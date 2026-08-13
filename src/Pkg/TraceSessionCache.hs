@@ -17,7 +17,7 @@ import Relude
 
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
-import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), atMapText)
+import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), atMapText, generateSummary)
 import Pkg.DeriveUtils (AesonText (..), unAesonTextMaybe)
 import Utils (jsonToMap, nestedJsonFromDotNotation)
 
@@ -94,7 +94,11 @@ stampSpan info span_ =
           , ("user.full_name",) . AE.String <$> info.userFullName
           ]
       inserts = fromMaybe Map.empty $ jsonToMap $ nestedJsonFromDotNotation pairs
-   in span_{attributes = Just (AesonText (am `Map.union` inserts))}
+      stamped = span_{attributes = Just (AesonText (am `Map.union` inserts))}
+   in -- Conversion builds the display summary before this trace-wide stamping
+      -- pass. Rebuild it from the inherited attributes so collapsed parents
+      -- expose the same session/user identity as the child that supplied it.
+      stamped{summary = generateSummary stamped}
 
 
 -- | Two-pass: (1) collect session info from spans, upsert cache; (2) stamp spans missing info.

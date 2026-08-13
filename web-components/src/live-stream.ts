@@ -217,28 +217,53 @@ export function tableRowToArray(cols: Record<string, unknown>, colIdxMap: Record
  * Build the trace-adjacency entries `groupSpans` needs for a set of pushed rows.
  *
  * A fetch gets these from the server, which derives them while assembling the page. A pushed
- * row arrives alone, so the client synthesises the same minimal entry a standalone record
- * would have had: its own trace, itself as root, no children. Without this `groupSpans`
- * produces nothing and the rows never render — the tree is keyed off trace adjacency, not off
- * the row array.
+ * row arrives without the query response's adjacency metadata, so the client synthesises it.
+ * A relay frame often contains several members of the same trace; relationships within that
+ * frame are retained and rows whose parent is outside it become temporary roots. Without
+ * these entries `groupSpans` produces nothing — the tree is keyed off trace adjacency, not
+ * off the row array.
  *
  * Rows that later turn out to belong to a larger trace are re-grouped when the durable read
  * replaces them, which is the same reconciliation a recent fetch already relies on.
  */
 export function traceEntriesFor(rows: unknown[][], colIdxMap: Record<string, number>): unknown[] {
   const at = (r: unknown[], name: string) => (colIdxMap[name] === undefined ? null : r[colIdxMap[name]]);
-  return rows.map(r => {
-    const id = String(at(r, 'id') ?? '');
+  const projected = rows.map(r => {
+    const rowId = String(at(r, 'id') ?? '');
+    const id = String(at(r, 'kind') === 'log' ? rowId : at(r, 'latency_breakdown') || rowId);
     const traceId = String(at(r, 'trace_id') || id);
+    const parentId = String(at(r, 'parent_id') ?? '');
     const ts = at(r, 'timestamp');
     const startMs = typeof ts === 'string' ? Date.parse(ts) : Number(ts ?? 0);
-    return {
-      trace_id: traceId,
-      start_time: (Number.isFinite(startMs) ? startMs : 0) * 1e6,
-      duration: Number(at(r, 'duration') ?? 0) || 0,
-      trace_start_time: typeof ts === 'string' ? ts : new Date(Number.isFinite(startMs) ? startMs : 0).toISOString(),
-      root: id,
-      children: {},
-    };
+    return { r, id, traceId, parentId, ts, startMs };
   });
+
+  // A relay frame can contain a whole ingest batch. Preserve the parent relationships that
+  // are present inside that frame, otherwise every member of one collapsed trace is treated
+  // as a standalone root and the "N new" pill counts (typically) all 200 batch rows. The
+  // durable query later groups those rows and appears to insert only one, breaking the pill's
+  // promise. Parents outside this frame remain roots until a durable read can reconcile them.
+  const idsByTrace = new Map<string, Set<string>>();
+  const childrenByTrace = new Map<string, Record<string, string[]>>();
+  for (const row of projected) {
+    if (!idsByTrace.has(row.traceId)) idsByTrace.set(row.traceId, new Set());
+    idsByTrace.get(row.traceId)!.add(row.id);
+  }
+  for (const row of projected) {
+    if (!row.parentId || !idsByTrace.get(row.traceId)?.has(row.parentId)) continue;
+    const children = childrenByTrace.get(row.traceId) ?? {};
+    (children[row.parentId] ??= []).push(row.id);
+    childrenByTrace.set(row.traceId, children);
+  }
+
+  return projected
+    .filter(row => !row.parentId || !idsByTrace.get(row.traceId)?.has(row.parentId))
+    .map(row => ({
+      trace_id: row.traceId,
+      start_time: (Number.isFinite(row.startMs) ? row.startMs : 0) * 1e6,
+      duration: Number(at(row.r, 'duration') ?? 0) || 0,
+      trace_start_time: typeof row.ts === 'string' ? row.ts : new Date(Number.isFinite(row.startMs) ? row.startMs : 0).toISOString(),
+      root: row.id,
+      children: childrenByTrace.get(row.traceId) ?? {},
+    }));
 }

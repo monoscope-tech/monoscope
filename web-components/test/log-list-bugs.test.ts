@@ -29,16 +29,25 @@ describe('LogList — LOWER', () => {
     expect(el.innerHTML).not.toContain('will-change-scroll');
   });
 
-  // Paint containment clips every descendant to the row's own 28px — measured, it left a
-  // device tooltip carrying a user-agent string (61px tall) less than half visible, and it
-  // clips `position: fixed` too, so nothing positions its way out. The virtualiser does not
-  // need it: off-screen rows are already out of the DOM.
-  test('rows contain layout and style but not paint, so a tooltip is not clipped to 28px', async () => {
+  // Paint containment clips overflowing row tooltips, so it must not be permanent. During
+  // active scrolling there is no useful hover interaction, however, and bounding paint to one
+  // 28px row substantially reduces the virtualizer's paint invalidation area.
+  test('rows add paint containment only while the list is actively scrolling', async () => {
     const el = await mountList();
     const css = el.querySelector('style')?.textContent ?? '';
     expect(css).toMatch(/contain:\s*layout style\s*;/);
-    expect(css).not.toMatch(/contain:[^;]*paint/);
+    expect(css).toMatch(/\.is-scrolling \.contain-layout-style\s*{[^}]*contain:\s*layout style paint/s);
     expect(el.innerHTML).not.toContain('contain-layout-style-paint');
+
+    // happy-dom reparents the deliberately non-standard virtualized table structure, so use a
+    // small scroll surface to exercise the handler itself.
+    const container = document.createElement('div');
+    container.id = 'logs_list_container_inner';
+    el.appendChild(container);
+    Object.defineProperty(el, 'logsContainer', { value: container, configurable: true });
+    (el as any).handleListScroll();
+    expect(container.classList.contains('is-scrolling')).toBe(true);
+    await vi.waitFor(() => expect(container.classList.contains('is-scrolling')).toBe(false), { timeout: 250 });
   });
 
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed

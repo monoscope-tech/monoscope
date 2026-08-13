@@ -22,6 +22,41 @@ function rowHasError(span: any[], idx: ColIdxMap, isLog: boolean): boolean {
   return isLog ? false : (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false);
 }
 
+const IDENTITY_SUMMARY_FIELDS = new Set(['session', 'user email', 'user name', 'user id']);
+
+function identityField(element: unknown): string | null {
+  if (typeof element !== 'string') return null;
+  const separator = element.indexOf(';');
+  if (separator < 0 || !element.includes('⇒')) return null;
+  const field = element.slice(0, separator);
+  return IDENTITY_SUMMARY_FIELDS.has(field) ? field : null;
+}
+
+// Older rows may have received promoted session/user columns from the trace
+// backfill after their persisted summary was built. Bubble the first available
+// identity value from descendants into each ancestor's in-memory summary so a
+// collapsed trace identifies the user without changing historical storage.
+function inheritIdentitySummary(parent: any[], child: any[], summaryIdx: number | undefined) {
+  if (summaryIdx === undefined) return;
+  const parentSummary = Array.isArray(parent[summaryIdx]) ? parent[summaryIdx] : [];
+  const childSummary = Array.isArray(child[summaryIdx]) ? child[summaryIdx] : [];
+  const present = new Set(parentSummary.map(identityField).filter(Boolean));
+  const inherited = childSummary.filter((element: unknown) => {
+    const field = identityField(element);
+    if (!field || present.has(field)) return false;
+    present.add(field);
+    return true;
+  });
+  if (inherited.length) parent[summaryIdx] = [...parentSummary, ...inherited];
+}
+
+function bubbleIdentity(span: APTEvent, summaryIdx: number | undefined) {
+  for (const child of span.children) {
+    bubbleIdentity(child, summaryIdx);
+    inheritIdentitySummary(span.data, child.data, summaryIdx);
+  }
+}
+
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, serverTraces: ServerTraceEntry[]) {
   const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
   const idx: ColIdxMap = {};
@@ -71,6 +106,10 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
       const bStart = b.startTime || 0;
       return flipDirection ? aStart - bStart : bStart - aStart;
     });
+
+  for (const trace of traces) {
+    for (const root of trace.spans) bubbleIdentity(root, idx.summary);
+  }
 
   return flattenSpanTree(traces, expandedTraces);
 }

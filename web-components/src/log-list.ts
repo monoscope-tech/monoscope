@@ -1,7 +1,7 @@
 'use strict';
 import '@lit-labs/virtualizer';
 import { FlowLayout } from '@lit-labs/virtualizer/layouts/flow.js';
-import { LitElement, html, css, TemplateResult, nothing } from 'lit';
+import { LitElement, html, css, TemplateResult, nothing, render as renderLit } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
@@ -553,8 +553,8 @@ export class LogList extends LitElement {
         query: url.searchParams.get('query') || null,
         columns: Object.keys(this.colIdxMap ?? {}),
       }),
-      onRows: rows => this.handleLiveRows(rows),
-      onDropped: total => {
+      onRows: (rows) => this.handleLiveRows(rows),
+      onDropped: (total) => {
         this.liveDropped = total;
         this.requestUpdate();
       },
@@ -584,7 +584,7 @@ export class LogList extends LitElement {
     const traces = traceEntriesFor(positional as any, this.colIdxMap as any);
     const tree = groupSpans(positional as any, this.colIdxMap, this.expandedTraces, this.flipDirection, traces as any);
     if (!tree.length) return;
-    tree.forEach(t => (t.isNew = true));
+    tree.forEach((t) => (t.isNew = true));
     this.fetchedNew = true;
 
     // The container decides *where* the row goes, never *whether* it arrives. Returning early
@@ -1537,7 +1537,8 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            const anchor = revealRecent || atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? null : this.captureScrollAnchor();
+            const anchor =
+              revealRecent || atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1826,7 +1827,7 @@ export class LogList extends LitElement {
    * colour across queries, sessions and pages — which is what makes the legend worth reading.
    */
   private dimColor(value: string): string {
-    return this.latencyDim === 'kind' ? KIND_COLORS[value] ?? 'bg-fillStrong' : this.serviceColors[value] || 'bg-fillStrong';
+    return this.latencyDim === 'kind' ? (KIND_COLORS[value] ?? 'bg-fillStrong') : this.serviceColors[value] || 'bg-fillStrong';
   }
 
   /**
@@ -1846,7 +1847,7 @@ export class LogList extends LitElement {
       const sum = totals.reduce((a, t) => a + t.ns, 0);
       this._legendCache = {
         key,
-        rows: totals.map(t => ({ ...t, pct: sum > 0 ? (t.ns / sum) * 100 : 0, color: this.dimColor(t.label) })),
+        rows: totals.map((t) => ({ ...t, pct: sum > 0 ? (t.ns / sum) * 100 : 0, color: this.dimColor(t.label) })),
       };
     }
     return this._legendCache.rows;
@@ -1870,6 +1871,28 @@ export class LogList extends LitElement {
     this.batchRequestUpdate('recentConcatenation');
   }
 
+  /**
+   * Keep each virtual row's paint invalidation inside that row while the viewport moves.
+   * Paint containment is released shortly after scrolling so overflowing badge/tooltips are
+   * not clipped during normal interaction. Mutating the scroll-surface class directly avoids
+   * scheduling a Lit render on every scroll event.
+   */
+  private markScrolling() {
+    this.isScrolling = true;
+    this.logsContainer?.classList.add('is-scrolling');
+    if (this.scrollEndTimer) clearTimeout(this.scrollEndTimer);
+    this.scrollEndTimer = setTimeout(() => {
+      this.isScrolling = false;
+      this.logsContainer?.classList.remove('is-scrolling');
+      this.scrollEndTimer = null;
+    }, 80);
+  }
+
+  private handleListScroll = () => {
+    this.markScrolling();
+    this.resumeLiveTailAtEdge();
+  };
+
   handleVisibilityChange = (e: any) => {
     const first = e.first;
     const last = e.last;
@@ -1878,18 +1901,7 @@ export class LogList extends LitElement {
     // Store visibility range for deferred chart update
     this.lastVisibilityRange = { first, last };
 
-    // Mark as scrolling
-    this.isScrolling = true;
-
-    // Clear existing timer
-    if (this.scrollEndTimer) {
-      clearTimeout(this.scrollEndTimer);
-    }
-
-    // Set timer to detect scroll end
-    this.scrollEndTimer = setTimeout(() => {
-      this.isScrolling = false;
-    }, 50);
+    this.markScrolling();
 
     // Also resume here, not only on the container's scroll event: this fires as rows enter and
     // leave, which covers a jump straight to the top that never crosses the intermediate
@@ -2037,6 +2049,16 @@ export class LogList extends LitElement {
           contain: layout style;
         }
 
+        /*
+          The virtualizer removes off-screen rows, but rows entering/leaving the runway still
+          repaint. Bound that work to one 28px row only during active scrolling. Once scrolling
+          stops, paint containment is removed so ordinary overflowing row tooltips remain usable.
+          Top-layer latency cards are unaffected by this temporary clip.
+        */
+        .is-scrolling .contain-layout-style {
+          contain: layout style paint;
+        }
+
         /* Fixed table layout for performance */
         table {
           table-layout: fixed;
@@ -2096,7 +2118,7 @@ export class LogList extends LitElement {
         )}
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
-        @scroll=${{ handleEvent: () => this.resumeLiveTailAtEdge(), passive: true }}
+        @scroll=${{ handleEvent: this.handleListScroll, passive: true }}
       >
         ${this.liveDropped > 0
           ? html`<div class="sticky top-0 z-50 flex justify-center" role="status" aria-live="polite">
@@ -2111,7 +2133,7 @@ export class LogList extends LitElement {
         ${!isAggregate && this.recentCount > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
-                class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
+                class="cbadge-sm cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
                 @pointerdown=${this.handleRecentClick}
                 aria-label="${this.recentCount} new events, click to load"
               >
@@ -2578,7 +2600,12 @@ export class LogList extends LitElement {
                   // The id is both an element id and half of a `--dashed-ident` anchor name, so
                   // it has to survive as a CSS identifier — span ids are hex but log ids are not.
                   card: ownSegments.length
-                    ? { id: `lat-${String(rowData.id ?? '').replace(/[^\w-]/g, '_')}`, body: latencyTooltip({ startNs, duration, traceStart, color }, ownSegments) }
+                    ? {
+                        id: `lat-${String(rowData.id ?? '').replace(/[^\w-]/g, '_')}`,
+                        // Most rows are only passed while scrolling. Defer the aggregation,
+                        // sorting and hidden tooltip DOM until somebody asks to see this card.
+                        body: () => latencyTooltip({ startNs, duration, traceStart, color }, ownSegments),
+                      }
                     : null,
                   barWidth: currentWidth - 12,
                 })}
@@ -2738,7 +2765,13 @@ export class LogList extends LitElement {
   // overlaid absolutely so the label alone sizes the box. Conditionally rendering
   // one OR the other left a frame where the row was empty (longer once the
   // virtualizer re-measured the changed row) and resized it, reflowing the list.
-  createLoadingRow = (id: string | null, label: string | TemplateResult, loading: boolean, onClick: () => void, rowRef?: RefOrCallback) => html`
+  createLoadingRow = (
+    id: string | null,
+    label: string | TemplateResult,
+    loading: boolean,
+    onClick: () => void,
+    rowRef?: RefOrCallback
+  ) => html`
     <tr
       class="w-full flex relative h-[28px] cursor-pointer hover:bg-fillWeaker"
       id=${id || nothing}
@@ -2749,7 +2782,11 @@ export class LogList extends LitElement {
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         <div class="h-7 relative flex items-center justify-center">
           <span class=${clsx('text-textBrand underline font-semibold', loading && 'invisible')}>${label}</span>
-          <div class=${clsx('absolute top-1 loading loading-dots loading-md h-5', !loading && 'invisible')} role="status" aria-label="Loading"></div>
+          <div
+            class=${clsx('absolute top-1 loading loading-dots loading-md h-5', !loading && 'invisible')}
+            role="status"
+            aria-label="Loading"
+          ></div>
         </div>
       </td>
     </tr>
@@ -2843,7 +2880,9 @@ export class LogList extends LitElement {
 
     return this.createLoadingRow(
       'recent-logs',
-      this.isLiveStreaming ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>` : 'Load newer events',
+      this.isLiveStreaming
+        ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>`
+        : 'Load newer events',
       this.isFetchingRecent,
       () => {
         if (this.isLiveStreaming) return;
@@ -2994,7 +3033,9 @@ export class LogList extends LitElement {
             </td>`
         : nothing;
       const rowHtml = ov
-        ? html`<div role="row" data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
+        ? html`<div role="row" data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
+            ${cells}${latencyCell}
+          </div>`
         : html`<tr data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </tr>`;
@@ -3049,15 +3090,16 @@ export class LogList extends LitElement {
           </li>
           ${column === 'latency_breakdown'
             ? (['service', 'kind'] as LatencyDim[]).map(
-                dim => html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
-                  <button
-                    class="cursor-pointer py-0.5"
-                    aria-pressed=${this.latencyDim === dim}
-                    @pointerdown=${() => this.setLatencyDim(dim)}
-                  >
-                    ${this.latencyDim === dim ? '✓ ' : ''}Break down by ${dim}
-                  </button>
-                </li>`
+                (dim) =>
+                  html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
+                    <button
+                      class="cursor-pointer py-0.5"
+                      aria-pressed=${this.latencyDim === dim}
+                      @pointerdown=${() => this.setLatencyDim(dim)}
+                    >
+                      ${this.latencyDim === dim ? '✓ ' : ''}Break down by ${dim}
+                    </button>
+                  </li>`
               )
             : nothing}
         </ul>
@@ -3222,17 +3264,23 @@ export class LogList extends LitElement {
       <div class="results-toolbar w-full flex items-center justify-end px-2 gap-3 min-w-0">
         ${serviceTimes.length
           ? html`<div class="service-time-region flex-1 min-w-0 flex items-center justify-end overflow-hidden text-xs text-textWeak">
-              <div class="service-time-items flex items-center justify-end gap-4 min-w-0 overflow-hidden" role="list" aria-label="Time by ${dimensionLabel} across these results">
+              <div
+                class="service-time-items flex items-center justify-end gap-4 min-w-0 overflow-hidden"
+                role="list"
+                aria-label="Time by ${dimensionLabel} across these results"
+              >
                 ${serviceTimes.slice(0, 3).map(serviceItem)}
                 ${moreServiceCount
                   ? html`<button
                       type="button"
-                      class="service-time-trigger shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150"
+                      class="service-time-trigger shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150 cursor-pointer "
                       popovertarget=${this.serviceTimePopoverId}
                       aria-haspopup="dialog"
                       aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
                       style="anchor-name: --service-time-trigger"
-                    >${moreServiceLabel}</button>`
+                    >
+                      ${moreServiceLabel}
+                    </button>`
                   : nothing}
               </div>
               <button
@@ -3242,7 +3290,9 @@ export class LogList extends LitElement {
                 aria-haspopup="dialog"
                 aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
                 style="anchor-name: --service-time-trigger"
-              >Time by ${dimensionLabel} · ${serviceTimes.length}</button>
+              >
+                Time by ${dimensionLabel} · ${serviceTimes.length}
+              </button>
               <div
                 id=${this.serviceTimePopoverId}
                 popover
@@ -3259,14 +3309,19 @@ export class LogList extends LitElement {
                     popovertarget=${this.serviceTimePopoverId}
                     popovertargetaction="hide"
                     aria-label="Close time by ${dimensionLabel}"
-                  >${faSprite('xmark', 'regular', 'w-3 h-3')}</button>
+                  >
+                    ${faSprite('xmark', 'regular', 'w-3 h-3')}
+                  </button>
                 </div>
                 <div class="flex flex-col gap-2" role="list">
-                  ${serviceTimes.map(item => html`<div class="flex items-center gap-2" role="listitem">
-                    <span class=${`w-2 h-2 rounded-xs shrink-0 ${item.color}`} aria-hidden="true"></span>
-                    <span class="truncate flex-1 text-textStrong" title=${item.label}>${item.label}</span>
-                    <span class="tabular-nums shrink-0">${formatPercent(item)} · ${fmtNs(item.ns)}</span>
-                  </div>`)}
+                  ${serviceTimes.map(
+                    (item) =>
+                      html`<div class="flex items-center gap-2" role="listitem">
+                        <span class=${`w-2 h-2 rounded-xs shrink-0 ${item.color}`} aria-hidden="true"></span>
+                        <span class="truncate flex-1 text-textStrong" title=${item.label}>${item.label}</span>
+                        <span class="tabular-nums shrink-0">${formatPercent(item)} · ${fmtNs(item.ns)}</span>
+                      </div>`
+                  )}
                 </div>
               </div>
             </div>`
@@ -3587,19 +3642,19 @@ export function exclusiveSegments(row: { startNs: number; duration: number }, de
   if (!(row.duration > 0)) return [];
   const rowEnd = row.startNs + row.duration;
   const spans = descendants
-    .map(d => ({ from: Math.max(row.startNs, d.startNs), to: Math.min(rowEnd, d.startNs + Math.max(0, d.duration)), d }))
-    .filter(s => s.to > s.from)
+    .map((d) => ({ from: Math.max(row.startNs, d.startNs), to: Math.min(rowEnd, d.startNs + Math.max(0, d.duration)), d }))
+    .filter((s) => s.to > s.from)
     .sort((a, b) => a.from - b.from);
   if (!spans.length) return [];
 
-  const bounds = [...new Set(spans.flatMap(s => [s.from, s.to]))].sort((a, b) => a - b);
+  const bounds = [...new Set(spans.flatMap((s) => [s.from, s.to]))].sort((a, b) => a - b);
   const parts: { from: number; to: number; label: string; color: string }[] = [];
   let next = 0;
   let active: typeof spans = [];
   for (let i = 0; i < bounds.length - 1; i++) {
     const [from, to] = [bounds[i], bounds[i + 1]];
     while (next < spans.length && spans[next].from <= from) active.push(spans[next++]);
-    active = active.filter(s => s.to > from);
+    active = active.filter((s) => s.to > from);
     let win: (typeof spans)[number] | undefined;
     for (const s of active) if (!win || (s.d.depth ?? 1) > (win.d.depth ?? 1)) win = s;
     if (!win) continue;
@@ -3607,7 +3662,7 @@ export function exclusiveSegments(row: { startNs: number; duration: number }, de
     if (prev && prev.to === from && prev.label === win.d.label && prev.color === win.d.color) prev.to = to;
     else parts.push({ from, to, label: win.d.label, color: win.d.color });
   }
-  return parts.map(p => ({
+  return parts.map((p) => ({
     leftPct: ((p.from - row.startNs) / row.duration) * 100,
     widthPct: ((p.to - p.from) / row.duration) * 100,
     color: p.color,
@@ -3640,7 +3695,7 @@ export function latencyBar(
 ): { track: string; segments: LatencySegment[]; frame: boolean } {
   if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: exclusiveSegments(row, descendants), frame: false };
   const axis = { startNs: row.traceStart, duration: row.traceEnd };
-  const direct = descendants.filter(c => (c.depth ?? 1) === 1);
+  const direct = descendants.filter((c) => (c.depth ?? 1) === 1);
   return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, direct)], frame: true };
 }
 
@@ -3665,13 +3720,23 @@ function rowMarker(
 
 /** Human-readable nanoseconds, matching the duration badge's vocabulary. */
 export const fmtNs = (ns: number): string =>
-  ns >= 1e9 ? `${(ns / 1e9).toFixed(2)}s` : ns >= 1e6 ? `${Math.round(ns / 1e6)}ms` : ns >= 1e3 ? `${Math.round(ns / 1e3)}\u00b5s` : `${Math.round(ns)}ns`;
+  ns >= 1e9
+    ? `${(ns / 1e9).toFixed(2)}s`
+    : ns >= 1e6
+      ? `${Math.round(ns / 1e6)}ms`
+      : ns >= 1e3
+        ? `${Math.round(ns / 1e3)}\u00b5s`
+        : `${Math.round(ns)}ns`;
 
 /**
  * What the bar is saying, in words — for the tooltip and for the screen reader, neither of
  * which can read a colour. Carries the trace offset the bar no longer encodes positionally.
  */
-export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: number; traceStart: number }, segments: LatencySegment[]): string {
+export function latencyTitle(
+  dim: LatencyDim,
+  row: { startNs: number; duration: number; traceStart: number },
+  segments: LatencySegment[]
+): string {
   const byLabel = new Map<string, number>();
   for (const s of segments) byLabel.set(s.label, (byLabel.get(s.label) ?? 0) + s.ns);
   const accounted = segments.reduce((a, s) => a + s.ns, 0);
@@ -3715,7 +3780,9 @@ export function latencyTooltip(row: { duration: number; startNs: number; traceSt
   // Self time is a row like any other: "40% of this request was spent here, not downstream"
   // is the same kind of answer as "50% was postgres", and hiding it makes the parts look
   // like they should sum to the total when they don't.
-  const rows = [...byLabel.entries()].map(([label, v]) => ({ label, ...v })).concat(self > 0 ? [{ label: 'self', ns: self, color: row.color }] : []);
+  const rows = [...byLabel.entries()]
+    .map(([label, v]) => ({ label, ...v }))
+    .concat(self > 0 ? [{ label: 'self', ns: self, color: row.color }] : []);
   rows.sort((a, b) => b.ns - a.ns);
   // A share that rounds to zero still isn't zero: a real 337µs call inside a 72ms request read
   // as "0%", which says the service did nothing rather than very little.
@@ -3730,12 +3797,13 @@ export function latencyTooltip(row: { duration: number; startNs: number; traceSt
       <span class="text-textWeak">+${fmtNs(Math.max(0, row.startNs - row.traceStart))} into trace</span>
     </div>
     ${rows.slice(0, 6).map(
-      r => html`<div class="flex items-center gap-2 whitespace-nowrap leading-5">
-        <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
-        <span class="grow truncate max-w-[16ch]">${r.label}</span>
-        <span class="tabular-nums text-textWeak">${fmtNs(r.ns)}</span>
-        <span class="tabular-nums text-textWeak w-9 text-right">${pct(r.ns)}</span>
-      </div>`
+      (r) =>
+        html`<div class="flex items-center gap-2 whitespace-nowrap leading-5">
+          <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
+          <span class="grow truncate max-w-[16ch]">${r.label}</span>
+          <span class="tabular-nums text-textWeak">${fmtNs(r.ns)}</span>
+          <span class="tabular-nums text-textWeak w-9 text-right">${pct(r.ns)}</span>
+        </div>`
     )}
     ${rows.length > 6 ? html`<div class="text-textWeak pt-0.5">+${rows.length - 6} more</div>` : nothing}
   </div>`;
@@ -3756,8 +3824,11 @@ export function dimTotals(rows: EventLine[], colIdxMap: ColIdxMap, dim: LatencyD
   const byLabel = new Map<string, number>();
   for (const row of rows) {
     if (!(row.duration > 0)) continue; // a log costs no time; a zero-length span has none to give
-    const direct = (row.childrenTimeSpans ?? []).filter(c => (c.depth ?? 1) === 1);
-    const covered = exclusiveSegments(row, direct.map(c => ({ ...c, label: '', color: '' }))).reduce((a, s) => a + s.ns, 0);
+    const direct = (row.childrenTimeSpans ?? []).filter((c) => (c.depth ?? 1) === 1);
+    const covered = exclusiveSegments(
+      row,
+      direct.map((c) => ({ ...c, label: '', color: '' }))
+    ).reduce((a, s) => a + s.ns, 0);
     const self = Math.max(0, row.duration - covered);
     if (!self) continue;
     const label = lookupVecValue<string>(row.data, colIdxMap, dim) || 'unknown';
@@ -3777,7 +3848,7 @@ export function spanLatencyBreakdown({
   track: string;
   segments: LatencySegment[];
   title: string;
-  card: { id: string; body: TemplateResult } | null;
+  card: { id: string; body: () => TemplateResult } | null;
   barWidth: number;
   frame: boolean;
 }) {
@@ -3790,22 +3861,28 @@ export function spanLatencyBreakdown({
   // floored width keeps a mark at the far end inside the bar instead of clipped away.
   const minPct = (3 / Math.max(barWidth, 1)) * 100;
   const bar = html`<div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
-      ${segments.map(s => {
-        const width = Math.max(s.widthPct, minPct);
-        return html`<div
-          class=${`h-full absolute top-0 rounded-sm ${s.color}`}
-          style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
-        ></div>`;
-      })}
-      <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
+    ${segments.map((s) => {
+      const width = Math.max(s.widthPct, minPct);
+      return html`<div
+        class=${`h-full absolute top-0 rounded-sm ${s.color}`}
+        style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
+      ></div>`;
+    })}
+    <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
            a span two thirds of the way into a trace is just a small block somewhere. -->
-      ${frame
-        ? html`<div class="absolute inset-0 pointer-events-none">
-            <div class="absolute top-0 left-0 h-full border-l-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
-            <div class="absolute top-0 right-0 h-full border-r-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
-            <div class="absolute top-1/2 -translate-y-1/2 left-0 w-full h-px bg-strokeBrand-strong shadow-[0_0_2px_var(--color-strokeBrand-weak)]"></div>
-          </div>`
-        : nothing}
+    ${frame
+      ? html`<div class="absolute inset-0 pointer-events-none">
+          <div
+            class="absolute top-0 left-0 h-full border-l-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"
+          ></div>
+          <div
+            class="absolute top-0 right-0 h-full border-r-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"
+          ></div>
+          <div
+            class="absolute top-1/2 -translate-y-1/2 left-0 w-full h-px bg-strokeBrand-strong shadow-[0_0_2px_var(--color-strokeBrand-weak)]"
+          ></div>
+        </div>`
+      : nothing}
   </div>`;
 
   // The card lives in the top layer, because a 28px row is no place for it. It began as an
@@ -3834,7 +3911,17 @@ export function spanLatencyBreakdown({
     >
       ${bar}
     </button>
-    <div popover="hint" id=${card.id} style=${`position-anchor:--${card.id}`} class="latency-card" aria-hidden="true">${card.body}</div>
+    <div
+      popover="hint"
+      id=${card.id}
+      style=${`position-anchor:--${card.id}`}
+      class="latency-card"
+      aria-hidden="true"
+      @beforetoggle=${(event: Event) => {
+        const target = event.currentTarget as HTMLElement;
+        if (!target.hasChildNodes()) renderLit(card.body(), target);
+      }}
+    ></div>
   `;
 }
 

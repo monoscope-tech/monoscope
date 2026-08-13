@@ -39,6 +39,17 @@ findSpan :: Text -> V.Vector (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Te
 findSpan name = find (\(n, _, _, _, _, _) -> n == name) . V.toList
 
 
+querySpanSummary :: TestResources -> Text -> Text -> IO (Maybe (V.Vector Text))
+querySpanSummary tr trId spanName = do
+  rows <-
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT summary FROM otel_logs_and_spans
+              WHERE project_id = ? AND context___trace_id = ? AND name = ? |]
+        (pid, trId, spanName)
+  pure $ (\(Only summary) -> summary) <$> (V.toList rows & viaNonEmpty head)
+
+
 -- The DB clock — the sweep's window is relative to NOW() on the server, so tests
 -- must age spans against this, not the host clock (docker clock skew otherwise
 -- pushes a "fresh" row past the 2-min lag boundary).
@@ -94,6 +105,11 @@ spec = around withTestResources do
         email `shouldBe` Just "u@test.com"
         uname `shouldBe` Just "uname"
         fullName `shouldBe` Just "User Full"
+      -- The parent/backend span was converted without identity. Its collapsed
+      -- row must still advertise the identity inherited from the frontend child.
+      backendSummary <- querySpanSummary tr trId "backend-span"
+      backendSummary `shouldSatisfy` maybe False (V.elem "session;right-badge-neutral⇒sess-100")
+      backendSummary `shouldSatisfy` maybe False (V.elem "user email;right-badge-neutral⇒u@test.com")
 
     it "does not overwrite existing session attributes" $ \tr -> do
       key <- createTestAPIKey tr pid "sess-prop-2"

@@ -232,6 +232,25 @@ describe('pushed Events rows', () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  test('the new-row pill counts a pushed trace batch as one collapsed row', async () => {
+    const el = await mountList();
+    (el as any).colIdxMap = COLS;
+    (el as any).isLiveStreaming = true;
+    Object.defineProperty(el, 'logsContainer', {
+      value: { scrollTop: 400, clientHeight: 500, scrollHeight: 5000 },
+    });
+    const timestamp = new Date().toISOString();
+    const pushed = (id: string, parent_id: string | null) => ({
+      shape: 'table',
+      cols: { id, latency_breakdown: id, trace_id: 'trace-1', parent_id, kind: 'span', timestamp },
+    });
+
+    (el as any).handleLiveRows([pushed('root', null), pushed('child-1', 'root'), pushed('child-2', 'child-1')]);
+
+    expect((el as any).recentDataToBeAdded).toHaveLength(3);
+    expect((el as any).recentCount).toBe(1);
+  });
+
   test('rows arriving while the list sits at the newest edge do not re-anchor the viewport', async () => {
     // At the top, the row under the user's eye is the one being pushed down on purpose.
     // Anchoring there scrolled the previous top row back into view on every tick — the list

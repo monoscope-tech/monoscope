@@ -330,14 +330,14 @@ describe('spanLatencyBreakdown wrapper', () => {
   // and it opens with no script at all. Both halves of that are attribute contracts: lose
   // `interestfor`/`popover` and it never opens; lose `anchor-name`/`position-anchor` and it
   // opens somewhere unrelated to the bar it describes.
-  const wrap = (card: { id: string; body: any } | null) => {
+  const wrap = (card: { id: string; body: () => any } | null) => {
     const host = document.createElement('div');
     render(spanLatencyBreakdown({ track: 'bg-api', segments: [], title: '1.2s total', card, barWidth: 108, frame: false }), host);
     return host;
   };
 
   test('a row with a breakdown gets a button wired to its own popover, anchored to its own bar', () => {
-    const host = wrap({ id: 'lat-abc', body: latencyTooltip({ duration: 1_000, startNs: 0, traceStart: 0, color: 'bg-api' }, []) });
+    const host = wrap({ id: 'lat-abc', body: () => latencyTooltip({ duration: 1_000, startNs: 0, traceStart: 0, color: 'bg-api' }, []) });
     const btn = host.querySelector('button')!;
     const pop = host.querySelector('[popover]')!;
     expect(btn.getAttribute('interestfor')).toBe('lat-abc');
@@ -346,6 +346,9 @@ describe('spanLatencyBreakdown wrapper', () => {
     expect(pop.getAttribute('style')).toContain('position-anchor:--lat-abc');
     expect(pop.getAttribute('popover')).toBe('hint');
     expect(pop.getAttribute('aria-hidden')).toBe('true'); // the button's aria-label says it instead
+    expect(pop.childElementCount).toBe(0); // hidden cards add no row subtree while scrolling
+    pop.dispatchEvent(new Event('beforetoggle'));
+    expect(pop.querySelector('.latency-card-body')).not.toBeNull();
   });
 
   test('a row with nothing to break down is not a control: no popover, no tab stop', () => {

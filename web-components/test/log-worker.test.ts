@@ -194,6 +194,50 @@ describe('Log Worker Functions', () => {
     });
   });
 
+  describe('collapsed trace identity', () => {
+    const colMap = {
+      trace_id: 0,
+      latency_breakdown: 1,
+      parent_id: 2,
+      timestamp: 3,
+      duration: 4,
+      start_time_ns: 5,
+      errors: 6,
+      summary: 7,
+      kind: 8,
+      id: 9,
+    };
+    const row = (id: string, parent: string | null, summary: string[]) =>
+      Object.assign([], { 0: 'tr', 1: id, 2: parent, 3: '2024-01-01T00:00:00Z', 4: 1, 5: 1, 6: false, 7: summary, 8: 'span', 9: id });
+
+    test('promotes descendant session and user identity to an anonymous root', () => {
+      const root = row('root', null, ['method;badge-GET⇒GET']);
+      const child = row('child', 'root', [
+        'session;right-badge-neutral⇒session-1',
+        'user email;right-badge-neutral⇒person@example.com',
+      ]);
+      const result = groupSpans([root, child], colMap, {}, false, [
+        { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'root', children: { root: ['child'] } },
+      ]);
+
+      expect(result[0].data[colMap.summary]).toEqual([
+        'method;badge-GET⇒GET',
+        'session;right-badge-neutral⇒session-1',
+        'user email;right-badge-neutral⇒person@example.com',
+      ]);
+    });
+
+    test('keeps identity explicitly set on the parent', () => {
+      const root = row('root', null, ['user email;right-badge-neutral⇒parent@example.com']);
+      const child = row('child', 'root', ['user email;right-badge-neutral⇒child@example.com']);
+      const result = groupSpans([root, child], colMap, {}, false, [
+        { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'root', children: { root: ['child'] } },
+      ]);
+
+      expect(result[0].data[colMap.summary]).toEqual(['user email;right-badge-neutral⇒parent@example.com']);
+    });
+  });
+
   describe('childrenTimeSpans carries the whole subtree', () => {
     // A collapsed row's bar could only ever paint its direct children, so a request whose
     // time was actually spent by a grandchild service showed as one flat colour.

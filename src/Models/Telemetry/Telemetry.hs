@@ -2281,6 +2281,21 @@ tag :: T.Text -> T.Text -> T.Text -> T.Text
 tag n s v = n <> ";" <> s <> "⇒" <> v
 
 
+-- | Compact identity elements shared by log and span rows. The renderer folds
+-- the user fields into one pill (email, then name, then id).
+--
+-- >>> identitySummary (Just (Map.fromList [("session.id", AE.String "s1"), ("user.email", AE.String "a@b.c")]))
+-- ["session;right-badge-neutral\8658s1","user email;right-badge-neutral\8658a@b.c"]
+identitySummary :: Maybe (Map T.Text AE.Value) -> [T.Text]
+identitySummary attrsM =
+  catMaybes
+    [ tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
+    , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM
+    , tag "user name" "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
+    , tag "user id" "right-badge-neutral" <$> atMapText "user.id" attrsM
+    ]
+
+
 encTrunc :: AE.ToJSON a => Int -> a -> T.Text
 encTrunc n x = let t = decodeUtf8 (AE.encode x) in if T.length t > n then T.take (n - 3) t <> "..." else t
 
@@ -2328,6 +2343,7 @@ generateLogSummary otel =
         , bodyElt
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         ]
+        <> identitySummary attrsM
    in
     V.fromList $ if isRawDataLog || null normalLogElements then rawDataLogElements else normalLogElements
 
@@ -2517,17 +2533,6 @@ generateSpanSummary otel =
         , spanNameFallback
         , errorStatus "badge-error"
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
-        , -- A row has space for *who*, not for the whole identity: the full session/user/
-          -- tenant set is the detail panel's job ('rowIdentity'). What a row must not do is
-          -- lie — `user.id` used to be emitted here labelled "user name", and only when
-          -- `user.email` happened to be absent, which is how a reader concludes the user id
-          -- is missing entirely. All three are emitted truthfully now; the renderer folds
-          -- them into one identity badge (email, else name, else id) so the row keeps its
-          -- single pill.
-          tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
-        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM
-        , tag "user name" "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
-        , tag "user id" "right-badge-neutral" <$> atMapText "user.id" attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
@@ -2535,6 +2540,7 @@ generateSpanSummary otel =
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]
+        <> identitySummary attrsM
    in
     V.fromList (if isEmptySpan then resourceFallbackElements else normalElements)
 
