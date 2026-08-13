@@ -559,10 +559,13 @@ describe('LogList — live tail resumes when scrolled back to the edge', () => {
   // The scroll position is stubbed rather than scrolled: under jsdom every height is 0, so a
   // real container reads as "pinned to the bottom" and the two directions can't be told apart.
   // Newest-first (flipDirection false) is the case in the report — rows enter at the top.
-  const withBuffer = async (scrollTop: number, over: Partial<Record<string, unknown>> = {}) => {
+  // Stubbing the container is what makes the flipped direction expressible at all: under jsdom
+  // every height is 0, so `scrollTop + clientHeight >= scrollHeight - 1` holds for any real
+  // container and oldest-first always reads as "pinned to the bottom".
+  const withBuffer = async (scrollTop: number, over: Partial<Record<string, unknown>> = {}, scrollHeight = 5000) => {
     const el = await mountList();
     Object.assign(el as any, { isLiveStreaming: true, flipDirection: false, recentDataToBeAdded: [row('n1'), row('n2')], ...over });
-    Object.defineProperty(el, 'logsContainer', { configurable: true, get: () => ({ scrollTop, clientHeight: 500, scrollHeight: 5000 }) });
+    Object.defineProperty(el, 'logsContainer', { configurable: true, get: () => ({ scrollTop, clientHeight: 500, scrollHeight }) });
     return el;
   };
 
@@ -614,6 +617,27 @@ describe('LogList — live tail resumes when scrolled back to the edge', () => {
     const el = await withBuffer(0, { isLiveStreaming: false });
     (el as any).resumeLiveTailAtEdge();
     expect((el as any).recentDataToBeAdded).toHaveLength(2);
+  });
+
+  // Oldest-first inverts the edge: rows land at the BOTTOM, so scrollTop 0 is the far end of
+  // the list, not the edge. The predicate itself was covered; this path was not, because it
+  // reads a container, and under jsdom's zero heights every container looks pinned to the
+  // bottom — a flipped component test would have passed whatever the code did.
+  test('oldest-first flushes at the bottom, not at the top', async () => {
+    const atTop = await withBuffer(0, { flipDirection: true });
+    (atTop as any).resumeLiveTailAtEdge();
+    expect((atTop as any).recentDataToBeAdded).toHaveLength(2); // top is the far end when flipped
+
+    const atBottom = await withBuffer(4500, { flipDirection: true }); // 4500 + 500 === scrollHeight
+    (atBottom as any).resumeLiveTailAtEdge();
+    expect((atBottom as any).recentDataToBeAdded).toHaveLength(0);
+  });
+
+  test('oldest-first buffers unless pinned to the bottom', () => {
+    expect(shouldBufferRecent(true, 0, false, true)).toBe(true); // scrolled up → buffer
+    expect(shouldBufferRecent(true, 4500, true, true)).toBe(false); // at the bottom → insert
+    expect(atInsertionEdge(0, true, true)).toBe(true); // flipped ignores scrollTop entirely
+    expect(atInsertionEdge(9999, false, true)).toBe(false);
   });
 });
 

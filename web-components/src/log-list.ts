@@ -1838,10 +1838,10 @@ export class LogList extends LitElement {
       this.isScrolling = false;
     }, 50);
 
-    // Scrolling back to where new rows arrive resumes the live tail. Buffering exists so a
-    // batch never yanks the viewport out from under someone reading mid-list; back at the
-    // edge there is nothing to protect, and without this the only way out of the buffer was
-    // to click the pill — so it counted up indefinitely while the list sat still.
+    // Also resume here, not only on the container's scroll event: this fires as rows enter and
+    // leave, which covers a jump straight to the top that never crosses the intermediate
+    // scroll positions. The other direction is why the scroll binding exists too — already
+    // showing the first row, nudging the last few pixels to 0 changes no row's visibility.
     this.resumeLiveTailAtEdge();
 
     // Debounced chart update (runs at most every 100ms)
@@ -2015,6 +2015,7 @@ export class LogList extends LitElement {
         )}
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
+        @scroll=${{ handleEvent: () => this.resumeLiveTailAtEdge(), passive: true }}
       >
         ${this.liveDropped > 0
           ? html`<div class="sticky top-0 z-50 flex justify-center" role="status" aria-live="polite">
