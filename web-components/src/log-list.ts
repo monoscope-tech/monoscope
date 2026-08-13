@@ -3552,6 +3552,13 @@ export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: 
  * Only called where there is a breakdown to show. A log has no duration and a childless span
  * has nothing under it, so their card could only restate the duration the row already prints —
  * and on a log-only view that was every row answering "0ns total, no service breakdown".
+ *
+ * On an expanded row this deliberately lists a different set than the bar beside it. The bar
+ * has become a waterfall — where this span sits in the trace, with its direct children, since
+ * every deeper span draws its own row below. The card stays what it always is: where this
+ * span's time went, over its whole subtree. Making them agree would mean either dropping the
+ * subtree summary or painting descendants the rows underneath already show. The header's
+ * "+X into trace" is the seam between the two, naming the position the bar encodes.
  */
 export function latencyTooltip(row: { duration: number; startNs: number; traceStart: number; color: string }, segments: LatencySegment[]) {
   const byLabel = new Map<string, { ns: number; color: string }>();

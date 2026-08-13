@@ -132,6 +132,73 @@ describe('LiveStream lifecycle', () => {
     expect(state).toBe('expired');
     expect(s.isRunning).toBe(false);
   });
+
+  // The browser holds the lease alive, so a renewal that never fires is a tail that dies at
+  // the lease length with no error — the failure mode the whole schedule exists to prevent.
+  test('renews at a third of the lease, driven by the server expiry rather than a constant', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-01T00:00:00.000Z'));
+    const calls = withFakes({ subscription_id: 's1', stream_url: '/stream/s1', expires_at: '2026-06-01T00:00:45.000Z' });
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 999, body: () => ({}), onRows: () => {}, onState: () => {} });
+    await s.start();
+
+    // Server said 45s, so renewal is due at 15s — not at leaseSecs, which is the fallback only.
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(calls.some(c => c.url.includes('/renew'))).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls.filter(c => c.url.includes('/renew'))).toHaveLength(1);
+    s.stop();
+  });
+
+  test('a short or skewed lease cannot become a renewal storm', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-01T00:00:00.000Z'));
+    // Already expired by the server's clock: a third of "remaining" would be negative.
+    const calls = withFakes({ subscription_id: 's1', stream_url: '/stream/s1', expires_at: '2026-05-31T23:59:00.000Z' });
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: () => {} });
+    await s.start();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(calls.filter(c => c.url.includes('/renew'))).toHaveLength(0); // floored at 5s, not immediate
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls.filter(c => c.url.includes('/renew'))).toHaveLength(1);
+    s.stop();
+  });
+
+  // A fixed retry against a broken backend is a self-inflicted load test; the point of the
+  // ladder is that a long outage costs progressively fewer attempts.
+  test('reconnect backs off further on each successive failure', async () => {
+    vi.useFakeTimers();
+    withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: () => {} });
+    await s.start();
+
+    const fail = async () => {
+      live.last!.onerror!();
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    const reconnectsAfter = async (ms: number) => {
+      const before = live.last;
+      await vi.advanceTimersByTimeAsync(ms - 1);
+      const early = live.last === before;
+      await vi.advanceTimersByTimeAsync(2);
+      return early && live.last !== before;
+    };
+
+    await fail();
+    expect(await reconnectsAfter(1000)).toBe(true); // first retry is prompt
+    await fail();
+    expect(await reconnectsAfter(2000)).toBe(true); // then it steps back
+    s.stop();
+  });
+
+  test('stopping releases the lease instead of leaving it to expire on the ingest pods', async () => {
+    const calls = withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: () => {} });
+    await s.start();
+    s.stop();
+    expect(calls.some(c => c.method === 'DELETE' && c.url.endsWith('/subscriptions/s1'))).toBe(true);
+    expect(live.last!.closed).toBe(true);
+  });
 });
 
 describe('pushed Events rows', () => {
