@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle, latencyTooltip, spanLatencyBreakdown } from '../src/log-list';
+import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle, latencyTooltip, spanLatencyBreakdown, dimTotals } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -353,6 +353,77 @@ describe('spanLatencyBreakdown wrapper', () => {
     expect(host.querySelector('button')).toBeNull();
     expect(host.querySelector('[popover]')).toBeNull();
     expect(host.querySelector('[role="img"]')!.getAttribute('aria-label')).toBe('1.2s total');
+  });
+});
+
+describe('dimTotals (legend)', () => {
+  // The legend answers "what dominates these results", which no single row's card can. It has
+  // to partition one real quantity: billing each row's whole duration would charge a request's
+  // time to every service in its call chain and total far past the wall clock.
+  const COLS = { service: 0 };
+  const mk = (service: string, duration: number, kids: { startNs: number; duration: number; depth?: number }[] = [], startNs = 0) =>
+    ({ data: [service], duration, startNs, childrenTimeSpans: kids.map((k) => ({ ...k, depth: k.depth ?? 1, data: [service] })) }) as any;
+
+  test('each row contributes its self time to its own service', () => {
+    // api spends 1000 but 600 of it waiting on a child → 400 is its own.
+    const rows = [mk('api', 1000, [{ startNs: 100, duration: 600 }]), mk('db', 600)];
+    expect(dimTotals(rows, COLS, 'service')).toEqual([
+      { label: 'db', ns: 600 },
+      { label: 'api', ns: 400 },
+    ]);
+  });
+
+  test('concurrent children occupy one stretch of the parent, not two', () => {
+    // 0-500 and 250-750 overlap: 750 of the parent is covered, not 1000, so self is 250.
+    const rows = [mk('api', 1000, [{ startNs: 0, duration: 500 }, { startNs: 250, duration: 500 }])];
+    expect(dimTotals(rows, COLS, 'service')).toEqual([{ label: 'api', ns: 250 }]);
+  });
+
+  // Normally a grandchild sits inside its parent, so including it would change nothing — the
+  // union is the same. It only shows when clock skew puts one outside: then counting it would
+  // take time off this row that no direct child of it was waiting on.
+  test('only direct children are subtracted, even when a skewed grandchild escapes its parent', () => {
+    const rows = [mk('api', 1000, [{ startNs: 0, duration: 400 }, { startNs: 500, duration: 200, depth: 2 }])];
+    expect(dimTotals(rows, COLS, 'service')).toEqual([{ label: 'api', ns: 600 }]);
+  });
+
+  test('rows that cost no time are left out, and a missing value is named rather than dropped', () => {
+    const rows = [mk('api', 0), mk('', 300), mk('api', 500, [{ startNs: 0, duration: 500 }])];
+    expect(dimTotals(rows, COLS, 'service')).toEqual([{ label: 'unknown', ns: 300 }]);
+  });
+
+  test('same service across many rows sums into one entry, ordered by time', () => {
+    const rows = [mk('api', 100), mk('db', 900), mk('api', 300)];
+    expect(dimTotals(rows, COLS, 'service')).toEqual([
+      { label: 'db', ns: 900 },
+      { label: 'api', ns: 400 },
+    ]);
+  });
+});
+
+describe('legend strip', () => {
+  const legend = (el: LogList) => el.querySelector('[aria-label^="Time by"]');
+  const mount = async (rows: any[]) => {
+    const el = await mountList();
+    Object.assign(el as any, { colIdxMap: { service: 0 }, serviceColors: { api: 'bg-api', db: 'bg-db' }, spanListTree: rows });
+    await el.updateComplete;
+    return el;
+  };
+  const r = (service: string, duration: number) => ({ data: [service], duration, startNs: 0, childrenTimeSpans: [] });
+
+  test('names the colours and their shares, largest first', async () => {
+    const el = await mount([r('api', 250), r('db', 750)]);
+    const text = legend(el)!.textContent!.replace(/\s+/g, ' ').trim();
+    expect(text).toContain('db 75%');
+    expect(text).toContain('api 25%');
+    expect(text.indexOf('db')).toBeLessThan(text.indexOf('api'));
+  });
+
+  // A single service is its own legend; showing a strip that says "api 100%" spends a row of
+  // a dense table to say nothing.
+  test('stays hidden when there is nothing to disambiguate', async () => {
+    expect(legend(await mount([r('api', 100), r('api', 200)]))).toBeNull();
+    expect(legend(await mount([]))).toBeNull();
   });
 });
 

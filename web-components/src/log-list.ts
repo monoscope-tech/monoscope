@@ -1800,6 +1800,71 @@ export class LogList extends LitElement {
     this.handleRecentConcatenation();
   }
 
+  /**
+   * Colour for one value of the breakdown dimension.
+   *
+   * Keyed on the dimension, not on `span_name`. Keying on the span name made this a
+   * per-operation palette wearing the name "service colors": two spans in one service got two
+   * colours, the same operation in two services got one, and any name missing the palette fell
+   * back to grey. Kind is a fixed semantic palette; service is hashed, so a service keeps its
+   * colour across queries, sessions and pages — which is what makes the legend worth reading.
+   */
+  private dimColor(value: string): string {
+    return this.latencyDim === 'kind' ? KIND_COLORS[value] ?? 'bg-fillStrong' : this.serviceColors[value] || 'bg-fillStrong';
+  }
+
+  /**
+   * The legend: where the whole result set spent its time, not one row.
+   *
+   * A card answers "what is this row waiting on". Nothing answered "what dominates these
+   * results", and the colours in the bars were write-only until something named them — the
+   * mapping is stable, so reading it once here teaches it everywhere.
+   *
+   * Memoised on the tree's identity and length rather than recomputed per render: it walks
+   * every loaded row, and the list holds up to 5000.
+   */
+  private get dimLegend(): { label: string; ns: number; pct: number; color: string }[] {
+    const key = `${this.spanListTree.length}:${this.latencyDim}:${this.spanListTree[0]?.id ?? ''}`;
+    if (this._legendCache?.key !== key) {
+      const totals = dimTotals(this.spanListTree, this.colIdxMap, this.latencyDim);
+      const sum = totals.reduce((a, t) => a + t.ns, 0);
+      this._legendCache = {
+        key,
+        rows: totals.map(t => ({ ...t, pct: sum > 0 ? (t.ns / sum) * 100 : 0, color: this.dimColor(t.label) })),
+      };
+    }
+    return this._legendCache.rows;
+  }
+  private _legendCache: { key: string; rows: { label: string; ns: number; pct: number; color: string }[] } | null = null;
+
+  /**
+   * One line naming the colours, ordered by the time behind them.
+   *
+   * Only when there is something to disambiguate: a single service is its own legend, and an
+   * aggregate view has no latency column to explain. The share is the point as much as the
+   * name — "postgres 28%" is an answer no single row's card can give.
+   */
+  private renderDimLegend() {
+    if (this.isAggregate) return nothing;
+    const rows = this.dimLegend;
+    if (rows.length < 2) return nothing;
+    const shown = rows.slice(0, 6);
+    return html`<div
+      class="flex items-center gap-x-4 gap-y-1 flex-wrap px-3 py-1.5 text-xs text-textWeak border-b border-strokeWeak"
+      role="list"
+      aria-label="Time by ${this.latencyDim} across these results"
+    >
+      ${shown.map(
+        r => html`<span class="inline-flex items-center gap-1.5 min-w-0" role="listitem" title="${r.label} — ${fmtNs(r.ns)}">
+          <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
+          <span class="truncate max-w-[18ch] text-textStrong">${r.label}</span>
+          <span class="tabular-nums">${r.pct < 0.5 ? '<1' : Math.round(r.pct)}%</span>
+        </span>`
+      )}
+      ${rows.length > shown.length ? html`<span class="text-textWeak">+${rows.length - shown.length} more</span>` : nothing}
+    </div>`;
+  }
+
   // Flush the live-tail buffer if the viewport is parked at the edge new rows arrive at.
   // Public so the visibility handler and any future scroll source share one rule.
   resumeLiveTailAtEdge() {
@@ -2006,7 +2071,7 @@ export class LogList extends LitElement {
             .join('\n')
         )}
       </style>
-      ${this.options()}
+      ${this.options()} ${this.renderDimLegend()}
       <div
         ${ref(this.containerRef)}
         class=${clsx(
@@ -2400,10 +2465,7 @@ export class LogList extends LitElement {
           // one service got two colours, the same operation in two services got one, and any
           // name missing the palette fell back to grey.
           const dimOf = (arr: any) => lookupVecValue<string>(arr, colIdxMap, this.latencyDim) || '';
-          const colorOf = (value: string) =>
-            this.latencyDim === 'kind'
-              ? KIND_COLORS[value] ?? 'bg-fillStrong'
-              : this.serviceColors[value] || 'bg-fillStrong';
+          const colorOf = (value: string) => this.dimColor(value);
           const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
           const chil = childrenTimeSpans.map(({ startNs, duration, data, depth }: ChildrenForLatency) => {
             const label = dimOf(data) || 'unknown';
@@ -3594,6 +3656,31 @@ export function latencyTooltip(row: { duration: number; startNs: number; traceSt
     )}
     ${rows.length > 6 ? html`<div class="text-textWeak pt-0.5">+${rows.length - 6} more</div>` : nothing}
   </div>`;
+}
+
+/**
+ * Time attributed to each value of the breakdown dimension, across every loaded row.
+ *
+ * Each row contributes its *self* time — its duration minus what its direct children were
+ * doing — to its own service. Summing whole durations instead would bill a request's time to
+ * every service in its call chain and total far past the wall clock; self time partitions it,
+ * so the shares are of one real quantity.
+ *
+ * Overlapping siblings are merged rather than added (`exclusiveSegments`), because two
+ * children running concurrently occupy one stretch of the parent, not two.
+ */
+export function dimTotals(rows: EventLine[], colIdxMap: ColIdxMap, dim: LatencyDim): { label: string; ns: number }[] {
+  const byLabel = new Map<string, number>();
+  for (const row of rows) {
+    if (!(row.duration > 0)) continue; // a log costs no time; a zero-length span has none to give
+    const direct = (row.childrenTimeSpans ?? []).filter(c => (c.depth ?? 1) === 1);
+    const covered = exclusiveSegments(row, direct.map(c => ({ ...c, label: '', color: '' }))).reduce((a, s) => a + s.ns, 0);
+    const self = Math.max(0, row.duration - covered);
+    if (!self) continue;
+    const label = lookupVecValue<string>(row.data, colIdxMap, dim) || 'unknown';
+    byLabel.set(label, (byLabel.get(label) ?? 0) + self);
+  }
+  return [...byLabel.entries()].map(([label, ns]) => ({ label, ns })).sort((a, b) => b.ns - a.ns);
 }
 
 export function spanLatencyBreakdown({
