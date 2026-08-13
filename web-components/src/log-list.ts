@@ -182,6 +182,7 @@ export class LogList extends LitElement {
   @query('#log_details_container') private logDetailsContainer?: HTMLElement;
   @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
   @query('#details_indicator') private detailsIndicator?: HTMLElement;
+  private readonly serviceTimePopoverId = `service-time-breakdown-${generateId()}`;
 
   private cachedServerTraces: ServerTraceEntry[] = [];
   // Non-reactive overrides used during renderAggregateChildren to avoid triggering Lit re-renders
@@ -1837,34 +1838,6 @@ export class LogList extends LitElement {
   }
   private _legendCache: { key: string; rows: { label: string; ns: number; pct: number; color: string }[] } | null = null;
 
-  /**
-   * One line naming the colours, ordered by the time behind them.
-   *
-   * Only when there is something to disambiguate: a single service is its own legend, and an
-   * aggregate view has no latency column to explain. The share is the point as much as the
-   * name — "postgres 28%" is an answer no single row's card can give.
-   */
-  private renderDimLegend() {
-    if (this.isAggregate) return nothing;
-    const rows = this.dimLegend;
-    if (rows.length < 2) return nothing;
-    const shown = rows.slice(0, 6);
-    return html`<div
-      class="flex items-center gap-x-4 gap-y-1 flex-wrap px-3 py-1.5 text-xs text-textWeak border-b border-strokeWeak"
-      role="list"
-      aria-label="Time by ${this.latencyDim} across these results"
-    >
-      ${shown.map(
-        r => html`<span class="inline-flex items-center gap-1.5 min-w-0" role="listitem" title="${r.label} — ${fmtNs(r.ns)}">
-          <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
-          <span class="truncate max-w-[18ch] text-textStrong">${r.label}</span>
-          <span class="tabular-nums">${r.pct < 0.5 ? '<1' : Math.round(r.pct)}%</span>
-        </span>`
-      )}
-      ${rows.length > shown.length ? html`<span class="text-textWeak">+${rows.length - shown.length} more</span>` : nothing}
-    </div>`;
-  }
-
   // Flush the live-tail buffer if the viewport is parked at the edge new rows arrive at.
   // Public so the visibility handler and any future scroll source share one rule.
   resumeLiveTailAtEdge() {
@@ -2059,6 +2032,34 @@ export class LogList extends LitElement {
           pointer-events: none;
         }
 
+        .results-toolbar {
+          container-type: inline-size;
+        }
+        .service-time-region {
+          margin-left: 16rem;
+        }
+        @container (max-width: 1100px) {
+          .service-time-region {
+            margin-left: 13rem;
+          }
+        }
+        @container (max-width: 880px) {
+          .service-time-items {
+            display: none;
+          }
+          .service-time-summary {
+            display: inline-flex;
+          }
+        }
+        @media (pointer: coarse) {
+          .service-time-trigger {
+            min-width: 44px;
+            min-height: 44px;
+            padding-inline: 8px;
+            font-size: 14px;
+          }
+        }
+
         /* Column width styles - dynamically generated for all known columns */
         ${unsafeHTML(
           [...new Set([...this.logsColumns, ...Object.keys(this.columnMaxWidthMap)])]
@@ -2071,7 +2072,7 @@ export class LogList extends LitElement {
             .join('\n')
         )}
       </style>
-      ${this.options()} ${this.renderDimLegend()}
+      ${this.options()}
       <div
         ${ref(this.containerRef)}
         class=${clsx(
@@ -3186,8 +3187,75 @@ export class LogList extends LitElement {
 
     if (this.mode === 'patterns') return html`<div class="border-b" style="border-color: var(--color-strokeWeak)"></div>`;
 
+    const legendRows = this.isAggregate ? [] : this.dimLegend;
+    const serviceTimes = legendRows.length > 1 ? legendRows : [];
+    const shownServiceCount = Math.min(3, serviceTimes.length);
+    const moreServiceCount = Math.max(0, serviceTimes.length - shownServiceCount);
+    const dimensionLabel = this.latencyDim === 'service' ? 'service' : 'span kind';
+    const dimensionPlural = this.latencyDim === 'service' ? 'services' : 'span kinds';
+    const moreServiceLabel = `+${moreServiceCount} ${moreServiceCount === 1 ? dimensionLabel : dimensionPlural}`;
+    const formatPercent = (item: (typeof serviceTimes)[number]) => (item.pct < 0.5 && item.ns > 0 ? '<1%' : `${Math.round(item.pct)}%`);
+    const serviceItem = (item: (typeof serviceTimes)[number]) => html`
+      <span class="service-time-item inline-flex items-center gap-1.5 min-w-0" role="listitem" title="${item.label} — ${fmtNs(item.ns)}">
+        <span class=${`w-2 h-2 rounded-xs shrink-0 ${item.color}`} aria-hidden="true"></span>
+        <span class="truncate max-w-[18ch] text-textStrong">${item.label}</span>
+        <span class="tabular-nums">${formatPercent(item)}</span>
+      </span>
+    `;
+
     return html`
-      <div class="w-full flex justify-end px-2 gap-3">
+      <div class="results-toolbar w-full flex items-center justify-end px-2 gap-3 min-w-0">
+        ${serviceTimes.length
+          ? html`<div class="service-time-region flex-1 min-w-0 flex items-center justify-end overflow-hidden text-xs text-textWeak">
+              <div class="service-time-items flex items-center justify-end gap-4 min-w-0 overflow-hidden" role="list" aria-label="Time by ${dimensionLabel} across these results">
+                ${serviceTimes.slice(0, 3).map(serviceItem)}
+                ${moreServiceCount
+                  ? html`<button
+                      type="button"
+                      class="service-time-trigger shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150"
+                      popovertarget=${this.serviceTimePopoverId}
+                      aria-haspopup="dialog"
+                      aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
+                      style="anchor-name: --service-time-trigger"
+                    >${moreServiceLabel}</button>`
+                  : nothing}
+              </div>
+              <button
+                type="button"
+                class="service-time-trigger service-time-summary hidden items-center shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150"
+                popovertarget=${this.serviceTimePopoverId}
+                aria-haspopup="dialog"
+                aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
+                style="anchor-name: --service-time-trigger"
+              >Time by ${dimensionLabel} · ${serviceTimes.length}</button>
+              <div
+                id=${this.serviceTimePopoverId}
+                popover
+                role="dialog"
+                aria-labelledby="${this.serviceTimePopoverId}-title"
+                class="dropdown bg-bgBase border border-strokeWeak rounded shadow p-3 w-72 max-w-[calc(100vw-1rem)] max-h-[min(32rem,80vh)] overflow-y-auto text-xs text-textWeak"
+                style="position-anchor: --service-time-trigger; inset: auto; top: anchor(bottom); right: anchor(right); margin-top: 4px"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <div id="${this.serviceTimePopoverId}-title" class="font-medium text-sm text-textStrong">Time by ${dimensionLabel}</div>
+                  <button
+                    type="button"
+                    class="service-time-trigger inline-flex items-center justify-center w-6 h-6 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong"
+                    popovertarget=${this.serviceTimePopoverId}
+                    popovertargetaction="hide"
+                    aria-label="Close time by ${dimensionLabel}"
+                  >${faSprite('xmark', 'regular', 'w-3 h-3')}</button>
+                </div>
+                <div class="flex flex-col gap-2" role="list">
+                  ${serviceTimes.map(item => html`<div class="flex items-center gap-2" role="listitem">
+                    <span class=${`w-2 h-2 rounded-xs shrink-0 ${item.color}`} aria-hidden="true"></span>
+                    <span class="truncate flex-1 text-textStrong" title=${item.label}>${item.label}</span>
+                    <span class="tabular-nums shrink-0">${formatPercent(item)} · ${fmtNs(item.ns)}</span>
+                  </div>`)}
+                </div>
+              </div>
+            </div>`
+          : html`<span class="flex-1"></span>`}
         <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
           ${viewButton('tree', 'tree', 'Tree')} ${viewButton('list', 'list-view', 'List')}
         </div>
