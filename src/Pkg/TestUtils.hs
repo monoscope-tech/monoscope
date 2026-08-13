@@ -30,6 +30,7 @@ module Pkg.TestUtils (
   effToServantHandlerTest,
   runQueryEffect,
   runHasqlEffect,
+  ackIssue,
   frozenTime,
   -- Mutable test clock — advance time within a single spec to exercise
   -- time-dependent behaviour without re-creating the AuthContext / pool.
@@ -125,9 +126,11 @@ import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
+import Effectful.Time qualified as EffTime
 import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -149,6 +152,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.LiveTail qualified as LiveTail
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Pkg.TraceSessionCache qualified as TSC
@@ -721,6 +725,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   hostStatsCache <- newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- newCache (Just $ TimeSpec 300 0)
+  codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
   tp <- getGlobalTracerProvider
   -- Parallel hasql pools sharing the same test DB. When TIMEFUSION_PG_TEST_URL
   -- is set, point the labeled "timefusion" pool at that instance so the
@@ -765,6 +770,12 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   traceSessionCache <- TSC.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
   metricCatalogBuffer <- Telemetry.newMetricCatalogBuffer
+  -- Tests are a single process, so the local hub is the honest transport: a test that
+  -- registers a subscription and ingests a batch sees the row without a broker.
+  liveTailHub <- LiveTail.newHub
+  liveTailCache <- LiveTail.newSubCache
+  liveTailBuffer <- LiveTail.newRelayBuffer
+  let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
   let atAuthCtx =
         AuthContext
@@ -782,11 +793,13 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           logsPatternCache
           hostStatsCache
           endpointStatsCache
+          codeBlobCache
           projectKeyCache
           extractionWorker
           traceSessionCache
           tfCircuit
           metricCatalogBuffer
+          liveTail
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)
                 databaseUrl = "test-db-connection-from-pool"
@@ -942,6 +955,14 @@ runQueryEffect TestResources{..} action = do
 
 
 -- | Hasql twin of `runQueryEffect`.
+-- | Acknowledge one issue indefinitely at the current (test) clock — the shape
+-- specs need when they only want an issue out of the Inbox and silenced.
+ackIssue :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> Issues.IssueId -> Eff es ()
+ackIssue pid uid iid = do
+  now <- EffTime.currentTime
+  void $ Issues.setAckState pid [iid] $ Just Issues.AckSet{at = now, by = Just uid, window = Issues.AckIndefinite}
+
+
 runHasqlEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, Hasql :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runHasqlEffect TestResources{..} action = do
   action
@@ -1537,7 +1558,7 @@ routeWriteRequest tr verb path params body
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
   ("POST", ["issues", iid, "ack"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid))
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
   ("POST", ["issues", iid, "unack"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "archive"]) ->

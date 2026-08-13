@@ -7,10 +7,13 @@ import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, w
 import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.ByteString.Char8 qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
-import Data.Time.Clock qualified
+import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (runConcurrent)
@@ -18,6 +21,9 @@ import Effectful.Fail (runFailIO)
 import Effectful.Ki qualified as Ki
 import Effectful.Time (runTime)
 import GHC.Profiling (startHeapProfTimer, startProfTimer, stopHeapProfTimer, stopProfTimer)
+import Kafka.Consumer qualified as KC
+import Kafka.Producer qualified as KProd
+import Kafka.Types qualified as KT
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
@@ -26,12 +32,15 @@ import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdo
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
 import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics qualified as Metrics
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
@@ -39,7 +48,7 @@ import Servant (FromHttpApiData (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (backgroundScope, config, extractionWorker, jobsPool, pool, timefusionPgPool),
+  AuthContext (backgroundScope, config, extractionWorker, jobsPool, liveTail, pool, timefusionPgPool),
   DeploymentEnv (Dev),
   EnvConfig (..),
   getAppContext,
@@ -50,7 +59,8 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM, sigUSR2)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
-import System.Types (effToServantHandler, runBackground)
+import System.Tracing (withSpan_)
+import System.Types (ATBackgroundCtx, effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
@@ -66,7 +76,225 @@ runMonoscope tp =
       let withLogger = Logging.makeLogger env.config.loggingDestination
       -- App-lifetime scope for fire-and-forget handler work (Slack/Twilio). The scope
       -- lives until shutdown, then ki reaps any still-running background fibers.
-      withLogger \l -> runServer l env{backgroundScope = Just backgroundScope} tp
+      envWithLiveTail <- liftIO (withLiveTailTransport env)
+      withLogger \l -> runServer l envWithLiveTail{backgroundScope = Just backgroundScope} tp
+
+
+-- | One log shape for every Live Tail fiber.
+--
+-- Seven call sites wrote this by hand; the source name and level are decisions that should be
+-- made once, not re-typed per fiber where they can quietly diverge.
+liveTailLog :: LogBase.Logger -> Text -> AE.Value -> IO ()
+liveTailLog lg msg = runLogT "live-tail" lg LogInfo . LogBase.logAttention msg
+
+
+-- | A supervised Live Tail fiber: run @act@ on a tick, forever, surviving any exception.
+--
+-- The catch is the point. These fibers sit beside ingestion, and one that dies on a transient
+-- database blip takes a feature down silently until the next deploy. Expressing "never exits"
+-- once means it cannot be forgotten in the next fiber someone adds.
+liveTailFiber :: LogBase.Logger -> Text -> Int -> IO () -> IO ()
+liveTailFiber lg what intervalMs act =
+  forever $ do
+    Safe.handleAny (\(e :: SomeException) -> liveTailLog lg ("live_tail: " <> what <> " failed") (AE.object ["error" AE..= show @Text e])) act
+    threadDelay (intervalMs * 1000)
+
+
+-- | Record a Live Tail event inside its own span, so the counter carries an exemplar.
+--
+-- Metrics recorded outside a span get no trace link — silently, since nothing fails and the
+-- counter still moves. 'runBackground' interprets the 'Tracing' effect but does not open a
+-- span, so every fiber-side counter was landing without one: the chart would show a spike with
+-- nothing to click through to.
+--
+-- Called only on ticks that have something to record, never per tick. The relay poller runs
+-- four times a second and the cache refresher every two — a span each would be hundreds of
+-- thousands of empty spans per pod per day, which is a cost we would be paying to describe
+-- nothing happening. The events these wrap (overflow, rejected filters, decode failures) are
+-- rare, so the baseline is zero and the exemplar exists exactly when someone wants to drill.
+--
+-- Levels are deliberately excluded. 'Metrics.liveTailCacheLoaded' records every tick and needs
+-- no exemplar: nobody drills from "500 subscriptions loaded" into a trace.
+liveTailEvent :: LogBase.Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
+liveTailEvent lg env tp name act = runBackground lg env tp (withSpan_ name [] act)
+
+
+-- | Run @act@ at most once per @interval@, tracked by @ref@.
+--
+-- Extracted from two hand-rolled copies. The hazard it removes is specific: forgetting the
+-- reset write turns a throttle into a busy loop, and nothing about the symptom points at the
+-- missing line.
+everyN :: NominalDiffTime -> IORef UTCTime -> IO () -> IO ()
+everyN interval ref act = do
+  now <- getCurrentTime
+  prev <- readIORef ref
+  when (diffUTCTime now prev >= interval) (writeIORef ref now >> act)
+
+
+-- | Point Live Tail's @emit@ at the transport this deployment actually has.
+--
+-- 'System.Config.configToEnv' wires the local hub, which is right for a single process and
+-- wrong the moment ingest and web are separate pods. Rebinding here rather than there is what
+-- keeps a context built outside the server (tests, CLI, jobs) working without a broker.
+withLiveTailTransport :: AuthContext -> IO AuthContext
+withLiveTailTransport env = case env.liveTail.transport of
+  LiveTail.KafkaTopic topic -> do
+    producer <- Queue.getOrInitKafkaProducer env.config
+    let emit e =
+          void
+            $ KProd.produceMessage
+              producer
+              KProd.ProducerRecord
+                { KProd.prTopic = KT.TopicName topic
+                , -- Keyed by subscription so one tail's rows keep their order within a
+                  -- partition. Ordering across subscriptions is meaningless — they are
+                  -- separate screens.
+                  KProd.prKey = Just (encodeUtf8 e.subscriptionId.toText)
+                , KProd.prPartition = KProd.UnassignedPartition
+                , KProd.prValue = Just (toStrict (AE.encode e))
+                , KProd.prHeaders = mempty
+                }
+    pure env{liveTail = env.liveTail{LiveTail.emit = emit}}
+  LiveTail.PostgresRelay ->
+    -- One insert per matched row would put a round trip on the ingest hot path, so the relay
+    -- emit only buffers; `liveTailRelayFlusher` drains the buffer on a tick. A full buffer
+    -- drops rather than blocks, for the same reason the per-browser queue does.
+    pure env{liveTail = env.liveTail{LiveTail.emit = LiveTail.bufferForRelay env.liveTail.relayBuffer}}
+
+
+-- | Reload the ingest pod's subscription cache, forever.
+--
+-- Runs wherever telemetry is processed. A failed refresh keeps the previous contents rather
+-- than clearing them: subscriptions carry their own expiry, so a stale cache degrades to
+-- "tails keep working until their lease would have lapsed anyway", while an emptied one would
+-- black out every live tail in the fleet on a single transient query error.
+liveTailCacheRefresher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailCacheRefresher appLogger env tp =
+  liveTailFiber appLogger "subscription cache refresh" (LiveTail.cacheRefreshSecs * 1000) do
+    rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions LiveTail.maxCached)
+    now <- getCurrentTime
+    bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
+    -- A level, not an event: recorded every tick and outside a span on purpose.
+    Metrics.recordMs Metrics.liveTailCacheLoaded (fromIntegral (length rows)) []
+    unless (null bad) do
+      -- The log is for us; the notice is for the person staring at a tail that will never
+      -- produce another row. Without it the only symptom is silence, which reads as "nothing
+      -- is happening" rather than "this stopped working".
+      liveTailEvent appLogger env tp "live_tail.filters_rejected" do
+        Metrics.count Metrics.liveTailCacheRejected (length bad) []
+        LiveTail.noticeBrokenFilters env.liveTail bad
+      liveTailLog appLogger "live_tail: stored filters no longer compile; those subscriptions will not match" (AE.object ["count" AE..= length bad])
+    when (length rows >= LiveTail.maxCached)
+      $ liveTailLog appLogger "live_tail: subscription cache hit its cap; some tails are not being matched" (AE.object ["cap" AE..= LiveTail.maxCached])
+
+
+-- | Drain the buffered relay rows into Postgres, and sweep expired ones.
+--
+-- Runs on ingest pods. Batched on a tick rather than written per row: the alternative is a
+-- database round trip inside the ingestion path, which is the one thing Live Tail is not
+-- allowed to cost.
+liveTailRelayFlusher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailRelayFlusher appLogger env tp =
+  liveTailFiber appLogger "relay flush" LiveTail.relayPollMs do
+    (pending, lost) <- LiveTail.takeRelayBuffer env.liveTail.relayBuffer
+    -- Overflow means the writer fell behind ingest; the rows are gone either way, but going
+    -- quietly is what makes it undiagnosable.
+    when (lost > 0) do
+      liveTailEvent appLogger env tp "live_tail.relay_overflow" $ Metrics.count Metrics.liveTailRelayDropped lost []
+      liveTailLog appLogger "live_tail: relay buffer overflowed; those tails are missing rows" (AE.object ["dropped" AE..= lost])
+    -- Guarded so an idle pod does not pay for an effect-stack setup every tick.
+    unless (null pending) $ runBackground appLogger env tp (LiveTail.relayPublish pending)
+
+
+-- | Poll the relay for rows addressed to this pod's connections.
+--
+-- Starts at the current end of the table, matching the Kafka consumer's @Latest@: a row
+-- written before this pod held a connection is a row already missed, and replaying it would
+-- show a "live" tail rows from minutes ago. Skips the query entirely while no connection is
+-- open, so a pod nobody is tailing through costs nothing.
+liveTailRelayPoller :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailRelayPoller appLogger env tp = do
+  watermark <- newIORef =<< runBackground appLogger env tp LiveTail.relayWatermark
+  lastReap <- newIORef =<< getCurrentTime
+  skewed <- newIORef (0 :: Int, 0 :: Int)
+  lastReport <- newIORef =<< getCurrentTime
+  liveTailFiber appLogger "relay poll" LiveTail.relayPollMs do
+    idle <- LiveTail.hubIsEmpty env.liveTail.hub
+    unless idle do
+      seen <- readIORef watermark
+      (results, next) <- runBackground appLogger env tp (LiveTail.relayDrain seen)
+      writeIORef watermark next
+      -- Same three-way handling as the Kafka consumer: a version skew is expected mid-deploy
+      -- and someone else's to deliver, an undecodable row never is, and both are counted
+      -- rather than silently skipped.
+      for_ results \case
+        LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
+        LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
+        LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
+    reportSkew appLogger env tp skewed lastReport
+    -- Any pod may reap; the delete is idempotent and bounded by age.
+    everyN (fromIntegral LiveTail.relayRetentionSecs) lastReap
+      $ runBackground appLogger env tp LiveTail.relayReap
+
+
+-- | Fan the side-topic into this pod's hub.
+--
+-- Every web pod needs every message, because a load balancer may put any browser's SSE
+-- connection on any pod — hence a consumer group unique to this process rather than a shared
+-- one, which would instead split the partitions between pods and deliver each row to exactly
+-- one of them (the wrong pod, most of the time).
+--
+-- Starts at the latest offset and never commits: there is nothing here worth resuming. A row
+-- a browser was not connected to receive is a row it has already missed, and replaying it on
+-- reconnect would show a "live" tail rows from minutes ago.
+liveTailConsumer :: LogBase.Logger -> AuthContext -> TracerProvider -> Text -> IO ()
+liveTailConsumer appLogger env tp topic = do
+  nonce <- T.take 8 . UUID.toText <$> UUID.nextRandom
+  let props =
+        KC.brokersList (map KC.BrokerAddress env.config.kafkaBrokers)
+          <> KC.groupId (KC.ConsumerGroupId ("mono_live_tail_" <> nonce))
+          <> KC.clientId (KC.ClientId ("mono-live-tail-" <> nonce))
+          <> KC.noAutoCommit
+          <> foldMap (uncurry KC.extraProp) (Queue.kafkaSaslExtraProps env.config)
+      sub = KC.topics [KT.TopicName topic] <> KC.offsetReset KC.Latest
+  Safe.bracket (KC.newConsumer props sub) (either (const pass) (void . KC.closeConsumer)) \case
+    Left e -> liveTailLog appLogger "live_tail: consumer failed to start" (AE.object ["error" AE..= show @Text e])
+    Right c -> do
+      -- Skew and corruption are counted, not logged per message: both fail for *every* message
+      -- while they last, so a per-message line would be a flood proportional to ingest volume.
+      -- The summary is what a human can act on — and silence here is what would turn a
+      -- half-finished rolling deploy into an unexplained fleet-wide empty tail.
+      skewed <- newIORef (0 :: Int, 0 :: Int) -- (version-mismatched, undecodable)
+      lastReport <- newIORef =<< getCurrentTime
+      forever do
+        KC.pollMessage c (KT.Timeout 1000) >>= \case
+          Left _ -> pass -- timeout or transient: the next poll retries
+          Right rec -> forM_ (KC.crValue rec) \raw ->
+            case LiveTail.decodeEnvelope raw of
+              LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
+              LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
+              LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
+        reportSkew appLogger env tp skewed lastReport
+
+
+-- | Surface accumulated live-tail decode failures once a minute, then reset.
+--
+-- A version mismatch is expected mid-deploy and resolves itself; one that persists means a pod
+-- is stuck on an old build and its users' tails are silently empty. Undecodable messages are
+-- never expected at all.
+reportSkew :: LogBase.Logger -> AuthContext -> TracerProvider -> IORef (Int, Int) -> IORef UTCTime -> IO ()
+reportSkew appLogger env tp skewed lastReport = everyN 60 lastReport do
+  (vers, bad) <- atomicModifyIORef' skewed ((0, 0),)
+  when (vers > 0 || bad > 0) do
+    -- Shared by the Kafka consumer and the relay poller, so both transports report a skew the
+    -- same way. `reason` is bounded to these two values.
+    liveTailEvent appLogger env tp "live_tail.decode_failed" do
+      Metrics.count Metrics.liveTailDecodeFailed vers [("reason", OA.toAttribute ("skew" :: Text))]
+      Metrics.count Metrics.liveTailDecodeFailed bad [("reason", OA.toAttribute ("undecodable" :: Text))]
+    liveTailLog
+      appLogger
+      "live_tail: side-topic messages dropped; those tails are missing rows"
+      (AE.object ["version_mismatched" AE..= vers, "undecodable" AE..= bad, "envelope_version" AE..= LiveTail.envelopeVersion])
 
 
 -- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of 'assetUrl',
@@ -129,6 +357,13 @@ runServer appLogger env tp = do
         defaultGzipSettings
           { gzipFiles = GzipCompress
           , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
+          , -- Never compress an SSE stream. The size threshold alone would hold the first 860
+            -- bytes of a Live Tail response waiting to decide, and a compressor sitting on a
+            -- connection whose whole purpose is to deliver a row the instant it exists is the
+            -- one buffering hop no response header can opt out of.
+            -- Prefix, not equality: a later edit that appends a charset to the content type
+            -- would otherwise silently switch compression back on.
+            gzipCheckMime = \mime -> not ("text/event-stream" `BS.isPrefixOf` mime) && defaultGzipSettings.gzipCheckMime mime
           }
 
   let corsPolicy =
@@ -180,6 +415,21 @@ runServer appLogger env tp = do
         , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
         ]
   let consumerOnly = env.config.consumerOnly -- CONSUMER_ONLY: queue consumers + schema-learning workers; skip Warp/gRPC/odd-jobs/global-timers
+  -- Live Tail splits across two roles, and one process can hold both. Matching needs the
+  -- subscription cache wherever telemetry is processed; delivery needs the side-topic
+  -- consumer wherever a browser can connect.
+  --
+  -- The cache and the relay writer are deliberately __unconditional__. They used to be gated
+  -- on @enableKafkaService || enablePubsubService || enableOtlpGrpcService@, which is a guess
+  -- at "does this process ingest?" — and it is wrong for OTLP-over-HTTP, which arrives on the
+  -- ordinary web listener with none of those flags set. A pod that ingests without a refreshed
+  -- cache matches every record against an empty subscription list, so the tail reports @live@
+  -- and stays empty forever. This is the same lesson as 'LiveTail.Transport': the failure was
+  -- never the cost of running the fiber, it was inferring the topology. An idle cache refresh
+  -- is one indexed query every 'cacheRefreshSecs' returning nothing, and the relay flusher on
+  -- an empty buffer does no work at all.
+      liveTailKafkaTopic = case env.liveTail.transport of LiveTail.KafkaTopic t -> Just t; LiveTail.PostgresRelay -> Nothing
+      liveTailRelay = env.liveTail.transport == LiveTail.PostgresRelay
   -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   -- Runtime profiling switch: SIGUSR2 toggles both the CPU sampling windows
@@ -218,6 +468,23 @@ runServer appLogger env tp = do
           guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" env.config.kafkaDeadLetterTopic (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebDeadLetterTopic env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
+        , -- Matching happens wherever telemetry lands, and every process is a place telemetry
+          -- can land — OTLP/HTTP needs no ingest flag at all. Unconditional beats guessing.
+          Just $ async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
+        , -- Relay writer follows ingest, reader follows HTTP; both are no-ops on the Kafka
+          -- transport, which carries the rows itself. Neither is gated on a role: the writer
+          -- flushes an empty buffer for free, and the reader skips its query outright while
+          -- this pod's hub has no connections ('hubIsEmpty').
+          guard liveTailRelay $> async (supervise logExc "live-tail-relay-write" $ liveTailRelayFlusher appLogger env tp)
+        , guard liveTailRelay $> async (supervise logExc "live-tail-relay-read" $ liveTailRelayPoller appLogger env tp)
+        , -- Delivery happens wherever the browser lands, so the consumer follows HTTP. Kafka
+          -- transport only: with the local hub, publish and deliver are already the same
+          -- process and a consumer would deliver a second copy of every row.
+          [ async (supervise logExc "live-tail-consumer" $ liveTailConsumer appLogger env tp t)
+          | not consumerOnly
+          , Just t <- [liveTailKafkaTopic]
+          ]
+            & listToMaybe
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
@@ -317,7 +584,7 @@ shutdownMonoscope env =
     atomically $ writeTVar env.extractionWorker.acceptingBatches False
     awaitDrained env.extractionWorker 500_000 10
     -- Phase B: force-flush drain buffers so buffered spans get pattern-tagged.
-    now <- Data.Time.Clock.getCurrentTime
+    now <- getCurrentTime
     ExtractionWorker.forceFlushAllBuffers env.extractionWorker now
     awaitDrained env.extractionWorker 500_000 5
     Queue.closeSharedKafkaProducer

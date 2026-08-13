@@ -32,6 +32,10 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   rawSql,
   selectFrom,
+  -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
+  -- constructor (see 'Pkg.Git.GitHost') and so cannot use 'WrappedEnumSC'.
+  enumFromField,
+  refineText,
 ) where
 
 import Control.Exception (throwIO)
@@ -144,6 +148,11 @@ newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
 
 instance KnownSymbol name => ToSchema (UUIDId name) where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
 instance ToParamSchema (UUIDId name) where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+
+
+-- Case-insensitive text is documented as plain text; lives here so every model
+-- carrying a 'CI Text' field gets the schema without redeclaring the orphan.
+instance ToSchema (CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
 
 
 instance HasField "toText" (UUIDId name) Text where

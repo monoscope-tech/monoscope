@@ -4,6 +4,7 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, A
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
 import Data.Map qualified as Map
@@ -94,6 +95,7 @@ import Pages.CodeContext qualified as PageCodeContext
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
@@ -113,6 +115,8 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
+import Pkg.Git qualified as Git
+import Pkg.LiveTail qualified as LT
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 
@@ -334,7 +338,7 @@ data ApiV1Routes mode = ApiV1Routes
           :> QueryParam "per_page" Int
           :> Get '[JSON] (ApiT.Paged ApiT.IssueApiSummary)
   , issueGet :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] ApiT.IssueApiFull
-  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> Post '[JSON] ApiT.IssueApiFull
+  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> QueryParam "duration_minutes" Int :> Post '[JSON] ApiT.IssueApiFull
   , issueUnack :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] ApiT.IssueApiFull
   , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] ApiT.IssueApiFull
   , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] ApiT.IssueApiFull
@@ -393,7 +397,27 @@ data Routes mode = Routes
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
-  , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+  , -- Kept at its original path so hooks configured before multi-host support keep delivering.
+    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+  , -- One route per host. The host is in the path rather than sniffed from the headers because
+    -- it decides which signature scheme to verify with, and that must not be attacker-chosen.
+    -- Every host's signature and event headers are captured; each arm reads only its own.
+    gitWebhook
+      :: mode
+        :- "webhook"
+          :> "git"
+          :> Capture "host" Git.GitHost
+          :> Header "X-Hub-Signature" Text -- Bitbucket
+          :> Header "X-Gitea-Signature" Text
+          :> Header "webhook-signature" Text -- GitLab 19.1+
+          :> Header "X-Gitlab-Token" Text -- GitLab, pre-19.1
+          :> Header "webhook-id" Text
+          :> Header "webhook-timestamp" Text
+          :> Header "X-Gitea-Event" Text
+          :> Header "X-Gitlab-Event" Text
+          :> Header "X-Event-Key" Text -- Bitbucket
+          :> ReqBody '[RawJSON] BS.ByteString
+          :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
@@ -469,7 +493,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
-  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Get '[HTML] (RespHeaders (Html ()))
+  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
@@ -479,7 +503,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
-    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> Get '[HTML] (RespHeaders (Html ()))
+    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -510,7 +534,10 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
   , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
-  , logExplorerValidateGet :: mode :- "log_explorer" :> "validate" :> QPT "query" :> Get '[JSON] (RespHeaders Log.QueryValidation)
+  , -- `source` matters: a metrics query reads a different table, so validating its fields
+    -- against otel_logs_and_spans squiggles the metrics table's own columns. Every sibling
+    -- endpoint here already takes it.
+    logExplorerValidateGet :: mode :- "log_explorer" :> "validate" :> QPT "query" :> QPT "source" :> Get '[JSON] (RespHeaders Log.QueryValidation)
   , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> Get '[HTML] (RespHeaders (Html ()))
   , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] Log.SaveQueryForm :> Post '[HTML] (RespHeaders Log.QueryLibraryView)
   , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders Log.QueryLibraryView)
@@ -518,6 +545,13 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
+  , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
+  , liveTailRegisterPost :: mode :- "live_tail" :> "subscriptions" :> ReqBody '[JSON] LT.NewSubscription :> Post '[JSON] (RespHeaders LiveTail.RegisterResponse)
+  , -- Streams for as long as the browser holds it open, so it is the one route here that is
+    -- not a plain request/response — see 'LiveTail.EventStream'.
+    liveTailStreamGet :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "stream" :> StreamGet NoFraming LiveTail.EventStream (LiveTail.SseHeaders (SourceIO Builder))
+  , liveTailRenewPost :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "renew" :> Post '[JSON] (RespHeaders AE.Value)
+  , liveTailDelete :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> Delete '[JSON] (RespHeaders AE.Value)
   , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
     -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
     -- the error panel wait on thirty round trips it may never need.
@@ -533,11 +567,11 @@ type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
 
 type AnomaliesRoutes' :: Type -> Type
 data AnomaliesRoutes' mode = AnomaliesRoutes'
-  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowledge" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowledge" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
@@ -670,7 +704,18 @@ server logger env tp otlpTraces otlpLogs =
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH
     , stripeWebhook = Settings.stripeWebhookPostH
-    , githubWebhook = GitSync.githubWebhookPostH
+    , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+    , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
+        GitSync.gitWebhookPostH
+          host
+          Git.WebhookReq
+            { event = asum [giteaEvent, glEvent, bbEvent]
+            , signature = asum [giteaSig, glSig, bbSig]
+            , gitlabToken = glToken
+            , gitlabWebhookId = glId
+            , gitlabTimestamp = glTs
+            , body = body
+            }
     , chartsDataShot = Charts.queryMetrics Nothing
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
@@ -917,6 +962,11 @@ logExplorerServer pid =
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
     , codeContextGet = PageCodeContext.codeContextH pid
+    , liveTailGet = LiveTail.liveTailGetH pid
+    , liveTailRegisterPost = LiveTail.liveTailRegisterH pid
+    , liveTailStreamGet = LiveTail.liveTailStreamH pid
+    , liveTailRenewPost = LiveTail.liveTailRenewH pid
+    , liveTailDelete = LiveTail.liveTailDeleteH pid
     }
 
 

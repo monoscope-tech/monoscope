@@ -120,13 +120,11 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 -- S3
 ----------------------------------------------------------------------
 
-getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
-getMinioConnectInfo accessKey secretKey region _bucket endpoint = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
-  where
-    withRegion = Minio.setRegion (fromString $ toString region) info
-    info = if T.null endpoint then Minio.awsCI else fromString $ toString endpoint
-    accessKey' = fromString $ toString accessKey
-    secretKey' = fromString $ toString secretKey
+getMinioConnectInfo :: Text -> Text -> Text -> Text -> Minio.ConnectInfo
+getMinioConnectInfo accessKey secretKey region endpoint =
+  Minio.setCreds (Minio.CredentialValue (fromString $ toString accessKey) (fromString $ toString secretKey) Nothing)
+    $ Minio.setRegion (fromString $ toString region)
+    $ bool (fromString $ toString endpoint) Minio.awsCI (T.null endpoint)
 
 
 -- | Turn a minio-hs error into something a user can act on, instead of leaking
@@ -180,7 +178,7 @@ awsRegions =
 
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
-  let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.bucket s3Form.endpointUrl
+  let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
   let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ "Not connected")
   case res of
@@ -396,7 +394,7 @@ apiKeyColumns pid =
                 if apiKey.active
                   then ("hover:bg-fillError-weak", hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
                   else ("hover:bg-fillSuccess-weak", hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
-              confirmMsg = "Are you sure you want to " <> (if apiKey.active then "revoke " else "activate ") <> apiKey.title <> " API Key?"
+              confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API Key?"
           button_
             [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left " <> hoverCls
             , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
@@ -687,8 +685,9 @@ data ScrapeHealth = HealthOk | HealthError | HealthPending
 
 configHealth :: PromCfg.PrometheusScrapeConfig -> ScrapeHealth
 configHealth cfg = case T.toLower . T.strip <$> cfg.lastStatus of
-  Just s | "ok" `T.isPrefixOf` s -> HealthOk
-  Just s | "error" `T.isPrefixOf` s -> HealthError
+  Just s
+    | "ok" `T.isPrefixOf` s -> HealthOk
+    | "error" `T.isPrefixOf` s -> HealthError
   _ -> HealthPending
 
 
@@ -947,14 +946,16 @@ notificationsTestPostH pid TestForm{..} = do
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
   if status == "sent"
-    then addSuccessToast (if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!") Nothing
+    then addSuccessToast (bool ("Test " <> channel <> " notification sent!") "Test notification sent to all channels!" (channel == "all")) Nothing
     else addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
   addRespHeaders mempty
 
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
 notificationsTestHistoryGetH pid = do
-  tests <- Hasql.interp [HI.sql|SELECT * FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]
+  -- Columns spelled out (not @SELECT *@) so an ADD COLUMN can't shift TestHistory's
+  -- positional decode; the list matches its field order.
+  tests <- Hasql.interp [HI.sql|SELECT id, project_id, issue_type, channel, target, status, error, created_at FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]
   addRespHeaders $ NotificationTestHistoryGet tests
 
 
@@ -1040,11 +1041,9 @@ data WebhookData = WebhookData
 -- False
 verifyLemonSqueezySignature :: Text -> ByteString -> ByteString -> Bool
 verifyLemonSqueezySignature sigHeader payload secret =
-  case B16.decode (encodeUtf8 sigHeader) of
-    Right provided ->
-      let expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
-       in BA.constEq expected provided
-    Left _ -> False
+  maybe False (BA.constEq expected) $ rightToMaybe $ B16.decode $ encodeUtf8 sigHeader
+  where
+    expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
 
 
 -- | Email every member of a project. Shared by the LemonSqueezy and Stripe webhooks.
@@ -1077,7 +1076,7 @@ webhookPostH sigHeaderM rawBody = do
       downgrade reason = do
         Projects.projectByOrderId (show orderId) >>= \case
           Just project -> do
-            rows <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
+            rows <- Projects.downgradeToFree orderId
             when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
             when (rows > 1) $ Log.logAttention "LS downgrade touched multiple rows" (show orderId :: Text, rows)
             notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl envConfig project.id)
@@ -1193,14 +1192,14 @@ manageBillingGetH pid from = do
               inCycle = filter (\(d, _, _, _, _) -> d >= s && d < e) allDaily
         , not (null inCycle)
         ]
-  let last_reported = fmtDate "%b %-d" project.usageLastReported
+  let lastReported = fmtDate "%b %-d" project.usageLastReported
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
       -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
       -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
-      provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.projectProvider project
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
+      provider = bool (Projects.projectProvider project) Projects.NoBillingProvider (Projects.isFreeTier project.paymentPlan)
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
 billingPage :: BillingData -> Html ()
@@ -1213,9 +1212,9 @@ billingPage d = div_ [] do
           | d.paymentPlan == "Bring your own storage" -> 199
           | otherwise -> 29 :: Int64
       planPrice = show basePriceNum
-      overageNum = max 0 (reqs - 20_000_000)
+      overageNum = overageReqs reqs
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
-      estCost = if isFree then "$0" else usd (fromIntegral basePriceNum + overageCost)
+      estCost = bool (usd (fromIntegral basePriceNum + overageCost)) "$0" isFree
       cycleStartText = fmtDate "%b %-d" d.cycleStart
   settingsSection_ do
     settingsH2_ "Billing"
@@ -1236,7 +1235,7 @@ billingPage d = div_ [] do
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
         div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
-        let bytesSuffix = if d.totalBytes > 0 then " · " <> humanBytes d.totalBytes else ""
+        let bytesSuffix = bool "" (" · " <> humanBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
               if isFree || overageNum <= 0
                 then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
@@ -1267,6 +1266,11 @@ billingPage d = div_ [] do
 
 usd :: Double -> Text
 usd n = "$" <> toText (printf "%.2f" n :: String)
+
+
+-- | Requests past the 20M included in the paid plan (billed at $1 per 1M).
+overageReqs :: Int64 -> Int64
+overageReqs n = max 0 (n - 20_000_000)
 
 
 fmtDate :: FormatTime t => String -> t -> Text
@@ -1301,10 +1305,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
   let cycleRows = filter (\(d, _, _, _, _) -> d >= cycleStartDay) rows
       totalReqs = sum [n | (_, n, _, _, _) <- cycleRows]
       totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- cycleRows]
-      summaryRight =
-        if totalBytes > 0
-          then fmt (commaizeF totalReqs) <> " rows · " <> humanBytes totalBytes
-          else fmt (commaizeF totalReqs) <> " rows"
+      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> humanBytes totalBytes) (totalBytes > 0)
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
@@ -1312,7 +1313,6 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
     then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
     else do
       let activeDays = length rows
-          included = 20_000_000 :: Int64
           maxDay = foldr (\(_, n, _, _, _) acc -> max n acc) 1 rows
           hasMetrics = any (\(_, _, m, _, _) -> m > 0) rows
           ascending = sortWith (\(d, _, _, _, _) -> d) rows
@@ -1323,7 +1323,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             fst
               $ foldl'
                 ( \(xs, acc) (day, n, m, eb, mb) ->
-                    let acc' = (if day < cycleStartDay then 0 else acc) + n
+                    let acc' = bool acc 0 (day < cycleStartDay) + n
                      in ((day, n, m, eb, mb, acc' - n, acc') : xs, acc')
                 )
                 ([], 0 :: Int64)
@@ -1332,7 +1332,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             | isFree || dayOverage <= 0 = "—"
             | otherwise = usd (fromIntegral dayOverage / 1_000_000)
             where
-              dayOverage = max 0 (cur - included) - max 0 (prev - included)
+              dayOverage = overageReqs cur - overageReqs prev
       unless hasMetrics
         $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak bg-fillWeak/40 border border-strokeWeak rounded-md px-3 py-2"] do
           span_ [class_ "text-textStrong"] "No metric ingestion this cycle."
@@ -1350,9 +1350,9 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               stickyTh_ "text-right" "Est. cost"
           let countCell :: Int64 -> Int64 -> Bool -> Html ()
               countCell bytes n0 strong = td_ [class_ "px-3 py-2 text-right whitespace-nowrap"] do
-                div_ [class_ (if strong then "text-textStrong" else "text-textWeak")]
+                div_ [class_ (bool "text-textWeak" "text-textStrong" strong)]
                   $ toHtml @Text
-                  $ if n0 <= 0 then "—" else fmt (commaizeF n0)
+                  $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
                 when (bytes > 0)
                   $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
                   $ toHtml @Text (humanBytes bytes)
@@ -1361,9 +1361,9 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
                   events = max 0 (n - metrics)
                   preCycle = day < cycleStartDay
-                  rowCls = "border-t border-strokeWeak align-top" <> (if preCycle then " opacity-50" else "")
-                  dayCls = "px-3 py-2 " <> (if preCycle then "text-textWeak" else "text-textStrong")
-              tr_ [class_ rowCls, title_ (if preCycle then "Previous cycle — shown for context" else "")] do
+                  rowCls = "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle
+                  dayCls = "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle
+              tr_ [class_ rowCls, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
                 td_ [class_ dayCls] $ toHtml $ fmtDate "%a %b %e" day
                 countCell eb events True
                 countCell mb metrics False
@@ -1377,7 +1377,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
         $ toHtml
         $ show activeDays
         <> " day"
-        <> (if activeDays == 1 then "" else "s")
+        <> bool "s" "" (activeDays == 1)
         <> " with activity since "
         <> cycleStartText
         <> "."
@@ -1395,7 +1395,7 @@ pastCyclesSection_ _ _ [] = mempty
 pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Past cycles"
-    span_ [class_ "text-xs text-textWeak"] $ toHtml @Text (show (length cycles) <> " cycle" <> (if length cycles == 1 then "" else "s"))
+    span_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ let n = length cycles in show n <> " cycle" <> bool "s" "" (n == 1)
   div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
     table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
       thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
@@ -1409,12 +1409,12 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
           -- ce is exclusive end; subtract 1 day for the human-facing label.
           let endLabel = fmtDate "%b %-d" (addDays (-1) ce)
               startLabel = fmtDate "%b %-d, %Y" cs
-              overage = max 0 (reqs - 20_000_000)
+              overage = overageReqs reqs
               costText = bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000)) "—" isFree
           tr_ [class_ "border-t border-strokeWeak"] do
             td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
             td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (if bytes > 0 then humanBytes bytes else "—")
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (humanBytes bytes) (bytes > 0))
             td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml costText
   unless isFree
     $ div_ [class_ "text-xs text-textWeak"] "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."

@@ -6,6 +6,7 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
+import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
@@ -73,6 +74,15 @@ const noopRef: RefOrCallback = () => {};
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
 type ScrollAnchor = { id: string; offset: number };
+
+/**
+ * Identity of a virtual row. Without it the virtualizer keys rows by index, so a live-tail
+ * batch prepended at the top re-renders every visible row's cells — the whole list repaints
+ * and re-measures on each tick instead of the existing rows simply moving down.
+ */
+// `'id' in item` and not `'type' in item`: an EventLine carries a `type` of its own ('log' | 'span').
+export const virtualItemKey = (item: VirtualListItem) =>
+  'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
 
 const MAX_RETAINED_ROWS = 5000;
 
@@ -181,12 +191,23 @@ export class LogList extends LitElement {
   private serviceColors: Record<string, string> = {};
   private columnMaxWidthMap: ColIdxMap = {};
   private recentFetchUrl: string = '';
-  private liveStreamInterval: NodeJS.Timeout | null = null;
+  // Live mode is a server push, not a poll. Polling could never be fast here: a row has to
+  // clear its ingest batch and land in TimeFusion before a query can return it, so the
+  // interval was bounded below by write-visibility latency no matter how short it got. The
+  // push path matches on the ingest pod *before* the write, which is the only way to beat it.
+  //
+  // The consequence, accepted deliberately: pushed rows are provisional. A row whose write
+  // later fails would show here and vanish on the next durable read. And under load the
+  // server drops the oldest queued rows rather than buffering without bound — Events has no
+  // service gate to bound it up front, so it is bounded here instead, with a visible count.
+  private liveStream: LiveStream | null = null;
+  @state() private liveDropped = 0;
   private barChart: any = null;
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
   private _loadNewerObserver: IntersectionObserver | null = null;
+  private _visibilityObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
@@ -218,8 +239,7 @@ export class LogList extends LitElement {
   private handleLiveToggle = (e: Event) => {
     if ((e.target as HTMLInputElement).checked) {
       this.isLiveStreaming = true;
-      if (!this.liveStreamInterval)
-        this.liveStreamInterval = setInterval(() => this.fetchData(this.buildRecentFetchUrl(), false, true), 5000);
+      if (!this.liveStream?.isRunning) void this.startLiveStream();
     } else {
       this.stopLiveStream();
     }
@@ -228,16 +248,18 @@ export class LogList extends LitElement {
   // Tear down live-tail polling and reflect it in the toggle; optional toast when
   // stopped automatically (e.g. the live window reached the range's upper bound).
   private stopLiveStream(message?: string) {
-    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
-    this.liveStreamInterval = null;
+    this.liveStream?.stop();
+    this.liveStream = null;
     this.isLiveStreaming = false;
     if (this.liveBtn) this.liveBtn.checked = false;
     if (message) this.showErrorToast(message);
     this.requestUpdate();
   }
   private handlePageHide = () => {
-    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
-    this.liveStreamInterval = null;
+    // Drops the lease too, so a closed tab stops matching on the ingest pods rather than
+    // waiting out its expiry.
+    this.liveStream?.stop();
+    this.liveStream = null;
   };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
@@ -508,6 +530,84 @@ export class LogList extends LitElement {
     }
   }
 
+  /**
+   * Open the push stream for the query currently in the box.
+   *
+   * The subscription carries this table's column list because the server cannot derive it —
+   * a query's final columns may be SQL expressions only the database can evaluate — so ingest
+   * resolves each name it can against the in-memory record and omits the rest.
+   */
+  private async startLiveStream() {
+    const url = new URL(window.location.href);
+    this.liveDropped = 0;
+    this.liveStream = new LiveStream({
+      projectId: this.projectId,
+      leaseSecs: 45,
+      body: () => ({
+        // No service gate on Events: it streams whatever the query says, bounded by the
+        // server's per-connection queue rather than refused up front.
+        all_signals: true,
+        query: url.searchParams.get('query') || null,
+        columns: Object.keys(this.colIdxMap ?? {}),
+      }),
+      onRows: rows => this.handleLiveRows(rows),
+      onDropped: total => {
+        this.liveDropped = total;
+        this.requestUpdate();
+      },
+      onState: (state, detail) => {
+        if (state === 'expired' || state === 'error') this.stopLiveStream(detail);
+      },
+    });
+    await this.liveStream.start();
+  }
+
+  /**
+   * Merge pushed rows through the same path a recent fetch uses.
+   *
+   * Reusing `groupSpans` and `mergeIntoTree` is what keeps trace grouping, the new-row
+   * highlight and the scroll-anchoring identical between pushed and fetched rows — a second
+   * merge path would drift from this one on the first change to either.
+   */
+  private handleLiveRows(rows: unknown[]) {
+    if (!rows.length || !this.colIdxMap) return;
+    const positional = rows
+      .map((r: any) => (r?.shape === 'table' ? tableRowToArray(r.cols ?? {}, this.colIdxMap as any) : null))
+      .filter((r): r is unknown[] => r !== null);
+    if (!positional.length) return;
+
+    // Trace adjacency has to be synthesised: a fetch receives it from the server, but a pushed
+    // row arrives alone, and groupSpans keys the tree off adjacency rather than off the rows.
+    const traces = traceEntriesFor(positional as any, this.colIdxMap as any);
+    const tree = groupSpans(positional as any, this.colIdxMap, this.expandedTraces, this.flipDirection, traces as any);
+    if (!tree.length) return;
+    tree.forEach(t => (t.isNew = true));
+    this.fetchedNew = true;
+
+    // The container decides *where* the row goes, never *whether* it arrives. Returning early
+    // when it is missing (before first paint, or while the list is detached) would drop pushed
+    // rows on the floor — and unlike a fetch, there is no cursor to re-request them with.
+    const container = this.logsContainer;
+    const scrollTop = container?.scrollTop ?? 0;
+    const scrolledToBottom = container ? scrollTop + container.clientHeight >= container.scrollHeight - 1 : true;
+    if (scrolledToBottom) this.shouldScrollToBottom = true;
+    // Same rule as a recent fetch: a user who has scrolled away gets a "N new" pill rather
+    // than having the viewport yanked out from under them mid-read.
+    if (container && shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
+      this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, true);
+    } else {
+      // Reaching here means the viewport is parked at the edge the rows arrive at (that is
+      // what shouldBufferRecent decided), so the row under the user's eye is the one being
+      // pushed down on purpose. Anchoring would scroll the previous top row back into view
+      // every tick — a visible bounce that also hides the rows just streamed in.
+      const anchor = container && !this.atNewRowEdge(scrollTop, scrolledToBottom) ? this.captureScrollAnchor() : null;
+      this.spanListTree = this.mergeIntoTree(tree, true);
+      this.updateVisibleItems();
+      if (anchor) void this.restoreScrollAnchor(anchor);
+    }
+    this.requestUpdate();
+  }
+
   private buildRecentFetchUrl(): string {
     // Always build from current browser URL to ensure we have latest query params
     const url = new URL(window.location.href);
@@ -735,8 +835,24 @@ export class LogList extends LitElement {
 
     // Project ID is now passed as a property from the server
 
-    // Fetch initial data from the JSON endpoint
-    this.fetchInitialData();
+    // Fetch initial data from the JSON endpoint. Embedded lists (issue-page tabs,
+    // dashboards) mount inside panels that are display:none until their tab is opened, so
+    // fetching on connect spends a full query on a panel the user may never look at — on the
+    // issue page that was the single biggest cost of the page load. Defer those to first
+    // visibility; the log explorer itself (no initialFetchUrl) stays eager.
+    // IntersectionObserver fires on the next frame for already-visible elements, so the
+    // visible case costs a frame rather than a branch that has to guess at layout.
+    if (this.initialFetchUrl) {
+      this._visibilityObserver = new IntersectionObserver((entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        this._visibilityObserver?.disconnect();
+        this._visibilityObserver = null;
+        this.fetchInitialData();
+      });
+      this._visibilityObserver.observe(this);
+    } else {
+      this.fetchInitialData();
+    }
   }
 
   private initializeFixedColumnWidths() {
@@ -833,9 +949,9 @@ export class LogList extends LitElement {
 
   updated(changedProperties: Map<string, any>) {
     // Stop live streaming when switching to an aggregate view
-    if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
-      clearInterval(this.liveStreamInterval);
-      this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
+    if (changedProperties.has('mode') && this.isAggregate && this.liveStream) {
+      this.liveStream.stop();
+      this.liveStream = null; // else handleLiveToggle's isRunning guard skips restart on switch-back
       this.isLiveStreaming = false;
     }
 
@@ -891,13 +1007,17 @@ export class LogList extends LitElement {
       this._loadNewerObserver.disconnect();
       this._loadNewerObserver = null;
     }
+    if (this._visibilityObserver) {
+      this._visibilityObserver.disconnect();
+      this._visibilityObserver = null;
+    }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
       this.updateBatchTimer = null;
     }
-    if (this.liveStreamInterval) {
-      clearInterval(this.liveStreamInterval);
-      this.liveStreamInterval = null;
+    if (this.liveStream) {
+      this.liveStream.stop();
+      this.liveStream = null;
     }
     if (this.scrollEndTimer) {
       clearTimeout(this.scrollEndTimer);
@@ -964,15 +1084,20 @@ export class LogList extends LitElement {
     return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection, this.cachedServerTraces);
   }
 
+  // Rows of a tree that the list actually renders: in tree view a collapsed trace contributes
+  // its root only. The buffer holds whole traces, so counting it raw promised a "72 new" that
+  // inserted a fraction of that many rows.
+  private renderableRows(tree: EventLine[]): EventLine[] {
+    return !this.isAggregate && (this.view === 'tree' || this.mode === 'sessions') ? tree.filter((e) => e.show) : tree;
+  }
+
+  // Count behind the "N new" pill — what clicking it will actually put on screen.
+  private get recentCount(): number {
+    return this.renderableRows(this.recentDataToBeAdded).length;
+  }
+
   private updateVisibleItems() {
-    let items: EventLine[];
-    if (this.isAggregate) {
-      items = this.spanListTree;
-    } else if (this.view === 'tree' || this.mode === 'sessions') {
-      items = this.spanListTree.filter((e) => e.show);
-    } else {
-      items = this.spanListTree;
-    }
+    const items = this.renderableRows(this.spanListTree);
     this.visibleItems = items;
 
     // Build virtual list with special items
@@ -1395,7 +1520,7 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            const anchor = revealRecent ? null : this.captureScrollAnchor();
+            const anchor = revealRecent || this.atNewRowEdge(scrollTop, scrolledToBottom) ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1589,7 +1714,10 @@ export class LogList extends LitElement {
   // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
   // tail paused for hours while inspecting an older row.
   private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
-    const merged = dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    // Drop rows already on screen here rather than at merge time: mergeIntoTree filters them
+    // anyway, so buffering them only inflates the "N new" pill above what it will insert.
+    const fresh = newData.filter((r) => !this.seenIds.has(r.id));
+    const merged = dedupeById(this.orderMerge(current, fresh, isRecentFetch));
     return this.flipDirection ? merged.slice(-MAX_RETAINED_ROWS) : merged.slice(0, MAX_RETAINED_ROWS);
   }
 
@@ -1630,6 +1758,11 @@ export class LogList extends LitElement {
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
     return kept;
+  }
+
+  // At the edge new rows are inserted at — top for newest-first, bottom when flipped.
+  private atNewRowEdge(scrollTop: number, scrolledToBottom: boolean): boolean {
+    return this.flipDirection ? scrolledToBottom : scrollTop <= 0;
   }
 
   private captureScrollAnchor(): ScrollAnchor | null {
@@ -1858,14 +1991,24 @@ export class LogList extends LitElement {
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
       >
-        ${!isAggregate && this.recentDataToBeAdded.length > 0 && !this.flipDirection
+        ${this.liveDropped > 0
+          ? html`<div class="sticky top-0 z-50 flex justify-center" role="status" aria-live="polite">
+              <span
+                class="cbadge-sm badge-neutral bg-fillWarning-strong text-textInverse-strong shadow rounded-lg text-sm"
+                title="Live mode drops the oldest events when they arrive faster than the browser can take them. Narrow the query to see every event."
+              >
+                ${this.liveDropped.toLocaleString()} dropped — narrow your query
+              </span>
+            </div>`
+          : nothing}
+        ${!isAggregate && this.recentCount > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
                 @pointerdown=${this.handleRecentClick}
-                aria-label="${this.recentDataToBeAdded.length} new events, click to load"
+                aria-label="${this.recentCount} new events, click to load"
               >
-                ${this.recentDataToBeAdded.length} new
+                ${this.recentCount} new
               </button>
             </div>`
           : nothing}
@@ -1928,6 +2071,7 @@ export class LogList extends LitElement {
                     this.isAggregate || this.wrapLines ? 'measured' : 'dense',
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
+                      .keyFunction=${virtualItemKey}
                       .renderItem=${this.renderVirtualItem}
                       @visibilityChanged=${this.handleVisibilityChange}
                       .layout=${this.isAggregate || this.wrapLines ? {} : { type: DenseRowFlowLayout }}
@@ -1952,17 +2096,15 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
-                aria-label=${this.recentDataToBeAdded.length > 0
-                  ? `Scroll to bottom (${this.recentDataToBeAdded.length} new events)`
-                  : 'Scroll to bottom'}
+                aria-label=${this.recentCount > 0 ? `Scroll to bottom (${this.recentCount} new events)` : 'Scroll to bottom'}
                 class=${clsx(
                   'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
-                  this.recentDataToBeAdded.length > 0
+                  this.recentCount > 0
                     ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
                     : 'bg-gradient-to-br from-fillStrong to-fillWeak'
                 )}
               >
-                ${this.recentDataToBeAdded.length > 0
+                ${this.recentCount > 0
                   ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
                   : nothing}
                 <span class="relative">
@@ -2237,12 +2379,14 @@ export class LogList extends LitElement {
               ? KIND_COLORS[value] ?? 'bg-fillStrong'
               : this.serviceColors[value] || 'bg-fillStrong';
           const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
-          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => {
+          const chil = childrenTimeSpans.map(({ startNs, duration, data, depth }: ChildrenForLatency) => {
             const label = dimOf(data) || 'unknown';
-            return { startNs, duration, label, color: colorOf(label) };
+            return { startNs, duration, depth, label, color: colorOf(label) };
           });
-          // The title always describes the row itself, whichever axis the bar is drawn on.
-          const ownSegments = latencySegments({ startNs, duration }, chil);
+          // The title always describes the row itself, whichever axis the bar is drawn on, and
+          // always exclusively — nested spans would otherwise bill the same time to every
+          // ancestor's service and make the parts sum past the total.
+          const ownSegments = exclusiveSegments({ startNs, duration }, chil);
           const { track, segments, frame } = latencyBar(
             !!expanded,
             { startNs, duration, traceStart, traceEnd, label: dimOf(dataArr) || 'unknown', color },
@@ -3249,14 +3393,64 @@ export function latencySegments(
   return segments;
 }
 
+type Descendant = { startNs: number; duration: number; label: string; color: string; depth?: number };
+
+/**
+ * Where a row's time actually went, attributed exclusively.
+ *
+ * `latencySegments` paints each descendant in its own right, so nested spans overlap and the
+ * same nanosecond is claimed by every ancestor of the span that spent it. For a summary that
+ * is wrong twice over: the colours stack (the deepest, most specific span is painted under its
+ * parents rather than over them) and the totals sum past the row. Here each instant belongs to
+ * exactly one span — the deepest one covering it, i.e. the service actually doing the work
+ * rather than the one waiting on it — and the leftovers are the row's own self time, which the
+ * track shows through. Segments come out disjoint, ordered, and merged across equal neighbours,
+ * so `latencyTitle` can sum them per label and get real per-service time.
+ */
+export function exclusiveSegments(row: { startNs: number; duration: number }, descendants: Descendant[]): LatencySegment[] {
+  if (!(row.duration > 0)) return [];
+  const rowEnd = row.startNs + row.duration;
+  const spans = descendants
+    .map(d => ({ from: Math.max(row.startNs, d.startNs), to: Math.min(rowEnd, d.startNs + Math.max(0, d.duration)), d }))
+    .filter(s => s.to > s.from)
+    .sort((a, b) => a.from - b.from);
+  if (!spans.length) return [];
+
+  const bounds = [...new Set(spans.flatMap(s => [s.from, s.to]))].sort((a, b) => a - b);
+  const parts: { from: number; to: number; label: string; color: string }[] = [];
+  let next = 0;
+  let active: typeof spans = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const [from, to] = [bounds[i], bounds[i + 1]];
+    while (next < spans.length && spans[next].from <= from) active.push(spans[next++]);
+    active = active.filter(s => s.to > from);
+    let win: (typeof spans)[number] | undefined;
+    for (const s of active) if (!win || (s.d.depth ?? 1) > (win.d.depth ?? 1)) win = s;
+    if (!win) continue;
+    const prev = parts[parts.length - 1];
+    if (prev && prev.to === from && prev.label === win.d.label && prev.color === win.d.color) prev.to = to;
+    else parts.push({ from, to, label: win.d.label, color: win.d.color });
+  }
+  return parts.map(p => ({
+    leftPct: ((p.from - row.startNs) / row.duration) * 100,
+    widthPct: ((p.to - p.from) / row.duration) * 100,
+    color: p.color,
+    label: p.label,
+    ns: p.to - p.from,
+  }));
+}
+
 /**
  * The bar for one row: which track it sits on, and what paints over it.
  *
  * Expanding a trace turns the column back into a waterfall, which is the whole point of
  * expanding it — the child rows are a breakdown of one request, and a breakdown needs a
  * shared axis, so every row of an expanded trace draws its own span positioned in the trace
- * with the trace as the empty track. A collapsed row has no siblings to line up with, so it
- * stays its own axis: full-width track (its self time) with its direct children inside it.
+ * with the trace as the empty track — and only its direct children inside it, since every
+ * deeper span is drawn by its own row just below. A collapsed row has no siblings to line up
+ * with and no rows below to defer to, so it stays its own axis: full-width track (its self
+ * time) under an exclusive breakdown of the whole subtree, which is the only place the time
+ * spent in each service is visible at all.
  *
  * `frame` is the |---[]---| rule the trace axis needs and the row axis doesn't: it marks
  * where the trace begins and ends, which is what makes a short span read as short and
@@ -3266,11 +3460,12 @@ export function latencySegments(
 export function latencyBar(
   expanded: boolean,
   row: { startNs: number; duration: number; traceStart: number; traceEnd: number; label: string; color: string },
-  children: { startNs: number; duration: number; label: string; color: string }[]
+  descendants: Descendant[]
 ): { track: string; segments: LatencySegment[]; frame: boolean } {
-  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: latencySegments(row, children), frame: false };
+  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: exclusiveSegments(row, descendants), frame: false };
   const axis = { startNs: row.traceStart, duration: row.traceEnd };
-  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, children)], frame: true };
+  const direct = descendants.filter(c => (c.depth ?? 1) === 1);
+  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, direct)], frame: true };
 }
 
 /**

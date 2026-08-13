@@ -74,6 +74,8 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
+import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (stampHashesAtIngest)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -285,6 +287,11 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
   let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest caches stamped
+  -- Live Tail, before the durable write: the whole point is that a browser sees the log
+  -- sooner than a query could return it. Runs after minting so the streamed row carries the
+  -- same id the stored row will, and so "open the full record" resolves once the write lands.
+  -- Bounded and total by construction — see 'LiveTail.publishMatches'.
+  fanOutToLiveTail appCtx minted
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
@@ -293,6 +300,49 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
   -- the caller before this point.
   pure (res $> [])
+
+
+-- | Hand each project's records to its active Live Tail subscriptions.
+--
+-- Grouped by project because 'LiveTail.publishMatches' looks subscriptions up per project, and
+-- a batch routinely carries several tenants. There is no transport check: every deployment has
+-- a working one, and a project nobody is tailing already costs a single lookup.
+fanOutToLiveTail :: (IOE :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es ()
+fanOutToLiveTail appCtx recs = do
+  stats <- fold <$> traverse publishOne (HM.toList byProject)
+  -- Metrics before logs: these are rates, and the log lines below fire only on the failure
+  -- paths. Attributed by transport only — see the cardinality note in "Pkg.Metrics".
+  let transport = [("transport", OA.toAttribute (case appCtx.liveTail.transport of LiveTail.KafkaTopic _ -> "kafka" :: Text; LiveTail.PostgresRelay -> "relay"))]
+  Metrics.count Metrics.liveTailEvaluated (getSum stats.evaluated) transport
+  Metrics.count Metrics.liveTailMatched (getSum stats.matched) transport
+  Metrics.count Metrics.liveTailFilterErrors (getSum stats.failed) transport
+  Metrics.count Metrics.liveTailPublishFailed (getSum stats.publishFailed) transport
+  Metrics.count Metrics.liveTailOversized (getSum stats.oversized) transport
+  Metrics.count Metrics.liveTailSkipped (getSum stats.skipped) transport
+  -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would be a
+  -- flood proportional to ingest volume rather than a diagnostic.
+  when (getSum stats.failed > 0)
+    $ Log.logAttention
+      "live_tail: filters could not be evaluated; rows treated as non-matching"
+      (AE.object ["failed" AE..= getSum stats.failed, "evaluated" AE..= getSum stats.evaluated])
+  -- A matched row the transport refused is a row a human is waiting for and will never see.
+  when (getSum stats.publishFailed > 0)
+    $ Log.logAttention
+      "live_tail: matched rows could not be published; those tails are missing logs"
+      (AE.object ["publish_failed" AE..= getSum stats.publishFailed, "matched" AE..= getSum stats.matched])
+  -- Both of these are rows dropped on purpose, which is exactly why they have to be said out
+  -- loud: to the user they are indistinguishable from a filter that matched nothing.
+  when (getSum stats.oversized > 0)
+    $ Log.logAttention
+      "live_tail: matched rows exceeded the envelope size cap and were dropped"
+      (AE.object ["oversized" AE..= getSum stats.oversized, "cap_bytes" AE..= LiveTail.maxEnvelopeBytes])
+  when (getSum stats.skipped > 0)
+    $ Log.logAttention
+      "live_tail: batch hit the evaluation budget; trailing records were not matched"
+      (AE.object ["skipped" AE..= getSum stats.skipped, "budget" AE..= LiveTail.maxEvalsPerBatch])
+  where
+    byProject = HM.fromListWith (<>) [(pid, V.singleton r) | r <- V.toList recs, Just pid <- [Projects.projectIdFromText r.project_id]]
+    publishOne (pid, rs) = LiveTail.publishMatches appCtx.liveTail pid rs
 
 
 -- | Fail a gRPC handler with a status code and message.
@@ -1556,6 +1606,16 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
     let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest projectCaches stamped
+    -- Live Tail, before the durable write — the same hook 'dualWriteWithPoisonMapping' has,
+    -- for the same reason. This is the /direct/ path: OTLP over gRPC on 4317 and OTLP over
+    -- HTTP, neither of which passes through Kafka or Pub/Sub. It is the only path a
+    -- deployment without a queue has, and it is what most self-hosted and dev installs use.
+    --
+    -- Missing here, Live Tail was structurally dead in exactly those deployments: it accepted
+    -- subscriptions, refreshed its cache, held the SSE connection open and reported @live@ —
+    -- and no record was ever offered to a filter, because every record arrived through the one
+    -- ingest path with no hook in it.
+    fanOutToLiveTail appCtx minted
     Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace

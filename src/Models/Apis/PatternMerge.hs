@@ -28,13 +28,11 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (showPGFloatArray)
+import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.PatternMerge (embeddingTextForError)
 import Relude
 import System.Types (DB)
 
-
--- Error pattern operations
 
 getUnembeddedErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, Text, Text)]
 getUnembeddedErrorPatterns pid =
@@ -46,12 +44,13 @@ getUnembeddedErrorPatterns pid =
 
 updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
 updateErrorEmbeddings [] = pure 0
-updateErrorEmbeddings pairs = do
-  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+updateErrorEmbeddings pairs =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
+  where
+    (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
@@ -86,7 +85,7 @@ unmergeErrorPattern pid =
 
 getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
 getErrorPatternGroupMembers eid =
-  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE canonical_id = #{eid} ORDER BY updated_at DESC |]
+  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE canonical_id = #{eid} ORDER BY updated_at DESC |])
 
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
@@ -96,8 +95,6 @@ fetchErrorTexts ids =
     . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
     <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{ids}) |]
 
-
--- Log pattern operations
 
 getUnembeddedLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, Text)]
 getUnembeddedLogPatterns pid =
@@ -109,12 +106,13 @@ getUnembeddedLogPatterns pid =
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
 updateLogEmbeddings [] = pure 0
-updateLogEmbeddings pairs = do
-  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+updateLogEmbeddings pairs =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(#{ids}::bigint[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
+  where
+    (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
@@ -144,7 +142,7 @@ unmergeLogPattern lid =
 
 getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
 getLogPatternGroupMembers lid =
-  Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |]
+  Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |])
 
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)

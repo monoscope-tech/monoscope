@@ -8,10 +8,12 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant qualified
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
@@ -123,3 +125,74 @@ spec = around withTestResources do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
       let warpPats = filter (\p -> p.errorType == "InvalidRequest") patterns
       length warpPats `shouldBe` 1
+
+    -- Acknowledging used to hide an issue from the Inbox while its alerts kept
+    -- arriving, which is what made "acknowledged" meaningless. An ack must
+    -- silence the issue for exactly its window, then hand it back.
+    it "4. Acknowledging silences notifications for its window, then they resume" \tr -> do
+      seedSlackChannel tr
+      apiKey <- createTestAPIKey tr pid "notif-ack-key"
+      ingestTraceWithException tr apiKey "GET /acked" "AckError" "boom" "at f (/a.js:1:1)" (addUTCTime (-600) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      let clearNotified = withResource tr.trPool \conn ->
+            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only pid)
+          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions pid)
+      issueIds <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'runtime_exception' ORDER BY created_at DESC LIMIT 1 |]
+          (PGS.Only pid) :: IO [PGS.Only Issues.IssueId]
+      issueId <- case issueIds of
+        (PGS.Only i : _) -> pure i
+        _ -> expectationFailure "no runtime_exception issue created" >> error "unreachable"
+
+      -- Acknowledged for an hour: the sweep must stay silent even though the
+      -- pattern is otherwise due.
+      let uid = (Servant.getResponse tr.trSessAndHeader).user.id
+      runTestBg frozenTime tr $ void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = Issues.AckFor 60}
+      clearNotified
+      silenced <- sweep
+      silenced `shouldBe` []
+
+      -- Past the window: the ack no longer holds, so alerts resume.
+      advanceMinutes tr 61
+      clearNotified
+      resumed <- sweep
+      resumed `shouldSatisfy` (not . null)
+
+      -- ...and the expiry sweep hands the issue back to the Inbox with a trail.
+      runTestBgNoReset tr BackgroundJobs.expireLapsedAcks
+      back <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT i.acknowledged_at IS NULL, EXISTS (SELECT 1 FROM apis.issue_activity_log a WHERE a.issue_id = i.id AND a.event = 'ack_expired')
+                FROM apis.issues i WHERE i.id = ? |]
+          (PGS.Only issueId) :: IO [(Bool, Bool)]
+      back `shouldBe` [(True, True)]
+
+    -- "Notify every N" silently stopped working once its error pattern was a day
+    -- old: the sweep's project selection bounded *every* row by created_at, so a
+    -- project with nothing fresh never got picked up and the cadence died. It
+    -- only appeared to work because the post-ingestion inline path has no such
+    -- bound — i.e. for as long as the error kept re-occurring.
+    it "5. An explicit subscription is still swept after its error ages past 24h" \tr -> do
+      seedSlackChannel tr
+      apiKey <- createTestAPIKey tr pid "notif-subscribed-key"
+      ingestTraceWithException tr apiKey "GET /old-sub" "StaleError" "still here" "at f (/a.js:1:1)" (addUTCTime (-600) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      -- created_at is compared against SQL now() by the project-selection query,
+      -- so age it on the real clock; the cadence itself is compared against the
+      -- app clock, so last_notified_at is an hour back on frozenTime.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.error_patterns
+                SET created_at = now() - interval '3 days', subscribed = TRUE,
+                    notify_every_minutes = 30, last_notified_at = ?
+                WHERE project_id = ? |]
+          (addUTCTime (-3600) frozenTime, pid)
+
+      (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+        $ BackgroundJobs.runNotificationSweep frozenTime
+      notifs `shouldSatisfy` (not . null)

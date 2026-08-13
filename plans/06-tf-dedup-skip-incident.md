@@ -1,5 +1,17 @@
 # TimeFusion: cross-project scans fail — `DedupExec key 'id' not in input schema`
 
+> **RESOLVED 2026-08-12.** Shipped in TimeFusion `f8d7278` — *"fix(read): keep dedup keys in
+> the scan so a skipped window can still dedup"*. The service map recovered and
+> `ServiceMapRollup` jobs stopped failing. The candidate patch below
+> ([`tf-dedup-skip-fix.patch`](tf-dedup-skip-fix.patch)) was **not** what landed; the shipped
+> fix keeps the dedup keys in the projection rather than disabling the skip, so the read-side
+> optimisation survives. Kept as an incident record — the reproduction steps are the reusable
+> part, since this class of failure (a narrowed projection dropping a column an exec node
+> still needs) can recur with any new pushdown.
+>
+> Related, and still open: the skip only ever fires for partitions the sweep certified, which
+> is today and yesterday — see `timefusion/docs/plans/2026-08-12-dedup-certification-coverage.md`.
+
 Live since **2026-08-09**. Handover doc; the candidate fix is in
 [`tf-dedup-skip-fix.patch`](tf-dedup-skip-fix.patch).
 

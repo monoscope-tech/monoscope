@@ -194,6 +194,30 @@ describe('Log Worker Functions', () => {
     });
   });
 
+  describe('childrenTimeSpans carries the whole subtree', () => {
+    // A collapsed row's bar could only ever paint its direct children, so a request whose
+    // time was actually spent by a grandchild service showed as one flat colour.
+    const colMap = { trace_id: 0, latency_breakdown: 1, parent_id: 2, timestamp: 3, duration: 4, start_time_ns: 5, errors: 6, summary: 7, kind: 8, id: 9 };
+    const row = (id: string, parent: string | null, startNs: number, duration: number) =>
+      Object.assign([], { 0: 'tr', 1: id, 2: parent, 3: '2024-01-01T00:00:00Z', 4: duration, 5: startNs, 6: false, 7: [], 8: 'span', 9: id });
+
+    test('a grandchild reaches its grandparent, labelled with its distance from it', () => {
+      const res = groupSpans([row('api', null, 0, 1000), row('svc', 'api', 100, 800), row('db', 'svc', 200, 500)], colMap, { tr: true }, false, [
+        { trace_id: 'tr', start_time: 0, duration: 1000, trace_start_time: null, root: 'api', children: { api: ['svc'], svc: ['db'] } },
+      ]);
+      const spans = (id: string) =>
+        res
+          .find((r: any) => r.id === id)!
+          .childrenTimeSpans.map((c: any) => ({ depth: c.depth, startNs: c.startNs, duration: c.duration }));
+      expect(spans('api')).toEqual([
+        { depth: 1, startNs: 100, duration: 800 },
+        { depth: 2, startNs: 200, duration: 500 },
+      ]);
+      expect(spans('svc')).toEqual([{ depth: 1, startNs: 200, duration: 500 }]);
+      expect(spans('db')).toEqual([]);
+    });
+  });
+
   describe('Integration test with realistic data', () => {
     test('should process a batch of 2540 items like in production', () => {
       const colIdxMap = createSampleColIdxMap();

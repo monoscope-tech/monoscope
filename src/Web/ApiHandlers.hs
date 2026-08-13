@@ -879,6 +879,7 @@ issueToSummary i =
     , affectedRequests = i.affectedRequests
     , affectedClients = i.affectedClients
     , acknowledged = isJust i.acknowledgedAt
+    , acknowledgedUntil = zonedTimeToUTC <$> i.acknowledgedUntil
     , archived = isJust i.archivedAt
     , createdAt = zonedTimeToUTC i.createdAt
     , updatedAt = zonedTimeToUTC i.updatedAt
@@ -966,14 +967,23 @@ issueMutate :: Projects.ProjectId -> Issues.IssueId -> ([Issues.IssueId] -> ATBa
 issueMutate pid iid op = fetchIssue pid iid *> op [iid] *> apiIssueGet pid iid
 
 
-apiIssueAck :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueAck pid iid = do
+-- | Acknowledge, silencing notifications for @duration_minutes@ — or
+-- indefinitely (until the issue regresses or is un-acked) when omitted.
+apiIssueAck :: Projects.ProjectId -> Issues.IssueId -> Maybe Int -> ATBaseCtx IssueApiFull
+apiIssueAck pid iid durationM = do
+  ack <- mkAckSet Nothing durationM
+  issueMutate pid iid $ \ids -> Issues.setAckState pid ids (Just ack)
+
+
+-- | Build an 'Issues.AckSet' for @now@ from an optional duration in minutes.
+mkAckSet :: Maybe Projects.UserId -> Maybe Int -> ATBaseCtx Issues.AckSet
+mkAckSet by durationM = do
   now <- Time.currentTime
-  issueMutate pid iid $ \ids -> Issues.setAckState pid ids (Just now) Nothing
+  pure Issues.AckSet{at = now, by, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
 
 
 apiIssueUnack :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueUnack pid iid = issueMutate pid iid $ \ids -> Issues.setAckState pid ids Nothing Nothing
+apiIssueUnack pid iid = issueMutate pid iid $ \ids -> Issues.setAckState pid ids Nothing
 
 
 apiIssueArchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -989,8 +999,9 @@ apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState
 apiIssuesBulk :: Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
 apiIssuesBulk pid ba = do
   now <- Time.currentTime
-  let ack = count $ Issues.setAckState pid ba.ids (Just now) Nothing
-      unack = count $ Issues.setAckState pid ba.ids Nothing Nothing
+  ackSet <- mkAckSet Nothing ba.durationMinutes
+  let ack = count $ Issues.setAckState pid ba.ids (Just ackSet)
+      unack = count $ Issues.setAckState pid ba.ids Nothing
       archive = count $ Issues.setArchiveState pid ba.ids (Just now)
       unarchive = count $ Issues.setArchiveState pid ba.ids Nothing
   bulkExec

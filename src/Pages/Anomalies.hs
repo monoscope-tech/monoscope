@@ -37,7 +37,6 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -77,7 +76,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (DetailLoading (KeepCurrent), spanDetailAttrs_, tracePage)
 import Pkg.AI qualified as AI
@@ -103,23 +102,34 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
--- | Acknowledge (on=True) or un-acknowledge (on=False) an anomaly/issue.
--- The acknowledge path cascades via the model helpers; the clear path resets the columns directly.
-acknowledgeAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
-acknowledgeAnomalyGetH pid enable aid _hostM = do
+-- | Acknowledge (on=True) or un-acknowledge (on=False) an issue. @durationM@ is
+-- the silence window in minutes; absent means indefinitely — until the issue
+-- regresses or someone un-acks it. Acknowledging is the *only* way to stop
+-- notifications for an issue, so it cascades to the underlying anomaly rows too.
+acknowledgeAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> Maybe Int -> ATAuthCtx (RespHeaders AnomalyAction)
+acknowledgeAnomalyGetH pid enable aid durationM = do
   (sess, _) <- Projects.sessionAndProject pid
+  now <- Time.currentTime
   let issueId = UUIDId aid.unUUIDId
-  if enable
-    then do
-      void $ Issues.acknowledgeIssue issueId sess.user.id
-      Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
-      v <- Anomalies.acknowledgeAnomalies sess.user.id (V.singleton (UUID.toText aid.unUUIDId))
-      void $ Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
-    else do
-      void $ Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
-      void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
-      Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
-  addRespHeaders $ Acknowlege pid issueId enable
+      window = maybe Issues.AckIndefinite Issues.AckFor durationM
+      until' = Issues.ackUntil now window
+  ackState <-
+    if enable
+      then do
+        void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = now, by = Just sess.user.id, window}
+        Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
+        hashes <- Anomalies.acknowledgeAnomalies sess.user.id until' (V.singleton (UUID.toText aid.unUUIDId))
+        void $ Anomalies.acknowlegeCascade sess.user.id until' (V.fromList hashes)
+        addSuccessToast (untilLabel "Acknowledged" now until' <> " \x2014 notifications paused") Nothing
+        pure $ Just until'
+      else do
+        void $ Issues.setAckState pid [issueId] Nothing
+        void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+        Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
+        addSuccessToast "Back in the Inbox \x2014 notifications resumed" Nothing
+        pure Nothing
+  addTriggerEvent "issuesListChanged" AE.Null
+  addRespHeaders $ Acknowlege pid issueId now ackState
 
 
 -- | Archive (on=True) or un-archive (on=False) an anomaly/issue.
@@ -130,52 +140,63 @@ archiveAnomalyGetH pid enable aid = do
   void $ Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
   void $ Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
+  addSuccessToast (bool "Restored to the Inbox" "Archived \x2014 notifications stopped" enable) Nothing
+  addTriggerEvent "issuesListChanged" AE.Null
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) enable
 
 
 data AnomalyAction
-  = Acknowlege Projects.ProjectId Issues.IssueId Bool
+  = -- | @Just until@ when acknowledged, alongside the render clock.
+    Acknowlege Projects.ProjectId Issues.IssueId UTCTime (Maybe UTCTime)
   | Archive Projects.ProjectId Issues.IssueId Bool
   | Bulk
 
 
 instance ToHtml AnomalyAction where
-  toHtml (Acknowlege pid aid is_ack) = toHtml $ anomalyAcknowledgeButton pid aid is_ack ""
+  toHtml (Acknowlege pid aid now untilM) = toHtml $ anomalyAcknowledgeButton pid aid now untilM
   toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
   toHtml Bulk = ""
   toHtmlRaw = toHtml
 
 
--- | Bulk acknowledge/archive anomalies, triggering a notification and list reload
-anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
-anomalyBulkActionsPostH pid action items = do
+-- | Bulk lifecycle transitions, triggering a toast and list reload. @duration@
+-- (minutes) applies to @acknowledge@ only; absent acknowledges indefinitely.
+anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> Maybe Int -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
+anomalyBulkActionsPostH pid action durationM items = do
   (sess, _) <- Projects.sessionAndProject pid
   if null items.itemId
     then do
       addErrorToast "No items selected" Nothing
       addRespHeaders Bulk
     else do
+      now <- Time.currentTime
       let vIds = V.fromList items.itemId
-      eventType <- case action of
+          issueIds = UUIDId <$> mapMaybe UUID.fromText items.itemId
+          window = maybe Issues.AckIndefinite Issues.AckFor durationM
+          until' = Issues.ackUntil now window
+      (eventType, msg) <- case action of
         "acknowledge" -> do
-          ths <- Anomalies.acknowledgeAnomalies sess.user.id vIds
-          void $ Anomalies.acknowlegeCascade sess.user.id (V.fromList ths)
-          pure Issues.IEAcknowledged
+          ths <- Anomalies.acknowledgeAnomalies sess.user.id until' vIds
+          void $ Anomalies.acknowlegeCascade sess.user.id until' (V.fromList ths)
+          pure (Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
+        "unacknowledge" -> do
+          void $ Issues.setAckState pid issueIds Nothing
+          pure (Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         "archive" -> do
           void $ Anomalies.archiveAnomaliesAndIssues vIds
-          pure Issues.IEArchived
+          pure (Issues.IEArchived, "Archived \x2014 notifications stopped")
+        "unarchive" -> do
+          void $ Issues.setArchiveState pid issueIds Nothing
+          pure (Issues.IEUnarchived, "Restored to the Inbox")
         _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
-      forM_ (mapMaybe UUID.fromText items.itemId) \u ->
-        Issues.logIssueActivity (UUIDId u) eventType (Just sess.user.id) Nothing
-      addSuccessToast (action <> "d items Successfully") Nothing
+      forM_ issueIds \u -> Issues.logIssueActivity u eventType (Just sess.user.id) Nothing
+      addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
 
 
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM =
-  anomalyDetailCore pid firstM sinceM $ \_ ->
-    Issues.selectIssueById issueId
+anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById issueId
 
 
 anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -212,7 +233,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
               , pageTitle = "#" <> show issue.seqNum
               , headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
-                  anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
+                  anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) now (zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt)
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
                   when (issue.issueType == Issues.RuntimeException)
                     $ whenJust errorM \errL -> do
@@ -245,15 +266,14 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                 patHash = "pat:" <> issue.targetHash
                 from = fromMaybe (addUTCTime (-3600) now) rangeStart
                 to = fromMaybe now rangeEnd
-            rows :: [V.Vector Text] <-
-              Hasql.interp
+            listToMaybe @(V.Vector Text)
+              <$> Hasql.interp
                 [HI.sql| SELECT summary FROM otel_logs_and_spans
                           WHERE project_id = #{pidTxt}
                             AND timestamp BETWEEN #{from} AND #{to}
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
-            pure $ listToMaybe rows
           else pure Nothing
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now isFirst tp sampleOverride
 
@@ -341,9 +361,7 @@ breadcrumbsFromCustomAttr sr = fromMaybe [] do
 -- attribute keys prefixed @sentry.breadcrumb.*@; we also handle plain OTel events
 -- (using the event name as the kind and @attributes.message\/body@ as the message).
 breadcrumbsFromSpanEvents :: Telemetry.SpanRecord -> [Breadcrumb]
-breadcrumbsFromSpanEvents sr = case AE.fromJSON sr.events of
-  AE.Success (events :: [Telemetry.SpanEvent]) -> map toBreadcrumb events
-  _ -> []
+breadcrumbsFromSpanEvents sr = foldMap (map toBreadcrumb) (parseMaybe AE.parseJSON sr.events :: Maybe [Telemetry.SpanEvent])
   where
     toBreadcrumb ev =
       let attrs = ev.eventAttributes
@@ -377,8 +395,7 @@ breadcrumbsFromTraceLogs errorSpanId sr =
 
 -- | Combine all breadcrumb sources for a trace, dedupe near-duplicates emitted by
 -- overlapping instrumentation (e.g. an SDK that ships both legacy attr + OTel events),
--- and sort chronologically. Duplicates land adjacent after sorting on the dedup key,
--- so 'groupBy' suffices.
+-- and sort chronologically.
 extractBreadcrumbs :: V.Vector Telemetry.SpanRecord -> Maybe (NonEmpty Breadcrumb)
 extractBreadcrumbs spans =
   let recs = V.toList spans
@@ -388,8 +405,7 @@ extractBreadcrumbs spans =
           <> concatMap breadcrumbsFromSpanEvents recs
           <> concatMap (breadcrumbsFromTraceLogs errorSpanId) recs
       dedupKey bc = (bc.timestamp, bc.kind, T.take 80 $ fromMaybe "" bc.message)
-      deduped = map head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
-   in nonEmpty deduped
+   in nonEmpty $ sortOn dedupKey $ ordNubOn dedupKey raw
 
 
 -- | Icon id + tailwind colour class for a breadcrumb @type@.
@@ -493,6 +509,22 @@ detailCard_ title body = div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2
   div_ [class_ "p-4 flex flex-col gap-3"] body
 
 
+-- | Banner stating, in words, what the issue's current state means for
+-- notifications. The whole point of the ack window is that a reader never has
+-- to guess whether alerts are still coming.
+issueStatusStrip_ :: UTCTime -> Issues.Issue -> Html ()
+issueStatusStrip_ now issue = whenJust banner \(icon, cls, msg) ->
+  div_ [class_ $ "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm " <> cls] do
+    faSprite_ icon "regular" "w-4 h-4 shrink-0"
+    span_ [] $ toHtml msg
+  where
+    banner
+      | isJust issue.archivedAt = Just ("archive", "border-strokeWeak bg-fillWeaker text-textWeak", "Archived — hidden from the Inbox and never notified. Unarchive to bring it back." :: Text)
+      | Just until' <- zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt =
+          Just ("bell-slash", "border-strokeSuccess-weak bg-fillSuccess-weak text-textSuccess", untilLabel "Acknowledged" now until' <> " \x2014 notifications are paused. This issue returns to the Inbox when the window ends or it regresses.")
+      | otherwise = Nothing
+
+
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
 anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
@@ -504,6 +536,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
     -- LEFT: scrollable main content
     div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
       -- Header: title
+      issueStatusStrip_ now issue
       h3_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
       unless (issue.recommendedAction == Issues.defaultRecommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
@@ -754,13 +787,23 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
                 div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
 
           div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
-            let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
-                logsQuery = case Issues.hashPrefix issue.issueType of
-                  Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
-                  _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-            let timeParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+            let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+                isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
+                lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
+                (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]) of
+                  (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", pickerParams)
+                  (_, Just tId) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", pickerParams)
+                  -- ~24% of error patterns never captured a trace id (log records carry no trace
+                  -- context; spans always do). The old empty-string fallback rendered
+                  -- @context___trace_id==""@, which filters nothing — the tab dumped the project's
+                  -- entire retention window (6s / 550KB of unrelated logs). With no trace to pin
+                  -- to, scope to the issue's service over +/-5min around when it was last seen.
+                  _ ->
+                    ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
+                    , "&from=" <> isoT (addUTCTime (-300) lastSeen) <> "&to=" <> isoT (addUTCTime 300 lastSeen)
+                    )
             div_ [class_ "grow-1 min-w-0 h-full"]
-              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
+              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
             div_
               [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/2 investigation-details"
@@ -779,14 +822,15 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
               ]
               $ htmxOverlayIndicator_ "details_indicator"
 
-      let withSessionIds = V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
-      unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
-        div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
-          faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
-          h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Session Replay"
-        termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+      whenJust (V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs V.!? 0) \sessionId ->
+        div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
+          div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
+            faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
+            h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Session Replay"
+          termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
 
-      unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange, Issues.LogPattern, Issues.LogPatternRateChange]) $ activityPanel_ pid issueId "" V.empty
+      -- Every other issue type already renders an Activity panel beside its own content.
+      when (issue.issueType == Issues.QueryAlert) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_
@@ -948,7 +992,7 @@ resolveErrorPostH pid errUuid = do
       | otherwise -> do
           when (err.state /= ErrorPatterns.ESResolved) do
             now <- Time.currentTime
-            void $ ErrorPatterns.resolveErrorPattern err.id now
+            void $ ErrorPatterns.updateErrorPatternState err.id ErrorPatterns.ESResolved now
             issueM <- Issues.selectIssueByHash pid err.hash
             whenJust issueM \issue -> Issues.logIssueActivity issue.id Issues.IEResolved (Just sess.user.id) Nothing
           addSuccessToast "Error resolved" Nothing
@@ -1466,22 +1510,11 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
               def
                 { rowId = Just issueRowId
                 , rowAttrs = Just issueRowAttrs
-                , bulkActions =
-                    [ BulkAction{icon = Just "check", title = "Acknowledge", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/archive"}
-                    ]
+                , bulkActions = issueBulkActions pid currentFilterTab
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
                 , pagination = if totalCount > 0 then Just paginationConfig else Nothing
-                , zeroState =
-                    Just
-                      $ ZeroState
-                        { icon = "empty-set"
-                        , title = "No Issues Or Errors."
-                        , description = "Issues and errors appear here automatically once you integrate an SDK."
-                        , actionText = "View SDK setup guides"
-                        , destination = Right "https://monoscope.tech/docs/sdks/"
-                        }
+                , zeroState = Just $ issueZeroState pid currentFilterTab
                 }
           }
       bwconf =
@@ -1490,9 +1523,8 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
           , menuItem = Just "Issues"
           , freeTierStatus = freeTierStatus
           , headContent = Just highlightJsHead_
-          , navTabs =
-              Just
-                $ toHtml
+          , navTabs = Just $ div_ [class_ "flex items-center gap-1.5"] do
+              toHtml
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
@@ -1503,11 +1535,48 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
                       , TabFilterOpt "Archived" Nothing Nothing
                       ]
                   }
+              -- Each tab differs only in how long the silence lasts and whether
+              -- the issue can come back; saying so is what stops "acknowledged"
+              -- from being a mystery.
+              span_ [class_ "tooltip tooltip-bottom", data_ "tip" (tabBlurb currentFilterTab)]
+                $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
           }
   addRespHeaders
     $ if loadM == Just "true"
       then ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
       else ALPage $ PageCtx bwconf issuesTable
+
+
+-- | One line under the tab strip saying what the tab *means*.
+tabBlurb :: Text -> Text
+tabBlurb = \case
+  "Acknowledged" -> "Someone owns these. Notifications are paused until the acknowledgement expires or the issue regresses."
+  "Archived" -> "Not actionable. Hidden and never notified — unarchive to bring one back."
+  _ -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
+
+
+-- | Bulk actions offered on each tab: only transitions that make sense from the
+-- state you're looking at.
+issueBulkActions :: Projects.ProjectId -> Text -> [BulkAction]
+issueBulkActions pid tab =
+  [ BulkAction{icon = Just i, title = t, uri = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> a}
+  | (i, t, a) <- case tab of
+      "Acknowledged" -> [("arrow-rotate-left", "Unacknowledge", "unacknowledge"), ("archive", "Archive", "archive")]
+      "Archived" -> [("arrow-rotate-left", "Unarchive", "unarchive")]
+      _ -> [("check", "Acknowledge", "acknowledge"), ("archive", "Archive", "archive")]
+  ]
+
+
+issueZeroState :: Projects.ProjectId -> Text -> ZeroState
+issueZeroState pid = \case
+  "Acknowledged" ->
+    ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." "Go to Inbox" (Right $ inboxUrl <> "Inbox")
+  "Archived" ->
+    ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." "Go to Inbox" (Right $ inboxUrl <> "Inbox")
+  _ ->
+    ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." "View SDK setup guides" (Right "https://monoscope.tech/docs/sdks/")
+  where
+    inboxUrl = "/p/" <> pid.toText <> "/issues?filter="
 
 
 data AnomalyListGet
@@ -1531,16 +1600,16 @@ issueRowAttrs (IssueVM _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker "
 
 
 issueRowId :: IssueVM -> Text
-issueRowId (IssueVM _ _ _ issue) = Issues.issueIdText issue.base.id
+issueRowId (IssueVM _ _ _ issue) = issue.base.id.toText
 
 
--- | (icon, iconStyle, colorClass, tooltip) — uses shape+color so status isn't color-only
-anomalyStatusIndicator :: Bool -> Bool -> Text -> (Text, Text, Text, Text)
-anomalyStatusIndicator _ True _ = ("archive", "regular", "text-fillStrong", "Archived")
-anomalyStatusIndicator True False _ = ("circle-check", "regular", "text-fillSuccess-strong", "Acknowledged")
-anomalyStatusIndicator False False "critical" = ("octagon-exclamation", "regular", "text-fillError-strong", "Critical")
-anomalyStatusIndicator False False "warning" = ("triangle-alert", "regular", "text-fillWarning-strong", "Warning")
-anomalyStatusIndicator False False _ = ("circle-alert", "regular", "text-textWeak", "Active")
+-- | (icon, colorClass, tooltip) — uses shape+color so status isn't color-only
+anomalyStatusIndicator :: Bool -> Bool -> Text -> (Text, Text, Text)
+anomalyStatusIndicator _ True _ = ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
+anomalyStatusIndicator True False _ = ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
+anomalyStatusIndicator False False "critical" = ("octagon-exclamation", "text-fillError-strong", "Critical")
+anomalyStatusIndicator False False "warning" = ("triangle-alert", "text-fillWarning-strong", "Warning")
+anomalyStatusIndicator False False _ = ("circle-alert", "text-textWeak", "Active")
 
 
 data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
@@ -1559,14 +1628,14 @@ issueColumns pid period toggleM =
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM isWidget _ _ issue) =
   unless isWidget
-    $ span_ [class_ $ "tabular-nums font-medium " <> countStyle issue.eventCount]
+    $ span_ [class_ $ "tabular-nums font-medium text-sm " <> countStyle issue.eventCount]
     $ toHtml
     $ formatWithCommas (fromIntegral issue.eventCount)
   where
     countStyle n
-      | n >= 100 = "text-sm text-fillError-strong"
-      | n >= 10 = "text-sm text-fillWarning-strong"
-      | otherwise = "text-sm text-textStrong"
+      | n >= 100 = "text-fillError-strong"
+      | n >= 10 = "text-fillWarning-strong"
+      | otherwise = "text-textStrong"
 
 
 renderIssueDateCol :: IssueVM -> Html ()
@@ -1625,12 +1694,7 @@ renderIssueTitle_ Issues.IssueL{base}
 
 -- | Render text with <> placeholders styled as distinct tokens
 renderWithPlaceholders_ :: Monad m => Text -> HtmlT m ()
-renderWithPlaceholders_ t = case T.breakOn "<>" t of
-  (before, "") -> toHtml before
-  (before, rest) -> do
-    toHtml before
-    span_ [class_ "text-textWeak opacity-60"] "<>"
-    renderWithPlaceholders_ (T.drop 2 rest)
+renderWithPlaceholders_ = mconcat . intersperse (span_ [class_ "text-textWeak opacity-60"] "<>") . map toHtml . T.splitOn "<>"
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
@@ -1638,24 +1702,26 @@ renderIssueMainCol pid (IssueVM _ currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt
-      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived (display b.severity)
-      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
+      (icon, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived (display b.severity)
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
+      stateBadges = do
+        severityBadge_ (display b.severity)
+        issueStateBadge_ issue.latestStateEvent
+        ackBadge_ currTime b
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       div_ [class_ "text-sm line-clamp-2 min-w-0"] do
-        span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
+        span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
         span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show b.seqNum <> " "
         a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
-      span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] do
-        severityBadge_ (display b.severity)
-        issueStateBadge_ issue.latestStateEvent
-        when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
+      span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] stateBadges
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity max-md:hidden"] do
-        inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
-        inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
-    div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] do
-      severityBadge_ (display b.severity)
-      issueStateBadge_ issue.latestStateEvent
+        inlineBtn (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
+        unless isAcknowledged
+          $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" (\q -> [hxGet_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
+            inlineBtn "Acknowledge for a set time" "clock" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
+        inlineBtn (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
+    div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] stateBadges
     div_ [class_ "max-md:hidden"] $ issuePreview_ issue
     div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
       div_ [class_ "flex items-center gap-1.5"] do
@@ -1663,22 +1729,24 @@ renderIssueMainCol pid (IssueVM _ currTime period issue) = do
         span_ [class_ "opacity-30"] "·"
         span_ [] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC b.createdAt
       div_ [class_ "flex items-center gap-3"] do
-        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
-        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
+        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
+        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
   where
+    -- Rows swap nothing: the handler fires `issuesListChanged` and the table
+    -- reloads, so an acknowledged row actually leaves the Inbox.
     inlineBtn tip icon hxAction extraAttrs =
-      button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)
+      button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none", hxAction] <> extraAttrs)
         $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let b = issue.base
-      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) (display b.severity)
-      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
+      (icon, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) (display b.severity)
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
-      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
+      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
       span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show b.seqNum
       span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
       severityBadge_ (display b.severity)
@@ -1700,6 +1768,7 @@ issueStateBadge_ = \case
   Just Issues.IEResolved -> badge "bg-fillSuccess-weak text-fillSuccess-strong border-strokeSuccess-strong" "RESOLVED"
   Just Issues.IEAutoResolved -> badge "bg-fillSuccess-weak text-fillSuccess-strong border-strokeSuccess-strong" "RESOLVED"
   Just Issues.IEReopened -> badge "bg-fillWarning-weak text-fillWarning-strong border-strokeWarning-weak" "REOPENED"
+  Just Issues.IEAckExpired -> badge "bg-fillWarning-weak text-fillWarning-strong border-strokeWarning-weak" "ACK EXPIRED"
   _ -> pass
   where
     badge cls = span_ [class_ $ "badge badge-sm border " <> cls]
@@ -1731,32 +1800,67 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
       | otherwise = previewSnippet pat
 
 
-anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
-anomalyAcknowledgeButton pid aid acked host =
-  issueToggleButton_ pid aid acked "check" ("Acknowledge", "Acknowledged") ("Acknowledge", "Unacknowledge") ("/acknowledge?host=" <> host, "/unacknowledge") "btn-primary" "bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak"
+-- | "Ack'd · 6h left" / "Acknowledged indefinitely" chip. Silence has an end, and
+-- the list is where you need to see it without opening anything.
+ackBadge_ :: UTCTime -> Issues.Issue -> Html ()
+ackBadge_ now b = whenJust (zonedTimeToUTC <$> b.acknowledgedUntil <* b.acknowledgedAt) \until' ->
+  let lbl = untilLabel "Ack'd" now until'
+   in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0", term "data-tippy-content" $ untilLabel "Acknowledged" now until' <> " \x2014 notifications are paused"] do
+        faSprite_ "bell-slash" "regular" "h-3 w-3"
+        toHtml lbl
+
+
+-- | Acknowledge control for the issue detail header. Unacknowledged: a primary
+-- button (silence until it regresses) joined to a caret opening the duration
+-- menu. Acknowledged: the remaining time, which un-acknowledges on click.
+anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> UTCTime -> Maybe UTCTime -> Html ()
+anomalyAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex"] case untilM of
+  Just until' ->
+    button_
+      ( [ type_ "button"
+        , class_ "btn btn-sm gap-1.5 bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak tooltip tooltip-bottom"
+        , data_ "tip" "Notifications are paused. Unacknowledge to resume them."
+        , Aria.label_ "Unacknowledge issue"
+        ]
+          <> req "/unacknowledge"
+      )
+      do
+        faSprite_ "bell-slash" "regular" "w-4 h-4"
+        span_ [class_ "max-md:hidden"] $ toHtml $ untilLabel "Acknowledged" now until'
+  Nothing -> div_ [class_ "join"] do
+    button_
+      ( [ type_ "button"
+        , class_ "btn btn-sm btn-primary join-item gap-1.5 tooltip tooltip-bottom"
+        , data_ "tip" "Pause notifications until this regresses"
+        , Aria.label_ "Acknowledge issue"
+        ]
+          <> req "/acknowledge"
+      )
+      do
+        faSprite_ "check" "regular" "w-4 h-4"
+        span_ [class_ "max-md:hidden"] "Acknowledge"
+    durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" (\q -> req $ "/acknowledge" <> durationQuery "duration" q) \popId ->
+      button_ [type_ "button", class_ "btn btn-sm btn-primary join-item px-2", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId, Aria.label_ "Acknowledge for a set time"]
+        $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+  where
+    ctlId = "ack-ctl-" <> aid.toText
+    req path = [term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> aid.toText <> path, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
 
 
 anomalyArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
 anomalyArchiveButton pid aid archived =
-  issueToggleButton_ pid aid archived "archive" ("Archive", "Unarchive") ("Archive", "Unarchive") ("/archive", "/unarchive") "btn-ghost" "btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak"
-
-
--- | Shared HTMX toggle button for the issue acknowledge/archive actions.
--- Labels show the current state; action names drive the tooltip/aria text.
-issueToggleButton_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> (Text, Text) -> (Text, Text) -> (Text, Text) -> Text -> Text -> Html ()
-issueToggleButton_ pid aid active icon labels actions paths offCls onCls = do
-  let pick = bool fst snd active
-  a_
-    [ class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom " <> bool offCls onCls active
-    , data_ "tip" $ T.toLower (pick actions) <> " issue"
-    , Aria.label_ $ pick actions <> " issue"
+  button_
+    [ type_ "button"
+    , class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost" <> bool "" " bg-fillWarning-weak text-textWarning border-strokeWarning-weak" archived
+    , data_ "tip" $ bool "Not actionable \x2014 hide it and stop notifying" "Move back to the Inbox" archived
+    , Aria.label_ $ bool "Archive issue" "Unarchive issue" archived
     , term "hx-preload" "false"
-    , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> pick paths
+    , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> aid.toText <> bool "/archive" "/unarchive" archived
     , hxSwap_ "outerHTML"
     ]
     do
-      faSprite_ icon "regular" "w-4 h-4"
-      span_ [class_ "max-md:hidden"] $ toHtml $ pick labels
+      faSprite_ "archive" "regular" "w-4 h-4"
+      span_ [class_ "max-md:hidden"] $ toHtml $ bool @Text "Archive" "Unarchive" archived
 
 
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
@@ -1838,8 +1942,9 @@ issueActivityTimeline_ userMap now activities
 eventDisplay :: Issues.IssueEvent -> (Text, Text, Text)
 eventDisplay = \case
   Issues.IECreated -> ("plus", "bg-fillSuccess-weak text-fillSuccess-strong", "Created")
-  Issues.IEAcknowledged -> ("check", "bg-fillBrand-weak text-fillBrand-strong", "Acknowledged")
-  Issues.IEUnacknowledged -> ("rotate-left", "bg-fillWeaker text-textWeak", "Unacknowledged")
+  Issues.IEAcknowledged -> ("bell-slash", "bg-fillBrand-weak text-fillBrand-strong", "Acknowledged")
+  Issues.IEUnacknowledged -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Unacknowledged")
+  Issues.IEAckExpired -> ("clock", "bg-fillWarning-weak text-fillWarning-strong", "Acknowledgement expired \x2014 back in the Inbox")
   Issues.IEArchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Archived")
   Issues.IEUnarchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Unarchived")
   Issues.IEResolved -> ("check-double", "bg-fillSuccess-weak text-fillSuccess-strong", "Resolved")

@@ -150,6 +150,13 @@ extra-source-files:
     static/migrations/0121_log_patterns_unclassified_recent_index.sql
     static/migrations/0122_otel_deployment_environment.sql
     static/migrations/0123_code_mappings.sql
+    static/migrations/0124_github_credentials.sql
+    static/migrations/0125_git_hosts.sql
+    static/migrations/0125_issue_ack_window.sql
+    static/migrations/0125_live_tail_subscriptions.sql
+    static/migrations/0126_git_rename_compat_views.sql
+    static/migrations/0126_live_tail_scope.sql
+    static/migrations/0127_live_tail_events.sql
 
 source-repository head
   type: git
@@ -204,6 +211,7 @@ library
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -227,6 +235,8 @@ library
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
+      Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
@@ -392,6 +402,7 @@ library
     , http-api-data
     , http-client
     , http-client-tls
+    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable
@@ -467,6 +478,7 @@ library
     , time
     , time-manager
     , tmp-postgres
+    , transformers
     , typed-process
     , tz
     , unix
@@ -585,9 +597,11 @@ test-suite integration-tests
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
+      LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
@@ -712,14 +726,17 @@ test-suite integration-tests
     , proto-lens
     , relude >=1.2.0.0
     , resource-pool
+    , safe-exceptions
     , servant
     , servant-htmx
     , servant-server
     , silently
     , stm
     , text
+    , text-display
     , these
     , time
+    , transformers
     , unliftio
     , unordered-containers
     , uuid
@@ -775,6 +792,7 @@ test-suite test-dev
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -798,6 +816,8 @@ test-suite test-dev
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
+      Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
@@ -839,9 +859,11 @@ test-suite test-dev
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
+      LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
@@ -1024,6 +1046,7 @@ test-suite test-dev
     , http-api-data
     , http-client
     , http-client-tls
+    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable
@@ -1099,6 +1122,7 @@ test-suite test-dev
     , time
     , time-manager
     , tmp-postgres
+    , transformers
     , typed-process
     , tz
     , unix
@@ -1136,6 +1160,7 @@ test-suite unit-tests
       Models.Telemetry.MetricServiceNameSpec
       Models.Telemetry.TimestampMicrosSpec
       Pkg.DrainSpec
+      Pkg.GitSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
@@ -1186,6 +1211,7 @@ test-suite unit-tests
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-client
     , http-types
     , lens
     , log-base

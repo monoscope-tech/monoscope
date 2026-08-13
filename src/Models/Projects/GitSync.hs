@@ -1,28 +1,32 @@
+-- | The stored side of a git integration: which repository a project syncs its YAML with,
+-- and which grants it can read source through.
+--
+-- The wire side — how to actually talk to each host — is "Pkg.Git", which this module
+-- re-exports the vocabulary of so call sites need only one import. What stays here is
+-- everything that touches the database, plus the GitHub App token flow, which has no
+-- equivalent on the other hosts and so never became part of the host abstraction.
 module Models.Projects.GitSync (
   GitHubSync (..),
   GitHubSyncId,
-  TreeEntry (..),
   SyncAction (..),
   getGitHubSync,
   getGitHubSyncDecrypted,
-  getGitHubSyncByRepo,
+  getGitSyncByRepo,
   insertGitHubSync,
   insertGitHubAppSync,
   updateGitHubSync,
   updateGitHubSyncKeepToken,
   updateGitHubSyncRepo,
-  updateLastTreeSha,
+  updateLastRevision,
   deleteGitHubSync,
   getDashboardGitState,
   updateDashboardGitInfo,
-  fetchGitTree,
-  fetchFileContent,
-  pushFileToGit,
-  RepoRef (..),
   GitCreds (..),
   mkGitCreds,
   syncRepoRef,
   syncCreds,
+  syncConn,
+  credentialConn,
   GitHubCredential (..),
   GitHubCredentialId,
   credentialCreds,
@@ -33,26 +37,31 @@ module Models.Projects.GitSync (
   dashboardToYaml,
   yamlToDashboard,
   titleToFilePath,
-  computeContentSha,
   buildSchemaWithMeta,
   getDashboardsPath,
-  detectDefaultBranch,
-  -- GitHub App integration
+  -- GitHub App integration; GitHub-only by nature
   githubToken,
   generateAppJWT,
   getInstallationToken,
-  listInstallationRepos,
-  GitHubRepo (..),
+  getInstallationAccount,
+  installationSettingsUrl,
   InstallationToken (..),
+  -- Re-exported from "Pkg.Git" so a caller needs one import, not two
+  Git.GitHost (..),
+  Git.GitConn (..),
+  Git.RepoRef (..),
+  Git.TreeEntry (..),
+  Git.GitRepo (..),
+  Git.computeContentSha,
+  Git.hostLabel,
+  Git.hostSlug,
 ) where
 
 import Control.Lens ((.~), (?~), (^.), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _Bool, _String)
-import Data.Aeson.Types (parseMaybe)
+import Data.Aeson.Lens (key, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..), def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
@@ -63,7 +72,6 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
@@ -79,21 +87,17 @@ import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
-import Network.HTTP.Types.Status (statusCode)
 import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
+import Pkg.Git qualified as Git
 import Relude
-import Relude.Extra.Bifunctor (bimapF, firstF)
+import Relude.Extra.Bifunctor (bimapF)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
-import UnliftIO.Exception (try)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "crypton-x509" Data.X509 (PrivKey (..))
 import "crypton-x509-store" Data.X509.File (readKeyFile)
-import "cryptonite" Crypto.Hash (Digest, SHA1, hash)
-import "memory" Data.ByteArray qualified as BA
 
 
 type GitHubSyncId = UUIDId "github_sync"
@@ -102,41 +106,40 @@ type GitHubSyncId = UUIDId "github_sync"
 type GitHubCredentialId = UUIDId "github_credential"
 
 
+-- | The one repository a project keeps its own dashboard and monitor YAML in.
+--
+-- Field order matches the physical column order of @projects.git_sync@, because
+-- 'HI.DecodeRow' is positional and some statements return the whole row. @host@ and @apiBase@
+-- are last for the same reason: 0125 appended them.
 data GitHubSync = GitHubSync
   { id :: GitHubSyncId
   , projectId :: ProjectId
   , owner :: Text
   , repo :: Text
   , branch :: Text
-  , accessToken :: Maybe Text -- Encrypted PAT (for manual setup)
-  , installationId :: Maybe Int64 -- GitHub App installation ID
+  , accessToken :: Maybe Text -- Encrypted token
+  , installationId :: Maybe Int64 -- GitHub App installation ID; GitHub only
   , pathPrefix :: Text -- Directory prefix for dashboards (default: "")
   , webhookSecret :: Maybe Text
-  , lastTreeSha :: Maybe Text
+  , lastRevision :: Maybe Text
+  -- ^ Head commit at the last pull. Not a tree sha: GitLab and Bitbucket have no such thing,
+  -- and a commit id answers the only question this was ever asked — has anything changed?
   , syncEnabled :: Bool
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
+  , host :: Git.GitHost
+  , apiBase :: Maybe Text
+  -- ^ Already-normalised API base for a self-hosted install; 'Nothing' is the host's SaaS.
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "git_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
 
 
 instance Default GitHubSync where
-  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch
+  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing
     where
       epoch = posixSecondsToUTCTime 0
-
-
-data TreeEntry = TreeEntry
-  { path :: Text
-  , _teType :: Text
-  , sha :: Text
-  , size :: Maybe Int
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "_te", DAE.CamelToSnake]] TreeEntry
 
 
 data SyncAction
@@ -177,13 +180,6 @@ decryptedOr :: (IOE :> es, Log :> es) => Text -> ProjectId -> Either Text a -> E
 decryptedOr what pid = either (\err -> logWarn ("GitHub " <> what <> " token decryption failed") (pid, err) $> Nothing) (pure . Just)
 
 
--- | Which repo, at which revision. A 'GitHubSync' denotes one and so does a code mapping;
--- the API calls take this rather than either record, so "read a file from GitHub" has one
--- implementation instead of one per caller that happens to hold a different type.
-data RepoRef = RepoRef {owner :: Text, repo :: Text, ref :: Text}
-  deriving stock (Eq, Generic, Show)
-
-
 -- | How to authenticate against an account. The App installation covers every repo in the
 -- account, which is why this is separable from 'RepoRef' at all.
 --
@@ -207,12 +203,25 @@ mkGitCreds :: Maybe Int64 -> Maybe Text -> Maybe GitCreds
 mkGitCreds instId token = AppInstallation <$> instId <|> PersonalToken <$> token
 
 
-syncRepoRef :: GitHubSync -> RepoRef
-syncRepoRef s = RepoRef s.owner s.repo s.branch
+syncRepoRef :: GitHubSync -> Git.RepoRef
+syncRepoRef s = Git.RepoRef s.owner s.repo s.branch
 
 
 syncCreds :: GitHubSync -> Maybe GitCreds
 syncCreds s = mkGitCreds s.installationId s.accessToken
+
+
+-- | Turn a row plus a resolved token into something that can be talked to.
+--
+-- The token is resolved separately — for GitHub it may be minted from an App installation,
+-- which is an HTTP round trip — so this stays pure and total: given the token, either the row
+-- describes a reachable host or it says why not.
+syncConn :: GitHubSync -> Text -> Either Text Git.GitConn
+syncConn s = Git.mkGitConn s.host s.apiBase
+
+
+credentialConn :: GitHubCredential -> Text -> Either Text Git.GitConn
+credentialConn c = Git.mkGitConn c.host c.apiBase
 
 
 -- | A grant to read an account's repositories, held per project.
@@ -224,15 +233,19 @@ data GitHubCredential = GitHubCredential
   { id :: GitHubCredentialId
   , projectId :: ProjectId
   , account :: Text
-  -- ^ The org or user login the installation covers.
+  -- ^ The org, group, workspace or user the grant covers. Only unique within a host.
   , installationId :: Maybe Int64
+  -- ^ GitHub App installation. No other host has an equivalent, and 0125's CHECK constraint
+  -- refuses one on a non-GitHub row.
   , accessToken :: Maybe Text
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
+  , host :: Git.GitHost
+  , apiBase :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_credentials", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubCredential)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "git_credentials", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubCredential)
 
 
 credentialCreds :: GitHubCredential -> Maybe GitCreds
@@ -250,16 +263,18 @@ getGitHubCredential encKey pid cid =
     >>= maybe (pure Nothing) (decryptedOr "credential" pid . decryptAccessToken encKey)
 
 
--- | Record a grant for an account, or update the one already held for it. Idempotent because
--- the same installation arriving twice is the same grant, not a second one.
-upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
-upsertGitHubCredential encKey pid account instId token =
+-- | Record a grant for an account on a host, or update the one already held for it. Idempotent
+-- because the same installation arriving twice is the same grant, not a second one.
+--
+-- Keyed on @(project, host, account)@: the same login on two hosts is two grants.
+upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
+upsertGitHubCredential encKey pid host apiBase account instId token =
   Hasql.interp
-    [HI.sql| INSERT INTO projects.github_credentials (project_id, account, installation_id, access_token)
-             VALUES (#{pid}, #{account}, #{instId}, #{encryptToken encKey <$> token})
-             ON CONFLICT (project_id, account)
-             DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.github_credentials.access_token), updated_at = now()
-             RETURNING * |]
+    [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, installation_id, access_token)
+             VALUES (#{pid}, #{host}, #{apiBase}, #{account}, #{instId}, #{encryptToken encKey <$> token})
+             ON CONFLICT (project_id, host, account)
+             DO UPDATE SET api_base = EXCLUDED.api_base, installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
+             RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 
 -- DB Operations
@@ -274,26 +289,31 @@ getGitHubSyncDecrypted encKey pid =
   getGitHubSync pid >>= maybe (pure Nothing) (decryptedOr "sync" pid . decryptAccessToken encKey)
 
 
-getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepo owner repo =
+-- | The sync row a webhook delivery is about.
+--
+-- Keyed on the host as well as the name: two hosts can both have an @acme/config@, and
+-- resolving without the host would let a push to one trigger a sync of the other.
+getGitSyncByRepo :: DB es => Git.GitHost -> Text -> Text -> Eff es (Maybe GitHubSync)
+getGitSyncByRepo host owner repo =
   Hasql.interp
-    (selectFrom @GitHubSync <> [HI.sql| WHERE owner = #{owner} AND repo = #{repo} |])
+    (selectFrom @GitHubSync <> [HI.sql| WHERE host = #{host} AND owner = #{owner} AND repo = #{repo} |])
 
 
--- | Insert a new GitHub sync config using PAT authentication
-insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal prefix = do
+-- | Insert a sync config authenticated by a token the user created — the only option on every
+-- host except GitHub, and still available there.
+insertGitHubSync :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
+insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal token webhookSecretVal prefix = do
   let encToken = encryptToken encKey token
   Hasql.interp
-    [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret, path_prefix)
-             VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{encToken}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
+    [HI.sql| INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, access_token, webhook_secret, path_prefix)
+             VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal}, #{branchVal}, #{encToken}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
 
 
 -- | Insert a new GitHub sync config using GitHub App installation
 insertGitHubAppSync :: DB es => ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
 insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
   Hasql.interp
-    [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
+    [HI.sql| INSERT INTO projects.git_sync (project_id, owner, repo, branch, installation_id, path_prefix)
            VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instId}, #{prefix}) RETURNING * |]
 
 
@@ -302,7 +322,7 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled = do
   now <- Time.currentTime
   let encToken = encryptToken encKey token
   Hasql.interp
-    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, access_token = #{encToken}, sync_enabled = #{enabled}, updated_at = #{now}
+    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, access_token = #{encToken}, sync_enabled = #{enabled}, updated_at = #{now}
              WHERE id = #{sid} RETURNING * |]
 
 
@@ -310,7 +330,7 @@ updateGitHubSyncKeepToken :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text
 updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled = do
   now <- Time.currentTime
   Hasql.interp
-    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = #{enabled}, updated_at = #{now}
+    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = #{enabled}, updated_at = #{now}
              WHERE id = #{sid} RETURNING * |]
 
 
@@ -319,20 +339,22 @@ updateGitHubSyncRepo :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> T
 updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix = do
   now <- Time.currentTime
   Hasql.interp
-    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, path_prefix = #{prefix}, updated_at = #{now}
+    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, path_prefix = #{prefix}, updated_at = #{now}
              WHERE id = #{sid} RETURNING * |]
 
 
-updateLastTreeSha :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
-updateLastTreeSha sid treeSha = do
+-- | Remember the head commit we last synced to, so the next pull can tell "nothing changed"
+-- from "everything was deleted".
+updateLastRevision :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
+updateLastRevision sid rev = do
   now <- Time.currentTime
-  Hasql.interpExecute [HI.sql| UPDATE projects.github_sync SET last_tree_sha = #{treeSha}, updated_at = #{now} WHERE id = #{sid} |]
+  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_revision = #{rev}, updated_at = #{now} WHERE id = #{sid} |]
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
 deleteGitHubSync sid =
   Hasql.interpExecute
-    [HI.sql| DELETE FROM projects.github_sync WHERE id = #{sid} |]
+    [HI.sql| DELETE FROM projects.git_sync WHERE id = #{sid} |]
 
 
 getDashboardGitState :: DB es => ProjectId -> Eff es (M.Map Text (DashboardId, Text))
@@ -349,100 +371,6 @@ updateDashboardGitInfo did path fsha = do
   Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET file_path = #{path}, file_sha = #{fsha}, updated_at = #{now} WHERE id = #{did} |]
 
 
--- GitHub API Operations
-fetchGitTree :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Eff es (Either Text (Text, [TreeEntry]))
-fetchGitTree token r = do
-  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/git/trees/" <> r.ref <> "?recursive=1"
-  result <- try $ W.getWith (githubOpts token) (toString url)
-  pure $ case result of
-    Left (HttpExceptionRequest _ (StatusCodeException resp _)) | statusCode (responseStatus resp) == 404 -> Right ("", []) -- Empty repo = empty tree
-    Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp ->
-      let body = resp ^. W.responseBody
-       in case (body ^? key "sha" . _String, body ^? key "tree" . _Array) of
-            (Just treeSha, Just entries) -> Right (treeSha, mapMaybe (parseMaybe AE.parseJSON) $ V.toList entries)
-            _ | body ^? key "truncated" . _Bool == Just True -> Left "Repository too large (>100k files)"
-            _ -> Left $ "Invalid tree response: " <> decodeUtf8 body
-
-
--- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since the contents API
--- takes either. Reading at the sha the telemetry reported is the difference between the
--- source that threw and the source as it is today.
-fetchFileContent :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Text -> Eff es (Either Text ByteString)
-fetchFileContent token r path = do
-  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/contents/" <> path <> "?ref=" <> r.ref
-  result <- tryHttp $ W.getWith (githubOpts token) (toString url)
-  pure $ result >>= \resp -> case resp ^. W.responseBody . key "content" . _String of
-    "" -> Left "No content field"
-    b64Content -> B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
-
-
--- | The credential to read or write this project's repo with: an App installation token when
--- the App is installed, else the stored PAT. Lives here rather than beside its first caller
--- because every GitHub call in the app needs it, and a second copy would be a second place to
--- get the App-before-PAT precedence wrong. Takes the app id and key rather than the whole
--- 'System.Config.EnvConfig' so this module stays a leaf of the config graph.
-githubToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitCreds -> Eff es (Either Text Text)
-githubToken appId privateKeyB64 = \case
-  AppInstallation instId ->
-    getInstallationToken appId privateKeyB64 instId <&> \case
-      Left err -> Left $ "Failed to get installation token: " <> err
-      Right tok -> Right tok.token
-  PersonalToken token -> pure $ Right token
-
-
--- | Push a file to GitHub. Returns (fileSha, treeSha) on success.
-pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
-pushFileToGit token r path content existingSha message = do
-  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/contents/" <> path
-      payload =
-        AE.object
-          $ [ "message" AE..= message
-            , "content" AE..= extractBase64 (B64.encodeBase64 content)
-            , "branch" AE..= r.ref
-            ]
-          <> maybeToList (("sha" AE..=) <$> existingSha)
-  result <- tryHttp $ W.putWith (githubOpts token) (toString url) payload
-  pure $ result >>= \resp ->
-    maybeToRight "Missing sha in response"
-      $ (,)
-      <$> (resp ^? W.responseBody . key "content" . key "sha" . _String)
-      <*> (resp ^? W.responseBody . key "commit" . key "tree" . key "sha" . _String)
-
-
-tryHttp :: IOE :> es => Eff es a -> Eff es (Either Text a)
-tryHttp = firstF formatHttpError . try
-
-
-formatHttpError :: HttpException -> Text
-formatHttpError (HttpExceptionRequest _ content) = "HTTP request failed: " <> toText (show content)
-formatHttpError (InvalidUrlException url reason) = "Invalid URL (" <> toText url <> "): " <> toText reason
-
-
-githubOpts :: Text -> W.Options
-githubOpts = githubOptsUA "Monoscope"
-
-
-githubOptsUA :: ByteString -> Text -> W.Options
-githubOptsUA ua token =
-  W.defaults
-    & W.header "Authorization"
-    .~ [encodeUtf8 $ "Bearer " <> token]
-      & W.header "Accept"
-    .~ ["application/vnd.github+json"]
-      & W.header "User-Agent"
-    .~ [ua]
-      & W.header "X-GitHub-Api-Version"
-    .~ ["2022-11-28"]
-
-
--- | Detect the default branch of a repo, or return "main" for empty repos
-detectDefaultBranch :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Text -> Eff es Text
-detectDefaultBranch token owner repo =
-  tryHttp (W.getWith (githubOpts token) (toString $ "https://api.github.com/repos/" <> owner <> "/" <> repo))
-    <&> either (const "main") (fromMaybe "main" . (^? W.responseBody . key "default_branch" . _String))
-
-
 -- | Get the dashboards folder path including prefix
 getDashboardsPath :: GitHubSync -> Text
 getDashboardsPath sync
@@ -450,15 +378,21 @@ getDashboardsPath sync
   | otherwise = sync.pathPrefix <> "/dashboards/"
 
 
-isDashboardFile :: Text -> TreeEntry -> Bool
-isDashboardFile prefix e = e._teType == "blob" && prefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) [".yaml", ".yml"]
+-- | A dashboard file we can actually plan against: a blob, under the prefix, ending in YAML,
+-- /and/ carrying a content hash. An entry with no sha is one Bitbucket would not tell us about
+-- (see 'Git.fetchTree'); planning on it would compare @Nothing@ to @Nothing@ and conclude
+-- nothing ever changes.
+isDashboardFile :: Text -> Git.TreeEntry -> Bool
+isDashboardFile prefix e = e.isBlob && isJust e.sha && prefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) [".yaml", ".yml"]
 
 
 -- Sync Logic
-buildSyncPlan :: Text -> [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
+buildSyncPlan :: Text -> [Git.TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
 buildSyncPlan prefix entries dbState = renames <> creates <> updates <> deletes
   where
-    gitFiles = M.fromList [(fromMaybe e.path $ T.stripPrefix prefix e.path, (e.path, e.sha)) | e <- entries, isDashboardFile prefix e]
+    -- `isDashboardFile` has already established the sha is present, so the fold below is
+    -- total; the fromMaybe is unreachable and only there to keep the pattern irrefutable.
+    gitFiles = M.fromList [(fromMaybe e.path $ T.stripPrefix prefix e.path, (e.path, fromMaybe "" e.sha)) | e <- entries, isDashboardFile prefix e]
     newFiles = gitFiles `M.difference` dbState
     removedFiles = dbState `M.difference` gitFiles
     removedBySha = M.fromList [(sha, rid) | (rid, sha) <- M.elems removedFiles]
@@ -468,7 +402,7 @@ buildSyncPlan prefix entries dbState = renames <> creates <> updates <> deletes
         [maybe (Right $ SyncCreate p s) (Left . SyncRename p s) (M.lookup s removedBySha) | (p, s) <- M.elems newFiles]
     renamedIds = [rid | SyncRename _ _ rid <- renames]
     deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList removedFiles, rid `notElem` renamedIds]
-    updates = M.foldMapWithKey (\relPath (fullPath, s) -> case M.lookup relPath dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate fullPath s rid]; _ -> []) gitFiles
+    updates = [SyncUpdate fullPath s rid | (relPath, (fullPath, s)) <- M.toList gitFiles, Just (rid, oldSha) <- [M.lookup relPath dbState], s /= oldSha]
 
 
 dashboardToYaml :: Dashboard -> ByteString
@@ -482,12 +416,6 @@ yamlToDashboard = first (toText . show) . Yaml.decodeEither'
 -- | Convert dashboard title to kebab-case file path
 titleToFilePath :: Text -> Text
 titleToFilePath = (<> ".yaml") . toText . toKebab . fromAny . toString . T.strip
-
-
--- | Compute Git blob SHA (SHA1 of "blob <size>\0<content>")
-computeContentSha :: ByteString -> Text
-computeContentSha content =
-  decodeUtf8 $ B16.encode $ BA.convert (hash ("blob " <> show (BS.length content) <> "\0" <> content) :: Digest SHA1)
 
 
 -- | Build a Dashboard schema with title, tags, and team handles populated
@@ -505,17 +433,6 @@ buildSchemaWithMeta schemaM title tags teamHandles =
 ---------------------------------
 -- GitHub App Integration
 
-data GitHubRepo = GitHubRepo
-  { id :: Int64
-  , name :: Text
-  , fullName :: Text
-  , private :: Bool
-  , defaultBranch :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] GitHubRepo
-
-
 data InstallationToken = InstallationToken
   { token :: Text
   , expiresAt :: Text
@@ -524,9 +441,29 @@ data InstallationToken = InstallationToken
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] InstallationToken
 
 
-newtype ReposResponse = ReposResponse {repositories :: [GitHubRepo]}
-  deriving stock (Generic)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ReposResponse
+-- | The token to talk to a host with: an App installation token when GitHub's App is
+-- installed, else the stored token as-is.
+--
+-- Still lives here rather than in "Pkg.Git" because minting an installation token is the
+-- GitHub App flow, which no other host has. Every host's 'PersonalToken' path is the identity
+-- function, which is exactly why the abstraction downstream takes a resolved token.
+githubToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitCreds -> Eff es (Either Text Text)
+githubToken appId privateKeyB64 = \case
+  AppInstallation instId -> bimapF ("Failed to get installation token: " <>) (.token) $ getInstallationToken appId privateKeyB64 instId
+  PersonalToken token -> pure $ Right token
+
+
+githubAppOpts :: Text -> W.Options
+githubAppOpts jwt =
+  W.defaults
+    & W.header "Authorization"
+    .~ [encodeUtf8 $ "Bearer " <> jwt]
+      & W.header "Accept"
+    .~ ["application/vnd.github+json"]
+      & W.header "User-Agent"
+    .~ ["Monoscope-App"]
+      & W.header "X-GitHub-Api-Version"
+    .~ ["2022-11-28"]
 
 
 generateAppJWT :: Text -> Text -> IO (Either Text Text)
@@ -559,16 +496,30 @@ generateAppJWT appId privateKeyB64 = do
 getInstallationToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text InstallationToken)
 getInstallationToken appId privateKeyB64 installationId =
   liftIO (generateAppJWT appId privateKeyB64) >>= either (pure . Left) \jwt -> do
-    let url = "https://api.github.com/app/installations/" <> show installationId <> "/access_tokens"
-    response <- W.postWith (githubOptsUA "Monoscope-App" jwt) (toString url) ("" :: ByteString)
-    pure $ decodeGitHub "token" $ response ^. W.responseBody
+    let url = "https://api.github.com/app/installations/" <> show @Text installationId <> "/access_tokens"
+    Git.tryHttp (W.postWith (githubAppOpts jwt) (toString url) ("" :: ByteString))
+      <&> (>>= first (\err -> "Failed to parse token response: " <> toText err) . AE.eitherDecode . (^. W.responseBody))
 
 
-listInstallationRepos :: W.HTTP :> es => Text -> Eff es (Either Text [GitHubRepo])
-listInstallationRepos accessToken = do
-  response <- W.getWith (githubOptsUA "Monoscope-App" accessToken) "https://api.github.com/installation/repositories?per_page=100"
-  pure $ (.repositories) <$> (decodeGitHub "repos" (response ^. W.responseBody) :: Either Text ReposResponse)
+-- | The org or user login an installation covers. Recorded as a credential the moment the
+-- App is installed, so reading source works without also having configured dashboard sync —
+-- they are two uses of one grant, not two integrations.
+getInstallationAccount :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text Text)
+getInstallationAccount appId privateKeyB64 instId =
+  liftIO (generateAppJWT appId privateKeyB64) >>= either (pure . Left) \jwt ->
+    Git.tryHttp (W.getWith (githubAppOpts jwt) (toString $ "https://api.github.com/app/installations/" <> show @Text instId))
+      <&> (>>= maybeToRight "Installation reports no account" . (^? W.responseBody . key "account" . key "login" . _String))
 
 
-decodeGitHub :: AE.FromJSON a => Text -> LByteString -> Either Text a
-decodeGitHub what = first (\err -> "Failed to parse " <> what <> " response: " <> toText err) . AE.eitherDecode
+-- | GitHub's own "Repository access" screen for an installation.
+--
+-- An installation reaches exactly the repositories it was installed on, and nothing on our
+-- side widens that — the grant belongs to GitHub, so a picker that is missing a repository
+-- has to link out to the one page that can add it. The @\/settings\/@ form is canonical for
+-- both personal and organisation installations; GitHub redirects org-owned ones to the org's
+-- equivalent page for anyone who may edit it.
+--
+-- >>> installationSettingsUrl 4242
+-- "https://github.com/settings/installations/4242"
+installationSettingsUrl :: Int64 -> Text
+installationSettingsUrl instId = "https://github.com/settings/installations/" <> show instId

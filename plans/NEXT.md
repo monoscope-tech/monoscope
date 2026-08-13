@@ -1,4 +1,23 @@
-# Next steps — as of 2026-08-11 evening
+# Next steps — as of 2026-08-12
+
+Closed since the 08-11 edition:
+
+- **Certification measurement (was P1).** Answered from the code rather than the 24h window it
+  asked for: the sweep can only certify today and yesterday
+  (`timefusion_dedup_lookback_days`, default 1) while dashboards query 7-30 days, so
+  `never_certified_pct = 100` is structural and no reading would have moved it. Survival plan
+  closed, coverage plan opened — `timefusion/docs/plans/2026-08-12-dedup-certification-coverage.md`.
+- **`fetchSnippet` had no cache (was P2).** Blobs are now cached on `(owner, repo, ref, path)`
+  in `AuthContext`, so a stack trace costs one fetch rather than one per frame. Not via
+  `Pkg.QueryCache` as suggested here — that is a timeseries cache and fits badly.
+- **`plans/06-tf-dedup-skip-incident.md` was stale (was P2).** Marked resolved: TF `f8d7278`.
+- **CapRover `start-first` (was TF P0).** Changed to `stop-first` via the CapRover API; every
+  other field of the app definition preserved. `"FailureAction": "pause"` is still set, and
+  still explains the wedge shape — left alone as a separate call.
+- **Health-probe blindness (was TF P0).** The probe now reports per-stage timings and a
+  runtime scheduling-lag sampler landed, so the next `exit 137` says which stage was slow and
+  whether workers were starved. TF `d50d2e4`. The measurement is instrumented but **not yet
+  read** — that needs a real incident or a loaded window.
 
 Everything below is open. Ordered by "what bites first if ignored", not by size.
 Companion to [README.md](README.md) (the overnight batch) and
@@ -104,17 +123,15 @@ may not be where the 99.5% is.
       `haskell_backtraces_unavailable`), a different shape from a span's
       `exception.stacktrace`. Pointing `stackTrace_` at it without checking those strings would
       be guessing. Needs someone to look at real payloads first.
-- [ ] **`fetchSnippet` has no cache.** One GitHub API call per frame opened. `intersect once`
-      plus one-frame-open-by-default keeps it near one call per error *viewed*, but a hot issue
-      viewed repeatedly re-fetches. Add a `Pkg.QueryCache` layer keyed on `(repo, ref, path)`
-      before this is on by default for large projects — a rate-limit stall would present as the
-      panel silently not filling in.
+- [x] ~~**`fetchSnippet` has no cache.**~~ Done — `AuthContext.codeBlobCache`, 15-min TTL,
+      successes only. Remaining nuance if it ever matters: the cache cannot tell a branch ref
+      from a sha, so an immutable sha gets the same short TTL as a moving branch.
 - [ ] **Source-map / debug-file symbolication is still out of scope.** Minified JS and stripped
       native frames resolve to nothing. `fetchSnippet` is the seam it plugs into. Only worth
       doing if customers actually hit it.
-- [ ] **`plans/06-tf-dedup-skip-incident.md` is stale.** It still reads as an open incident with
-      an unverified patch; the fix shipped (`f8d7278`) and the service map recovered. Either
-      mark it resolved or fold it into the TF plan doc and delete it.
+- [x] ~~**`plans/06-tf-dedup-skip-incident.md` is stale.**~~ Marked resolved in place; the
+      reproduction steps are worth keeping since a narrowed projection dropping a column an
+      exec node needs can recur with any new pushdown.
 
 ## P3 — hygiene and follow-ups
 
