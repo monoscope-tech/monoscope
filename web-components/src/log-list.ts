@@ -1965,9 +1965,23 @@ export class LogList extends LitElement {
           will-change: background-color;
         }
 
-        /* Performance optimizations that can't be done with Tailwind */
-        .contain-layout-style-paint {
-          contain: layout style paint;
+        /*
+          Layout and style containment, deliberately without paint.
+
+          Paint containment clips every descendant to the row's own box, and a log row is 28px.
+          Measured, that left a device tooltip carrying a full user-agent string 61px tall with
+          46 percent of it visible — and it clips fixed positioning too, so nothing positions
+          its way out. The tooltips inside a row are labels on spans, and the one declarative
+          way into the top layer (interestfor) only invokes from a link or a button, so keeping
+          paint containment would mean turning labels into controls.
+
+          Little is given up: the virtualiser already removes off-screen rows from the DOM, so
+          paint containment was not saving their paint — layout and style containment are what
+          keep one row's contents from affecting its siblings. If row scrolling ever regresses,
+          this is the line to revisit.
+        */
+        .contain-layout-style {
+          contain: layout style;
         }
 
         /* Fixed table layout for performance */
@@ -2854,7 +2868,7 @@ export class LogList extends LitElement {
       const rowClass = clsx(
         'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
         rowHoverBg,
-        !ov && 'contain-layout-style-paint',
+        !ov && 'contain-layout-style',
         isPatterns && (this.wrapLines ? 'items-start' : 'items-center'),
         // All non-wrapping, non-aggregate rows (including sessions) use the
         // dense 28px log row height for a consistent rhythm.
@@ -3616,10 +3630,11 @@ export function spanLatencyBreakdown({
         : nothing}
   </div>`;
 
-  // The card lives in the top layer, because nothing else escapes the row. Rows carry
-  // `contain: layout style paint` for the virtualiser, and paint containment is a hard clip
-  // boundary — an absolutely positioned card was snipped to the height of its own row, which
-  // left only the header line visible. `popover` is the one placement the clip cannot reach.
+  // The card lives in the top layer, because a 28px row is no place for it. It began as an
+  // escape from the row's paint containment, which clipped it to the header line; that
+  // containment is gone now (see `.contain-layout-style`), but the top layer is still the
+  // right home — the card is taller than the row and overlaps its neighbours by design, and
+  // up there it also dismisses on Escape, which a CSS-only tooltip cannot do.
   //
   // `interestfor` opens it on hover *and* on keyboard focus with no script, and the popover
   // dismisses on Escape, which a CSS tooltip cannot do. Anchor positioning ties it back to the

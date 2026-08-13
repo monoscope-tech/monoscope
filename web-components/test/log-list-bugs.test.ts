@@ -29,6 +29,18 @@ describe('LogList — LOWER', () => {
     expect(el.innerHTML).not.toContain('will-change-scroll');
   });
 
+  // Paint containment clips every descendant to the row's own 28px — measured, it left a
+  // device tooltip carrying a user-agent string (61px tall) less than half visible, and it
+  // clips `position: fixed` too, so nothing positions its way out. The virtualiser does not
+  // need it: off-screen rows are already out of the DOM.
+  test('rows contain layout and style but not paint, so a tooltip is not clipped to 28px', async () => {
+    const el = await mountList();
+    const css = el.querySelector('style')?.textContent ?? '';
+    expect(css).toMatch(/contain:\s*layout style\s*;/);
+    expect(css).not.toMatch(/contain:[^;]*paint/);
+    expect(el.innerHTML).not.toContain('contain-layout-style-paint');
+  });
+
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed
   // at 28px. The inflated estimate caused oversized scroll gaps.
   test('virtualizer starts with the dense log-row height and bounded overhang', () => {
