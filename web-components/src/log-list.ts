@@ -3550,7 +3550,13 @@ export function latencyTooltip(row: { duration: number; startNs: number; traceSt
   // like they should sum to the total when they don't.
   const rows = [...byLabel.entries()].map(([label, v]) => ({ label, ...v })).concat(self > 0 ? [{ label: 'self', ns: self, color: row.color }] : []);
   rows.sort((a, b) => b.ns - a.ns);
-  const pct = (ns: number) => (row.duration > 0 ? Math.round((ns / row.duration) * 100) : 0);
+  // A share that rounds to zero still isn't zero: a real 337µs call inside a 72ms request read
+  // as "0%", which says the service did nothing rather than very little.
+  const pct = (ns: number) => {
+    if (!(row.duration > 0)) return '0%';
+    const share = (ns / row.duration) * 100;
+    return share > 0 && share < 0.5 ? '<1%' : `${Math.round(share)}%`;
+  };
   return html`<div class="latency-card-body text-left text-textStrong font-normal">
     <div class="flex items-baseline justify-between gap-3 pb-1 mb-1 border-b border-strokeWeak">
       <span class="font-medium">${fmtNs(row.duration)} total</span>
@@ -3561,7 +3567,7 @@ export function latencyTooltip(row: { duration: number; startNs: number; traceSt
         <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
         <span class="grow truncate max-w-[16ch]">${r.label}</span>
         <span class="tabular-nums text-textWeak">${fmtNs(r.ns)}</span>
-        <span class="tabular-nums text-textWeak w-9 text-right">${pct(r.ns)}%</span>
+        <span class="tabular-nums text-textWeak w-9 text-right">${pct(r.ns)}</span>
       </div>`
     )}
     ${rows.length > 6 ? html`<div class="text-textWeak pt-0.5">+${rows.length - 6} more</div>` : nothing}

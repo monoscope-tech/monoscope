@@ -316,6 +316,13 @@ describe('latencyTooltip', () => {
     expect(lines(card([]))).toEqual(['self 1µs 100%']);
   });
 
+  // Seen on a real trace: a 337µs call inside a 72ms request rendered "0%", which reads as
+  // "this service did nothing" rather than "very little". Rounding must not erase a real cost.
+  test('a share too small to round to a percent reads as <1%, never 0%', () => {
+    const r = { duration: 100_000, startNs: 0, traceStart: 0, color: 'bg-api' };
+    expect(lines(card([seg('db', 300, 0)], r))).toEqual(['self 100µs 100%', 'db 300ns <1%']);
+  });
+
 });
 
 describe('spanLatencyBreakdown wrapper', () => {
