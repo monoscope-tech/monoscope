@@ -227,21 +227,21 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "| summarize dcount(attributes.user.id, 2) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
-    it "generates COUNT DISTINCT SQL for dcount" do
+    it "lowers dcount to a sketch, the spelling both backends share" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(attributes.user.id) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT attributes___user___id)::float AS dcount_attributes_user_id FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', distinct_count(approx_count_distinct(attributes___user___id))::float AS dcount_attributes_user_id FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
-    it "generates COUNT DISTINCT SQL for dcount with dotted path" do
+    it "lowers a dotted-path dcount to a sketch too" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(resource.service.name) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT resource___service___name)::float AS dcount_resource_service_name FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', distinct_count(approx_count_distinct(resource___service___name))::float AS dcount_resource_service_name FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 

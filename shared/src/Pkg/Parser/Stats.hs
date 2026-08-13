@@ -146,6 +146,24 @@ simpleAggSQL :: Text -> Subject -> Text
 simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 
+-- | Sketch-based distinct count, valid on both backends.
+--
+-- KQL's @dcount@ is approximate BY DEFINITION -- that is what its accuracy
+-- argument is for -- so exact @COUNT(DISTINCT ...)@ was never the right lowering.
+-- It is also the expensive one: it holds every distinct value, per group, for
+-- the whole scan. Measured against prod TimeFusion 2026-08-13, grouped by hour
+-- over 24h, the exact form took 23.9s and the sketch 15.9s; the gap widens with
+-- cardinality and the memory ceiling stops moving at all.
+--
+-- @approx_count_distinct@ builds the sketch and @distinct_count@ reads the
+-- number out of it, on BOTH backends. The sketch/accessor split is not
+-- cosmetic: Timescale Toolkit's @approx_count_distinct@ returns a @hyperloglog@,
+-- so @approx_count_distinct(x)::float@ is a type error there. Same shape as
+-- 'percentileSQL' below.
+dcountSQL :: Text -> Text
+dcountSQL sub = "distinct_count(approx_count_distinct(" <> sub <> "))::float"
+
+
 -- | Timescale Toolkit-compatible bounded percentile aggregate.
 percentileSQL :: Double -> Text -> Text
 percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> sub <> " AS DOUBLE)))::float"
@@ -155,7 +173,7 @@ percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CA
 aggToSqlNoAlias :: AggFunction -> Text
 aggToSqlNoAlias (Count sub _) = "count(" <> display sub <> ")::float"
 aggToSqlNoAlias (CountIf cond _) = "COUNT(*) FILTER (WHERE " <> display cond <> ")::float"
-aggToSqlNoAlias (DCount sub _ _) = "COUNT(DISTINCT " <> display sub <> ")::float"
+aggToSqlNoAlias (DCount sub _ _) = dcountSQL (display sub)
 aggToSqlNoAlias (Sum sub _) = simpleAggSQL "sum" sub
 aggToSqlNoAlias (Avg sub _) = simpleAggSQL "avg" sub
 aggToSqlNoAlias (Min sub _) = simpleAggSQL "min" sub

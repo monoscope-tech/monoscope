@@ -699,7 +699,11 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             MIN(timestamp) AS first_seen,
             MAX(COALESCE(end_time, timestamp)) AS last_seen,
             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1000000000)::BIGINT AS duration_ns,
-            COUNT(DISTINCT trace_id)::BIGINT AS trace_count,
+            -- Sketch, not exact: an exact distinct holds every trace id per
+            -- session for the whole scan, and the sketch is exact below 512
+            -- distinct values anyway -- which every real session is. Same
+            -- spelling on both backends; see Pkg.Parser.Stats.dcountSQL.
+            distinct_count(approx_count_distinct(trace_id))::BIGINT AS trace_count,
             -- First-observed context, by timestamp. FILTER drops empties so
             -- we don't report "user landed on '' " for sessions where the
             -- opening event has no url_path / user_agent.|]
@@ -719,8 +723,8 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           SELECT
             COUNT(*)::BIGINT AS total_sessions,
             COUNT(*) FILTER (WHERE error_count > 0)::BIGINT AS errored_sessions,
-            COUNT(DISTINCT COALESCE(user_id, user_email)) FILTER (WHERE COALESCE(user_id, user_email) IS NOT NULL)::BIGINT AS unique_users,
-            (SELECT COUNT(DISTINCT service_name) FILTER (WHERE service_name IS NOT NULL)::BIGINT FROM filtered) AS unique_services,
+            distinct_count(approx_count_distinct(COALESCE(user_id, user_email)) FILTER (WHERE COALESCE(user_id, user_email) IS NOT NULL))::BIGINT AS unique_users,
+            (SELECT distinct_count(approx_count_distinct(service_name) FILTER (WHERE service_name IS NOT NULL))::BIGINT FROM filtered) AS unique_services,
             COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS med_dur,
             COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS p95_dur,
             COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY event_count), 0)::BIGINT AS med_evt,
