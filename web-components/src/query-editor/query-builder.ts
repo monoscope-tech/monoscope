@@ -2,6 +2,8 @@ import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { schemaManager } from './query-editor';
 
+type FieldOption = { label: string; value: string; type: string };
+
 // Simple debounce utility
 function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
   let timeout: NodeJS.Timeout;
@@ -27,14 +29,14 @@ export class QueryBuilderComponent extends LitElement {
   @state() private sortFields: { field: string; direction: 'asc' | 'desc' }[] = [];
   @state() private limitValue: number | null = null;
   @state() private showMoreSettings: boolean = false;
-  @state() private fieldsOptions: { label: string; value: string; type: string }[] = [];
+  @state() private fieldsOptions: FieldOption[] = [];
   @state() private newGroupByField: string = '';
   @state() private newAggFunction: string = '';
   @state() private newAggField: string = '';
   @state() private selectedAggFunction: string = '';
   @state() private aggSearchTerm: string = '';
   @state() private filteredAggFunctions: string[] = [];
-  @state() private filteredFields: { label: string; value: string }[] = [];
+  @state() private filteredFields: FieldOption[] = [];
   @state() private showFieldsColumn: boolean = false;
   @state() private visualizationType: string = '';
   @state() private newSortField: string = '';
@@ -43,7 +45,7 @@ export class QueryBuilderComponent extends LitElement {
   // New Group By UI state
   @state() private groupBySearchTerm: string = '';
   @state() private showGroupByFieldsColumn: boolean = false;
-  @state() private filteredGroupByFields: { label: string; value: string }[] = [];
+  @state() private filteredGroupByFields: FieldOption[] = [];
   @state() private enableBinning: boolean = false;
   @state() private enableAutoBin: boolean = false;
   @state() private binValue: number = 5;
@@ -434,11 +436,11 @@ export class QueryBuilderComponent extends LitElement {
 
       const summarizeParts = aggregationPart
         .split(',')
-        .map((part) => part.trim())
+        .map((part: string) => part.trim())
         .filter(Boolean);
 
       this.aggregations = summarizeParts
-        .map((part) => {
+        .map((part: string) => {
           // Match function with optional parameters: func() or func(params)
           const funcMatch = part.match(/(\w+)\(([^)]*)\)/);
           if (funcMatch) {
@@ -460,10 +462,10 @@ export class QueryBuilderComponent extends LitElement {
     if (sortByMatch) {
       const sortParts = sortByMatch[2]
         .split(',')
-        .map((part) => part.trim())
+        .map((part: string) => part.trim())
         .filter(Boolean);
 
-      this.sortFields = sortParts.map((part) => {
+      this.sortFields = sortParts.map((part: string) => {
         const [field, direction] = part.split(/\s+/);
         return {
           field: field.trim(),

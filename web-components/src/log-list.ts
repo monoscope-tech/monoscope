@@ -2925,7 +2925,7 @@ export class LogList extends LitElement {
       summary: { title: 'summary', classes: 'shrink-1' },
     };
 
-    const { title = column, classes = 'shrink-0' } = config[column] || {};
+    const { title = column, classes = 'shrink-0' } = config[column as keyof typeof config] || {};
     return this.tableHeadingWrapper(title, column, classes, width);
   }
 
@@ -2953,7 +2953,7 @@ export class LogList extends LitElement {
       const isPatterns = effectiveMode === 'patterns';
       const isAggregate = isPatterns;
       const s = rowData.type === 'log' ? 'logs' : 'spans';
-      const targetInfo = isAggregate ? '' : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
+      const targetInfo: [string, string, string] = isAggregate ? ['', '', s] : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths

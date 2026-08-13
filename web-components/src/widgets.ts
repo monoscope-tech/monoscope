@@ -473,10 +473,6 @@ declare global {
     formatNumber: (num: number) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
-    logListTable?: any;
-    dashboardRefreshTimer: NodeJS.Timeout | null;
-    dashboardRefreshInterval: number;
-    bindFunctionsToObjects: any;
     setVariable: (key: string, value: string) => void;
     getVariable: (key: string) => string;
   }

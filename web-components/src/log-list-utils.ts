@@ -225,7 +225,7 @@ export const createCachedIconRenderer = () => {
     // Bounded cache - prevent memory leaks
     if (cache.size >= 512) {
       const firstKey = cache.keys().next().value;
-      cache.delete(firstKey);
+      if (firstKey !== undefined) cache.delete(firstKey);
     }
 
     cache.set(cacheKey, result);

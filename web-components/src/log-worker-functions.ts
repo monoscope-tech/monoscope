@@ -1,8 +1,17 @@
 // Testable worker functions
 type ColIdxMap = Record<string, number>;
-type APTEvent = any;
+type APTEvent = {
+  id: string;
+  startNs: number;
+  hasErrors: boolean;
+  duration: number;
+  children: APTEvent[];
+  parent: string | null;
+  data: any[];
+  type: 'log' | 'span';
+};
 type EventLine = any;
-type Trace = any;
+type Trace = { traceId: string; spans: APTEvent[]; startTime: number; duration: number; trace_start_time: Date | null };
 type ChildrenForLatency = { startNs: number; duration: number; data: any[]; depth: number };
 type ServerTraceEntry = { trace_id: string; start_time: number; duration: number; trace_start_time: string | null; root: string; children: Record<string, string[]> };
 
@@ -77,7 +86,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
       children: [] as APTEvent[],
       parent: span[idx.parent_id],
       data: span,
-      type: isLog ? 'log' : 'span',
+      type: isLog ? ('log' as const) : ('span' as const),
     };
   });
 
@@ -89,7 +98,10 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
     .map((entry) => {
       for (const [parentId, childIds] of Object.entries(entry.children)) {
         const parent = spanById.get(parentId);
-        if (parent) parent.children = childIds.map((id) => spanById.get(id)).filter(Boolean);
+        if (parent) parent.children = childIds.flatMap((id) => {
+          const child = spanById.get(id);
+          return child ? [child] : [];
+        });
       }
       const rootSpan = spanById.get(entry.root);
       return {

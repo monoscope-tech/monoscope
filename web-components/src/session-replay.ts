@@ -21,8 +21,8 @@ export class SessionReplay extends LitElement {
   @property({ type: String }) private fullWidth: string = '';
 
   @state() private activityWidth = 0;
-  @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
-  @query('#progressBar') private progressBar: HTMLElement;
+  @query('#replayerOuterContainer') private replayerOuterContainer!: HTMLElement;
+  @query('#progressBar') private progressBar!: HTMLElement;
   @state() private playSpeed = 1;
   @state() private skipInactive = true;
   @state() private consoleEventsEnable = [true, true, true]; // error, warn, info;
@@ -404,7 +404,7 @@ export class SessionReplay extends LitElement {
     this.sessionStart = events[0].timestamp;
     this.ingestMarkers(events);
 
-    this.player = new Replayer(events, { root: target, plugins: [{ handler: this.handleConsoleEvents }], skipInactive: this.skipInactive });
+    this.player = new Replayer(events, { root: target, plugins: [{ handler: (event) => this.handleConsoleEvents(event as eventWithTime) }], skipInactive: this.skipInactive });
     this.trickPlayer = null;
     this.metaData = this.player.getMetaData();
     this.updateScale();

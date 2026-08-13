@@ -3,7 +3,7 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { spriteUrl } from '../assets';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import {
   AGGREGATION_COMMANDS,
   DATA_SOURCES,
@@ -19,7 +19,7 @@ import {
   type SuggestionKind as CompletionKind,
 } from './completion';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml';
+import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml.js';
 import { groupBy, pick } from 'lodash';
 
 // Configure Monaco workers (we only use the base editor, no language services).
@@ -89,12 +89,17 @@ interface QueryLibItem {
 }
 
 // Schema types
+type FieldValue = string | number | boolean;
+
 type FieldInfo = {
-  type: FieldType;
+  type?: FieldType;
+  field_type?: FieldType;
   description?: string;
-  enum?: (string | number | boolean)[];
+  enum?: FieldValue[];
   fields?: Record<string, FieldInfo>;
-  examples?: string[];
+  properties?: Record<string, FieldInfo>;
+  items?: FieldInfo;
+  examples?: FieldValue[];
 };
 
 type Schema = {
@@ -105,6 +110,7 @@ type Schema = {
 
 type SchemaData = {
   fields: Record<string, FieldInfo>;
+  properties?: Record<string, SchemaData>;
   operators?: Record<string, string[]>;
 };
 
@@ -113,7 +119,7 @@ type SuggestionItem = CompletionItem | RecentSearch | SavedView | PopularSearch;
 interface SchemaField {
   name: string;
   type: string;
-  examples?: string[];
+  examples?: FieldValue[];
   fields?: Record<string, any>;
 }
 
@@ -210,7 +216,7 @@ class SchemaManager {
         .filter(([name]) => !name.includes('.'))
         .map(([name, info]) => ({
           name,
-          type: info.type || 'string',
+          type: info.type || info.field_type || 'string',
           examples: info.examples || info.enum || [],
           fields: fields.some(([k]) => k.startsWith(`${name}.`)) ? {} : undefined,
         }));
@@ -225,7 +231,7 @@ class SchemaManager {
         if (!acc.has(childName)) {
           acc.set(childName, {
             name: childName,
-            type: info.type || 'string',
+            type: info.type || info.field_type || 'string',
             examples: info.examples || info.enum || [],
             fields: fields.some(([k]) => k.startsWith(`${prefixWithDot}${childName}.`)) ? {} : undefined,
           });
@@ -300,6 +306,12 @@ class SchemaManager {
     this.setCacheWithLimit(this.valueCache, cacheKey, result);
     return result;
   };
+  getFieldSuggestions = async (schema = this.getDefaultSchema()): Promise<{ name: string; type: string; description?: string }[]> =>
+    (await this.resolveNested(schema, '')).map((field) => ({
+      name: field.name,
+      type: field.type,
+      description: field.examples?.join(', '),
+    }));
 
   // Legacy compatibility methods
   getRootFields = async (): Promise<{ name: string; info: FieldInfo }[]> => {
@@ -423,13 +435,13 @@ monaco.editor.defineTheme('transparent-theme-dark', {
 
 // Register AQL language
 monaco.languages.register({ id: 'aql' });
-monaco.languages.setMonarchTokensProvider('aql', language);
-monaco.languages.setLanguageConfiguration('aql', conf);
+monaco.languages.setMonarchTokensProvider('aql', language as monaco.languages.IMonarchLanguage);
+monaco.languages.setLanguageConfiguration('aql', conf as unknown as monaco.languages.LanguageConfiguration);
 
 // Register YAML language for yaml-editor component
 monaco.languages.register({ id: 'yaml', extensions: ['.yaml', '.yml'], aliases: ['YAML', 'yaml'] });
-monaco.languages.setMonarchTokensProvider('yaml', yamlLanguage);
-monaco.languages.setLanguageConfiguration('yaml', yamlConf);
+monaco.languages.setMonarchTokensProvider('yaml', yamlLanguage as monaco.languages.IMonarchLanguage);
+monaco.languages.setLanguageConfiguration('yaml', yamlConf as monaco.languages.LanguageConfiguration);
 
 // Suggestions come from ./completion, called directly by the component. Monaco
 // keeps syntax highlighting only: its own completion provider and suggest widget
@@ -940,7 +952,7 @@ export class QueryEditorComponent extends LitElement {
 
         if (hasSummarize && !hasBinFunction) {
           // Query has summarize but no bin_auto for timestamp, add bin_auto(timestamp) to the by clause
-          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeByClause, (match, summarizePrefix, byClause) => {
+          newQuery = currentQuery.replace(REGEX_PATTERNS.summarizeByClause, (_match: string, summarizePrefix: string, byClause: string) => {
             // Add bin_auto(timestamp) to the beginning of the by clause
             const updatedBy = byClause.trim()
               ? `${summarizePrefix}bin_auto(timestamp), ${byClause.trim()}`
@@ -975,8 +987,9 @@ export class QueryEditorComponent extends LitElement {
   public handleAddQuery(queryFragment: string, replace: boolean = false): void {
     if (!this.editor) return;
 
+    const editor = this.editor;
     const previouslyFocusedElement = document.activeElement as HTMLElement;
-    const hadFocus = this.editor.hasTextFocus();
+    const hadFocus = editor.hasTextFocus();
 
     this.isProgrammaticUpdate = true;
 
@@ -1040,8 +1053,8 @@ export class QueryEditorComponent extends LitElement {
       this.updatePlaceholder();
     } finally {
       setTimeout(() => {
-        this.editor.focus = originalFocus.bind(this.editor);
-        this.editor.trigger = originalTrigger.bind(this.editor);
+        editor.focus = originalFocus.bind(editor);
+        editor.trigger = originalTrigger.bind(editor);
 
         document.removeEventListener('focus', preventFocus, true);
         document.removeEventListener('focusin', preventFocus, true);
@@ -1129,7 +1142,6 @@ export class QueryEditorComponent extends LitElement {
       },
       lineDecorationsWidth: 0,
       lineNumbersMinChars: 0,
-      validate: false as any,
       renderWhitespace: 'none',
       cursorBlinking: 'solid',
       smoothScrolling: false,
@@ -1577,14 +1589,14 @@ export class QueryEditorComponent extends LitElement {
     const uiData: Record<SuggestionKind, () => ReturnType<typeof this.getSuggestionUIData>> = {
       recentSearch: () => ({
         icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-textWeak bg-fillWeak border-strokeWeak">⏱</span>`,
-        primaryText: item.query,
+        primaryText: (item as RecentSearch).query,
         secondaryText: (item as RecentSearch).timestamp,
       }),
       savedView: () => ({
         icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-amber-400 bg-amber-400/15 border-amber-400/30">★</span>`,
         primaryText: (item as SavedView).name,
         secondaryText: html`
-          <span class="truncate text-textWeak mr-2" title="${item.query}">${item.query}</span>
+          <span class="truncate text-textWeak mr-2" title="${(item as SavedView).query}">${(item as SavedView).query}</span>
           ${(item as SavedView).owner
             ? html`<span class="flex-shrink-0 rounded-full w-6 h-6 flex items-center justify-center text-xs"
                 >${(item as SavedView).owner!.icon || ''}</span
@@ -1594,7 +1606,7 @@ export class QueryEditorComponent extends LitElement {
       }),
       popularSearch: () => ({
         icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-sky-400 bg-sky-400/15 border-sky-400/30">↗</span>`,
-        primaryText: item.query,
+        primaryText: (item as PopularSearch).query,
         secondaryText: (item as PopularSearch).description,
       }),
       completion: () => {
@@ -1813,17 +1825,6 @@ export class QueryEditorComponent extends LitElement {
     `;
   }
 }
-
-// Add a convenience method to get field suggestions directly from schemaManager
-schemaManager.getFieldSuggestions = async (schema?: string): Promise<{ name: string; type: string; description?: string }[]> => {
-  const schemaToUse = schema || schemaManager.getDefaultSchema();
-  const fields = await schemaManager.resolveNested(schemaToUse, '');
-  return fields.map((field) => ({
-    name: field.name,
-    type: field.type,
-    description: field.examples?.join(', '),
-  }));
-};
 
 // Expose schemaManager globally for external configuration
 (window as any).schemaManager = schemaManager;

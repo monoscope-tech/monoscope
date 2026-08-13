@@ -4,6 +4,7 @@
     "useDefineForClassFields": false,
     "module": "ESNext",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["bun", "node"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

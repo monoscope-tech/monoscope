@@ -20,7 +20,7 @@ export function initializeDefaultSchema(): void {
         .filter(([name]) => !name.includes('.'))
         .map(([name, info]) => ({
           name,
-          type: info.type || info.field_type,
+          type: info.type || info.field_type || 'string',
           examples: info.examples,
           // Check if this field has nested fields by looking for dotted versions
           fields: Object.keys(currentSchema.fields).some((key) => key.startsWith(name + '.')) ? {} : undefined,
@@ -51,7 +51,7 @@ export function initializeDefaultSchema(): void {
       if (!childMap.has(childName)) {
         childMap.set(childName, {
           name: childName,
-          type: info.type || info.field_type,
+          type: info.type || info.field_type || 'string',
           examples: info.examples,
           // Mark as having nested fields if there are deeper levels or if it's an object type
           fields: hasNestedFields || nestedFields.some((f) => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,

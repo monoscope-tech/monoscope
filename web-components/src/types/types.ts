@@ -14,7 +14,7 @@ declare global {
       projectId: string;
     } | null;
     testVariables: any;
-    logListTable: Element | null;
+    logListTable?: Element | null;
     collectionResults: any[] | undefined;
     dashboardRefreshInterval: number;
     dashboardRefreshTimer: NodeJS.Timeout | null;
@@ -26,7 +26,7 @@ declare global {
     evalScriptsFromContent: (container: HTMLElement) => void;
     params: () => Record<string, string>;
     setQueryParamAndReload: (key: string, value: string) => void;
-    setParams: (state: Record<string, any>, load: boolean) => void;
+    setParams: (state: Record<string, any>, load?: boolean) => void;
     flameGraphChart: any;
     waterFallGraphChart: any;
     serviceMapChart: any;
@@ -36,9 +36,18 @@ declare global {
     formatNumber: (num: number) => string;
     getUTCOffset: () => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
+    tagifyTemplateFunc: (this: TagifyTemplateContext, tagData: TagifyTagData) => string;
     getTagValues: (selector: string) => string[];
     updateTimePicker: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }) => string;
   }
+  type TagifyTagData = { value?: string; email?: string; class?: string; name?: string };
+  type TagifyTemplateContext = {
+    settings: { classNames: { tag: string; tagX: string; tagText: string } };
+    getAttributes: (tagData: TagifyTagData) => string;
+  };
+
+  var monaco: typeof import('monaco-editor/esm/vs/editor/editor.api.js');
+
   function updateUrlState(key: string | string[], value: string, action?: 'set' | 'delete'): void;
 }
 

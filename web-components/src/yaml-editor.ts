@@ -1,5 +1,6 @@
 import { LitElement, html } from 'lit';
 import { customElement, query } from 'lit/decorators.js';
+import type * as Monaco from 'monaco-editor';
 
 // Use the global Monaco instance (set by query-editor which also registers YAML language)
 const monacoInstance = globalThis.monaco;
@@ -16,7 +17,7 @@ export class YamlEditorComponent extends LitElement {
   protected createRenderRoot = () => this;
 
   @query('.yaml-editor-container') private container!: HTMLDivElement;
-  private editor: monaco.editor.IStandaloneCodeEditor | null = null;
+  private editor: Monaco.editor.IStandaloneCodeEditor | null = null;
   private themeObserver: MutationObserver | null = null;
 
   getValue(): string {

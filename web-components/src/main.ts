@@ -284,7 +284,7 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
   const defaultOptions = {
     skipInvalid: true,
     templates: {
-      tag: window.tagifyTemplateFunc,
+      tag: tagifyTemplateFunc,
       dropdownItemNoMatch: (data: any) => `No match for: ${data.value}`,
     },
     editTags: { clicks: 2, keepInvalid: false },
@@ -308,7 +308,10 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
   return tagify;
 };
 
-function tagifyTemplateFunc(tagData: any) {
+function tagifyTemplateFunc(
+  this: { settings: { classNames: { tag: string; tagX: string; tagText: string } }; getAttributes: (data: TagifyTagData) => string },
+  tagData: TagifyTagData
+) {
   return `<tag title="${tagData.value || tagData.email}"
                contenteditable='false'
                spellcheck='false'
@@ -320,7 +323,7 @@ function tagifyTemplateFunc(tagData: any) {
        </tag>`;
 }
 
-(window as any).tagifyTemplateFunc = tagifyTemplateFunc;
+window.tagifyTemplateFunc = tagifyTemplateFunc;
 
 // Auto-initialize tagify inputs from data attributes
 // Uses data-tagify-* prefix to avoid collision with Tagify's built-in data attribute handling
