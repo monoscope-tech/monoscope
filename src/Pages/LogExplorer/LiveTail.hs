@@ -122,18 +122,11 @@ data RegisterResponse = RegisterResponse
 
 
 -- | Register a lease.
---
--- Ordering is deliberate: the service gate is checked before the query is parsed and before
--- any count query runs, because it is the only reason Live Tail's volume is bounded and it is
--- also the cheapest thing to reject.
 liveTailRegisterH :: Projects.ProjectId -> LT.NewSubscription -> ATAuthCtx (RespHeaders RegisterResponse)
 liveTailRegisterH pid body = do
   sess <- Projects.getSession
   appCtx <- Reader.ask @AuthContext
-  -- The service gate lives in 'LT.Scope': Live Tail cannot be constructed without a service,
-  -- and the Events tab has none to give. Resolving it first means the gate is enforced before
-  -- anything expensive runs, and by the type rather than by a check a later edit could drop.
-  scope <- either refuse pure (LT.scopeFor body)
+  let scope = LT.scopeFor body
   whenLeft_ (LT.compileQuery (fromMaybe "" body.query)) refuse
   now <- Time.currentTime
   let expiresAt = addUTCTime (fromIntegral LT.leaseSecs) now

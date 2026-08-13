@@ -4,7 +4,7 @@
  * The server matches on the ingest pod and pushes over SSE; `LiveStream` owns the connection
  * lifecycle. This component owns only what is left — the row buffer and how it renders.
  *
- * Three rules shape it:
+ * Four rules shape it:
  *
  * 1. **The row buffer is capped.** A tail on a busy service produces rows faster than anyone
  *    can read them; an uncapped list is an out-of-memory crash with extra steps. Rows past the
@@ -16,6 +16,12 @@
  *    the button labels and the status dot switch in stylesheet rules, the same way the
  *    Explorer's own live toggle works (`logExplorerActions_`). The only thing CSS genuinely
  *    cannot do — setting `disabled`, which has to be real for assistive tech — stays here.
+ * 4. **The selection is the control.** There is no start button. The page opens tailing every
+ *    service's logs, and changing service, environment, kind or filter re-registers on the
+ *    spot: a button would only add a step between a choice and its consequence, and a stale
+ *    tail — still running under the previous filter — for as long as it went unpressed.
+ *    Everything selected lives in the URL, so a tail pasted into an incident channel opens on
+ *    the same stream the sender was watching.
  */
 
 import { LitElement, html, nothing, TemplateResult } from 'lit';
@@ -64,6 +70,13 @@ const STATE_LABEL: Record<LiveState, string> = {
   error: 'Error',
 };
 
+/** Signal-kind modes, mirroring `Pkg.LiveTail.SignalKind` — the values are its derived spelling. */
+const KINDS: Array<[string, string]> = [
+  ['logs', 'Logs'],
+  ['spans', 'Spans'],
+  ['any', 'Logs & spans'],
+];
+
 @customElement('live-tail')
 export class LiveTail extends LitElement {
   @state() private streamState: LiveState = 'idle';
@@ -74,6 +87,13 @@ export class LiveTail extends LitElement {
   @state() private statusMessage = '';
   @state() private services: string[] = [];
   @state() private environments: string[] = [];
+
+  // What the tail is registered for. Held here rather than read off the controls at start
+  // time, because there is no start: every change to one of these re-registers immediately.
+  private service = '';
+  private environment = '';
+  private kind = 'logs';
+  private query = '';
 
   /**
    * The buffer keeps filling while paused; `rows` is the frozen view of it.
@@ -97,6 +117,14 @@ export class LiveTail extends LitElement {
     super.connectedCallback();
     this.projectId = this.dataset.projectId ?? '';
     this.leaseSecs = Number(this.dataset.leaseSecs ?? '45');
+    // The URL is the source of truth for what to tail, so a pasted link opens the same stream.
+    // `query` is the same parameter the query editor maintains, and the Events tab uses.
+    const params = new URLSearchParams(location.search);
+    this.service = params.get('service') ?? '';
+    this.environment = params.get('env') ?? '';
+    const kind = params.get('kind') ?? '';
+    this.kind = KINDS.some(([v]) => v === kind) ? kind : 'logs';
+    this.query = params.get('query') ?? '';
     this.classList.add('group/lt');
     document.addEventListener('visibilitychange', this.onVisibility);
   }
@@ -108,7 +136,15 @@ export class LiveTail extends LitElement {
   }
 
   firstUpdated() {
+    // The tail starts itself: the page's whole job is to show what is arriving, and a screen
+    // that waits to be told to do that is a step between the user and the only thing here.
+    this.restart();
     void this.loadFacets();
+    // Monaco is lazy-loaded by a scan of the server-rendered document (see index.ts), which ran
+    // before this element rendered its editor. Ask for a re-scan so this editor gets armed the
+    // same way — importing Monaco here instead would pull ~1MB eagerly on every page that
+    // renders a <live-tail>, including the log explorer's hidden one.
+    this.dispatchEvent(new CustomEvent('arm-deferred-components', { bubbles: true }));
   }
 
   updated() {
@@ -134,15 +170,16 @@ export class LiveTail extends LitElement {
   }
 
   /**
-   * Offer the services and environments the project actually has, so the required service
-   * selection is a pick rather than a guess.
+   * Offer the services and environments the project actually has, so narrowing a tail is a
+   * pick rather than a guess.
    *
    * Both come from the schema endpoint's facet values, which land under
    * `fields[<dotted key>].examples` — the same enrichment the query editor's autocomplete
    * reads. There is no top-level `services` list to ask for.
    *
-   * On failure the placeholders stand alone. That is a dead end for Live Tail, since a service
-   * is mandatory, so it says so rather than leaving an empty dropdown to explain itself.
+   * A failure here is not fatal: the tail already runs across every service, and the dropdown
+   * is only how you narrow it. So the stream is left alone and the dropdown says why it is
+   * empty rather than the page claiming to be broken.
    */
   private async loadFacets() {
     try {
@@ -151,34 +188,42 @@ export class LiveTail extends LitElement {
       const examples = (key: string): string[] => fields[key]?.examples ?? [];
       this.services = examples('resource.service.name');
       this.environments = examples('resource.deployment.environment.name');
-      if (!this.services.length) {
-        this.streamState = 'error';
-        this.statusMessage = 'No services found for this project yet — send some telemetry first.';
-      }
     } catch {
       this.services = [];
       this.environments = [];
-      this.streamState = 'error';
-      this.statusMessage = 'Could not load the service list.';
     }
   }
 
-  private start = () => {
-    const service = this.querySelector<HTMLSelectElement>('[data-service]')?.value?.trim() ?? '';
-    if (!service) {
-      this.streamState = 'error';
-      this.statusMessage = 'Select a service before starting the tail.';
-      return;
-    }
+  /**
+   * (Re)register the tail for the current selection.
+   *
+   * Everything the server matches on is fixed at registration, so any change to it is a new
+   * subscription — and the rows already on screen came from the old one. Clearing them is the
+   * honest answer: a list mixing two filters is one nobody can read a conclusion out of.
+   */
+  private restart = () => {
+    this.teardown();
+    this.buffer = [];
+    this.rows = [];
     this.droppedServer = 0;
     this.droppedClient = 0;
+    // Only what differs from the default is written, so a plain /live_tail link stays plain.
+    const url = new URL(location.href);
+    const inUrl: Array<[string, string]> = [
+      ['service', this.service],
+      ['env', this.environment],
+      ['kind', this.kind === 'logs' ? '' : this.kind],
+    ];
+    inUrl.forEach(([k, v]) => (v ? url.searchParams.set(k, v) : url.searchParams.delete(k)));
+    history.replaceState({}, '', url);
     this.stream = new LiveStream({
       projectId: this.projectId,
       leaseSecs: this.leaseSecs,
       body: () => ({
-        service,
-        environment: this.querySelector<HTMLSelectElement>('[data-environment]')?.value || null,
-        query: this.querySelector<HTMLInputElement>('[data-query]')?.value || null,
+        service: this.service || null,
+        environment: this.environment || null,
+        kind: this.kind,
+        query: this.query || null,
       }),
       onRows: rows => this.appendRows(rows.map(r => (r as any).log as LiveRow).filter(Boolean)),
       onDropped: total => (this.droppedServer = total),
@@ -194,13 +239,6 @@ export class LiveTail extends LitElement {
     this.stream?.stop();
     this.stream = null;
   }
-
-  private stopStream = () => {
-    this.teardown();
-    // An expired or failed tail keeps its state so the status line can explain itself; a
-    // deliberate stop goes back to idle.
-    if (this.streamState !== 'expired' && this.streamState !== 'error') this.streamState = 'idle';
-  };
 
   private appendRows(batch: LiveRow[]) {
     if (!batch.length) return;
@@ -223,27 +261,54 @@ export class LiveTail extends LitElement {
     return html`
       <div class="w-full h-full flex flex-col">
         <div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-strokeWeak">
-          <select data-service class="select select-sm w-48" aria-label="Service" ?disabled=${this.running}>
-            <option value="">Select a service…</option>
-            ${this.services.map(s => html`<option value=${s}>${s}</option>`)}
+          <select
+            class="select select-sm w-48"
+            aria-label="Service"
+            @change=${(e: Event) => {
+              this.service = (e.target as HTMLSelectElement).value;
+              this.restart();
+            }}
+          >
+            <option value="" ?selected=${!this.service}>All services</option>
+            ${this.services.map(s => html`<option value=${s} ?selected=${s === this.service}>${s}</option>`)}
           </select>
-          <select data-environment class="select select-sm w-40" aria-label="Environment" ?disabled=${this.running}>
-            <option value="">All environments</option>
-            ${this.environments.map(e => html`<option value=${e}>${e}</option>`)}
+          <select
+            class="select select-sm w-40"
+            aria-label="Environment"
+            @change=${(e: Event) => {
+              this.environment = (e.target as HTMLSelectElement).value;
+              this.restart();
+            }}
+          >
+            <option value="" ?selected=${!this.environment}>All environments</option>
+            ${this.environments.map(e => html`<option value=${e} ?selected=${e === this.environment}>${e}</option>`)}
           </select>
-          <input
-            data-query
-            class="input input-sm flex-1 min-w-64"
-            placeholder=${'Filter, e.g. level == "error"'}
-            aria-label="Filter query"
-            ?disabled=${this.running}
-          />
-          <!-- One button, two labels: which one shows is a stylesheet rule keyed off the
-               host's data-state, so connecting/reconnecting relabel without a re-render. -->
-          <button class="btn btn-sm btn-primary" @click=${() => (this.running ? this.stopStream() : this.start())}>
-            <span class="group-data-[state=live]/lt:hidden group-data-[state=connecting]/lt:hidden group-data-[state=reconnecting]/lt:hidden">Start tail</span>
-            <span class="hidden group-data-[state=live]/lt:inline group-data-[state=connecting]/lt:inline group-data-[state=reconnecting]/lt:inline">Stop</span>
-          </button>
+          <!-- Kind is a control, not a hidden kind == "log" inside the filter: it decides what
+               the page is showing, and a mode the user cannot see is one they cannot undo. -->
+          <select
+            class="select select-sm w-36"
+            aria-label="Signal kind"
+            @change=${(e: Event) => {
+              this.kind = (e.target as HTMLSelectElement).value;
+              this.restart();
+            }}
+          >
+            ${KINDS.map(([v, label]) => html`<option value=${v} ?selected=${v === this.kind}>${label}</option>`)}
+          </select>
+          <!-- The same editor the Events tab uses, so a filter written in one is valid in the
+               other: KQL autocomplete against this project's schema, and server-side
+               validation as you type. It emits update-query once the query settles. -->
+          <query-editor
+            class="flex-1 min-w-64 flex items-center min-h-[38px]"
+            project-id=${this.projectId}
+            default-value=${this.query}
+            @update-query=${(e: CustomEvent<{ value: string }>) => {
+              const next = (e.detail?.value ?? '').trim();
+              if (next === this.query) return;
+              this.query = next;
+              this.restart();
+            }}
+          ></query-editor>
           <button class="btn btn-sm" ?disabled=${!this.running} @click=${() => this.togglePause()}>
             <span class="group-data-[paused=true]/lt:hidden">Pause</span>
             <span class="hidden group-data-[paused=true]/lt:inline">Resume</span>
@@ -290,7 +355,7 @@ export class LiveTail extends LitElement {
                 r => this.rowTemplate(r)
               )
             : html`<div class="p-8 text-center text-textWeak font-sans text-sm">
-                ${this.streamState === 'live' ? 'Waiting for matching logs…' : 'Select a service and start the tail.'}
+                ${this.streamState === 'live' ? 'Waiting for matching records…' : STATE_LABEL[this.streamState]}
               </div>`}
         </div>
       </div>
@@ -303,8 +368,10 @@ export class LiveTail extends LitElement {
       <span class="text-textWeak shrink-0 tabular-nums">${r.timestamp.slice(11, 23)}</span>
       <span class="shrink-0 w-14 uppercase ${levelClass(r.level)}">${r.level ?? ''}</span>
       <span class="shrink-0 w-32 truncate text-textWeak">${r.service ?? ''}</span>
+      <!-- A span has no body; its name is the line. Without the fallback a spans tail renders
+           a column of blank rows and reads as a broken stream rather than a working one. -->
       <span class="flex-1 whitespace-pre-wrap break-all"
-        >${r.body}${r.truncated ? html`<span class="text-textWeak"> …truncated</span>` : nothing}</span
+        >${r.body || r.name || ''}${r.truncated ? html`<span class="text-textWeak"> …truncated</span>` : nothing}</span
       >
     </div>`;
   }

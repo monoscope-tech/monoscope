@@ -32,6 +32,7 @@ module Pkg.LiveTail (
   Subscription (..),
   SubscriptionId,
   Scope (..),
+  SignalKind (..),
   scopeFor,
   scopeToText,
   scopeFromRow,
@@ -132,7 +133,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
 import Pkg.Parser.Stats (parseQueryToAST, validateFields)
@@ -150,45 +151,68 @@ import System.IO.Unsafe (unsafePerformIO)
 type SubscriptionId = UUIDId "live_tail_subscription"
 
 
--- | Which signals a subscription watches, and — structurally — whether it is gated by a
--- service.
+-- | Which signal kinds a tail watches.
 --
--- The two live surfaces bound their volume differently, and encoding that as a sum rather than
--- a @Bool@ plus a @Maybe Text@ is what stops the wrong combination existing at all. Live Tail
--- /cannot/ be constructed without a service; the Events tab has no service to give, and no
--- amount of handler code can accidentally drop the gate from the one that needs it.
+-- A sum rather than the raw @kind@ text because "spans" is not a value that column holds: a
+-- span is stored under its OTel span kind (@server@, @client@, @internal@, …), so "everything
+-- that is not a log" cannot be written as an equality. Narrower cuts than these three are the
+-- filter's job — @kind == "server"@ is a query, not a mode.
+--
+-- One derived spelling — @any@ \/ @logs@ \/ @spans@ — serves the request body, the column and
+-- the @\<option value>@ alike, so none of the three can drift from the others.
+--
+-- >>> AE.encode SKLogs
+-- "\"logs\""
+-- >>> AE.decode "\"spans\"" :: Maybe SignalKind
+-- Just SKSpans
+-- >>> AE.decode "\"traces\"" :: Maybe SignalKind
+-- Nothing
+data SignalKind = SKAny | SKLogs | SKSpans
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "SK" SignalKind
+
+
+-- | The @kind@ a log record carries. Set at ingest ("Opentelemetry.OtlpServer"); every other
+-- value in that column is a span kind.
+logKind :: Text
+logKind = "log"
+
+
+-- | Which surface a subscription feeds, and so which shape its rows take.
+--
+-- The two live surfaces render genuinely different things — a log list and the Events table —
+-- and the sum is what keeps a row from being projected into the wrong one. The service is
+-- optional on both: it narrows a tail, it is not what bounds it. The bound is the
+-- per-connection queue, which drops the oldest rows and reports the count.
 data Scope
-  = -- | Live Tail: one service, logs only. The service is the bound.
-    LogsOnly Text
-  | -- | The Events tab's live toggle: every signal, no service gate. Bounded instead by the
-    -- per-connection queue — a tail matching more than a browser can take drops the oldest
-    -- rows and reports the count, rather than being refused up front.
+  = -- | Live Tail's log list: an optional service, and which signal kinds to show.
+    LogTail (Maybe Text) SignalKind
+  | -- | The Events tab's live toggle: every signal, projected into the table's columns.
     AllSignals
   deriving stock (Eq, Generic, Show)
 
 
--- | Storage form. Kept narrow deliberately: the column is a discriminator, not a place to
--- smuggle more state.
-scopeToText :: Scope -> (Text, Maybe Text)
+-- | Storage form: the discriminator, the service it is narrowed to, and the kind it watches.
+scopeToText :: Scope -> (Text, Maybe Text, SignalKind)
 scopeToText = \case
-  LogsOnly svc -> ("logs_only", Just svc)
-  AllSignals -> ("all_signals", Nothing)
+  LogTail svc kind -> ("logs_only", svc, kind)
+  AllSignals -> ("all_signals", Nothing, SKAny)
 
 
--- | Rebuild a 'Scope' from its stored parts. A @logs_only@ row with no service is corrupt —
--- the schema cannot express "gated by nothing" — so it fails rather than silently widening
--- into a tail across every service.
+-- | Rebuild a 'Scope' from its stored parts.
 --
--- >>> scopeFromRow "logs_only" (Just "checkout")
--- Just (LogsOnly "checkout")
--- >>> scopeFromRow "logs_only" Nothing
--- Nothing
--- >>> scopeFromRow "all_signals" Nothing
+-- >>> scopeFromRow "logs_only" (Just "checkout") SKSpans
+-- Just (LogTail (Just "checkout") SKSpans)
+-- >>> scopeFromRow "logs_only" Nothing SKLogs
+-- Just (LogTail Nothing SKLogs)
+-- >>> scopeFromRow "all_signals" Nothing SKAny
 -- Just AllSignals
-scopeFromRow :: Text -> Maybe Text -> Maybe Scope
-scopeFromRow "logs_only" (Just svc) = Just (LogsOnly svc)
-scopeFromRow "all_signals" _ = Just AllSignals
-scopeFromRow _ _ = Nothing
+-- >>> scopeFromRow "nonsense" Nothing SKAny
+-- Nothing
+scopeFromRow :: Text -> Maybe Text -> SignalKind -> Maybe Scope
+scopeFromRow "logs_only" svc kind = Just (LogTail svc kind)
+scopeFromRow "all_signals" _ _ = Just AllSignals
+scopeFromRow _ _ _ = Nothing
 
 
 -- | A lease, as stored. @expiresAt@ is authoritative — see the migration for why.
@@ -216,41 +240,39 @@ data Subscription = Subscription
 
 -- | What a browser asked for, after the handler authenticated it. Project and user are never
 -- read from the request body, so they are not fields here.
---
--- @service@ is optional at the wire level and required by 'LogsOnly' at the type level; the
--- handler is what turns one into the other, and refuses when it cannot.
 data NewSubscription = NewSubscription
   { service :: Maybe Text
+  -- ^ Absent or blank tails every service in the project.
   , environment :: Maybe Text
   , query :: Maybe Text
   , allSignals :: Maybe Bool
-  -- ^ Set by the Events tab. Absent or false means Live Tail's logs-only, service-gated form.
+  -- ^ Set by the Events tab. Absent or false means Live Tail's log-list form.
+  , kind :: Maybe SignalKind
+  -- ^ Which signals the log list shows; omitted means logs. Ignored when @allSignals@ is set.
   , columns :: Maybe [Text]
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewSubscription
 
 
--- | Resolve the browser's requested scope, enforcing the gate that 'LogsOnly' requires.
+-- | Resolve the browser's requested scope.
 --
--- >>> scopeFor (NewSubscription (Just "checkout") Nothing Nothing Nothing Nothing)
--- Right (LogsOnly "checkout")
--- >>> scopeFor (NewSubscription Nothing Nothing Nothing Nothing Nothing)
--- Left ServiceRequired
--- >>> scopeFor (NewSubscription Nothing Nothing Nothing (Just True) Nothing)
--- Right AllSignals
-scopeFor :: NewSubscription -> Either RegisterError Scope
+-- >>> scopeFor (NewSubscription (Just " checkout ") Nothing Nothing Nothing Nothing Nothing)
+-- LogTail (Just "checkout") SKLogs
+-- >>> scopeFor (NewSubscription (Just "") Nothing Nothing Nothing (Just SKSpans) Nothing)
+-- LogTail Nothing SKSpans
+-- >>> scopeFor (NewSubscription Nothing Nothing Nothing (Just True) Nothing Nothing)
+-- AllSignals
+scopeFor :: NewSubscription -> Scope
 scopeFor ns
-  | ns.allSignals == Just True = Right AllSignals
-  | otherwise = maybe (Left ServiceRequired) (Right . LogsOnly) (mfilter (not . T.null) (T.strip <$> ns.service))
+  | ns.allSignals == Just True = AllSignals
+  | otherwise = LogTail (mfilter (not . T.null) (T.strip <$> ns.service)) (fromMaybe SKLogs ns.kind)
 
 
 -- | Why a registration was refused. Typed rather than stringly so the handler maps each case
 -- to a status code and the UI can react to the limit cases specifically.
 data RegisterError
-  = -- | The service gate. Live Tail's volume is bounded by this and nothing else.
-    ServiceRequired
-  | -- | @summarize@, @sort@, @take@, @project@, @extend@ or @source=@ — all need a result set,
+  = -- | @summarize@, @sort@, @take@, @project@, @extend@ or @source=@ — all need a result set,
     -- and a stream has none.
     NotAFilter
   | -- | Parser rejected the text, or it names a field that does not exist.
@@ -265,7 +287,6 @@ data RegisterError
 -- other tenants.
 registerErrorMessage :: RegisterError -> Text
 registerErrorMessage = \case
-  ServiceRequired -> "Select a service before starting the tail."
   NotAFilter -> "Live Tail streams individual logs, so it only accepts filters — remove summarize, sort, take, project and extend."
   BadQuery m -> m
   QueryTooLong n -> "Query is " <> show n <> " characters; the limit is " <> show maxQueryLength <> "."
@@ -416,11 +437,11 @@ effectiveFilter cs row
   | not (maybe True (matches envSubject) cs.sub.environment) = Right False
   | otherwise = maybe (Right True) (evalExpr resolver) cs.userFilter
   where
-    -- 'AllSignals' has no service predicate to apply — that is the whole difference between
-    -- the two surfaces, and it lives here rather than in a nullable field the caller might
-    -- forget to check.
+    -- The Events tab has no service to narrow by, and a Live Tail that named none is asking
+    -- for the whole project. Matched exhaustively rather than read out of a nullable field a
+    -- caller could forget to check.
     serviceOk = case cs.sub.scope of
-      LogsOnly svc -> matches serviceSubject svc
+      LogTail svc _ -> maybe True (matches serviceSubject) svc
       AllSignals -> True
     resolver :: Resolver
     resolver = resolveIn row
@@ -438,8 +459,10 @@ envSubject = Subject "resource.deployment.environment.name" "resource" [FieldKey
 
 -- | Every subscription this row matches.
 --
--- Logs only: a batch may carry spans and metrics, and Live Tail is a log view. Filtering here
--- rather than at the call site keeps the "what is a log?" decision in one place.
+-- A batch carries logs, spans and metrics together, so "which signals did this tail ask for?"
+-- is decided here — per subscription, not per batch: one project can have a logs tail and an
+-- Events tail open at once, and the same span must reach the second while never reaching the
+-- first.
 --
 -- An 'EvalError' resolves to a non-match, and is returned alongside so the caller can count
 -- it. Failing closed matters: a broken filter that matched everything would stream a user rows
@@ -448,14 +471,17 @@ matchesFor :: [CompiledSub] -> Telemetry.OtelLogsAndSpans -> ([CompiledSub], [Ev
 matchesFor subs rec = partitionEithers (mapMaybe decide subs)
   where
     row = AE.toJSON rec
-    isLog = rec.kind == Just "log"
-    -- The logs-only restriction is per subscription, not per batch: one project can have a
-    -- Live Tail and an Events tail open at once, and the same span must reach the second while
-    -- never reaching the first. Matched exhaustively rather than by guard + `otherwise`, so a
-    -- third Scope inherits neither answer silently — it fails to compile until decided.
-    decide cs = case cs.sub.scope of
-      LogsOnly _ -> if isLog then verdict cs else Nothing
-      AllSignals -> verdict cs
+    isLog = rec.kind == Just logKind
+    -- Not @not isLog@: a record with no kind at all is neither, and a spans tail must not
+    -- become the dumping ground for whatever ingest could not classify.
+    isSpan = maybe False (/= logKind) rec.kind
+    -- Matched exhaustively rather than by guard + `otherwise`, so a further Scope or
+    -- SignalKind inherits no answer silently — it fails to compile until decided.
+    decide cs = bool Nothing (verdict cs) case cs.sub.scope of
+      AllSignals -> True
+      LogTail _ SKAny -> True
+      LogTail _ SKLogs -> isLog
+      LogTail _ SKSpans -> isSpan
 
     verdict cs = case effectiveFilter cs row of
       Right True -> Just (Left cs)
@@ -499,8 +525,8 @@ insertSubscription
 insertSubscription pid uid ns scope perUser perProject expiresAt =
   Hasql.interpOne
     [HI.sql|
-      INSERT INTO projects.live_tail_subscriptions (project_id, user_id, scope, service, environment, query, columns, expires_at)
-      SELECT #{pid}, #{uid}, #{scopeText}, #{svc}, #{ns.environment}, #{fromMaybe "" ns.query}, #{cols}, #{expiresAt}
+      INSERT INTO projects.live_tail_subscriptions (project_id, user_id, scope, service, kind, environment, query, columns, expires_at)
+      SELECT #{pid}, #{uid}, #{scopeText}, #{svc}, #{kind}, #{ns.environment}, #{fromMaybe "" ns.query}, #{cols}, #{expiresAt}
       WHERE (SELECT count(*) FROM projects.live_tail_subscriptions
              WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now()) < #{perUser}
         AND (SELECT count(*) FROM projects.live_tail_subscriptions
@@ -508,7 +534,7 @@ insertSubscription pid uid ns scope perUser perProject expiresAt =
       RETURNING id
     |]
   where
-    (scopeText, svc) = scopeToText scope
+    (scopeText, svc, kind) = scopeToText scope
     cols = V.fromList (clampColumns (fromMaybe [] ns.columns))
 
 
@@ -521,7 +547,7 @@ activeSubscriptions limit =
   mapMaybe fromRow
     <$> Hasql.interp
       [HI.sql|
-        SELECT id, project_id, user_id, scope, service, environment, query, columns, expires_at
+        SELECT id, project_id, user_id, scope, service, kind, environment, query, columns, expires_at
         FROM projects.live_tail_subscriptions
         WHERE expires_at > now()
         ORDER BY created_at
@@ -530,7 +556,7 @@ activeSubscriptions limit =
 
 
 -- | The stored row, before 'Scope' is reassembled from its discriminator and service.
-type SubRow = (SubscriptionId, Projects.ProjectId, Projects.UserId, Text, Maybe Text, Maybe Text, Text, V.Vector Text, UTCTime)
+type SubRow = (SubscriptionId, Projects.ProjectId, Projects.UserId, Text, Maybe Text, SignalKind, Maybe Text, Text, V.Vector Text, UTCTime)
 
 
 -- | Rebuild a 'Subscription', dropping any row whose scope cannot be reconstructed.
@@ -538,8 +564,8 @@ type SubRow = (SubscriptionId, Projects.ProjectId, Projects.UserId, Text, Maybe 
 -- Dropping rather than defaulting: the only way this fails is a @logs_only@ row with no
 -- service, and the safe reading of a missing gate is "do not match", never "match everything".
 fromRow :: SubRow -> Maybe Subscription
-fromRow (sid, pid, uid, scopeText, svc, environment, query, columns, expiresAt) = do
-  scope <- scopeFromRow scopeText svc
+fromRow (sid, pid, uid, scopeText, svc, kind, environment, query, columns, expiresAt) = do
+  scope <- scopeFromRow scopeText svc kind
   pure Subscription{id = sid, projectId = pid, userId = uid, scope, environment, query, columns = V.toList columns, expiresAt}
 
 
@@ -551,7 +577,7 @@ activeSubscriptionFor pid uid sid =
     . mapMaybe fromRow
     <$> Hasql.interp
       [HI.sql|
-        SELECT id, project_id, user_id, scope, service, environment, query, columns, expires_at
+        SELECT id, project_id, user_id, scope, service, kind, environment, query, columns, expires_at
         FROM projects.live_tail_subscriptions
         WHERE id = #{sid} AND project_id = #{pid} AND user_id = #{uid} AND expires_at > now()
       |]
@@ -950,7 +976,7 @@ envelopeFromValue value = case AET.parseMaybe (AE.withObject "LiveEnvelope" (AE.
 -- | Project a record into the shape this subscription's surface renders.
 toLiveRow :: Scope -> [Text] -> Telemetry.OtelLogsAndSpans -> LiveRow
 toLiveRow scope cols r = case scope of
-  LogsOnly _ -> LogRow (toLogRowFields r)
+  LogTail _ _ -> LogRow (toLogRowFields r)
   AllSignals -> TableRow (toTableCols cols r)
 
 

@@ -1,9 +1,9 @@
 -- | Live Tail end to end, at the layers where it can actually be wrong.
 --
---   * __Registration__ — the gates deciding whether a subscription exists at all: the service
---     requirement and the filter-only restriction. These are what keep Live Tail's volume
---     bounded and its semantics streamable, so each gets its own assertion rather than a
---     shared happy path.
+--   * __Registration__ — the gates deciding whether a subscription exists at all: the
+--     filter-only restriction and the per-user and per-project caps. These are what keep Live
+--     Tail streamable and bounded, so each gets its own assertion rather than a shared happy
+--     path.
 --   * __Matching and delivery__ — subscriptions in the ingest cache, a batch pushed through
 --     'LT.publishMatches', and an assertion about exactly which rows reached the hub. This is
 --     the layer where a filter bug leaks another team's logs to a user, so the negative cases
@@ -50,7 +50,7 @@ intruderId = Projects.UserId (UUID.fromWords 0 0 0 98)
 
 
 newSub :: Text -> LT.NewSubscription
-newSub service = LT.NewSubscription (Just service) Nothing Nothing Nothing Nothing
+newSub service = LT.NewSubscription (Just service) Nothing Nothing Nothing Nothing Nothing
 
 
 spec :: Spec
@@ -72,8 +72,8 @@ spec = do
       let sub = mkSub 1 "checkout" Nothing "level == \"error\""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid $
-          V.fromList
+        LT.publishMatches rt pid
+          $ V.fromList
             [ logRecord "checkout" "prod" "error" "boom" -- matches
             , logRecord "checkout" "prod" "info" "fine" -- wrong level
             , logRecord "billing" "prod" "error" "not yours" -- wrong service: must never appear
@@ -90,14 +90,30 @@ spec = do
       (rows, _) <- LT.takeBatch conn
       map logBody rows `shouldBe` ["a"]
 
+    it "tails every service when none is named, and honours the kind mode" do
+      -- The page opens on this: no service, logs. The service narrows a tail rather than
+      -- bounding it, and which signals it shows is a mode the user picks — not the implicit
+      -- kind = 'log' every subscription used to carry.
+      let allServices = mkSubScoped 25 (LT.LogTail Nothing LT.SKLogs) [] Nothing ""
+          spans = mkSubScoped 26 (LT.LogTail Nothing LT.SKSpans) [] Nothing ""
+          both = mkSubScoped 27 (LT.LogTail Nothing LT.SKAny) [] Nothing ""
+      hub <- LT.newHub
+      conns <- traverse (\s -> LT.newConn 100 >>= \c -> c <$ LT.attachConn hub s.id c) [allServices, spans, both]
+      rt <- runtimeWith hub [allServices, spans, both]
+      _ <-
+        LT.publishMatches rt pid
+          $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b", spanRecord "checkout" "prod" "error"]
+      counts <- traverse (fmap (length . fst) . LT.takeBatch) conns
+      counts `shouldBe` [2, 1, 3]
+
     it "keeps the server's selectors out of the client query's reach" do
       -- The selectors are applied as resolved values, never spliced into the query text, so a
       -- filter that is true for every row still cannot escape its service or environment.
       let sub = mkSub 3 "checkout" (Just "prod") "level == \"error\" or level != \"error\""
       (conn, rt) <- fixture [sub]
       _ <-
-        LT.publishMatches rt pid $
-          V.fromList
+        LT.publishMatches rt pid
+          $ V.fromList
             [ logRecord "checkout" "prod" "error" "prod row"
             , logRecord "checkout" "staging" "error" "staging row"
             , logRecord "billing" "prod" "error" "other service"
@@ -271,7 +287,7 @@ spec = do
       -- What actually goes over Kafka is this encoding, so a shape that cannot decode is a
       -- tail that silently delivers nothing. Both surfaces share the envelope, so both are
       -- pinned here rather than only the one that happened to be written first.
-      let logEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 30 "checkout" Nothing "").id (LT.toLiveRow (LT.LogsOnly "checkout") [] (logRecord "checkout" "prod" "error" "boom"))
+      let logEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 30 "checkout" Nothing "").id (LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] (logRecord "checkout" "prod" "error" "boom"))
           tableEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 31 "checkout" Nothing "").id (LT.toLiveRow LT.AllSignals ["kind"] (logRecord "checkout" "prod" "error" "boom"))
       forM_ [logEnv, tableEnv] \env ->
         AE.eitherDecode (AE.encode env) `shouldSatisfy` \case
@@ -288,7 +304,7 @@ spec = do
           b = mkSub 33 "billing" Nothing ""
       _ <- LT.attachConn hub a.id mine
       _ <- LT.attachConn hub b.id theirs
-      let env = LT.LiveEnvelope LT.envelopeVersion a.id (LT.toLiveRow (LT.LogsOnly "checkout") [] (logRecord "checkout" "prod" "error" "boom"))
+      let env = LT.LiveEnvelope LT.envelopeVersion a.id (LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] (logRecord "checkout" "prod" "error" "boom"))
       -- Decode first, exactly as the consumer does, so the test exercises the wire form.
       case AE.eitherDecode (AE.encode env) of
         Left e -> fail ("envelope did not decode: " <> e)
@@ -311,7 +327,7 @@ spec = do
       future <- addUTCTime 300 <$> getCurrentTime
       sid <-
         runHasqlEffect tr
-          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 9 9 future
+          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future
       theId <- maybe (fail "insert produced no id") pure sid
       found <- runHasqlEffect tr $ LT.activeSubscriptionFor pid ownerId theId
       fmap (.id) found `shouldBe` Just theId
@@ -327,7 +343,7 @@ spec = do
     -- uncommitted row — see the note on 'insertSubscription'; the cap is "about N".)
     it "refuses the insert once a cap is reached, in the same statement that writes" \tr -> do
       future <- addUTCTime 300 <$> getCurrentTime
-      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 2 9 future
+      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 2 9 future
       results <- replicateM 3 register
       -- Third one refused, and refused by the write itself rather than by a prior count.
       map isJust results `shouldBe` [True, True, False]
@@ -337,12 +353,12 @@ spec = do
       -- docker-compose, self-hosted — so it is the common path, not the fallback. Nothing else
       -- exercises publish → drain → deliver end to end.
       let sub = mkSub 40 "checkout" Nothing ""
-          env = LT.LiveEnvelope LT.envelopeVersion sub.id (LT.toLiveRow (LT.LogsOnly "checkout") [] (logRecord "checkout" "prod" "error" "relayed"))
+          env = LT.LiveEnvelope LT.envelopeVersion sub.id (LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] (logRecord "checkout" "prod" "error" "relayed"))
       before <- runHasqlEffect tr LT.relayWatermark
       runHasqlEffect tr (LT.relayPublish [env])
       (results, next) <- runHasqlEffect tr (LT.relayDrain before)
       next `shouldSatisfy` (> before)
-      map logBody [r | LT.Delivered e <- results, let r = e.row] `shouldContain` ["relayed"]
+      map logBody [r | LT.Delivered e <- results, let { r = e.row }] `shouldContain` ["relayed"]
 
     it "reports a version skew on the relay as a skew, not as corruption" \tr -> do
       -- The Kafka path learned this the hard way: a payload from another envelope version fails
@@ -357,7 +373,7 @@ spec = do
       -- Overflow is expected under load; invisible overflow is not. Every other drop in this
       -- feature is counted, and this was the one that was not.
       buf <- LT.newRelayBuffer
-      let env n = LT.LiveEnvelope LT.envelopeVersion (mkSub n "checkout" Nothing "").id (LT.toLiveRow (LT.LogsOnly "checkout") [] (logRecord "checkout" "prod" "info" (show n)))
+      let env n = LT.LiveEnvelope LT.envelopeVersion (mkSub n "checkout" Nothing "").id (LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] (logRecord "checkout" "prod" "info" (show n)))
       traverse_ (LT.bufferForRelay buf . env) [1 .. fromIntegral LT.relayBufferDepth + 5]
       (pending, lost) <- LT.takeRelayBuffer buf
       length pending `shouldBe` fromIntegral LT.relayBufferDepth
@@ -394,7 +410,7 @@ spec = do
       -- "you have too many live tails open" reached the user as a 500. Nothing covered the
       -- failure path of a failure path until the concurrent-cap test below tripped over it.
       future <- addUTCTime 300 <$> getCurrentTime
-      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 99 99 future
+      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
       perUser <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
       perProject <- runHasqlEffect tr $ LT.countActiveForProject pid
       perUser `shouldSatisfy` (>= 1)
@@ -412,10 +428,10 @@ spec = do
       -- 'insertSubscription'), and these caps bound one user's browser tabs. The cap that
       -- protects the fleet is 'maxCached', a LIMIT on the ingest side that cannot be raced.
       future <- addUTCTime 300 <$> getCurrentTime
-      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 99 99 future
+      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 99 99 future
       -- Whatever this user already has, committed, is the cap — so the cap is met exactly.
       atCap <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
-      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") atCap 99 future
+      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) atCap 99 future
       results <- Ki.scoped \scope -> replicateM 8 (Ki.fork scope register) >>= atomically . traverse Ki.await
       filter isJust results `shouldBe` []
 
@@ -426,7 +442,7 @@ spec = do
       -- for the full lease — this is what makes that ~2s instead of ~45s.
       future <- addUTCTime 300 <$> getCurrentTime
       sid <-
-        runHasqlEffect tr (LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 9 9 future)
+        runHasqlEffect tr (LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 future)
           >>= maybe (fail "insert produced no id") pure
       LT.deleteSubscriptionIO tr.trATCtx.hasqlPool pid ownerId sid
       gone <- runHasqlEffect tr $ LT.activeSubscriptionFor pid ownerId sid
@@ -440,7 +456,7 @@ spec = do
       past <- addUTCTime (-60) <$> getCurrentTime
       expired <-
         runHasqlEffect tr
-          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 9 9 past
+          $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogTail (Just "checkout") LT.SKLogs) 9 9 past
       expired `shouldSatisfy` isJust
       active <- runHasqlEffect tr $ LT.activeSubscriptions 100
       map (.id) active `shouldSatisfy` notElem (fromMaybe (UUIDId UUID.nil) expired)
@@ -503,7 +519,7 @@ runtimeWith hub subs = do
 
 
 mkSub :: Word32 -> Text -> Maybe Text -> Text -> LT.Subscription
-mkSub n service = mkSubScoped n (LT.LogsOnly service) []
+mkSub n service = mkSubScoped n (LT.LogTail (Just service) LT.SKLogs) []
 
 
 mkSubScoped :: Word32 -> LT.Scope -> [Text] -> Maybe Text -> Text -> LT.Subscription
