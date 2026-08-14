@@ -101,7 +101,7 @@ import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.List.Extra (chunksOf, lookup)
+import Data.List.Extra (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Scientific qualified as Sci
@@ -1572,16 +1572,32 @@ bulkInsertOtelLogsAndSpans usePgTypes records
 -- text→Variant (VariantInsertRewriter) — pass 'False'. The array bind params are
 -- identical either way; only these columns' SELECT projection differs.
 insertUnnestStmt :: Bool -> V.Vector OtelRow -> Statement () Int64
-insertUnnestStmt usePgTypes rows =
+insertUnnestStmt = unnestInsert "otel_logs_and_spans" otelColumns ""
+
+
+-- | The single INSERT…SELECT…unnest statement for a table, built from its
+-- column list. ONE statement text regardless of batch size — which is the whole
+-- point: a VALUES list with a tuple per row makes every distinct batch size a
+-- distinct statement, hence a distinct prepared statement and a distinct cached
+-- plan. `insertOtelMetrics` used to do exactly that (`chunksOf 350`, so every
+-- ragged tail minted a new shape) and each of those plans held ~350 × 68 bind
+-- params, every one of them wrapped in a CAST by TimeFusion's insert coercion.
+-- Prod 2026-08-14: TF's plan cache sat at 43% and pgwire's per-connection
+-- prepared-statement store (unbounded in COUNT) held the rest.
+--
+-- @pgSuffix@ is appended on PostgreSQL only (e.g. @ON CONFLICT … DO NOTHING@);
+-- TimeFusion has no upsert.
+unnestInsert :: Text -> [BulkCol r] -> Text -> Bool -> V.Vector r -> Statement () Int64
+unnestInsert table cols pgSuffix usePgTypes rows =
   toPreparableStatement
-    ( fromString ("INSERT INTO otel_logs_and_spans (" <> toString names <> ") SELECT " <> toString selects <> " FROM unnest(")
-        <> mconcat (intersperse (fromString ", ") [c.bind rows | c <- otelColumns])
-        <> fromString (") AS u(" <> toString aliases <> ")")
+    ( fromString ("INSERT INTO " <> toString table <> " (" <> toString names <> ") SELECT " <> toString selects <> " FROM unnest(")
+        <> mconcat (intersperse (fromString ", ") [c.bind rows | c <- cols])
+        <> fromString (") AS u(" <> toString aliases <> ")" <> toString (if usePgTypes then pgSuffix else ""))
     )
     D.rowsAffected
   where
-    idxd = zip [1 :: Int ..] otelColumns
-    names = T.intercalate ", " [c.name | c <- otelColumns]
+    idxd = zip [1 :: Int ..] cols
+    names = T.intercalate ", " [c.name | c <- cols]
     aliases = T.intercalate ", " ["c" <> show i | (i, _) <- idxd]
     selects = T.intercalate ", " [c.selectExpr usePgTypes ("u.c" <> show i) | (i, c) <- idxd]
 
@@ -1590,11 +1606,17 @@ insertUnnestStmt usePgTypes rows =
 -- it's projected out of the unnest alias in the SELECT. The 'Bool' is
 -- @usePgTypes@ (see 'insertUnnestStmt'): 'True' casts to native uuid/jsonb
 -- (Postgres), 'False' leaves bare text (TimeFusion).
-data OtelCol = OtelCol
+data BulkCol r = BulkCol
   { name :: Text
-  , bind :: V.Vector OtelRow -> Snippet
+  , bind :: V.Vector r -> Snippet
   , selectExpr :: Bool -> Text -> Text
   }
+
+
+type OtelCol = BulkCol OtelRow
+
+
+type MetricCol = BulkCol MetricRow
 
 
 -- | SQL element type emitted as a @$N::<ty>[]@ cast on every unnest bind
@@ -1620,15 +1642,24 @@ instance UnnestElem Int64 where elemSqlType = "int8"
 instance UnnestElem Bool where elemSqlType = "bool"
 
 
+instance UnnestElem Double where elemSqlType = "float8"
+
+
+instance UnnestElem MetricType where elemSqlType = "text"
+
+
+instance UnnestElem AggregationTemporality where elemSqlType = "text"
+
+
 -- | The single column combinator. hasql-interpolate's @EncodeValue (Vector a)@
 -- instance derives the whole postgres-array encoder for ANY encodable element
 -- type, so there are no hand-written encoders or per-type helpers. NULL
 -- elements are allowed (@EncodeField (Maybe a)@); the SELECT projects the
 -- column as-is on both engines. The bind param carries an explicit array cast
 -- (see 'UnnestElem').
-column :: forall a. UnnestElem a => Text -> (OtelRow -> Maybe a) -> OtelCol
+column :: forall a r. UnnestElem a => Text -> (r -> Maybe a) -> BulkCol r
 column nm proj =
-  OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows) <> fromString (toString ("::" <> elemSqlType @a <> "[]"))) (const Relude.id)
+  BulkCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows) <> fromString (toString ("::" <> elemSqlType @a <> "[]"))) (const Relude.id)
 
 
 -- | Round a 'UTCTime' to microsecond resolution. Timestamps travel to both
@@ -1646,30 +1677,63 @@ roundUTCToMicros (UTCTime day dt) = UTCTime day (picosecondsToDiffTime us)
 -- | Timestamp column: microsecond-quantized then bound as ISO-8601 text (see
 -- 'UnnestElem' / 'roundUTCToMicros') and cast back to timestamptz in the SELECT
 -- on both engines.
-tsColumn :: Text -> (OtelRow -> Maybe UTCTime) -> OtelCol
+tsColumn :: Text -> (r -> Maybe UTCTime) -> BulkCol r
 tsColumn nm proj = (column nm (fmap (toText . iso8601Show . roundUTCToMicros) . proj)){selectExpr = \_ a -> a <> "::timestamptz"}
 
 
 -- | Text column that PostgreSQL must cast to a native type with no text→T
 -- assignment cast (@uuid@); TimeFusion takes the bare text (Utf8).
-castColumn :: Text -> Text -> (OtelRow -> Maybe Text) -> OtelCol
+castColumn :: Text -> Text -> (r -> Maybe Text) -> BulkCol r
 castColumn nm pgType proj = (column nm proj){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::" <> pgType else a}
 
 
 -- | text[] column rebuilt with @string_to_array(_, chr(31))@ (hashes, summary):
 -- elements are 0x1F-joined (0x1F stripped from each first) so commas inside an
 -- element are safe. Identical on TimeFusion and TimescaleDB.
-splitColumn :: Text -> (OtelRow -> V.Vector Text) -> OtelCol
+splitColumn :: Text -> (r -> V.Vector Text) -> BulkCol r
 splitColumn nm proj = (column nm (Just . joinUnit . proj)){selectExpr = \_ a -> "string_to_array(" <> a <> ", chr(31))"}
   where
     joinUnit = T.intercalate "\x1f" . fmap (T.filter (/= '\x1f')) . V.toList
+
+
+-- | Date column: sent as ISO-8601 text and cast back on both engines (TF's
+-- pgwire cannot decode a @_date@ bind param — see 'UnnestElem').
+dateColumn :: Text -> (r -> Maybe Text) -> BulkCol r
+dateColumn nm proj = (column nm proj){selectExpr = \_ a -> a <> "::date"}
+
+
+-- | Typed numeric array column (@bigint[]@ / @double precision[]@) rebuilt from
+-- 0x1F-joined text, exactly like 'splitColumn' but with an element cast. The
+-- per-row VALUES form already emitted @string_to_array(_, chr(31))::T[]@ on both
+-- engines, so this only moves the same expression behind a bind param.
+--
+-- An EMPTY array becomes NULL rather than @{""}@, which is what the literal form
+-- produced and which no numeric cast accepts. Histogram points always carry
+-- buckets, so this was latent rather than live.
+numArrayColumn :: Text -> Text -> (r -> Maybe AE.Value) -> BulkCol r
+numArrayColumn nm elemTy proj = (column nm (joined . proj)){selectExpr = \_ a -> "string_to_array(" <> a <> ", chr(31))::" <> elemTy <> "[]"}
+  where
+    joined = \case
+      Just (AE.Array xs) | not (V.null xs) -> Just (T.intercalate "\x1f" (jsonText <$> V.toList xs))
+      _ -> Nothing
+
+
+-- | 'numArrayColumn' over the quantile objects, which fan out into two parallel
+-- @double precision[]@ columns: the quantile keys, then their values.
+quantileColumn :: Text -> Bool -> (r -> Maybe AE.Value) -> BulkCol r
+quantileColumn nm wantQuantiles proj = numArrayColumn nm "double precision" (fmap pick . proj)
+  where
+    key = if wantQuantiles then "quantile" else "value"
+    pick = \case
+      AE.Array xs -> AE.Array (V.mapMaybe (\case AE.Object o -> KEM.lookup key o; _ -> Nothing) xs)
+      v -> v
 
 
 -- | JSON/Variant column: value JSON-encoded to text and sent as text[]. On
 -- PostgreSQL/TimescaleDB it's cast @::jsonb@ in the SELECT (no text→jsonb
 -- assignment cast); on TimeFusion the bare text coerces to Variant (the
 -- VariantInsertRewriter fires on the SELECT projection).
-jsonColumn :: Text -> (OtelRow -> Maybe AE.Value) -> OtelCol
+jsonColumn :: Text -> (r -> Maybe AE.Value) -> BulkCol r
 jsonColumn nm proj = (column nm (fmap (jsonText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
 
 
@@ -2638,141 +2702,117 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
   pure result
 
 
--- | Insert one chunk into a single store. Values are sent as text for the
--- TimeFusion leg where JSON must arrive as Variant-compatible text; the PG
--- projection casts JSON and ids to their native types.
+-- | Per-row prep for the metrics bulk insert, mirroring 'OtelRow': the
+-- attribute/resource maps and the native value columns are derived ONCE instead
+-- of once per column projection (there are 67 of them).
+data MetricRow = MetricRow
+  { rec :: MetricRecord
+  , attrs :: Maybe (Map.Map Text AE.Value)
+  , resourceMap :: Maybe (Map.Map Text AE.Value)
+  , native :: NativeMetricColumns
+  }
+
+
+mkMetricRow :: MetricRecord -> MetricRow
+mkMetricRow r =
+  MetricRow
+    { rec = r
+    , attrs = objectToMap r.attributes
+    , resourceMap = objectToMap r.resource
+    , native = metricValueToNative r.metricValue
+    }
+
+
+-- | Single source of truth for the otel_metrics bulk insert. One 'BulkCol' per
+-- column, in table order; 'unnestInsert' derives the whole statement from it.
+metricColumns :: [MetricCol]
+metricColumns =
+  let fld nm g = column nm (\r -> g r.rec)
+      resourceText nm key = column nm (\r -> atMapText key r.resourceMap)
+      attrText nm key = column nm (\r -> atMapText key r.attrs)
+      attrInt nm key = column nm (\r -> fromIntegral @Int @Int32 <$> atMapInt key r.attrs)
+      nat nm g = column nm (\r -> g r.native)
+      i32 nm g = column nm (\r -> fromIntegral @Int @Int32 <$> g r.native)
+      nums nm ty g = numArrayColumn nm ty (\r -> g r.native)
+   in [ fld "project_id" (Just . UUID.toText . (.projectId))
+      , tsColumn "timestamp" (Just . (.metricTime) . (.rec))
+      , dateColumn "date" (Just . toText . iso8601Show . utctDay . (.metricTime) . (.rec))
+      , tsColumn "start_timestamp" ((.startTimestamp) . (.rec))
+      , tsColumn "ingested_at" (Just . (.timestamp) . (.rec))
+      , castColumn "id" "uuid" (\r -> Just (UUID.toText (fromMaybe (metricId r.rec) r.rec.id)))
+      , fld "series_id" (Just . metricSeriesId)
+      , fld "metric_name" (Just . (.metricName))
+      , fld "metric_description" (Just . (.metricDescription))
+      , fld "metric_unit" (Just . (.metricUnit))
+      , fld "metric_type" (Just . (.metricType))
+      , fld "aggregation_temporality" (.aggregationTemporality)
+      , fld "is_monotonic" (.isMonotonic)
+      , fld "flags" (Just . fromIntegral @Int @Int64 . (.flags))
+      , jsonColumn "resource" (Just . (.resource) . (.rec))
+      , fld "resource_schema_url" (Just . (.resourceSchemaUrl))
+      , fld "scope_name" (\m -> scopeField "name" m.instrumentationScope)
+      , fld "scope_version" (\m -> scopeField "version" m.instrumentationScope)
+      , fld "scope_schema_url" (Just . (.scopeSchemaUrl))
+      , jsonColumn "attributes" (Just . (.attributes) . (.rec))
+      , fld "dropped_attributes_count" (Just . fromIntegral @Int @Int64 . (.droppedAttributesCount))
+      , jsonColumn "exemplars" (Just . (.exemplars) . (.rec))
+      , column "resource___service___name" (\r -> Just (metricServiceNameFromResource r.rec.metricName r.rec.resource))
+      , resourceText "resource___service___namespace" "service.namespace"
+      , resourceText "resource___service___instance___id" "service.instance.id"
+      , resourceText "resource___service___version" "service.version"
+      , resourceText "resource___deployment___environment___name" "deployment.environment.name"
+      , resourceText "resource___host___name" "host.name"
+      , resourceText "resource___container___name" "container.name"
+      , resourceText "resource___k8s___cluster___name" "k8s.cluster.name"
+      , resourceText "resource___k8s___namespace___name" "k8s.namespace.name"
+      , resourceText "resource___k8s___pod___name" "k8s.pod.name"
+      , resourceText "resource___k8s___container___name" "k8s.container.name"
+      , resourceText "resource___cloud___provider" "cloud.provider"
+      , resourceText "resource___cloud___region" "cloud.region"
+      , resourceText "resource___cloud___availability___zone" "cloud.availability_zone"
+      , attrText "attributes___http___request___method" "http.request.method"
+      , attrText "attributes___http___route" "http.route"
+      , attrInt "attributes___http___response___status_code" "http.response.status_code"
+      , attrText "attributes___error___type" "error.type"
+      , attrText "attributes___rpc___service" "rpc.service"
+      , attrText "attributes___rpc___method" "rpc.method"
+      , attrInt "attributes___rpc___grpc___status_code" "rpc.grpc.status_code"
+      , attrText "attributes___db___system___name" "db.system.name"
+      , attrText "attributes___db___operation___name" "db.operation.name"
+      , attrText "attributes___messaging___system" "messaging.system"
+      , attrText "attributes___messaging___operation" "messaging.operation"
+      , attrText "attributes___messaging___destination___name" "messaging.destination.name"
+      , nat "value" (.nValue)
+      , nat "value_double" (.nValueDouble)
+      , nat "value_int" (.nValueInt)
+      , nat "distribution_count" (.nCount)
+      , nat "distribution_sum" (.nSum)
+      , nat "distribution_min" (.nPointMin)
+      , nat "distribution_max" (.nPointMax)
+      , nums "hist_bucket_counts" "bigint" (.nBucketCounts)
+      , nums "hist_explicit_bounds" "double precision" (.nExplicitBounds)
+      , i32 "exp_hist_scale" (.nExpHistScale)
+      , nat "exp_hist_zero_count" (.nExpHistZeroCount)
+      , nat "exp_hist_zero_threshold" (.nExpHistZeroThreshold)
+      , i32 "exp_hist_pos_offset" (.nExpHistPosOffset)
+      , nums "exp_hist_pos_buckets" "bigint" (.nExpHistPosBuckets)
+      , i32 "exp_hist_neg_offset" (.nExpHistNegOffset)
+      , nums "exp_hist_neg_buckets" "bigint" (.nExpHistNegBuckets)
+      , quantileColumn "summary_quantiles" True (\r -> r.native.nQuantiles)
+      , quantileColumn "summary_values" False (\r -> r.native.nQuantiles)
+      , fld "message_size_bytes" (Just . (.messageSizeBytes))
+      ]
+
+
+-- | Insert metrics into a single store as ONE statement whose text does not
+-- depend on the batch size. See 'unnestInsert' for why that matters.
 insertOtelMetrics :: DB es => Bool -> V.Vector MetricRecord -> Eff es BulkInsertResult
-insertOtelMetrics usePgTypes records =
-  -- A chunk either lands whole or throws, so the row count is the submitted total.
-  BulkInsertResult (fromIntegral $ V.length records)
-    <$ traverse_ insertChunk (chunksOf 350 $ V.toList records)
-  where
-    insertChunk chunk =
-      Hasql.interpExecute_
-        $ [HI.sql|INSERT INTO otel_metrics (
-      project_id, timestamp, date, start_timestamp, ingested_at, id, series_id,
-      metric_name, metric_description, metric_unit, metric_type, aggregation_temporality, is_monotonic, flags,
-      resource, resource_schema_url, scope_name, scope_version, scope_schema_url, attributes, dropped_attributes_count, exemplars,
-      resource___service___name, resource___service___namespace, resource___service___instance___id, resource___service___version,
-      resource___deployment___environment___name, resource___host___name, resource___container___name,
-      resource___k8s___cluster___name, resource___k8s___namespace___name, resource___k8s___pod___name, resource___k8s___container___name,
-      resource___cloud___provider, resource___cloud___region, resource___cloud___availability___zone,
-      attributes___http___request___method, attributes___http___route, attributes___http___response___status_code, attributes___error___type,
-      attributes___rpc___service, attributes___rpc___method, attributes___rpc___grpc___status_code,
-      attributes___db___system___name, attributes___db___operation___name,
-      attributes___messaging___system, attributes___messaging___operation, attributes___messaging___destination___name,
-      value, value_double, value_int, distribution_count, distribution_sum, distribution_min, distribution_max,
-      hist_bucket_counts, hist_explicit_bounds, exp_hist_scale, exp_hist_zero_count, exp_hist_zero_threshold,
-      exp_hist_pos_offset, exp_hist_pos_buckets, exp_hist_neg_offset, exp_hist_neg_buckets,
-      summary_quantiles, summary_values, message_size_bytes
-    ) VALUES |]
-        <> mconcat (intersperse [HI.sql|,|] (metricRowSql usePgTypes <$> chunk))
-        <> if usePgTypes then [HI.sql| ON CONFLICT (project_id, timestamp, id) DO NOTHING|] else mempty
+insertOtelMetrics usePgTypes records
+  | V.null records = pure mempty
+  | otherwise = do
+      n <- Hasql.use $ HSession.statement () (unnestInsert "otel_metrics" metricColumns " ON CONFLICT (project_id, timestamp, id) DO NOTHING" usePgTypes (V.map mkMetricRow records))
+      pure (BulkInsertResult n)
 
-
-metricRowSql :: Bool -> MetricRecord -> HI.Sql
-metricRowSql usePgTypes r@MetricRecord{projectId, id = metricIdM, metricName, metricDescription, metricUnit, metricType, metricTime, timestamp, startTimestamp, attributes, resource, resourceSchemaUrl, instrumentationScope, scopeSchemaUrl, droppedAttributesCount, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} =
-  let NativeMetricColumns{nValue, nValueDouble, nValueInt, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nExpHistScale, nExpHistZeroCount, nExpHistZeroThreshold, nExpHistPosOffset, nExpHistPosBuckets, nExpHistNegOffset, nExpHistNegBuckets, nQuantiles} = metricValueToNative r.metricValue
-      attrField k = atMapText k (objectToMap attributes)
-      attrFieldInt k = atMapInt k (objectToMap attributes)
-      resourceField k = atMapText k (objectToMap resource)
-      -- 'metricServiceNameFromResource' already tries resource service.name first.
-      serviceName = Just (metricServiceNameFromResource metricName resource)
-      serviceNamespace = resourceField "service.namespace"
-      serviceInstanceId = resourceField "service.instance.id"
-      serviceVersion = resourceField "service.version"
-      deploymentEnvironment = resourceField "deployment.environment.name"
-      hostName = resourceField "host.name"
-      containerName = resourceField "container.name"
-      k8sClusterName = resourceField "k8s.cluster.name"
-      k8sNamespaceName = resourceField "k8s.namespace.name"
-      k8sPodName = resourceField "k8s.pod.name"
-      k8sContainerName = resourceField "k8s.container.name"
-      cloudProvider = resourceField "cloud.provider"
-      cloudRegion = resourceField "cloud.region"
-      cloudAvailabilityZone = resourceField "cloud.availability_zone"
-      httpMethod = attrField "http.request.method"
-      httpRoute = attrField "http.route"
-      httpStatus = attrFieldInt "http.response.status_code"
-      errorType = attrField "error.type"
-      rpcService = attrField "rpc.service"
-      rpcMethod = attrField "rpc.method"
-      rpcStatus = attrFieldInt "rpc.grpc.status_code"
-      dbSystem = attrField "db.system.name"
-      dbOperation = attrField "db.operation.name"
-      messagingSystem = attrField "messaging.system"
-      messagingOperation = attrField "messaging.operation"
-      messagingDestination = attrField "messaging.destination.name"
-      projectIdText = UUID.toText projectId
-      metricIdText = UUID.toText $ fromMaybe (metricId r) metricIdM
-      seriesId = metricSeriesId r
-      flagsInt64 = fromIntegral flags :: Int64
-      scopeName = scopeField "name" instrumentationScope
-      scopeVersion = scopeField "version" instrumentationScope
-      metricDate = toText $ iso8601Show (utctDay metricTime)
-      val = [HI.sql|(#{projectIdText}, #{metricTime}, #{metricDate}::date, #{startTimestamp}, #{timestamp}, |]
-   in val
-        <> castSql "uuid" usePgTypes metricIdText
-        <> [HI.sql|, #{seriesId}, #{metricName}, #{metricDescription}, #{metricUnit}, #{metricType}, #{aggregationTemporality}, #{isMonotonic}, #{flagsInt64}, |]
-        <> jsonSql usePgTypes resource
-        <> [HI.sql|, #{resourceSchemaUrl}, #{scopeName}, #{scopeVersion}, #{scopeSchemaUrl}, |]
-        <> jsonSql usePgTypes attributes
-        <> [HI.sql|, #{droppedAttributesCount}, |]
-        <> jsonSql usePgTypes exemplars
-        <> [HI.sql|,
-          #{serviceName}, #{serviceNamespace}, #{serviceInstanceId}, #{serviceVersion},
-          #{deploymentEnvironment}, #{hostName}, #{containerName},
-          #{k8sClusterName}, #{k8sNamespaceName}, #{k8sPodName}, #{k8sContainerName},
-          #{cloudProvider}, #{cloudRegion}, #{cloudAvailabilityZone},
-          #{httpMethod}, #{httpRoute}, #{httpStatus}, #{errorType},
-          #{rpcService}, #{rpcMethod}, #{rpcStatus},
-          #{dbSystem}, #{dbOperation},
-          #{messagingSystem}, #{messagingOperation}, #{messagingDestination},
-          #{nValue}, #{nValueDouble}, #{nValueInt}, #{nCount}, #{nSum}, #{nPointMin}, #{nPointMax}, |]
-        <> jsonArraySql "bigint" nBucketCounts
-        <> [HI.sql|, |]
-        <> jsonArraySql "double precision" nExplicitBounds
-        <> [HI.sql|, #{nExpHistScale}, #{nExpHistZeroCount}, #{nExpHistZeroThreshold}, #{nExpHistPosOffset}, |]
-        <> jsonArraySql "bigint" nExpHistPosBuckets
-        <> [HI.sql|, #{nExpHistNegOffset}, |]
-        <> jsonArraySql "bigint" nExpHistNegBuckets
-        <> [HI.sql|, |]
-        <> summaryArraySql True nQuantiles
-        <> [HI.sql|, |]
-        <> summaryArraySql False nQuantiles
-        <> [HI.sql|, #{messageSizeBytes})|]
-
-
--- | Bare text on TimeFusion (coerced to Variant); explicitly cast on Postgres,
--- which has no text→uuid/jsonb assignment cast.
-castSql :: Text -> Bool -> Text -> HI.Sql
-castSql pgType usePgTypes x = [HI.sql|#{x}|] <> if usePgTypes then fromString (toString ("::" <> pgType)) else mempty
-
-
-jsonSql :: Bool -> AE.Value -> HI.Sql
-jsonSql usePgTypes = castSql "jsonb" usePgTypes . jsonText
-
-
--- Existing metric value arrays are JSON-backed. Re-encode them as typed SQL
--- arrays at the storage boundary so histogram queries never parse JSON.
-elemArraySql :: Text -> (AE.Value -> Maybe Text) -> Maybe AE.Value -> HI.Sql
-elemArraySql typ pick = \case
-  Just (AE.Array xs) ->
-    let values = T.intercalate "\x1f" $ mapMaybe pick $ V.toList xs
-     in [HI.sql|string_to_array(#{values}, chr(31))::|] <> fromString (toString typ) <> [HI.sql|[]|]
-  _ -> [HI.sql|NULL|]
-
-
-jsonArraySql :: Text -> Maybe AE.Value -> HI.Sql
-jsonArraySql typ = elemArraySql typ (Just . jsonText)
-
-
--- | Quantile objects fan out into two parallel double arrays: keys, then values.
-summaryArraySql :: Bool -> Maybe AE.Value -> HI.Sql
-summaryArraySql wantQuantiles =
-  elemArraySql "double precision" \case
-    AE.Object o -> KEM.lookup (if wantQuantiles then "quantile" else "value") o >>= \case AE.Number n -> Just (toText $ show n); _ -> Nothing
-    _ -> Nothing
 
 
 -- | Catalog rows are one per metric descriptor, never one per data point.
