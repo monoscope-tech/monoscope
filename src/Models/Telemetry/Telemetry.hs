@@ -2814,7 +2814,6 @@ insertOtelMetrics usePgTypes records
       pure (BulkInsertResult n)
 
 
-
 -- | Catalog rows are one per metric descriptor, never one per data point.
 -- Callers batch this after raw persistence; it intentionally uses the ordinary
 -- Hasql interpreter because the catalog is TimescaleDB-only.
