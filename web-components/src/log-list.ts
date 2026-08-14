@@ -15,6 +15,7 @@ import { spriteUrl } from './assets';
 import clsx from 'clsx';
 import {
   formatTimestamp,
+  formatTimestampCompact,
   lookupVecValue,
   getErrorClassification,
   faSprite,
@@ -86,6 +87,10 @@ export const virtualItemKey = (item: VirtualListItem) =>
   'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
 
 const MAX_RETAINED_ROWS = 5000;
+// Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
+// `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
+const NARROW_VIEWPORT = '(max-width: 767px)';
+const NARROW_COLUMNS = ['id', 'timestamp', 'created_at', 'service', 'summary'];
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
 // initial estimate inflated the virtual scroll range roughly 3.5×.
@@ -205,6 +210,14 @@ export class LogList extends LitElement {
   // service gate to bound it up front, so it is bounded here instead, with a visible count.
   private liveStream: LiveStream | null = null;
   @state() private liveDropped = 0;
+  // Phone-width layout is a different table, not a scaled one — see displayColumns.
+  @state() private isNarrow = window.matchMedia(NARROW_VIEWPORT).matches;
+  private narrowQuery = window.matchMedia(NARROW_VIEWPORT);
+  private onNarrowChange = (e: MediaQueryListEvent) => (this.isNarrow = e.matches);
+  // The active row of the grid keyboard model. Focus stays on the <table> and this drives
+  // aria-activedescendant plus the active outline: lit-virtualizer recycles row nodes, so
+  // DOM focus placed on a row dies with the node as soon as the list scrolls.
+  @state() private focusedRowId: string | null = null;
   private barChart: any = null;
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -822,6 +835,8 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.isNarrow = this.narrowQuery.matches;
+    this.narrowQuery.addEventListener('change', this.onNarrowChange);
     window.addEventListener('chart-updated', this.handleChartCountUpdate);
     this.initWorker();
     this.setupEventListeners();
@@ -1063,6 +1078,7 @@ export class LogList extends LitElement {
 
     // Note: Caches in renderSummaryElements closure will be garbage collected
     // when the component is destroyed
+    this.narrowQuery.removeEventListener('change', this.onNarrowChange);
 
     super.disconnectedCallback();
   }
@@ -1809,6 +1825,58 @@ export class LogList extends LitElement {
     });
   }
 
+  // The <table> is the tab stop, so entering it with nothing active starts at the top.
+  private activateFirstRow = () => {
+    if (!this.focusedRowId) void this.moveRowFocus(0);
+  };
+
+  // Rows are virtualized, so the target may not be rendered yet. Move the marker first,
+  // then ask the virtualizer to bring it into view; focus itself never leaves the table.
+  private async moveRowFocus(to: number | 'first' | 'last') {
+    const rowIndexes = this.virtualListItems.reduce<number[]>((acc, item, i) => ('id' in item ? (acc.push(i), acc) : acc), []);
+    if (!rowIndexes.length) return;
+    const current = rowIndexes.findIndex((i) => (this.virtualListItems[i] as EventLine).id === this.focusedRowId);
+    const target =
+      to === 'first' ? 0 : to === 'last' ? rowIndexes.length - 1 : Math.max(0, Math.min(rowIndexes.length - 1, (current < 0 ? 0 : current) + to));
+    const index = rowIndexes[target];
+    const id = (this.virtualListItems[index] as EventLine).id;
+    if (id === this.focusedRowId && current >= 0) return;
+    this.focusedRowId = id;
+    await this.updateComplete;
+    // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows that are
+    // currently rendered, so a jump to Home/End past the window would silently not scroll.
+    // Home/End pin to the edge; 'nearest' leaves them a no-op when the target is far off-screen.
+    this.querySelector('lit-virtualizer')?.scrollToIndex(index, to === 'first' ? 'start' : to === 'last' ? 'end' : 'nearest');
+  }
+
+  private handleGridKeydown = (event: KeyboardEvent) => {
+    // Controls inside a cell own their own keys — a button's Enter must not also
+    // open the row behind it, and typing in a header filter must not scroll the list.
+    if ((event.target as HTMLElement).closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    const moves: Record<string, number | 'first' | 'last'> = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10, Home: 'first', End: 'last' };
+    if (event.key in moves) {
+      event.preventDefault();
+      void this.moveRowFocus(moves[event.key]);
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && this.focusedRowId) {
+      event.preventDefault();
+      void this.activateFocusedRow();
+    }
+  };
+
+  // A jump (Home/End/PageUp/PageDown) scrolls before the virtualizer mounts the target,
+  // so activating straight away would find no element and silently do nothing.
+  private async activateFocusedRow() {
+    const id = this.focusedRowId;
+    if (!id) return;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const row = this.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(id)}"]`);
+      if (row) return row.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+  }
+
   handleRecentClick() {
     const container = document.querySelector('#logs_list_container_inner');
     if (container) {
@@ -2018,7 +2086,7 @@ export class LogList extends LitElement {
         @keyframes pulseIndicator {
           0%,
           90% {
-            background-color: oklch(48% 0.205 265);
+            background-color: var(--color-fillBrand-strong);
           }
           100% {
             background-color: transparent;
@@ -2134,7 +2202,7 @@ export class LogList extends LitElement {
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
                 class="cbadge-sm cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
-                @pointerdown=${this.handleRecentClick}
+                @click=${this.handleRecentClick}
                 aria-label="${this.recentCount} new events, click to load"
               >
                 ${this.recentCount} new
@@ -2145,11 +2213,15 @@ export class LogList extends LitElement {
           role="grid"
           aria-label="${isPatterns ? 'Log patterns' : this.mode === 'sessions' ? 'Sessions' : 'Log events'}"
           aria-rowcount=${this.totalCount || -1}
-          class="table-fixed ${isAggregate || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
+          tabindex="0"
+          aria-activedescendant=${this.focusedRowId ? `logrow-${this.focusedRowId}` : nothing}
+          @focus=${this.activateFirstRow}
+          @keydown=${this.handleGridKeydown}
+          class="table-fixed ${isAggregate || this.wrapsLines || this.isNarrow ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
             this.logsColumns.reduce(
               (acc, column) => {
-                const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+                const width = this.columnWidth(column);
                 if (width) {
                   acc[`--col-${column}-width`] = `${width}px`;
                 }
@@ -2161,10 +2233,11 @@ export class LogList extends LitElement {
             .map(([k, v]) => `${k}: ${v}`)
             .join('; ')}
         >
-          <thead class="z-10 sticky top-0 isolate">
+          <!-- Column headers label columns; a stacked phone row has none, so they are noise there. -->
+          <thead class=${clsx('z-10 sticky top-0 isolate', this.isNarrow && 'hidden')}>
             <tr class="text-textWeak border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
-                ? skeletonColumns(this.logsColumns).map((column, idx) => {
+                ? skeletonColumns(this.displayColumns).map((column, idx) => {
                     // Mirror skeletonCell's per-column widths so header pills sit
                     // directly above their row cells (id is the narrow stripe,
                     // latency_breakdown pins right).
@@ -2187,23 +2260,23 @@ export class LogList extends LitElement {
                     `;
                   })
                 : html`
-                    ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-                    ${this.logsColumns.includes('latency_breakdown') && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
+                    ${this.displayColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
+                    ${this.displayColumns.includes('latency_breakdown') && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
                   `}
             </tr>
           </thead>
           ${isInitialLoading
-            ? loadingSkeleton(this.logsColumns)
+            ? loadingSkeleton(this.displayColumns)
             : html`
                 <tbody class="min-w-0 text-xs">
                   ${keyed(
-                    this.isAggregate || this.wrapLines ? 'measured' : 'dense',
+                    this.isAggregate || this.wrapsLines ? 'measured' : 'dense',
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
                       .keyFunction=${virtualItemKey}
                       .renderItem=${this.renderVirtualItem}
                       @visibilityChanged=${this.handleVisibilityChange}
-                      .layout=${this.isAggregate || this.wrapLines ? {} : { type: DenseRowFlowLayout }}
+                      .layout=${this.isAggregate || this.wrapsLines ? {} : { type: DenseRowFlowLayout }}
                     ></lit-virtualizer>`
                   )}
                 </tbody>
@@ -2219,7 +2292,7 @@ export class LogList extends LitElement {
         ${!isAggregate && !this.shouldScrollToBottom && this.flipDirection
           ? html` <div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
-                @pointerdown=${() => {
+                @click=${() => {
                   this.shouldScrollToBottom = true;
                   this.scrollToBottom();
                   this.handleRecentConcatenation();
@@ -2227,15 +2300,10 @@ export class LogList extends LitElement {
                 data-tip="Scroll to bottom"
                 aria-label=${this.recentCount > 0 ? `Scroll to bottom (${this.recentCount} new events)` : 'Scroll to bottom'}
                 class=${clsx(
-                  'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
-                  this.recentCount > 0
-                    ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
-                    : 'bg-gradient-to-br from-fillStrong to-fillWeak'
+                  'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-colors duration-150 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong',
+                  this.recentCount > 0 ? 'bg-fillBrand-strong' : 'bg-fillStrong'
                 )}
               >
-                ${this.recentCount > 0
-                  ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
-                  : nothing}
                 <span class="relative">
                   ${faSprite('arrow-down', 'regular', 'h-6 w-6 fill-textInverse-strong stroke-textInverse-strong')}
                 </span>
@@ -2396,7 +2464,7 @@ export class LogList extends LitElement {
 
   logItemCol = (rowData: EventLine, key: string): any => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
-    const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    const wrapClass = this.wrapsLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
     // When rendering inside aggregate children, use overridden colIdxMap
     const colIdxMap = this._renderOverrides?.colIdxMap ?? this.colIdxMap;
     // Detect once, reused by latency + summary cases.
@@ -2467,7 +2535,7 @@ export class LogList extends LitElement {
         const rowKind = lookupVecValue<string>(dataArr, colIdxMap, 'kind');
         return html`<div class="relative">
           <time class=${`monospace text-xs text-textWeak tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
-            >${formatTimestamp(timestamp)}</time
+            >${this.isNarrow ? formatTimestampCompact(timestamp) : formatTimestamp(timestamp)}</time
           >
           ${rowTraceId && rowKind !== 'log' && this.mode !== 'sessions'
             ? html`<button
@@ -2480,7 +2548,7 @@ export class LogList extends LitElement {
                 }}
               >
                 <span
-                  class="flex items-center justify-center w-5 h-5 rounded border border-strokeMedium bg-bgBase text-iconNeutral group-hover/btn:border-strokeBrand group-hover/btn:text-textBrand group-hover/btn:bg-fillBrand/10 transition-colors"
+                  class="flex items-center justify-center w-5 h-5 rounded border border-strokeStrong bg-bgBase text-iconNeutral group-hover/btn:border-strokeBrand-strong group-hover/btn:text-textBrand group-hover/btn:bg-fillBrand-weak transition-colors"
                 >
                   ${faSprite('up-right-and-down-left-from-center', 'regular', 'w-2.5 h-2.5')}
                 </span>
@@ -2624,7 +2692,7 @@ export class LogList extends LitElement {
         return rowData._latencyCache.content;
       case 'summary':
         const isSessionTopLevel = this.mode === 'sessions' && depth === 0;
-        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
+        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapsLines) {
           const summaryArray = this.parseSummaryData(dataArr);
           // Session top-level rows use the two-line identity/context layout;
           // everything else (logs, patterns, expanded session children) uses
@@ -2632,8 +2700,8 @@ export class LogList extends LitElement {
           rowData._summaryCache = {
             content: isSessionTopLevel
               ? [this.renderSessionSummary(summaryArray)]
-              : this.renderSummaryElements(summaryArray, this.wrapLines),
-            wrapLines: this.wrapLines,
+              : this.renderSummaryElements(summaryArray, this.wrapsLines),
+            wrapLines: this.wrapsLines,
           };
         }
         // Synthetic-orphan rows append a click-to-copy chip showing the full
@@ -2645,7 +2713,7 @@ export class LogList extends LitElement {
           // whitespace text nodes lit emits between spans. The old
           // break-all/break-spaces preserved those newlines and inflated every
           // row to ~4 blank lines (88px) regardless of pattern length.
-          return html`<div class="flex items-center gap-1 min-w-0 ${this.wrapLines ? 'flex-wrap' : 'whitespace-nowrap overflow-hidden'}">
+          return html`<div class="flex items-center gap-1 min-w-0 ${this.wrapsLines ? 'flex-wrap' : 'whitespace-nowrap overflow-hidden'}">
             ${patIsError
               ? html`<span class="cbadge-sm badge-error shrink-0 align-middle" title="Pattern includes error-level events">error</span>`
               : nothing}
@@ -2659,7 +2727,7 @@ export class LogList extends LitElement {
             : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         const summaryContent = rowData._summaryCache.content;
         return html`<div
-          class=${clsx('flex w-full gap-1 min-w-0', isSessionTopLevel ? 'items-center' : this.wrapLines ? 'items-start' : 'items-center')}
+          class=${clsx('flex w-full gap-1 min-w-0', isSessionTopLevel ? 'items-center' : this.wrapsLines ? 'items-start' : 'items-center')}
         >
           ${this.view === 'tree' || this.mode === 'sessions'
             ? html`
@@ -2714,7 +2782,7 @@ export class LogList extends LitElement {
               'flex gap-1 min-w-0',
               isSessionTopLevel
                 ? 'flex-1 items-center'
-                : this.wrapLines
+                : this.wrapsLines
                   ? 'items-center break-all flex-wrap'
                   : 'items-center overflow-hidden'
             )}
@@ -2779,7 +2847,7 @@ export class LogList extends LitElement {
       @click=${onClick}
       ${ref(rowRef ?? noopRef)}
     >
-      <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
+      <td colspan=${String(this.displayColumns.length)} class="relative pl-[calc(40vw-10ch)]">
         <div class="h-7 relative flex items-center justify-center">
           <span class=${clsx('text-textBrand underline font-semibold', loading && 'invisible')}>${label}</span>
           <div
@@ -2900,10 +2968,37 @@ export class LogList extends LitElement {
     return this.renderFetchRecentButton();
   }
 
+  // On a phone the desktop table is ~4000px wide, so summary — the column that says
+  // what actually happened — starts off-screen behind two columns of chrome. Narrow
+  // viewports render the same rows with only the identifying columns, and summary
+  // flexes to fill instead of taking its fixed 3600px. The user's own column choices
+  // are untouched; this filters what is drawn, not what is configured.
+  private get displayColumns(): string[] {
+    if (!this.isNarrow) return this.logsColumns;
+    return this.logsColumns.filter((c) => NARROW_COLUMNS.includes(c));
+  }
+
+  // A phone cannot show a log line on one row: after timestamp and service there are
+  // ~160px left. Wrapping turns each row into a stacked block instead of a line the user
+  // has to swipe sideways to read. This is the same path the "Wrap lines" option uses,
+  // so the measured virtualizer layout below is already exercised by it.
+  private get wrapsLines(): boolean {
+    return this.wrapLines || this.isNarrow;
+  }
+
+  // Header cells, body cells and the generated width CSS vars must agree, so all three
+  // ask here rather than reaching into fixedColumnWidths themselves.
+  private columnWidth(column: string): number | undefined {
+    // A phone stacks each row into a block (see rowClass), so no cell gets a fixed
+    // column width — they are full-width lines, not columns sitting side by side.
+    if (this.isNarrow) return undefined;
+    return this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+  }
+
   logTableHeading(column: string) {
     if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></td>`;
 
-    const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+    const width = this.columnWidth(column);
     // Tailwind safelist: class="max-md:static"
     const config = {
       pattern_count: { title: 'count', classes: 'shrink-0' },
@@ -2949,7 +3044,7 @@ export class LogList extends LitElement {
       const ov = this._renderOverrides;
       const effectiveMode = ov?.mode ?? this.mode;
       const effectiveColIdxMap = ov?.colIdxMap ?? this.colIdxMap;
-      const effectiveLogsColumns = ov?.logsColumns ?? this.logsColumns;
+      const effectiveLogsColumns = ov?.logsColumns ?? this.displayColumns;
       const isPatterns = effectiveMode === 'patterns';
       const isAggregate = isPatterns;
       const s = rowData.type === 'log' ? 'logs' : 'spans';
@@ -2984,13 +3079,20 @@ export class LogList extends LitElement {
       // inside a <td>, so emitting <tr>/<td> here produces invalid nesting and
       // browsers reparent the orphan <tr>s. Use <div role="row|cell"> instead.
       const rowClass = clsx(
-        'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
+        'item-row relative p-0 flex group isolate cursor-pointer',
+        // Wrap rather than a pure column: the marker, time and service belong on one
+        // meta line (as a column stack each became a full-width band of dead space),
+        // and only summary is forced onto its own line below them.
+        this.isNarrow ? 'flex-wrap items-center gap-x-2 py-1.5 px-1 border-b border-strokeWeak' : 'whitespace-nowrap',
+        rowData.id === this.focusedRowId && 'outline outline-2 -outline-offset-2 outline-strokeBrand-strong',
         rowHoverBg,
         !ov && 'contain-layout-style',
-        isPatterns && (this.wrapLines ? 'items-start' : 'items-center'),
+        isPatterns && (this.wrapsLines ? 'items-start' : 'items-center'),
         // All non-wrapping, non-aggregate rows (including sessions) use the
         // dense 28px log row height for a consistent rhythm.
-        !this.wrapLines && !isAggregate && 'h-[28px] items-center',
+        !this.wrapsLines && !isAggregate && 'h-[28px] items-center',
+        // Stacked rows size to their content; a 28px cap would clip the wrapped summary.
+        this.isNarrow && 'h-auto',
         isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
         isNew && 'animate-fadeBg'
       );
@@ -3011,10 +3113,20 @@ export class LogList extends LitElement {
       const cells = effectiveLogsColumns
         .filter((v) => v !== 'latency_breakdown')
         .map((column) => {
-          const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+          const hasWidth = this.columnWidth(column);
           // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
-          const skipFixedWidth = ov && column === 'summary';
-          const cellClass = `${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
+          const skipFixedWidth = (ov || this.isNarrow) && column === 'summary';
+          // Stacked cards cap the body: an unclamped raw log line wraps to ~10 lines and
+          // one event fills the whole phone screen, which defeats scanning.
+          // basis-full, not w-full: the summary cell also carries flex-1 (basis 0), which
+          // wins over a width and keeps it on the meta line instead of wrapping below it.
+          // pr-2: cells only carry pl-2, which on a phone left the wrapped summary running
+          // flush into the right edge of the card with no inset.
+          const narrowCell = this.isNarrow ? (column === 'summary' ? 'basis-full max-h-24 overflow-hidden pr-2' : 'w-auto shrink-0') : '';
+          // break-words, not whitespace-break-spaces, on phones: the latter preserves the
+          // template's own indentation as blank lines, which made empty cells ~90px tall.
+          const wrapClasses = this.wrapsLines ? (this.isNarrow ? 'break-words' : 'break-all whitespace-break-spaces') : '';
+          const cellClass = `${wrapClasses} ${narrowCell} ${cellBg} group-hover:bg-inherit relative pl-2 ${
             column === 'summary'
               ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}`
               : 'flex-shrink-0 overflow-hidden hover:overflow-visible hover:z-30'
@@ -3032,11 +3144,13 @@ export class LogList extends LitElement {
               ${this.logItemCol(rowData, 'latency_breakdown')}
             </td>`
         : nothing;
+      // The grid points aria-activedescendant here, so the id must be stable and unique.
+      const rowId = `logrow-${rowData.id}`;
       const rowHtml = ov
-        ? html`<div role="row" data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
+        ? html`<div role="row" id=${rowId} data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </div>`
-        : html`<tr data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
+        : html`<tr id=${rowId} data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </tr>`;
       return rowHtml;
@@ -3049,7 +3163,7 @@ export class LogList extends LitElement {
   };
 
   tableHeadingWrapper(title: string, column: string, classes: string, width?: number) {
-    const finalWidth = width || this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+    const finalWidth = width ?? this.columnWidth(column);
     if (!finalWidth && column === 'latency_breakdown') {
       this.columnMaxWidthMap[column] = 120;
     }
@@ -3080,22 +3194,22 @@ export class LogList extends LitElement {
           class="dropdown menu flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
         >
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
-            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.hideColumn(column)}>Hide column</button>
+            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.hideColumn(column)}>Hide column</button>
           </li>
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
-            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, -1)}>Move column left</button>
+            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, -1)}>Move column left</button>
           </li>
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
-            <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
+            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, 1)}>Move column right</button>
           </li>
           ${column === 'latency_breakdown'
             ? (['service', 'kind'] as LatencyDim[]).map(
                 (dim) =>
                   html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
                     <button
-                      class="cursor-pointer py-0.5"
+                      class="cursor-pointer w-full text-left py-1 min-h-6"
                       aria-pressed=${this.latencyDim === dim}
-                      @pointerdown=${() => this.setLatencyDim(dim)}
+                      @click=${() => this.setLatencyDim(dim)}
                     >
                       ${this.latencyDim === dim ? '✓ ' : ''}Break down by ${dim}
                     </button>
@@ -3231,7 +3345,7 @@ export class LogList extends LitElement {
   options() {
     const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
       html` <button
-        @pointerdown=${() => this.changeView(view)}
+        @click=${() => this.changeView(view)}
         aria-pressed=${this.view === view}
         aria-label="${label} view"
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
@@ -3339,7 +3453,7 @@ export class LogList extends LitElement {
             role="button"
             aria-label="Log display options"
             aria-haspopup="true"
-            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded text-textWeak hover:text-textStrong focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
+            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 min-h-6 min-w-6 text-xs rounded text-textWeak hover:text-textStrong focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong`}
           >
             ${faSprite('gear', 'regular', `h-3 w-3`)}
             <span class="sm:inline hidden">Options</span>
@@ -3359,7 +3473,7 @@ export class LogList extends LitElement {
             })}
             ${this.renderCheckbox('Wrap lines', 'wrap-text', this.wrapLines, (checked) => {
               this.wrapLines = checked;
-              if (this.wrapLines) {
+              if (this.wrapsLines) {
                 requestAnimationFrame(() => {
                   const container = this.logsContainer;
                   if (container) {
@@ -3452,20 +3566,23 @@ class ColumnsSettings extends LitElement {
                     .filter((col) => !this.columns.some((c) => c === col) && col.toLowerCase().includes(this.searchTerm.toLowerCase()))
                     .map(
                       (col) => html`
-                        <li
-                          class="px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
-                          @pointerdown=${() => {
-                            let summaryIndex = this.columns.indexOf('summary');
-                            if (summaryIndex === -1 || col === 'latency_breakdown') {
-                              this.columns.push(col);
-                            } else {
-                              this.columns.splice(summaryIndex, 0, col);
-                            }
-                            this.searchTerm = '';
-                            this._emitChanges();
-                          }}
-                        >
-                          ${col}
+                        <li>
+                          <button
+                            type="button"
+                            class="w-full text-left px-1 py-0.5 hover:bg-fillWeak cursor-pointer"
+                            @click=${() => {
+                              let summaryIndex = this.columns.indexOf('summary');
+                              if (summaryIndex === -1 || col === 'latency_breakdown') {
+                                this.columns.push(col);
+                              } else {
+                                this.columns.splice(summaryIndex, 0, col);
+                              }
+                              this.searchTerm = '';
+                              this._emitChanges();
+                            }}
+                          >
+                            ${col}
+                          </button>
                         </li>
                       `
                     )}
@@ -3493,7 +3610,7 @@ class ColumnsSettings extends LitElement {
               >
                 <span class="text-textStrong">${col}</span>
                 <div class="flex items-center gap-2">
-                  <button class="hidden group-hover:inline-block cursor-pointer" @pointerdown=${() => this._removeColumn(index)}>
+                  <button class="hidden group-hover:inline-block cursor-pointer" @click=${() => this._removeColumn(index)}>
                     ${faSprite('trash-can', 'regular', 'h-3 w-3 text-iconNeutral fill-iconError')}
                   </button>
                   ${faSprite('grip-dots-vertical', 'regular', 'h-4 w-4 text-iconNeutral')}
@@ -3980,7 +4097,7 @@ function errorState(cols: number, message: string, onRetry: () => void) {
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
         <div class="max-w-full mx-auto my-8 text-center p-5 sm:py-10 sm:px-24 flex flex-col gap-3 items-center">
-          ${faSprite('circle-exclamation', 'regular', 'h-10 w-10 stroke-strokeError fill-fillError-strong opacity-70')}
+          ${faSprite('circle-exclamation', 'regular', 'h-10 w-10 stroke-strokeError-strong fill-fillError-strong opacity-70')}
           <h2 class="text-lg text-textStrong font-semibold">Failed to load events</h2>
           <p class="text-sm text-textWeak max-w-sm">${message}</p>
           <button class="btn btn-sm btn-ghost border border-strokeWeak mt-1" @click=${onRetry}>
@@ -3994,26 +4111,17 @@ function errorState(cols: number, message: string, onRetry: () => void) {
 
 function emptyState(cols: number) {
   let title = `No events found`;
-  let subText = `No results matched your query, or this project hasn't received any events yet.`;
+  let subText = `Nothing matched in the selected time range. Try widening the time picker or removing a filter. If this project is new, it may not have sent events yet.`;
   return html`
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
-        <div class="max-w-full mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
-          <div class="relative">
-            <div class="absolute inset-0 -m-8">
-              <div class="w-full h-full rounded-full bg-gradient-to-b from-fillBrand-weak to-transparent opacity-20 blur-xl"></div>
-            </div>
-            <div class="relative">
-              ${faSprite('empty', 'regular', 'h-24 w-24 mx-auto stroke-strokeBrand-strong fill-fillBrand-strong opacity-80')}
-            </div>
-          </div>
-          <div class="flex flex-col gap-3">
-            <h2 class="text-2xl text-textStrong font-bold">${title}</h2>
-            <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
-            <a href="https://monoscope.tech/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary border-0">
-              Read integration guides
-            </a>
-          </div>
+        <div class="max-w-full mx-auto my-8 text-center px-5 py-10 flex flex-col items-center gap-2">
+          ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
+          <h2 class="text-base text-textStrong font-semibold">${title}</h2>
+          <p class="text-sm max-w-md text-textWeak">${subText}</p>
+          <a href="https://monoscope.tech/docs/sdks/" target="_BLANK" class="text-sm text-textBrand hover:text-textStrong underline mt-1">
+            Read integration guides
+          </a>
         </div>
       </td>
     </tr>

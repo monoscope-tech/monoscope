@@ -234,7 +234,7 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
     ul_ [class_ "flex flex-wrap max-md:flex-nowrap gap-x-3 gap-y-1 max-md:overflow-x-auto c-scroll", term "aria-label" "Service colors"]
       $ forM_ services
       $ \service -> li_ [class_ "flex items-center gap-1.5 shrink-0", term "data-service-color" service] do
-        div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillNeutral-strong" service colors] pass
+        div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillStrong" service colors] pass
         span_ [class_ "truncate max-w-40"] $ toHtml service
   where
     services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]

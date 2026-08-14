@@ -575,9 +575,9 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
         div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
-      label_ ([term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeaker hover:text-textWeak flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (bool "true" "false" sess.isSidebarClosed), Aria.controls_ "side-nav-menu"] <> tippyRight_ "Expand sidebar" <> [[__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]]) do
+      label_ ([term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeak hover:text-textStrong flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (bool "true" "false" sess.isSidebarClosed), Aria.controls_ "side-nav-menu"] <> tippyRight_ "Expand sidebar" <> [[__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]]) do
         faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
-      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
+      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
     let searchScript = [__|on click send paletteToggle to #cmd-palette-global|]
     div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
@@ -638,7 +638,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           faSprite_ "circle-question" "regular" "nav-icon w-4 h-4 shrink-0"
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1.5 whitespace-nowrap truncate"] do
             "Docs"
-            faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeaker"
+            faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeak"
 
   div_ [class_ "py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser

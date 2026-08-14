@@ -1148,7 +1148,7 @@ export class SessionReplay extends LitElement {
                 style="left:${(this.trickTarget / this.metaData.totalTime) * 100}%; top:-200px"
               >
                 <div id="trickPlayerContainer" class="h-40 w-60 bg-black overflow-hidden"></div>
-                <div class="text-textInverse text-center w-full py-2 tabular-nums">${SessionReplay.formatTime(this.trickTarget)}</div>
+                <div class="text-textInverse-strong text-center w-full py-2 tabular-nums">${SessionReplay.formatTime(this.trickTarget)}</div>
               </div>
               <div class="relative h-full bg-fillBrand-strong rounded-sm" style="width:${(this.currentTime / (this.metaData.totalTime || 1)) * 100}%">
                 <span class="absolute -right-1.5 h-3.5 w-3.5 top-1/2 -translate-y-1/2 rounded-full bg-fillBrand-strong ring-2 ring-bgBase shadow-sm"></span>

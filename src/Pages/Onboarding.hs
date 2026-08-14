@@ -463,11 +463,11 @@ integrationsPage pid apikey =
                 span_ "Copy"
                 faSprite_ "copy" "regular" "h-4 w-4"
 
-        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg"] do
+        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
             "Want to test quickly? "
             label_
-              [ class_ "text-textBrand hover:text-textBrand-strong underline font-medium cursor-pointer"
+              [ class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"
               , Lucid.for_ "telemetrygen-modal"
               ]
               "Use telemetrygen"
@@ -839,8 +839,8 @@ inviteTeamMemberModal pid emails enableFreetier = do
       details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
         summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
         div_ [class_ "flex-col gap-3 flex pt-3"] $ do
-          when enableFreetier $ div_ [class_ "bg-fillInfo-weak border border-strokeInfo-weak rounded-lg p-3 flex items-start gap-2"] do
-            faSprite_ "circle-info" "regular" "w-4 h-4 text-textInfo flex-shrink-0 mt-0.5"
+          when enableFreetier $ div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 flex items-start gap-2"] do
+            faSprite_ "circle-info" "regular" "w-4 h-4 text-textInformation flex-shrink-0 mt-0.5"
             p_ [class_ "text-sm text-textWeak"] "Free plan members will be invited but disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]

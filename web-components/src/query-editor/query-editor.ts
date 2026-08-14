@@ -1751,7 +1751,7 @@ export class QueryEditorComponent extends LitElement {
 
     let currentIndex = 0;
     const keyboardHelp = html`
-      <div class="sticky bottom-0 bg-bgRaised z-50 border-t border-strokeMedium px-4 py-2 text-xs text-textWeak flex items-center justify-between">
+      <div class="sticky bottom-0 bg-bgRaised z-50 border-t border-strokeWeak px-4 py-2 text-xs text-textWeak flex items-center justify-between">
         <div>
           <span class="mr-2">
             <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↑</kbd>
@@ -1774,7 +1774,7 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
+        class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeWeak shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
         style="${positionStyle}"
         id="query-suggestions"
         role="listbox"

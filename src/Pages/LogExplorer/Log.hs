@@ -538,6 +538,10 @@ renderFacets facetSummary = do
                       [ type_ "checkbox"
                       , class_ "checkbox checkbox-xs max-md:checkbox-sm"
                       , [__|on click toggleSubQuery(@data-field + ' == "' + @data-value + '"') on #filterElement|]
+                      , -- The label's own text is just the value, so without this a screen
+                        -- reader announces "200, checked" with no idea which field it filters.
+                        -- data-tippy-content carries the same string but is not exposed to AT.
+                        Aria.label_ (f.path <> " equals " <> val)
                       , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
                       , term "data-field" f.path
                       , term "data-value" val
@@ -829,8 +833,11 @@ recordExploration pid uid stepsDone queryAST = do
 -- | Log Explorer header controls: live-stream toggle, time picker, refresh.
 logExplorerActions_ :: Maybe (Text, Text) -> Html ()
 logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
-  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData set @aria-checked to #streamLiveData.checked|], term "aria-checked" "false"] do
-    input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
+  -- sr-only, not hidden: `display:none` drops the checkbox out of the tab order, so the
+  -- label could advertise role=switch while being unreachable by keyboard. The ring on
+  -- the label is what makes that focus visible, since the input itself has no box.
+  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData set @aria-checked to #streamLiveData.checked|], term "aria-checked" "false"] do
+    input_ [type_ "checkbox", id_ "streamLiveData", class_ "sr-only"]
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
   Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
@@ -1587,7 +1594,7 @@ apiLogsPage page = do
     -- Show/hide-filters label; @attrs@ must not carry a class_ (Lucid concatenates
     -- duplicate class attributes with no separator).
     filtersLabel_ :: [Attribute] -> Html () -> Html ()
-    filtersLabel_ attrs trailing = label_ ([class_ "gap-1 flex items-center cursor-pointer text-textWeak"] <> attrs) do
+    filtersLabel_ attrs trailing = label_ ([class_ "gap-1 flex items-center min-h-6 cursor-pointer text-textWeak rounded has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong"] <> attrs) do
       faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
       span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
       span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
@@ -1673,7 +1680,7 @@ apiLogsPage page = do
     -- No `contain:layout` here: it makes this a containing block for fixed/anchored
     -- descendants, which clips the facet action popover (top layer) to the sidebar.
     facetsPanel =
-      div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
+      div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -1708,11 +1715,13 @@ apiLogsPage page = do
         $ virtualTable page.pid Nothing page.vizType
 
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
-    rowCountHeader = div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+    -- max-md:hidden: on phones this row moves into the toolbar via mobileExtra, and two
+    -- copies would also give the screen reader two aria-live regions for one count.
+    rowCountHeader = div_ [class_ "max-md:hidden flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
       filtersLabel_ []
         $ input_
           [ type_ "checkbox"
-          , class_ "toggle-filters hidden"
+          , class_ "toggle-filters sr-only"
           , id_ "toggle-filters"
           , [__|
               init

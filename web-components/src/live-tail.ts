@@ -328,7 +328,10 @@ export class LiveTail extends LitElement {
 
         <div class="px-4 py-1.5 text-xs border-b border-strokeWeak" role="status" aria-live="polite">
           <span class="inline-flex items-center gap-1.5 text-textWeak">
-            <span class="inline-block w-1.5 h-1.5 rounded-full bg-fillWarning group-data-[state=idle]/lt:bg-fillWeak group-data-[state=live]/lt:bg-fillSuccess group-data-[state=error]/lt:bg-fillError group-data-[state=expired]/lt:bg-fillError"></span>
+            <span
+              aria-hidden="true"
+              class="inline-block w-1.5 h-1.5 rounded-full bg-fillWarning-strong group-data-[state=idle]/lt:bg-fillWeak group-data-[state=live]/lt:bg-fillSuccess-strong group-data-[state=error]/lt:bg-fillError-strong group-data-[state=expired]/lt:bg-fillError-strong"
+            ></span>
             <span>${STATE_LABEL[this.streamState]}${this.paused && this.streamState === 'live' ? ' — display paused' : ''}</span>
             <span>· ${this.rows.length} shown</span>
             ${dropped > 0

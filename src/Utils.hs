@@ -763,14 +763,22 @@ freeTierDailyMaxEvents :: Integer
 freeTierDailyMaxEvents = 10000
 
 
--- | Pretty print count numbers, converting large values to K/M/B format
--- | Example: 1534999 becomes 1.5M, 200000 becomes 200K
+-- | Pretty print count numbers, converting large values to K/M/B format.
+-- A whole multiple prints without a trailing tenth.
+--
+-- >>> map prettyPrintCount [999, 1000, 1500, 200000, 1534999, 2000000000]
+-- ["999","1K","1.5K","200K","1.5M","2B"]
 prettyPrintCount :: Int -> Text
 prettyPrintCount n
-  | n >= 1_000_000_000 = T.show (n `div` 1_000_000_000) <> "." <> T.show ((n `mod` 1_000_000_000) `div` 100_000_000) <> "B"
-  | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
-  | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
+  | n >= 1_000_000_000 = scaled 1_000_000_000 "B"
+  | n >= 1_000_000 = scaled 1_000_000 "M"
+  | n >= 1_000 = scaled 1_000 "K"
   | otherwise = T.show n
+  where
+    -- Drop a .0 tenth rather than print it: "200.0K" is noise on a scanning surface.
+    scaled unit suffix =
+      let (whole, tenth) = (n `div` unit, (n `mod` unit) `div` (unit `div` 10))
+       in T.show whole <> memptyIfFalse (tenth /= 0) ("." <> T.show tenth) <> suffix
 
 
 -- | Map a raw backend (Postgres / TimeFusion) error message to a short, safe

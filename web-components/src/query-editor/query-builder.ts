@@ -1032,7 +1032,7 @@ export class QueryBuilderComponent extends LitElement {
           <div class="flex flex-wrap gap-1">
             ${this.aggregations.map(
               (agg, index) => html`
-                <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                <div class="text-xs text-textDisabled monospace bg-fillWeaker">
                   [<span class="text-textStrong">${agg.function}(${agg.field})</span>
                   <span class="cursor-pointer" data-tippy-content="Remove aggregation" @pointerdown="${() => this.removeAggregation(index)}"
                     >✕</span
@@ -1042,7 +1042,7 @@ export class QueryBuilderComponent extends LitElement {
             )}
             <button
               type="button"
-              class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+              class="text-xs text-textDisabled monospace bg-fillWeaker rounded hover:bg-fillHover cursor-pointer"
               popovertarget="agg-popover"
               style="anchor-name: --agg-anchor"
               data-tippy-content="Add an aggregation function"
@@ -1073,7 +1073,7 @@ export class QueryBuilderComponent extends LitElement {
               <div class="flex mb-3 border rounded">
                 <!-- Aggregations column -->
                 <div class="w-1/2 border-r">
-                  <div class="p-1 bg-bgWeaker font-medium border-b monospace">Aggregation</div>
+                  <div class="p-1 bg-fillWeaker font-medium border-b monospace">Aggregation</div>
                   <div class="max-h-60 overflow-y-auto">
                     ${this.aggFunctions.map(
                       (func) => html`
@@ -1092,7 +1092,7 @@ export class QueryBuilderComponent extends LitElement {
 
                 <!-- Fields column -->
                 <div class="w-1/2">
-                  <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+                  <div class="p-1 bg-fillWeaker font-medium border-b monospace">Fields</div>
                   <div class="max-h-60 overflow-y-auto">
                     ${
                       this.showFieldsColumn && this.fieldsOptions.length > 0
@@ -1108,7 +1108,7 @@ export class QueryBuilderComponent extends LitElement {
                                 }}"
                               >
                                 ${field.value}
-                                <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                                <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-fillWeaker">
                                   ${this.getFieldIcon(field.type, field.value)}
                                 </span>
                               </div>
@@ -1137,7 +1137,7 @@ export class QueryBuilderComponent extends LitElement {
                       const isBinned = field.includes('bin(') || field.includes('bin_auto(');
                       // For display purposes, ensure we show the full function with parameter
                       return html`
-                        <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                        <div class="text-xs text-textDisabled monospace bg-fillWeaker">
                           [<span class="text-textStrong">${field}</span>
                           <span
                             class="cursor-pointer"
@@ -1150,7 +1150,7 @@ export class QueryBuilderComponent extends LitElement {
                     })}
                     <button
                       type="button"
-                      class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+                      class="text-xs text-textDisabled monospace bg-fillWeaker rounded hover:bg-fillHover cursor-pointer"
                       popovertarget="group-by-popover"
                       style="anchor-name: --group-by-anchor"
                       data-tippy-content="Add a group by field"
@@ -1166,7 +1166,7 @@ export class QueryBuilderComponent extends LitElement {
                       style="position: absolute; position-anchor: --group-by-anchor"
                     >
                       <!-- Compact Binning Options at the Very Top -->
-                      <div class="flex items-center mb-3 p-2 border rounded bg-bgWeaker whitespace-nowrap">
+                      <div class="flex items-center mb-3 p-2 border rounded bg-fillWeaker whitespace-nowrap">
                         <label class="flex items-center cursor-pointer mr-4">
                           <input
                             type="radio"
@@ -1196,7 +1196,7 @@ export class QueryBuilderComponent extends LitElement {
                           <span class="label-text inline-flex items-center"
                             >bin(_,
                             <select
-                              class="select select-xs bg-bgWeaker border-none p-0 mx-1 focus:outline-none"
+                              class="select select-xs bg-fillWeaker border-none p-0 mx-1 focus:outline-none"
                               @change="${(e: Event) => {
                                 this.binValue = parseInt((e.target as HTMLSelectElement).value) || 5;
                               }}"
@@ -1243,7 +1243,7 @@ export class QueryBuilderComponent extends LitElement {
 
                       <!-- Fields List -->
                       <div class="border rounded">
-                        <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+                        <div class="p-1 bg-fillWeaker font-medium border-b monospace">Fields</div>
                         <div class="max-h-60 overflow-y-auto">
                           ${this.fieldsOptions.length > 0
                             ? (this.groupBySearchTerm && this.filteredGroupByFields.length > 0
@@ -1261,7 +1261,7 @@ export class QueryBuilderComponent extends LitElement {
                                     }}"
                                   >
                                     ${field.value}
-                                    <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                                    <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-fillWeaker">
                                       ${this.getFieldIcon(field.type, field.value)}
                                     </span>
                                   </div>
@@ -1287,7 +1287,7 @@ export class QueryBuilderComponent extends LitElement {
                   <div class="flex flex-wrap gap-1">
                     ${this.sortFields.map(
                       (sort, index) => html`
-                        <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                        <div class="text-xs text-textDisabled monospace bg-fillWeaker">
                           [<span class="text-textDisabled">sort:</span>
                           <span class="text-textStrong"
                             >${sort.field}
@@ -1324,7 +1324,7 @@ export class QueryBuilderComponent extends LitElement {
             ? html`
                 <div class="flex items-center ml-4 gap-1 max-md:hidden">
                   <div class="flex flex-wrap gap-1">
-                    <div class="text-xs text-textDisabled monospace bg-bgWeaker">
+                    <div class="text-xs text-textDisabled monospace bg-fillWeaker">
                       [<span class="text-textDisabled">limit:</span>
                       <input
                         type="number"
@@ -1361,7 +1361,7 @@ export class QueryBuilderComponent extends LitElement {
                 <div class="ml-auto">
                   <button
                     type="button"
-                    class="text-xs text-textDisabled monospace bg-bgWeaker rounded hover:bg-fillHover cursor-pointer"
+                    class="text-xs text-textDisabled monospace bg-fillWeaker rounded hover:bg-fillHover cursor-pointer"
                     popovertarget="more-settings-popover"
                     style="anchor-name: --more-settings-anchor"
                     data-tippy-content="Additional options: sorting and limits"
@@ -1447,7 +1447,7 @@ export class QueryBuilderComponent extends LitElement {
 
             <!-- Fields List -->
             <div class="border rounded">
-              <div class="p-1 bg-bgWeaker font-medium border-b monospace">Fields</div>
+              <div class="p-1 bg-fillWeaker font-medium border-b monospace">Fields</div>
               <div class="max-h-60 overflow-y-auto">
                 ${
                   this.fieldsOptions.length > 0
@@ -1482,7 +1482,7 @@ export class QueryBuilderComponent extends LitElement {
                             }}"
                           >
                             ${field.value}
-                            <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-bgWeaker">
+                            <span class="float-right text-xs text-textDisabled p-1 rounded-sm bg-fillWeaker">
                               ${this.getFieldIcon(field.type, field.value)}
                             </span>
                           </div>

@@ -78,11 +78,12 @@ logQueryBox_ config = do
         -- and the message row below both derive from it in CSS, so JS sets one
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
-        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
-            $ [ class_ "hidden ai-search"
+            $ [ class_ "sr-only ai-search"
               , type_ "checkbox"
               , id_ "ai-search-chkbox"
+              , Aria.label_ "Ask in plain English with AI search"
               , -- Every path that opens or collapses AI search routes through `change`, so
                 -- the preference below is written once here instead of at four call sites.
                 [__|on change
@@ -204,6 +205,7 @@ logQueryBox_ config = do
             select_
               [ class_ "select select-sm max-w-[130px]"
               , id_ "session-sort-select"
+              , Aria.label_ "Sort sessions by"
               , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
               ]
               $ forM_ ([("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")] :: [(Text, Text)]) \(v, label) ->
@@ -253,12 +255,12 @@ logQueryBox_ config = do
           whenNothing_ config.targetWidgetPreview
             $ popularSearchChips_ config.queryLibSaved config.queryLibRecent noActiveQuery
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
-          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 group-has-[.default-chart:checked]/pg:block"] do
+          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
               >> span_ [class_ "text-xs"] "Hide timeline"
 
         whenJust config.mobileExtra
-          $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full hidden"]
+          $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full"]
 
         div_ [class_ "flex justify-end gap-2 max-md:hidden"] do
           fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
@@ -495,7 +497,7 @@ queryLibItem_ isRecent qli =
   where
     actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
     actionBtn_ tip icon attrs =
-      button_ ([type_ "button", class_ "p-1 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
+      button_ ([type_ "button", class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
         $ faSprite_ icon "regular" "h-3 w-3"
 
 

@@ -62,12 +62,12 @@ instance ToHtml ShareLinkPost where
           , readonly_ "readonly"
           , id_ "shareURL"
           , value_ $ "https://app.monoscope.tech/share/r/" <> rid
-          , class_ "flex-1 min-w-0 bg-fillWeaker border border-strokeWeak rounded-md px-3 py-1.5 font-mono text-xs text-textWeak cursor-text transition-colors focus:outline-hidden focus:border-strokeBrand"
+          , class_ "flex-1 min-w-0 bg-fillWeaker border border-strokeWeak rounded-md px-3 py-1.5 font-mono text-xs text-textWeak cursor-text transition-colors focus:outline-hidden focus:border-strokeBrand-strong"
           , onfocus_ "this.select()"
           ]
         button_
           [ type_ "button"
-          , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand focus-visible:ring-offset-2"
+          , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand-strong focus-visible:ring-offset-2"
           , [__|
              on click
                if 'clipboard' in window.navigator then

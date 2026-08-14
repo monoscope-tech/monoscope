@@ -129,6 +129,13 @@ export const formatTimestamp = (input: string): string => {
   return isValid(date) ? format(date, 'MMM dd HH:mm:ss') + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
 };
 
+// Phones drop the date and keep the clock: the date is redundant inside a time-range
+// window, and "Aug 14 " is ~50px of a 390px screen that the log line needs more.
+export const formatTimestampCompact = (input: string): string => {
+  const date = new Date(input);
+  return isValid(date) ? format(date, 'HH:mm:ss') + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
+};
+
 export const lookupVecValue = <T = any>(vec: any[], colIdxMap: ColIdxMap, key: string): T => {
   const idx = colIdxMap[key];
   // Direct array access is faster than lodash.get for simple array lookups

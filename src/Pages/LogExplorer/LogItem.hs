@@ -48,7 +48,7 @@ getServiceName rs = fromMaybe "Unknown" $ (Map.lookup "service" =<< rs) >>= (^? 
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor = HM.findWithDefault "bg-fillNeutral-strong"
+getServiceColor = HM.findWithDefault "bg-fillStrong"
 
 
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)

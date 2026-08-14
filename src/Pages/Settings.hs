@@ -962,7 +962,7 @@ notificationsTestHistoryGetH pid = do
 historyHtml_ :: [TestHistory] -> Html ()
 historyHtml_ [] = div_ [class_ "text-center py-12"] do
   div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
-  p_ [class_ "text-sm text-textWeaker"] "Test your integrations to see results here"
+  p_ [class_ "text-sm text-textWeak"] "Test your integrations to see results here"
 historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
     renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
@@ -1369,7 +1369,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                 countCell mb metrics False
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
-                    div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty
+                    div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
                 td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ dayCostText prev cur
       let cycleStartText = fmtDate "%b %-d" cycleStartDay
       when (activeDays < 30)
