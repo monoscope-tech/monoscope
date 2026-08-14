@@ -231,6 +231,9 @@ bodyWrapper bcfg child = do
           deferredCss href =
             link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
+          gridStackScript src = do
+            void $ script_ "window.gridStackReady = new Promise(resolve => { window.__resolveGridStack = resolve; });"
+            script_ [src_ src, defer_ "true", onload_ "window.__resolveGridStack?.(window.GridStack)"] ("" :: Text)
       mapM_
         deferredCss
         [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
@@ -265,13 +268,14 @@ bodyWrapper bcfg child = do
         , assetUrl "/public/assets/js/thirdparty/notyf3.min.js"
         ]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-      mapM_ deferScript
-        $ [assetUrl "/public/assets/deps/gridstack/gridstack-all.js" | bcfg.needsGridStack]
-        <> [ assetUrl "/public/assets/deps/easepick/bundle.min.js"
-           , assetUrl "/public/assets/js/thirdparty/luxon.min.js"
-           , assetUrl "/public/assets/js/thirdparty/popper2_11_4.min.js"
-           , assetUrl "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"
-           ]
+      when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
+      mapM_
+        deferScript
+        [ assetUrl "/public/assets/deps/easepick/bundle.min.js"
+        , assetUrl "/public/assets/js/thirdparty/luxon.min.js"
+        , assetUrl "/public/assets/js/thirdparty/popper2_11_4.min.js"
+        , assetUrl "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"
+        ]
 
       when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
 

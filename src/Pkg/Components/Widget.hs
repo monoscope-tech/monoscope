@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -367,25 +367,32 @@ widget_ w' = case w.wType of
       -- Collapse chevron: only for full-width groups
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
-    div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widget_ (wChild{_isNested = Just True}))
+    div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1" : gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
   WTTraces -> wgtCard_ $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
-    w = w' & #id %~ (<|> (slugify <$> w'.title))
+    normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] w'.children
+    w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
     isFullWidth = (== Just 12) $ w.layout >>= (.w)
-    -- For groups: full-width uses the height the children require, partial-width uses max(yamlH, requiredHeight)
     effectiveHeight = case w.wType of
-      WTGroup ->
-        let reqH = 1 + foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 (fromMaybe [] w.children)
-         in Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
+      WTGroup -> Just $ widgetHeightForWidth (fromMaybe 1 $ w.layout >>= (.w)) w
       _ -> w.layout >>= (.h)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
     attrs =
       foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
+        <> [ style_
+               $ T.intercalate ";"
+               $ catMaybes
+                 [ ("--grid-preload-left:" <>) . gridPercent <$> (w.layout >>= (.x))
+                 , ("--grid-preload-top:" <>) . gridRem <$> (w.layout >>= (.y))
+                 , ("--grid-preload-width:" <>) . gridPercent <$> (w.layout >>= (.w))
+                 , ("--grid-preload-height:" <>) . gridRem <$> effectiveHeight
+                 ]
+           ]
     widgetJson = encodeText w
     autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
@@ -393,6 +400,112 @@ widget_ w' = case w.wType of
         then Relude.id
         else div_ ([class_ "grid-stack-item h-full flex-1 !overflow-visible has-[details[open]]:z-50 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full !overflow-visible [.grid-stack_&]:h-auto"]
     wgtCard_ = gridItem_ . div_ [class_ "h-full group/wgt "]
+
+
+-- | Emit GridStack's final geometry before its deferred script loads.
+gridStackAttrs :: [Widget] -> [Attribute]
+gridStackAttrs widgets =
+  [ style_
+      $ "--gs-columns:12;--gs-column-width:8.3333333333%;--gs-cell-height:5rem;"
+      <> "--gs-item-margin-top:1rem;--gs-item-margin-right:0.5rem;"
+      <> "--gs-item-margin-bottom:1rem;--gs-item-margin-left:0.5rem;"
+      <> "height:"
+      <> gridRem rows
+  ]
+  where
+    rows = if null widgets then 2 else layoutRows widgets
+
+
+-- $setup
+-- >>> import Data.Default (def)
+-- >>> let testWidget kind position = (def :: Widget){wType = kind, layout = Just position}
+-- >>> let coordinates widget = fmap (\position -> (position.x, position.y, position.w, position.h)) widget.layout
+
+
+-- | Resolve incomplete, out-of-bounds, and overlapping layouts before HTML is
+-- emitted. GridStack then hydrates the exact same collision-free coordinates.
+--
+-- Missing positions, oversized widths, overlaps, and row packing:
+--
+-- >>> let widgets = [testWidget WTList Layout{x = Just 0, y = Just 2, w = Just 20, h = Just 2}, testWidget WTList Layout{x = Just 0, y = Just 0, w = Just 6, h = Just 1}, testWidget WTList Layout{x = Nothing, y = Nothing, w = Just 6, h = Just 1}]
+-- >>> map coordinates (normalizeWidgetLayouts widgets)
+-- [Just (Just 0,Just 0,Just 6,Just 1),Just (Just 6,Just 0,Just 6,Just 1),Just (Just 0,Just 1,Just 12,Just 2)]
+--
+-- Saved visual order wins over YAML array order, and a clamped full-width group
+-- derives its height from its children:
+--
+-- >>> let lower = testWidget WTList Layout{x = Just 0, y = Just 4, w = Just 6, h = Just 2}
+-- >>> let golden = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 20, h = Just 10}){children = Just []}
+-- >>> map coordinates (normalizeWidgetLayouts [lower, golden])
+-- [Just (Just 0,Just 0,Just 12,Just 2),Just (Just 0,Just 2,Just 6,Just 2)]
+--
+-- Nested group children are normalized recursively:
+--
+-- >>> let child position = testWidget WTList position
+-- >>> let groupWidget = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 12, h = Just 1}){children = Just [child Layout{x = Just 0, y = Just 0, w = Just 8, h = Just 1}, child Layout{x = Just 0, y = Just 0, w = Just 8, h = Just 1}]}
+-- >>> fmap coordinates (listToMaybe $ normalizeWidgetLayouts [groupWidget])
+-- Just (Just (Just 0,Just 0,Just 12,Just 3))
+-- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [groupWidget]) >>= (.children))
+-- [Just (Just 0,Just 0,Just 8,Just 1),Just (Just 0,Just 1,Just 8,Just 1)]
+normalizeWidgetLayouts :: [Widget] -> [Widget]
+normalizeWidgetLayouts widgets =
+  map snd
+    $ sortOn visualPriority
+    $ snd
+    $ foldl' placeWidget ([], [])
+    $ sortOn placementPriority
+    $ zip [0 :: Int ..] widgets
+  where
+    placementPriority (idx, widget) = case widget.layout of
+      Just Layout{x = Just x, y = Just y} -> (False, max 0 y, max 0 x, idx)
+      _ -> (True, maxBound, maxBound, idx)
+
+    visualPriority (idx, widget) =
+      ( fromMaybe maxBound $ widget.layout >>= (.y)
+      , fromMaybe maxBound $ widget.layout >>= (.x)
+      , idx
+      )
+
+    placeWidget (occupied, acc) (idx, widget) =
+      let layout = fromMaybe def widget.layout
+          width = min 12 $ max 1 $ fromMaybe 1 layout.w
+          normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] widget.children
+          normalizedWidget = widget{children = normalizedChildren <$ widget.children}
+          height = widgetHeightForWidth width normalizedWidget
+          requestedX = min (12 - width) $ max 0 $ fromMaybe 0 layout.x
+          requestedY = max 0 $ fromMaybe 0 layout.y
+          hasPosition = isJust layout.x && isJust layout.y
+          candidates =
+            if hasPosition
+              then [(y, requestedX) | y <- [0 .. requestedY]] <> [(y, x) | y <- [requestedY + 1 ..], x <- [0 .. 12 - width]]
+              else [(y, x) | y <- [0 ..], x <- [0 .. 12 - width]]
+          (placedY, placedX) = fromMaybe (requestedY, requestedX) $ find (isFree occupied width height) candidates
+          rect = (placedX, placedY, width, height)
+          widget' = normalizedWidget{layout = Just Layout{x = Just placedX, y = Just placedY, w = Just width, h = Just height}}
+       in (rect : occupied, (idx, widget') : acc)
+
+    isFree occupied width height (y, x) = all (not . overlaps (x, y, width, height)) occupied
+    overlaps (x1, y1, w1, h1) (x2, y2, w2, h2) = x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2
+
+
+layoutRows :: [Widget] -> Int
+layoutRows = foldl' (\rows widget -> max rows $ fromMaybe 0 (widget.layout >>= (.y)) + fromMaybe 1 (widget.layout >>= (.h))) 0
+
+
+widgetHeightForWidth :: Int -> Widget -> Int
+widgetHeightForWidth width widget = case widget.wType of
+  WTGroup ->
+    let requiredHeight = 1 + max 1 (layoutRows $ fromMaybe [] widget.children)
+     in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
+  _ -> max 1 $ fromMaybe 1 $ widget.layout >>= (.h)
+
+
+gridRem :: Int -> Text
+gridRem value = show (value * 5) <> "rem"
+
+
+gridPercent :: Int -> Text
+gridPercent value = toText (printf "%.10f%%" ((fromIntegral value :: Double) * 100 / 12) :: String)
 
 
 gridStackHandleClassFor :: Widget -> Text
@@ -760,7 +873,7 @@ renderChart widget = do
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
-            div_ [class_ "h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
+            div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
             let sumBy = fromMaybe SBSum widget.summarizeBy
                 theme = fromMaybe "default" widget.theme
                 echartOpt = encodeText $ widgetToECharts widget

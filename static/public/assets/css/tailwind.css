@@ -493,6 +493,11 @@
   .htmx-settling > * {
     animation: fadeSlideIn 150ms var(--ease-out-expo) forwards;
   }
+  /* Dashboard tabs already arrive with their final GridStack geometry. Moving
+     the swapped grid during hydration makes a stable layout look unstable. */
+  #dashboard-tabs-content.htmx-settling > * {
+    animation: none;
+  }
   /* Opt-in class for containers that want smoother HTMX transitions */
   .htmx-fade-target {
     transition: opacity 150ms ease-out;
@@ -1197,8 +1202,19 @@ body, :host {
 
   /* Dashboard grid loading states */
   .grid-stack:not(.grid-stack-initialized) { visibility: hidden; }
-  .dashboard-skeleton { transition: opacity 0.2s; }
-  .dashboard-loaded .dashboard-skeleton { opacity: 0; pointer-events: none; }
+  .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized) { visibility: visible; }
+  .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized) > .grid-stack-item {
+    left: var(--grid-preload-left, 0%);
+    top: var(--grid-preload-top, 0rem);
+    width: var(--grid-preload-width, var(--gs-column-width));
+    height: var(--grid-preload-height, var(--gs-cell-height));
+  }
+  /* ECharts owns everything inside this reserved slot. Its HTML canvas and
+     loading/error paint cannot invalidate the surrounding dashboard layout. */
+  .chart-render-slot {
+    contain: layout paint;
+    min-height: 100%;
+  }
 
   /* Widget drawer sticky header - shadow only, no size change to avoid jitter */
   .widget-drawer-sticky {

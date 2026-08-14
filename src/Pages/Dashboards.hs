@@ -120,9 +120,16 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
--- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
+-- | Dashboard critical grid geometry and SQL-preview dependencies.
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
+  style_
+    """
+    .grid-stack{position:relative}
+    .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized){visibility:visible}
+    .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:absolute;left:var(--grid-preload-left,0%)!important;top:var(--grid-preload-top,0rem)!important;width:var(--grid-preload-width,8.3333333333%)!important;height:var(--grid-preload-height,5rem)!important}
+    @media(max-width:767px){.grid-stack{display:flex!important;flex-direction:column;gap:.5rem;height:auto!important}.grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:relative!important;left:auto!important;top:auto!important;width:100%!important}.grid-stack>.grid-stack-item:not([data-mobile-autofit]){height:180px!important}.grid-stack>.grid-stack-item[data-mobile-autofit]{height:auto!important}.nested-grid>.grid-stack-item{height:120px!important}}
+    """
   link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
   script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
   script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
@@ -239,18 +246,18 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload:inherited" "mouseover"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
+          let tabPath = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name
+              tabUrl = tabPath <> queryStr
+              tabContentUrl = tabPath <> "/content" <> queryStr
           a_
             [ role_ "tab"
             , href_ tabUrl
             , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-            , hxGet_ tabUrl
+            , hxGet_ tabContentUrl
             , hxTarget_ "#dashboard-tabs-content"
-            , hxSelect_ "#dashboard-tabs-content"
-            , term "hx-select-oob" "#dashboard-tabs-container:outerMorph"
-            , hxSwap_ "innerHTML"
-            , hxPushUrl_ "true"
-            , [__|on click set my.preloadState to 'DONE'|]
+            , hxSwap_ "innerHTML settle:0ms"
+            , hxPushUrl_ tabUrl
+            , [__|on click remove .tab-active from <.tab-active/> in #dashboard-tabs-container then add .tab-active to me then set my.preloadState to 'DONE'|]
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
@@ -300,7 +307,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount)] do
     -- Only warn when a constant actually ran and returned zero rows (Just []).
     -- result == Nothing means the query was skipped (nothing references it) or
     -- failed (logged separately) — neither is a "no data" condition.
@@ -309,7 +317,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
       span_ $ toHtml $ "Constants with no data: " <> T.intercalate ", " emptyConstants
     div_ [class_ "dashboard-grid-wrapper relative min-h-[400px]"] do
-      dashboardSkeleton_
       case dash.tabs of
         Just tabs ->
           -- Tab system with htmx lazy loading - only render active tab content
@@ -322,10 +329,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   variablePickerModal_ pid dashId renderTabSlug allParams v False
         -- Fall back to old behavior for dashboards without tabs
         Nothing -> do
-          let rootWidgets = (dash :: Dashboards.Dashboard).widgets
-          div_ [class_ "grid-stack -m-2"] do
+          let rootWidgets = Widget.normalizeWidgetLayouts (dash :: Dashboards.Dashboard).widgets
+          div_ (class_ "grid-stack grid-stack-preloaded -m-2" : Widget.gridStackAttrs rootWidgets) do
             forM_ rootWidgets \w -> toHtml w{Widget._projectId = Just pid}
-            when (null rootWidgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+            when (null rootWidgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", style_ "--grid-preload-left:0%;--grid-preload-top:0rem;--grid-preload-width:25%;--grid-preload-height:10rem", Lucid.for_ "page-data-drawer"] do
               faSprite_ "plus" "regular" "h-8 w-8"
               span_ "Add a widget"
 
@@ -348,15 +355,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         };
 
         function initializeGrids() {
-          document.querySelectorAll('.dashboard-grid-wrapper').forEach(wrapper => {
-            if (!wrapper._skeletonTimeout && !wrapper.classList.contains('dashboard-loaded')) {
-              wrapper._skeletonTimeout = setTimeout(() => wrapper.classList.add('dashboard-loaded'), 5000);
-            }
-          });
-          const gridInstances = [];
-          document.querySelectorAll('.grid-stack').forEach(gridEl => {
+          document.querySelectorAll('.grid-stack:not(.nested-grid)').forEach(gridEl => {
             if (!gridEl.classList.contains('grid-stack-initialized')) {
-              const wrapper = gridEl.closest('.dashboard-grid-wrapper');
               try {
                 const grid = GridStack.init({
                   column: 12,
@@ -365,7 +365,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   handleClass: 'grid-stack-handle',
                   styleInHead: true,
                   float: false,
-                  animate: true,
+                  animate: false,
                   columnOpts: {
                     breakpointForWindow: true,
                     breakpoints: [{w: 768, c: 1}],
@@ -398,13 +398,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 // 'removed' fires when a widget is deleted via DOM removal — that's a real edit.
                 grid.on('removed', () => { gridEl._userInteracted = true; });
                 gridEl.classList.add('grid-stack-initialized');
-                gridInstances.push(grid);
+                requestAnimationFrame(() => requestAnimationFrame(() => grid.setAnimation(true)));
                 window.gridStackInstance = grid;
               } finally {
-                if (wrapper) {
-                  wrapper.classList.add('dashboard-loaded');
-                  if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
-                }
                 window.interpolateVarTemplates();
               }
             }
@@ -426,7 +422,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 margin: '1rem 0.5rem',
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
-                animate: true,
+                animate: false,
                 columnOpts: {
                   breakpointForWindow: true,
                   breakpoints: [{w: 768, c: 1}],
@@ -472,16 +468,35 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               }, 500));
 
               nestedEl.classList.add('grid-stack-initialized');
+              requestAnimationFrame(() => requestAnimationFrame(() => nestedInstance.setAnimation(true)));
             }
           });
         }
 
-        // Initialize grids on page load (wait for deferred GridStack)
-        function waitForGridStack() {
-          if (typeof GridStack === 'undefined') { setTimeout(waitForGridStack, 50); return; }
-          initializeGrids();
+        // The page shell resolves this promise from the GridStack script's load
+        // event. No polling and no timer-dependent hydration ordering.
+        window.gridStackReady.then(initializeGrids);
+
+        // Keep attributed dashboard CLS samples available to browser telemetry
+        // and tests. User-initiated shifts are excluded by the web-vitals spec.
+        window.__dashboardLayoutShifts = window.__dashboardLayoutShifts || [];
+        if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('layout-shift')) {
+          new PerformanceObserver(list => {
+            for (const entry of list.getEntries()) {
+              if (entry.hadRecentInput) continue;
+              const page = document.getElementById('dashboardPage');
+              const sample = {
+                value: entry.value,
+                dashboardId: page?.dataset.dashboardId || "unknown",
+                widgetCount: Number(page?.dataset.widgetCount || 0),
+                gridRelated: entry.sources?.some(source => source.node?.closest?.('.grid-stack')) || false,
+                chartRelated: entry.sources?.some(source => source.node?.closest?.('[data-chart-widget]')) || false
+              };
+              window.__dashboardLayoutShifts.push(sample);
+              window.dispatchEvent(new CustomEvent('dashboard-layout-shift', { detail: sample }));
+            }
+          }).observe({ type: 'layout-shift', buffered: true });
         }
-        waitForGridStack();
 
         // Re-initialize grids after htmx settles new tab content
         document.body.addEventListener('htmx:after:swap', function(e) {
@@ -2313,32 +2328,22 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
     widgetOrderTriggerForm_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug) True
 
 
--- | Skeleton loader shown while GridStack initializes
-dashboardSkeleton_ :: Html ()
-dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
-  loadingIndicatorWith_ LdLG LdSpinner "text-fillBrand-strong"
-  p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
-  div_ [class_ "grid grid-cols-12 max-md:grid-cols-1 gap-4 mt-8 w-full max-w-4xl px-8"] do
-    div_ [class_ "col-span-8 max-md:col-span-1 h-32 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 max-md:col-span-1 h-32 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 max-md:col-span-1 h-24 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 max-md:hidden h-24 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 max-md:hidden h-24 rounded-lg skeleton-shimmer"] ""
-
-
 -- | Render a single tab content panel.
 -- isPartial: True for HTMX partial loads (include OOB swap), False for full page loads
 tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Html ()
 tabContentPanel_ pid dashboardId idx tabName widgets isPartial = do
   when isPartial $ breadcrumbSuffixOob_ tabName
+  let normalizedWidgets = Widget.normalizeWidgetLayouts widgets
   div_
-    [ class_ "tab-panel grid-stack -m-2"
-    , data_ "tab-index" (show idx)
-    , id_ $ "tab-panel-" <> dashboardId <> "-" <> show idx
-    ]
+    ( [ class_ "tab-panel grid-stack grid-stack-preloaded -m-2"
+      , data_ "tab-index" (show idx)
+      , id_ $ "tab-panel-" <> dashboardId <> "-" <> show idx
+      ]
+        <> Widget.gridStackAttrs normalizedWidgets
+    )
     do
-      forM_ widgets \w -> toHtml w{Widget._projectId = Just pid}
-      when (null widgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+      forM_ normalizedWidgets \w -> toHtml w{Widget._projectId = Just pid}
+      when (null normalizedWidgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", style_ "--grid-preload-left:0%;--grid-preload-top:0rem;--grid-preload-width:25%;--grid-preload-height:10rem", Lucid.for_ "page-data-drawer"] do
         faSprite_ "plus" "regular" "h-8 w-8"
         span_ "Add a widget"
 

@@ -1,5 +1,6 @@
 {
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/typography": "^0.5.20",
     "autoprefixer": "^10.5.0",
     "daisyui": "^5.7.16",
@@ -15,7 +16,8 @@
     "html2canvas": "^1.4.1"
   },
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "test:gridstack-parity": "playwright test test/browser/dashboard-grid-parity.spec.js --reporter=line"
   },
   "overrides": {
     "serialize-javascript": "^7.0.5",
