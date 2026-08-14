@@ -70,6 +70,7 @@ rounded:
   field: "0.4rem"
   md: "8px"
   box: "1rem"
+  full: "9999px"
 spacing:
   row: "4px"
   tight: "8px"

@@ -528,10 +528,10 @@
     color: var(--color-fillSuccess-strong);
     animation: copyFeedback 1.5s var(--ease-out-expo) forwards;
   }
+  /* Settles onto 1 instead of overshooting past it: scale(1.1) was an elastic pop. */
   @keyframes copyFeedback {
-    0% { opacity: 0; transform: scale(0.5); }
-    20% { opacity: 1; transform: scale(1.1); }
-    30% { transform: scale(1); }
+    0% { opacity: 0; transform: scale(0.92); }
+    20% { opacity: 1; transform: scale(1); }
     80% { opacity: 1; }
     100% { opacity: 0; }
   }
@@ -622,23 +622,6 @@
   }
 
   /* Link hover underline animation */
-  .link-animated {
-    position: relative;
-  }
-  .link-animated::after {
-    content: '';
-    position: absolute;
-    bottom: -1px;
-    left: 0;
-    width: 0;
-    height: 1px;
-    background: currentColor;
-    transition: width 200ms var(--ease-out-expo);
-  }
-  .link-animated:hover::after {
-    width: 100%;
-  }
-
   /* Smooth scrollbar for small containers */
   .smooth-scroll {
     scroll-behavior: smooth;
@@ -665,6 +648,43 @@
   .card-lift:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
+  }
+
+  /* easepick (custom date range) ships its own palette and only switches to a dark one
+     via AmpPlugin, which we don't load — and which keys off the OS `prefers-color-scheme`
+     rather than our own theme toggle, so it would still be wrong for anyone whose OS and
+     app themes disagree. Its variables are declared on `:host` inside the shadow root, and
+     a light-DOM rule on the host outranks `:host`, so mapping them here is enough. Our
+     tokens already flip with `data-theme`, so one block covers both themes. */
+  .easepick-wrapper {
+    --color-bg-default: var(--color-bgRaised);
+    --color-bg-secondary: var(--color-fillWeaker);
+    --color-fg-default: var(--color-textStrong);
+    --color-fg-secondary: var(--color-textWeak);
+    --color-fg-muted: var(--color-textDisabled);
+    --color-fg-primary: var(--color-textBrand);
+    --color-fg-accent: var(--color-textError);
+    --color-fg-selected: var(--color-textInverse-strong);
+    --color-border-default: var(--color-strokeWeak);
+    --color-border-locked: var(--color-strokeWeak);
+    --color-btn-primary-bg: var(--color-fillBrand-strong);
+    --color-btn-primary-fg: var(--color-textInverse-strong);
+    --color-btn-primary-border: var(--color-fillBrand-strong);
+    --color-btn-primary-hover-bg: var(--color-fillBrand-strong);
+    --color-btn-primary-hover-fg: var(--color-textInverse-strong);
+    --color-btn-primary-hover-border: var(--color-strokeBrand-strong);
+    --color-btn-primary-disabled-bg: var(--color-fillDisabled);
+    --color-btn-primary-disabled-fg: var(--color-textDisabled);
+    --color-btn-primary-disabled-border: var(--color-strokeDisabled);
+    --color-btn-secondary-bg: var(--color-bgRaised);
+    --color-btn-secondary-fg: var(--color-textStrong);
+    --color-btn-secondary-border: var(--color-strokeStrong);
+    --color-btn-secondary-hover-bg: var(--color-fillWeak);
+    --color-btn-secondary-hover-fg: var(--color-textStrong);
+    --color-btn-secondary-hover-border: var(--color-strokeStrong);
+    --color-btn-secondary-disabled-bg: var(--color-fillDisabled);
+    --color-btn-secondary-disabled-fg: var(--color-textDisabled);
+    --color-btn-secondary-disabled-border: var(--color-strokeDisabled);
   }
 
   /* Tooltip entrance animation */
@@ -739,12 +759,13 @@
   }
 
   /* Number badge bounce for notifications */
-  @keyframes badgeBounce {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.15); }
+  /* Emphasis without overshoot: scaling past 1 is the bounce the design system rules out. */
+  @keyframes badgeAppear {
+    from { opacity: 0.35; }
+    to { opacity: 1; }
   }
-  .badge-bounce {
-    animation: badgeBounce 300ms var(--ease-out-expo);
+  .badge-appear {
+    animation: badgeAppear 300ms var(--ease-out-expo);
   }
 
   /* Skeleton text lines with varying widths for realistic content preview */
@@ -777,30 +798,6 @@
   }
 
   /* Navigation/breadcrumb polish */
-  .nav-item {
-    position: relative;
-    transition: color 150ms ease-out, background-color 150ms ease-out;
-  }
-  .nav-item::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 3px;
-    height: 0;
-    background: var(--color-fillBrand-strong);
-    border-radius: 0 2px 2px 0;
-    transition: height 150ms var(--ease-out-expo);
-  }
-  .nav-item.active::before,
-  .nav-item:hover::before {
-    height: 60%;
-  }
-  .nav-item.active::before {
-    height: 80%;
-  }
-
   /* Breadcrumb separator animation */
   .breadcrumb-separator {
     opacity: 0.5;
@@ -905,20 +902,6 @@
   .status-dot-info { background: var(--color-fillInformation-strong); }
   .status-dot-neutral { background: var(--color-fillWeak); }
 
-  /* Loading overlay for containers */
-  .loading-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(255, 255, 255, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10;
-    animation: fadeIn 150ms ease-out;
-  }
-  [data-theme="dark"] .loading-overlay {
-    background: rgba(0, 0, 0, 0.6);
-  }
   @keyframes fadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -971,6 +954,7 @@
   --radius-selector: 0.4rem;
   --radius-field: 0.4rem;
   --radius-box: 1rem;
+  --radius-full: 9999px;
   --size-selector: 0.25rem;
   --size-field: 0.25rem;
   --border: 1px;
@@ -1218,7 +1202,7 @@ body, :host {
 
   /* Widget drawer sticky header - shadow only, no size change to avoid jitter */
   .widget-drawer-sticky {
-    transition: box-shadow 150ms ease-out, padding 150ms ease-out;
+    transition: box-shadow 150ms ease-out;
   }
   .widget-drawer-stuck.widget-drawer-sticky {
     box-shadow: var(--shadow-xs);
@@ -1605,7 +1589,7 @@ code, pre, .code, .monospace {
   position: relative;
   background: black;
   float: left;
-  border-radius: 5px;
+  border-radius: 4px;
   box-shadow: none;
 }
 
@@ -2050,7 +2034,7 @@ code, pre, .code, .monospace {
     content: '';
     position: absolute;
     inset: 0;
-    border-radius: 9999px;
+    border-radius: var(--radius-full);
     background: inherit;
     animation: alertPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
@@ -2201,8 +2185,8 @@ code, pre, .code, .monospace {
   --tagify-dd-text-color: var(--color-text);
   background: var(--color-bgRaised);
   border: 1px solid var(--color-strokeWeak);
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+  border-radius: var(--radius-field);
+  box-shadow: var(--shadow-lg);
   margin-top: 4px;
   min-width: max-content !important;
 }
@@ -2220,10 +2204,6 @@ code, pre, .code, .monospace {
   color: var(--color-textStrong) !important;
 }
 
-/* Dark mode overrides */
-[data-theme="dark"] .tagify__dropdown {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-}
 
 /* Dark mode tag colors */
 [data-theme="dark"] .tagify {
@@ -2265,6 +2245,19 @@ code, pre, .code, .monospace {
 }
 
 /* Dashboard variable selectors */
+.dash-variable {
+  /* Tagify replaces the text input after first paint. Reserve the final
+     control height so that replacement cannot resize the sticky toolbar. */
+  box-sizing: border-box;
+  height: 2.25rem;
+}
+
+.dash-variable > input.dash-variable-input {
+  /* Match Tagify's input minimum width before it initializes. Otherwise the
+     wider native text input can make the toolbar wrap for a single frame. */
+  width: 110px;
+}
+
 .dash-variable .tagify {
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);
@@ -2304,17 +2297,16 @@ code, pre, .code, .monospace {
   @apply cursor-move;
 }
 
-/* Nested grid collapse/expand transitions */
+/* Group collapse toggles `.hidden` on the nested grid (Widget.hs), i.e. display:none,
+   and a display:none element cannot transition — so the opacity/max-height pair that
+   used to live here never actually ran, and `.collapsed .nested-grid` never took effect
+   because `.hidden` is always applied alongside `.collapsed`. Removed rather than
+   converted to grid-template-rows: gridstack sets an explicit height on this container,
+   so making the collapse animate is a structural change (wrapper element + dropping
+   `.hidden`), not a CSS swap. `overflow: hidden` stays — it clips gridstack children
+   independently of collapse. */
 .nested-grid {
-  transition: opacity 0.2s ease-out, max-height 0.3s ease-out;
   overflow: hidden;
-}
-
-.collapsed .nested-grid {
-  opacity: 0;
-  max-height: 0 !important;
-  padding: 0 !important;
-  margin: 0 !important;
 }
 
 .collapse-toggle svg {
@@ -2324,9 +2316,9 @@ code, pre, .code, .monospace {
 /* Gridstack custom resize icon - restore APItoolkit custom styling
    (overrides the default gridstack arrow icon with a dotted grid pattern) */
 .grid-stack-placeholder > .placeholder-content {
-  background-color: rgba(0, 104, 255, 0.05);
-  border-radius: 1rem;
-  border: 2px dashed rgba(0, 104, 255, 0.5);
+  background-color: color-mix(in oklch, var(--color-fillBrand-strong) 5%, transparent);
+  border-radius: var(--radius-box);
+  border: 2px dashed color-mix(in oklch, var(--color-fillBrand-strong) 50%, transparent);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -2334,7 +2326,7 @@ code, pre, .code, .monospace {
 
 .grid-stack-placeholder > .placeholder-content::after {
   content: 'drop here';
-  color: rgba(0, 104, 255, 0.7);
+  color: color-mix(in oklch, var(--color-fillBrand-strong) 70%, transparent);
   font-size: 1rem;
   pointer-events: none;
 }
@@ -2353,23 +2345,6 @@ code, pre, .code, .monospace {
   content: '›' !important;
   color: var(--color-strokeStrong);
 }
-/* 
-.animated-fadeBG {
-  animation: bgColorChange 5s infinite alternate;
-}
-
-@keyframes bgColorChange {
-  0% {
-    background-color: 
-  }
-  50% {
-    background-color: rgb(250 208 196);
-  }
-  100% {
-    background-color: rgb(251 194 235);
-  }
-} */
-
 @keyframes rotate {
   0% {
     transform: rotate(0deg);
@@ -2422,10 +2397,6 @@ code, pre, .code, .monospace {
   border-radius: inherit;
 }
 
-
-.gradient-border {
-  border-image: linear-gradient(45deg, rgb(255 204 0), rgb(51 204 51), rgb(51 153 255)) 1;
-}
 
 
 
@@ -2509,7 +2480,7 @@ table td a[href]:not(.btn):not([data-no-preview])::after,
   background: var(--tooltip-bg);
   border: 1px solid var(--color-strokeWeak);
   border-radius: 0.25rem;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  box-shadow: var(--shadow-md);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
