@@ -30,12 +30,14 @@
   src: url("/public/assets/fonts/JetBrainsMono[wght].woff2") format("woff2");
 }
 
-/* Inter Variable fonts */
+/* Inter is preloaded from the document head. Keep text in the font block period
+   instead of painting a visibly different face, and give its temporary layout
+   fallback Inter-compatible metrics so surrounding controls do not move. */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 100 900;
-  font-display: swap;
+  font-display: block;
   src: url("/public/assets/fonts/InterVariable.woff2") format("woff2");
 }
 
@@ -43,11 +45,18 @@
   font-family: 'Inter';
   font-style: italic;
   font-weight: 100 900;
-  font-display: swap;
+  font-display: block;
   src: url("/public/assets/fonts/InterVariable-Italic.woff2") format("woff2");
 }
 
-/* Inter font features are applied via :root font-feature-settings below */
+@font-face {
+  font-family: 'Inter Metric Fallback';
+  src: local("Arial");
+  size-adjust: 104.57%;
+  ascent-override: 90%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}
 
 @theme {
   --text-3xs: 0.5rem;
@@ -1018,7 +1027,7 @@
 
 html,
 body, :host {
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family: 'Inter', 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   font-feature-settings: 'liga' 1, 'calt' 1, 'ss01' 1, 'ss02' 1, 'cv01' 1, 'cv02' 1;
   line-height: 1.45;
   @apply overscroll-none bg-bgBase;
@@ -2247,9 +2256,11 @@ code, pre, .code, .monospace {
 /* Dashboard variable selectors */
 .dash-variable {
   /* Tagify replaces the text input after first paint. Reserve the final
-     control height so that replacement cannot resize the sticky toolbar. */
+     control box so that replacement cannot resize the sticky toolbar. Longer
+     legends can still expand the fieldset naturally. */
   box-sizing: border-box;
   height: 2.25rem;
+  min-width: 7.75rem;
 }
 
 .dash-variable > input.dash-variable-input {
@@ -2265,7 +2276,7 @@ code, pre, .code, .monospace {
 }
 
 .dash-variable legend {
-  line-height: 1;
+  line-height: 0;
   margin-bottom: -0.25em;
 }
 

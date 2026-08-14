@@ -236,6 +236,8 @@ library
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Git
+      Pkg.Icons
+      Pkg.Icons.TH
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
@@ -817,6 +819,8 @@ test-suite test-dev
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Git
+      Pkg.Icons
+      Pkg.Icons.TH
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics

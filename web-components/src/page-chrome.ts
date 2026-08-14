@@ -138,18 +138,30 @@ onReady(function(){
             e.target.removeAttribute('aria-busy');
           });
 
-          // Progress bar for HTMX requests
+          // Progress bar for user-visible navigation/actions. Initial dashboard
+          // widget hydration has its own reserved loading UI and must not churn a
+          // shared global indicator eight times in parallel.
           const progressBar = document.getElementById('htmx-progress');
           if (progressBar) {
-            document.body.addEventListener('htmx:before:request', () => {
+            let activeRequests = 0;
+            const isWidgetHydration = (e: any) =>
+              Boolean(e.detail?.elt?.closest?.('[data-widget], [data-chart-widget]'));
+            document.body.addEventListener('htmx:before:request', (e: any) => {
+              if (isWidgetHydration(e)) return;
+              activeRequests += 1;
+              if (activeRequests !== 1) return;
               progressBar.classList.remove('htmx-settling');
               progressBar.classList.add('htmx-request');
             });
-            document.body.addEventListener('htmx:after:request', () => {
+            document.body.addEventListener('htmx:after:request', (e: any) => {
+              if (isWidgetHydration(e)) return;
+              activeRequests = Math.max(0, activeRequests - 1);
+              if (activeRequests !== 0) return;
               progressBar.classList.remove('htmx-request');
               progressBar.classList.add('htmx-settling');
             });
           }
+
 
           // Cmd+Enter / Ctrl+Enter form submission for textareas
           document.addEventListener('keydown', function(e: KeyboardEvent) {

@@ -23,6 +23,7 @@ module Pages.Dashboards (
   DashboardRes (..),
   DashboardsGetD (..),
   dashboardDuplicateWidgetPostH,
+  dashboardWidgetNewGetH,
   dashboardWidgetExpandGetH,
   visTypes,
   processEagerWidget,
@@ -120,7 +121,8 @@ import Utils
 import Web.FormUrlEncoded (FromForm)
 
 
--- | Dashboard critical grid geometry and SQL-preview dependencies.
+-- | Dashboard critical grid geometry. SQL-preview dependencies are loaded only
+-- when a preview is requested from the widget editor.
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
   style_
@@ -130,10 +132,6 @@ dashboardHeadContent_ = do
     .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:absolute;left:var(--grid-preload-left,0%)!important;top:var(--grid-preload-top,0rem)!important;width:var(--grid-preload-width,8.3333333333%)!important;height:var(--grid-preload-height,5rem)!important}
     @media(max-width:767px){.grid-stack{display:flex!important;flex-direction:column;gap:.5rem;height:auto!important}.grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:relative!important;left:auto!important;top:auto!important;width:100%!important}.grid-stack>.grid-stack-item:not([data-mobile-autofit]){height:180px!important}.grid-stack>.grid-stack-item[data-mobile-autofit]{height:auto!important}.nested-grid>.grid-stack-item{height:120px!important}}
     """
-  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text
@@ -2110,6 +2108,17 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
+-- | Lazy content for the new-widget drawer. Keeping this out of the initial
+-- dashboard response removes the editor form and its skeletons from both the
+-- transferred HTML and the live DOM until the user opens the drawer.
+dashboardWidgetNewGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
+  (_, project) <- Projects.sessionAndProject pid
+  _ <- getDashAndVM dashId Nothing
+  let currentRange = (,) <$> rangeStartM <*> rangeEndM
+  addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit"
+
+
 -- | SQL preview endpoint for debugging KQL queries (shows generated SQL)
 widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
@@ -2127,13 +2136,43 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
         sqlBlock_ "Main Query" qc.finalSqlQuery
         whenJust qc.finalSummarizeQuery $ sqlBlock_ "Summarize Query"
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
+        let cssUrl = assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css" :: Text
+            hljsUrl = assetUrl "/public/assets/deps/highlightjs/highlight.min.js" :: Text
+            sqlUrl = assetUrl "/public/assets/deps/highlightjs/sql.min.js" :: Text
+            formatterUrl = assetUrl "/public/assets/deps/highlightjs/sql-formatter.min.js" :: Text
         script_
-          """
-          document.querySelectorAll('.sql-preview-container pre code').forEach(el => {
-            el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
-            hljs.highlightElement(el);
-          });
-          """
+          [text|
+          (() => {
+            const loadScript = src => new Promise((resolve, reject) => {
+              const existing = document.querySelector('script[src="' + src + '"]');
+              if (existing) {
+                if (existing.dataset.loaded === 'true') resolve();
+                else existing.addEventListener('load', resolve, {once: true});
+                return;
+              }
+              const script = document.createElement('script');
+              script.src = src;
+              script.onload = () => { script.dataset.loaded = 'true'; resolve(); };
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+            if (!document.querySelector('link[data-dashboard-sql-theme]')) {
+              const link = document.createElement('link');
+              link.rel = 'stylesheet'; link.href = '${cssUrl}';
+              link.dataset.dashboardSqlTheme = '';
+              document.head.appendChild(link);
+            }
+            (async () => {
+              await loadScript('${hljsUrl}');
+              await loadScript('${sqlUrl}');
+              await loadScript('${formatterUrl}');
+              document.querySelectorAll('.sql-preview-container pre code:not(.hljs)').forEach(el => {
+                el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
+                hljs.highlightElement(el);
+              });
+            })();
+          })();
+          |]
   where
     sqlBlock_ :: Text -> Text -> Html ()
     sqlBlock_ label sql =
@@ -2390,9 +2429,11 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 
 -- | Unified dashboard actions (add widget button, yaml drawer, context menu)
 dashboardActions_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
-dashboardActions_ pid paymentPlan dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
+dashboardActions_ pid _paymentPlan dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
-  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" False Nothing (Just $ widgetViewerEditor_ pid paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit") $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  let rangeParams = maybe [] (\(rangeStart, rangeEnd) -> [("range_start", Just rangeStart), ("range_end", Just rangeEnd)]) currentRange
+      editorUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets/new" <> queryStringFrom (("tab", tabSlugM) : rangeParams)
+  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" False (Just editorUrl) Nothing $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
   let dashActionsPop = "dash-actions-" <> dashId.toText
   div_ [class_ "inline-block"] do

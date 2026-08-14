@@ -208,8 +208,10 @@ bodyWrapper bcfg child = do
       when (isProd && bcfg.config.enableBrowserMonitoring)
         $ link_ [rel_ "preconnect", href_ "https://unpkg.com"]
 
-      -- Preload critical CSS
+      -- Preload critical CSS and Inter before their stylesheet declarations are
+      -- encountered. Inter uses a block period, so fallback glyphs never paint.
       link_ [rel_ "preload", href_ (assetUrl "/public/assets/css/tailwind.min.css"), term "as" "style"]
+      link_ [rel_ "preload", href_ "/public/assets/fonts/InterVariable.woff2", term "as" "font", type_ "font/woff2", term "crossorigin" "anonymous"]
 
       -- View Transitions API (Chrome 111+, graceful fallback for others)
       meta_ [name_ "view-transition", content_ "same-origin"]
@@ -224,10 +226,9 @@ bodyWrapper bcfg child = do
         """
 
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
-          -- Toasts, tag inputs and the session replayer are all post-interaction UI whose
-          -- JS is itself deferred — nothing they style exists at first paint, so blocking
-          -- the render on them cost ~85ms each for no visible benefit. Fetch at normal
-          -- priority, promote to a real stylesheet on arrival.
+          -- Toasts and the session replayer are post-interaction UI. Tagify is not:
+          -- dashboard filters are above the fold, and upgrading them before their CSS
+          -- arrives produces an unstyled wrapper followed by a visible resize.
           deferredCss href =
             link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
@@ -237,11 +238,12 @@ bodyWrapper bcfg child = do
       mapM_
         deferredCss
         [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
-        , assetUrl "/public/assets/css/thirdparty/tagify.min.css"
         , assetUrl "/public/assets/css/thirdparty/rrweb.css"
         ]
       mapM_ css
-        $ [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+        $ [ assetUrl "/public/assets/css/thirdparty/tagify.min.css"
+          ]
+        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
         <> [ assetUrl "/public/assets/css/tailwind.min.css"
            , assetUrl "/public/assets/web-components/dist/css/index.css"
            ]

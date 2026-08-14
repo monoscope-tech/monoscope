@@ -451,6 +451,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QPUUId "source_dashboard_id" :> Post '[HTML] (RespHeaders Widget.Widget)
+  , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Widget alert routes
     widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -877,6 +878,7 @@ cookieProtectedServer =
     , dashboardDuplicatePost = Dashboards.dashboardDuplicatePostH
     , dashboardStarPost = Dashboards.dashboardStarPostH
     , dashboardDuplicateWidget = Dashboards.dashboardDuplicateWidgetPostH
+    , dashboardWidgetNewGet = Dashboards.dashboardWidgetNewGetH
     , dashboardWidgetExpandGet = Dashboards.dashboardWidgetExpandGetH
     , widgetAlertUpsert = Dashboards.widgetAlertUpsertH
     , widgetAlertDelete = Dashboards.widgetAlertDeleteH
@@ -1101,7 +1103,7 @@ avatarGetH userId =
         (mkGravatarUrl email name)
         "image/png"
         "public, max-age=604800"
-        (pure $ addImageHeaders "image/png" "public, max-age=60" "")
+        (pure $ addImageHeaders "image/svg+xml" "public, max-age=60" avatarFallback)
 
     fetchImage url ct cache fallback =
       handle
@@ -1111,6 +1113,10 @@ avatarGetH userId =
     toMd5 msg = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower msg
     mkGravatarUrl email name = "https://www.gravatar.com/avatar/" <> toMd5 email <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> T.replace " " "+" name <> "/128"
     addImageHeaders ct cache body = addHeader @"Cache-Control" cache $ addHeader @"Content-Type" ct body
+    -- A valid image keeps the reserved avatar box painted and avoids the browser's
+    -- broken-image fallback when both the configured avatar and Gravatar fail.
+    avatarFallback =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" rx=\"64\" fill=\"#e5e7eb\"/><circle cx=\"64\" cy=\"48\" r=\"23\" fill=\"#9ca3af\"/><path d=\"M23 116c5-25 19-38 41-38s36 13 41 38\" fill=\"#9ca3af\"/></svg>"
 
 
 -- Widget GET handler that accepts dashboard parameters

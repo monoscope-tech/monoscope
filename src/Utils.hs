@@ -115,7 +115,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.DeriveUtils (assetUrl)
+import Pkg.Icons qualified as Icons
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
@@ -292,21 +292,31 @@ truncateMiddle n t
   | otherwise = T.take (n - 6) t <> "…" <> T.takeEnd 5 t
 
 
--- | Render a Font Awesome icon from the sprite sheet at
+-- | Render a Font Awesome icon embedded at compile time from
 -- static/public/assets/svgs/fa-sprites/{regular,solid}.svg. The first arg is
--- the symbol id (e.g. "bucket"). When adding a new icon, you must add its
--- <symbol> to the corresponding sprite file — it will not render otherwise.
+-- the symbol id (e.g. "bucket"). Adding a symbol to either source sheet causes
+-- this module to be recompiled via 'qAddDependentFile'.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ sprite <> "#" <> mIcon]
+faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
+  Nothing -> svg_ baseAttributes pass
+  Just icon ->
+    svg_
+      ( baseAttributes
+          <> [term "viewBox" icon.viewBox]
+      )
+      -- Symbol-level presentation attributes must remain closer to the paths
+      -- than the outer `.icon` CSS. In particular, `.icon { fill: currentColor }`
+      -- must not override a source symbol's `fill="none"`.
+      $ Svg.g_ (map (uncurry term) icon.attributes)
+      $ toHtmlRaw icon.body
   where
-    -- Top-level, so the hash lookup happens once per process rather than per icon —
-    -- a page renders thousands of these.
-    sprite = if faType == "solid" then spriteSolidUrl else spriteRegularUrl
-
-
-spriteSolidUrl, spriteRegularUrl :: Text
-spriteSolidUrl = assetUrl "/public/assets/svgs/fa-sprites/solid.svg"
-spriteRegularUrl = assetUrl "/public/assets/svgs/fa-sprites/regular.svg"
+    -- Preserve the requested box even for a bad/dynamic icon name. This matches
+    -- external <use>'s failure mode and prevents an unknown icon shifting layout.
+    baseAttributes =
+      [ class_ $ "icon " <> classes
+      , term "width" "1em"
+      , term "height" "1em"
+      ]
 
 
 -- | Type-safe loading indicator size

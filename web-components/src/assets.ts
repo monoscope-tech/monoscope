@@ -16,4 +16,4 @@ export const spriteUrl = (kind: string) =>
   (kind === 'solid' ? urls().spriteSolid : urls().spriteRegular) ?? `/public/assets/svgs/fa-sprites/${kind}.svg`;
 
 export const faSprite_ = (iconName: string, kind: string, classes: string): TemplateResult =>
-  html`<svg class="${classes}" fill="currentColor"><use href="${spriteUrl(kind)}#${iconName}"></use></svg>`;
+  html`<svg class="${classes}" width="1em" height="1em" fill="currentColor"><use href="${spriteUrl(kind)}#${iconName}"></use></svg>`;

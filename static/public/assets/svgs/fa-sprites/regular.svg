@@ -299,7 +299,7 @@
   <symbol viewBox="0 0 6 11" id="f-arrow-right">
     <path d="M1 9.5L5 5.5L1 1.5" stroke="#64748B" stroke-width="1.66667" stroke-linecap="round" stroke-linejoin="round" />
   </symbol>
-  <symbol id="f-chevron-up">
+  <symbol id="f-chevron-up" viewBox="0 0 12 12">
     <path d="M3 7.5L6 4.5L9 7.5" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round" />
   </symbol>
   <symbol id="p-chevron-down" width="16" height="16" viewBox="0 0 16 16" fill="none">
