@@ -2806,13 +2806,31 @@ metricColumns =
 
 -- | Insert metrics into a single store as ONE statement whose text does not
 -- depend on the batch size. See 'unnestInsert' for why that matters.
+-- Reports the SUBMITTED count, not @rowsAffected@, and that is load-bearing:
+-- the PG leg carries @ON CONFLICT (project_id, timestamp, id) DO NOTHING@, so a
+-- replayed export legitimately affects ZERO rows while losing nothing — the
+-- conflicting row is already durable. 'unaccountedRows' cannot tell a skipped
+-- duplicate from a dropped row, so feeding it @rowsAffected@ makes every replay
+-- look like silent under-persistence: it raises 'SilentUnderPersistError', which
+-- becomes @Left WriteFailure@, which the gRPC handler reports as
+-- @"OTLP write failed: pg-failed"@ and the batch goes to the DLQ.
+--
+-- The VALUES implementation this replaced used @interpExecute_@ and hard-coded
+-- @V.length records@ for exactly this reason, with the same comment ("a chunk
+-- either lands whole or throws"); switching to a statement that returns
+-- @rowsAffected@ silently changed that contract.
+--
+-- 'bulkInsertOtelLogsAndSpans' is deliberately NOT changed: it has no
+-- @ON CONFLICT@, so affected and submitted are the same number there.
+--
+-- The statement still throws on a real failure, so a genuinely lost batch is
+-- caught by the exception path rather than by row accounting.
 insertOtelMetrics :: DB es => Bool -> V.Vector MetricRecord -> Eff es BulkInsertResult
 insertOtelMetrics usePgTypes records
   | V.null records = pure mempty
   | otherwise = do
-      n <- Hasql.use $ HSession.statement () (unnestInsert "otel_metrics" metricColumns " ON CONFLICT (project_id, timestamp, id) DO NOTHING" usePgTypes (V.map mkMetricRow records))
-      pure (BulkInsertResult n)
-
+      _affected <- Hasql.use $ HSession.statement () (unnestInsert "otel_metrics" metricColumns " ON CONFLICT (project_id, timestamp, id) DO NOTHING" usePgTypes (V.map mkMetricRow records))
+      pure (BulkInsertResult (fromIntegral (V.length records)))
 
 
 -- | Catalog rows are one per metric descriptor, never one per data point.

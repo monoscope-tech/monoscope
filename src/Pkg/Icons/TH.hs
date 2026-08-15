@@ -31,10 +31,11 @@ parseSprite :: String -> Text -> Either String [EmbeddedIcon]
 parseSprite kind contents = stripComments contents >>= go []
   where
     go acc source = case T.breakOn "<symbol" source of
-      (_, rest) | T.null rest ->
-        if null acc
-          then Left "sprite contains no <symbol> elements"
-          else Right $ reverse acc
+      (_, rest)
+        | T.null rest ->
+            if null acc
+              then Left "sprite contains no <symbol> elements"
+              else Right $ reverse acc
       (_, rest) -> do
         let (opening, afterOpening) = T.breakOn ">" rest
         when (T.null afterOpening) $ Left "unterminated <symbol> opening tag"

@@ -33,7 +33,7 @@ iconTable = HM.fromList $ map fromEmbedded embeddedIcons
 embeddedIcons :: [(String, String, String, [(String, String)], String)]
 embeddedIcons =
   $( embedIconEntries
-      [ ("regular", "static/public/assets/svgs/fa-sprites/regular.svg")
-      , ("solid", "static/public/assets/svgs/fa-sprites/solid.svg")
-      ]
+       [ ("regular", "static/public/assets/svgs/fa-sprites/regular.svg")
+       , ("solid", "static/public/assets/svgs/fa-sprites/solid.svg")
+       ]
    )
