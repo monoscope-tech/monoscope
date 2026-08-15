@@ -1027,12 +1027,22 @@ export class LogList extends LitElement {
   private blankHealAttempts = 0;
   private blankHealEpoch = -1;
   private blankHealAt = 0;
+  private detailResizeHealTimer: ReturnType<typeof setTimeout> | null = null;
   private healBlankVirtualizer() {
     const virtualizer = this.querySelector('lit-virtualizer');
     const container = this.logsContainer;
     if (!virtualizer || !container || this.isLoading || this.virtualListItems.length === 0) return;
-    // Any rendered row means the virtualizer is healthy; the loadMore/fetchRecent rows count.
-    if (virtualizer.querySelector('tr')) {
+
+    // A stale layout can leave rows mounted but position every one outside the viewport. The
+    // old `querySelector('tr')` check called that healthy even though the user saw an empty
+    // list; scrolling upward happened to bring those misplaced rows back. Require a real data
+    // row intersecting the viewport instead. Sentinel rows do not prove log content is visible.
+    const viewport = container.getBoundingClientRect();
+    const hasVisibleDataRow = [...virtualizer.querySelectorAll<HTMLElement>('[data-row-id]')].some((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom;
+    });
+    if (hasVisibleDataRow) {
       this.blankHealAttempts = 0;
       return;
     }
@@ -1109,6 +1119,10 @@ export class LogList extends LitElement {
     if (this.blankWatchdog) {
       clearInterval(this.blankWatchdog);
       this.blankWatchdog = null;
+    }
+    if (this.detailResizeHealTimer) {
+      clearTimeout(this.detailResizeHealTimer);
+      this.detailResizeHealTimer = null;
     }
     if (this.worker) {
       this.worker.terminate();
@@ -1808,8 +1822,17 @@ export class LogList extends LitElement {
       // lit-virtualizer can briefly resolve that resize to an empty rendered range. A click
       // does not otherwise schedule a Lit update, so the ordinary post-update health check
       // never runs and the user sees a blank flash until the watchdog notices. Check on the
-      // very next frame, while this resize is settling, and recover only if rows disappeared.
-      if (width < 50 && listWasDeepScrolled) requestAnimationFrame(() => this.healBlankVirtualizer());
+      // next frame and once more after ResizeObserver/layout work has settled. The latter is
+      // necessary because a deep stale range can still contain off-viewport <tr> nodes during
+      // the first check and become visibly blank only after the virtualizer processes the width.
+      if (width < 50 && listWasDeepScrolled) {
+        requestAnimationFrame(() => this.healBlankVirtualizer());
+        if (this.detailResizeHealTimer) clearTimeout(this.detailResizeHealTimer);
+        this.detailResizeHealTimer = setTimeout(() => {
+          this.detailResizeHealTimer = null;
+          this.healBlankVirtualizer();
+        }, 100);
+      }
     });
 
     // Use event delegation instead of querying all rows

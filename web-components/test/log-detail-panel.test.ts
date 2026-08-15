@@ -79,7 +79,7 @@ describe('detail panel loading indicator', () => {
     expect(loaderOn()).toBe(false);
   });
 
-  test('opening the panel checks the deep-scrolled virtualizer on the resize frame', async () => {
+  test('opening the panel checks the deep-scrolled virtualizer during and after resize', async () => {
     (window as any).htmx = { ajax: () => new Promise(() => {}) };
     const el = new LogList();
     Object.defineProperty(el, 'logsContainer', { value: { scrollTop: 5000 } });
@@ -87,7 +87,8 @@ describe('detail panel loading indicator', () => {
 
     clickRow(el, 'a');
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise((resolve) => setTimeout(resolve, 110));
 
-    expect(heal).toHaveBeenCalledOnce();
+    expect(heal).toHaveBeenCalledTimes(2);
   });
 });
