@@ -834,8 +834,16 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   alertDM <- lookupAlert alertM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
-  -- Facets and the Query Library lazy-load through their own HTMX endpoints.
+  -- Non-common facets and the Query Library lazy-load through their own HTMX endpoints.
   freeTierStatusE <- tryAny $ checkFreeTierStatus pid project.paymentPlan
+
+  -- The initial HTMX facet request used to enqueue this job. Common facets now render
+  -- with the page, so preserve the missing-summary recovery without restoring that
+  -- client-side round trip.
+  when (isNothing bw.facetSummaryM)
+    $ liftIO
+    $ withResource authCtx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
   let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
   logErr "freeTierStatus" freeTierStatusE
@@ -887,6 +895,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , queryResultCount = 0
           , parseError = parseErrorMsg
           , preloadUrl
+          , facetSummary = bw.facetSummaryM
           }
   addRespHeaders $ LogPage $ PageCtx bwconf page
 
@@ -962,10 +971,9 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
       }
 
 
--- | Facet sidebar values, lazy-loaded via HTMX (intersect once) so the ~680KB of
--- value rows isn't inlined into the initial page render. Facets are project-wide
--- (independent of query/time range), so this needs only the project id. Also
--- queues facet generation for projects that don't have a precomputed summary yet.
+-- | Lazy facet fragments for collapsed groups and per-field overflow values.
+-- Common facets render in the initial page from the summary already read by
+-- 'mkPageCtx'; this endpoint keeps the rest off the critical rendering path.
 logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
@@ -1150,30 +1158,6 @@ chartSummarySkeleton_ =
   div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col", role_ "status", Aria.label_ "Loading chart"] do
     div_ [class_ "flex-[3] min-w-0 rounded-2xl skeleton-shimmer"] ""
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
-
-
--- | Placeholder shown while the facet sidebar (logExplorerFacetsH) lazy-loads.
--- Mirrors the real structure — one expanded section (facet rows + a few value
--- lines) over collapsed section pills — so the column doesn't sit empty. Varied
--- widths keep it from reading as a mechanical grid.
-facetsSkeleton_ :: Html ()
-facetsSkeleton_ =
-  div_ [class_ "flex flex-col gap-2", role_ "status", Aria.label_ "Loading filters"] do
-    sectionPill
-    div_ [class_ "flex flex-col gap-3 pl-2 mt-1"]
-      $ forM_ ([("58%", ["52%", "38%"]), ("44%", ["46%"]), ("68%", ["44%", "60%", "36%"]), ("50%", ["48%"])] :: [(Text, [Text])]) \(nameW, valWs) ->
-        div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "flex items-center gap-2"] do
-            bar "h-2.5 w-2.5 shrink-0" Nothing
-            bar "h-3.5" (Just nameW)
-          div_ [class_ "flex flex-col gap-1.5 pl-7"] $ forM_ valWs \vw ->
-            div_ [class_ "flex items-center justify-between gap-2"] do
-              div_ [class_ "flex items-center gap-2 flex-1 min-w-0"] (bar "h-3 w-3 shrink-0" Nothing >> bar "h-3" (Just vw))
-              bar "h-3 w-6 shrink-0" Nothing
-    replicateM_ 4 sectionPill
-  where
-    sectionPill = div_ [class_ "h-8 rounded-lg skeleton-shimmer w-full"] ""
-    bar cls widthM = div_ ([class_ $ "rounded skeleton-shimmer " <> cls] <> maybe [] (\w -> [style_ $ "width:" <> w]) widthM) ""
 
 
 -- | KPI card shared by the sessions/patterns summary headers.
@@ -1472,6 +1456,7 @@ data ApiLogsPageData = ApiLogsPageData
   , queryResultCount :: Int
   , parseError :: Maybe Text
   , preloadUrl :: Text
+  , facetSummary :: Maybe FacetSummary
   }
 
 
@@ -1718,16 +1703,13 @@ apiLogsPage page = do
                       show <details.facet-section-group, details.facet-section, .facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
             ]
-        -- Facet values (~680KB) are lazy-loaded via HTMX on first intersect so
-        -- they're kept out of the initial page render; search still works once
-        -- loaded (facets are project-wide, independent of query/time range).
-        div_
-          [ id_ "facets-list"
-          , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer/facets"
-          , hxTrigger_ "intersect once"
-          , hxSwap_ "innerHTML"
-          ]
-          facetsSkeleton_
+        -- Common filters are above the fold and arrive with the page. renderFacets
+        -- emits their values plus cheap shells whose bodies load on first open.
+        div_ [id_ "facets-list"]
+          $ maybe
+            (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
+            renderFacets
+            page.facetSummary
 
     logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader

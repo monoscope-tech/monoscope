@@ -19,6 +19,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Lucid qualified
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -30,6 +31,7 @@ import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Stats (Sources (..))
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
@@ -54,6 +56,26 @@ nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
 -- assertions inspect the payload structurally, as before.
 fetchData :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
 fetchData tr q cols cur since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur Nothing since from to Nothing Nothing)
+
+
+seedFacetSummary :: TestResources -> IO ()
+seedFacetSummary tr = do
+  let field category = Catalog.FieldStruct mempty mempty category False
+      doc =
+        Catalog.SummaryDoc
+          { fields =
+              HashMap.fromList
+                [ ("service.name", field Catalog.FCResource)
+                , ("url.path", field Catalog.FCAttribute)
+                ]
+          , services = V.singleton "checkout-svc"
+          , topValuesByField =
+              HashMap.fromList
+                [ ("service.name", Catalog.TopK 1 (HashMap.singleton "checkout-svc" 8))
+                , ("url.path", Catalog.TopK 1 (HashMap.singleton "/orders" 5))
+                ]
+          }
+  runHasqlEffect tr $ SchemaCatalog.upsertSummary (V.singleton (testPid, doc))
 
 
 spec :: Spec
@@ -636,6 +658,17 @@ spec = around withTestResources do
       case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
 
   describe "Log Explorer page shell" do
+    it "renders Common facets with the page and leaves other groups lazy" \tr -> do
+      seedFacetSummary tr
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+          eagerUrl = "hx-get=\"/p/" <> testPid.toText <> "/log_explorer/facets\""
+      html `shouldSatisfy` T.isInfixOf "data-field=\"resource.service.name\""
+      html `shouldSatisfy` T.isInfixOf "data-value=\"checkout-svc\""
+      html `shouldNotSatisfy` T.isInfixOf "data-value=\"/orders\""
+      html `shouldSatisfy` T.isInfixOf "facets?group=http"
+      html `shouldNotSatisfy` T.isInfixOf eagerUrl
+
     -- Regression: HTMX swaps only #main-content, so a preload script in <head>
     -- was discarded when arriving from another page. The table then raced its
     -- fallback worker fetch against chart requests and could render an empty list.

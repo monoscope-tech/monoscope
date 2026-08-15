@@ -39,7 +39,7 @@ mkPageCtx pid = do
   -- reported. getFacetSummary ignores the time range.
   facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
   let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, envOptions})
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, envOptions})
   where
     envValues (SchemaCatalog.FacetData m) =
       V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
@@ -167,6 +167,9 @@ data BWConfig = BWConfig
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
+  , facetSummaryM :: Maybe SchemaCatalog.FacetSummary
+  -- ^ The project summary already fetched by 'mkPageCtx'. Page renderers that need
+  -- facet values should reuse it instead of issuing the same primary-key read again.
   , envOptions :: V.Vector Text
   -- ^ Deployment environments this project has actually reported, for the app-wide picker.
   -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
