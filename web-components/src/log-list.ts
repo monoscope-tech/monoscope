@@ -639,7 +639,10 @@ export class LogList extends LitElement {
     const container = this.logsContainer;
     const scrollTop = container?.scrollTop ?? 0;
     const scrolledToBottom = container ? scrollTop + container.clientHeight >= container.scrollHeight - 1 : true;
-    if (scrolledToBottom) this.shouldScrollToBottom = true;
+    // This flag only drives oldest-first's "jump to newest" affordance. Setting it while
+    // newest-first pagination is parked at the bottom creates an irrelevant reactive update
+    // when a row click clears it, and that full rerender can empty a deep virtualizer runway.
+    if (this.flipDirection && scrolledToBottom) this.shouldScrollToBottom = true;
     // Same rule as a recent fetch: a user who has scrolled away gets a "N new" pill rather
     // than having the viewport yanked out from under them mid-read.
     if (container && shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
@@ -1056,14 +1059,15 @@ export class LogList extends LitElement {
     if (this.blankHealAttempts >= 3 || now - this.blankHealAt < 500) return;
     this.blankHealAttempts++;
     this.blankHealAt = now;
-    const index = Math.min(this.lastVisibilityRange?.first ?? 0, this.virtualListItems.length - 1);
-    container.scrollTop = 0;
-    if (index <= 0) return;
-    // Wait for the re-measure the reset triggered before asking for an index, or the jump is
-    // computed against the same stale geometry that caused the blank and lands near the top.
-    void Promise.resolve(virtualizer.layoutComplete)
-      .then(() => virtualizer.scrollToIndex(index, 'start'))
-      .catch(() => {});
+    // A real one-pixel scroll reliably makes lit-virtualizer recompute its runway. Preserve
+    // the user's deep position: resetting to zero made the list reappear at the newest edge
+    // and could leave the intended range blank until the user scrolled manually.
+    const originalScrollTop = container.scrollTop;
+    const nudgedScrollTop = originalScrollTop > 0 ? originalScrollTop - 1 : originalScrollTop + 1;
+    container.scrollTop = nudgedScrollTop;
+    requestAnimationFrame(() => {
+      if (this.isConnected) container.scrollTop = originalScrollTop;
+    });
   }
 
   updated(changedProperties: Map<string, any>) {
@@ -1657,7 +1661,7 @@ export class LogList extends LitElement {
           const clientHeight = container.clientHeight;
           const scrollHeight = container.scrollHeight;
           const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
-          if (scrolledToBottom) this.shouldScrollToBottom = true;
+          if (this.flipDirection && scrolledToBottom) this.shouldScrollToBottom = true;
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
@@ -1806,7 +1810,9 @@ export class LogList extends LitElement {
     // Batch DOM reads and writes
     requestAnimationFrame(() => {
       const width = sideView.offsetWidth;
-      this.shouldScrollToBottom = false;
+      // Newest-first never consumes this flag. Mutating it there caused a full host rerender
+      // on row click after load-more, which is the direct trigger for the blank runway.
+      if (this.flipDirection) this.shouldScrollToBottom = false;
 
       if (width < 50) {
         sideView.style.width = `550px`;

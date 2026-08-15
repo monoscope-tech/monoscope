@@ -91,4 +91,14 @@ describe('detail panel loading indicator', () => {
 
     expect(heal).toHaveBeenCalledTimes(2);
   });
+
+  test('newest-first row clicks do not mutate flipped-only scroll state', () => {
+    (window as any).htmx = { ajax: () => new Promise(() => {}) };
+    const el = new LogList();
+    Object.assign(el as any, { flipDirection: false, shouldScrollToBottom: true });
+
+    clickRow(el, 'a');
+
+    expect((el as any).shouldScrollToBottom).toBe(true);
+  });
 });

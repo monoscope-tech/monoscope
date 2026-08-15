@@ -24,7 +24,7 @@ const container = () => ({ scrollTop: 5000, getBoundingClientRect: () => ({ top:
 describe('blank virtualizer recovery', () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  test('resets the scroll origin and returns to the anchored row when nothing rendered', async () => {
+  test('nudges the scroll position without resetting a deep viewport to the newest edge', async () => {
     const el = await mountList();
     const c = container();
     Object.defineProperty(el, 'logsContainer', { value: c, configurable: true });
@@ -34,10 +34,10 @@ describe('blank virtualizer recovery', () => {
 
     (el as any).healBlankVirtualizer();
 
-    expect(c.scrollTop).toBe(0); // forces the layout to re-measure from a known-good origin
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(v.scrollToIndex).toHaveBeenCalledWith(400, 'start');
+    expect(c.scrollTop).toBe(4999); // real scroll event forces runway recalculation
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(c.scrollTop).toBe(5000); // the user's exact position is preserved
+    expect(v.scrollToIndex).not.toHaveBeenCalled();
   });
 
   test('does nothing while rows are rendering', async () => {
@@ -63,10 +63,10 @@ describe('blank virtualizer recovery', () => {
 
     (el as any).healBlankVirtualizer();
 
-    expect(c.scrollTop).toBe(0);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(v.scrollToIndex).toHaveBeenCalledWith(400, 'start');
+    expect(c.scrollTop).toBe(4999);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(c.scrollTop).toBe(5000);
+    expect(v.scrollToIndex).not.toHaveBeenCalled();
   });
 
   test('the retry budget is per eviction, not per component lifetime', async () => {
