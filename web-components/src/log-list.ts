@@ -1870,6 +1870,17 @@ export class LogList extends LitElement {
       .finally(() => seq === this.detailRequestSeq && showIndicator(false));
   };
 
+  private preserveGridFocusOnPointerRowClick = (event: MouseEvent) => {
+    // The table is the keyboard tab stop. Chrome's default action for mousedown on a plain
+    // cell focuses that table and scrolls the enormous virtual table itself into view. Near
+    // the pagination edge this clamps the scroll surface to its maximum before `click`, and
+    // lit-virtualizer briefly resolves that offset to an empty range. A pointer click does not
+    // need to move keyboard focus; genuine controls inside a row still retain normal focus.
+    const target = event.target as HTMLElement;
+    if (event.button !== 0 || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    event.preventDefault();
+  };
+
   moveColumn(column: string, direction: number) {
     const index = this.logsColumns.indexOf(column);
     if (index === -1) return;
@@ -2355,6 +2366,7 @@ export class LogList extends LitElement {
         )}
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
+        @mousedown=${this.preserveGridFocusOnPointerRowClick}
         @scroll=${{ handleEvent: this.handleListScroll, passive: true }}
       >
         ${this.liveDropped > 0

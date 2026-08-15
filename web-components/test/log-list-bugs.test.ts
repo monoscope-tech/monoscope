@@ -29,6 +29,21 @@ describe('LogList — LOWER', () => {
     expect(el.innerHTML).not.toContain('will-change-scroll');
   });
 
+  test('pointer row activation does not focus-scroll the virtual table', async () => {
+    const el = await mountList();
+    const plainCell = document.createElement('td');
+    const plainMouseDown = new MouseEvent('mousedown', { button: 0, cancelable: true });
+    Object.defineProperty(plainMouseDown, 'target', { value: plainCell });
+    (el as any).preserveGridFocusOnPointerRowClick(plainMouseDown);
+    expect(plainMouseDown.defaultPrevented).toBe(true);
+
+    const button = document.createElement('button');
+    const buttonMouseDown = new MouseEvent('mousedown', { button: 0, cancelable: true });
+    Object.defineProperty(buttonMouseDown, 'target', { value: button });
+    (el as any).preserveGridFocusOnPointerRowClick(buttonMouseDown);
+    expect(buttonMouseDown.defaultPrevented).toBe(false);
+  });
+
   // Paint containment clips overflowing row tooltips, so it must not be permanent. During
   // active scrolling there is no useful hover interaction, however, and bounding paint to one
   // 28px row substantially reduces the virtualizer's paint invalidation area.
