@@ -2,10 +2,13 @@ module Pages.BusinessFlowsSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, getZonedTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -23,10 +26,12 @@ import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
-import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified
 import Test.Hspec
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 -- Test context that includes both test resources and a dynamically created project
@@ -248,13 +253,97 @@ settingsTests = do
 -- checkout write stores StripeProvider, and Project decodes the new trailing
 -- billing_provider column back positionally so projectProvider reads it.
 stripeBillingTests :: SpecWith TestContext
-stripeBillingTests =
+stripeBillingTests = do
   it "stores and decodes StripeProvider round-trip" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_test123" "si_test" "cus_test"
     projectM <- runQueryEffect tr $ Projects.projectById testPid
     case projectM of
       Just project -> Projects.projectProvider project `shouldBe` Projects.StripeProvider
       Nothing -> fail "project not found after updateStripeProjectBilling"
+
+  -- Regression: deleting a project used to leave its subscription live, so the
+  -- customer kept being billed for a project they could no longer see (a deleted
+  -- project billed a full month on the day its trial ended).
+  it "deleteProject cancels the project's Stripe subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_test123" "si_test" "cus_test"
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
+    map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_test123"]
+
+  it "deleteProject cancels the project's LemonSqueezy subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid "GraduatedPricing" "987654" "si_test" "ord_test" V.empty
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
+    map fst reqs `shouldContain` ["https://api.lemonsqueezy.com/v1/subscriptions/987654"]
+
+  it "deleteProject issues no cancellation for an unbilled project" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
+    map fst reqs `shouldBe` []
+
+  -- One human is one Stripe customer with one trial, however many projects they run.
+  -- Previously each project minted its own customer and its own 30-day trial, which
+  -- is how one account ended up with two subscriptions on the same card.
+  it "userBilling carries a user's customer and trial history across their projects" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let uid = (getResponse tr.trSessAndHeader).user.id
+    fresh <- runQueryEffect tr $ Projects.userBilling uid
+    fresh `shouldBe` Projects.UserBilling{stripeCustomerId = Nothing, hasSubscribedBefore = False}
+
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_first" "si_first" "cus_first"
+    subscribed <- runQueryEffect tr $ Projects.userBilling uid
+    subscribed `shouldBe` Projects.UserBilling{stripeCustomerId = Just "cus_first", hasSubscribedBefore = True}
+
+    -- Deleting that project must not reset either fact, or the next project hands
+    -- out a fresh trial and a fresh customer — the exact double-billing shape.
+    _ <- runQueryEffect tr $ Projects.deleteProject testPid
+    afterDelete <- runQueryEffect tr $ Projects.userBilling uid
+    afterDelete `shouldBe` subscribed
+
+  it "checkout reuses the buyer's Stripe customer and withholds a repeat trial" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let checkout = runAsBaseRecordingHTTP tr . atAuthToBase tr.trSessAndHeader . flip CreateProject.stripeCheckoutInitH (CreateProject.StripeCheckoutForm "GraduatedPricing")
+        sessionBody reqs = snd <$> find ((== "https://api.stripe.com/v1/checkout/sessions") . fst) reqs
+
+    -- First ever upgrade: no customer to reuse, trial granted.
+    (firstReqs, _) <- checkout testPid
+    case sessionBody firstReqs of
+      Nothing -> fail "no checkout session request recorded"
+      Just b -> do
+        decodeUtf8 @Text b `shouldSatisfy` T.isInfixOf "trial_period_days"
+        decodeUtf8 @Text b `shouldNotSatisfy` T.isInfixOf "customer="
+
+    -- Once that buyer has any billing history, a further checkout reuses their
+    -- customer and withholds the trial — this is what a second project now hits.
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_first" "si_first" "cus_first"
+    (secondReqs, _) <- checkout testPid
+    case sessionBody secondReqs of
+      Nothing -> fail "no checkout session request recorded"
+      Just b -> do
+        decodeUtf8 @Text b `shouldSatisfy` T.isInfixOf "customer=cus_first"
+        decodeUtf8 @Text b `shouldNotSatisfy` T.isInfixOf "trial_period_days"
+
+  -- Checkout overwrites sub_id with the new subscription, so a previous one left
+  -- running here bills the customer twice with nothing left pointing at it. Pins
+  -- that the cancel reads the OLD sub_id, i.e. that it stays ahead of the write.
+  it "stripe checkout webhook cancels the subscription the project held before" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_old" "si_old" "cus_test"
+    now <- getTestTime tr.trTestClock
+    let body =
+          BL.toStrict
+            $ AE.encode
+            $ AE.object
+              [ "type" AE..= ("checkout.session.completed" :: Text)
+              , "data"
+                  AE..= AE.object
+                    [ "object"
+                        AE..= AE.object
+                          [ "client_reference_id" AE..= testPid.toText
+                          , "subscription" AE..= ("sub_new" :: Text)
+                          , "customer" AE..= ("cus_test" :: Text)
+                          ]
+                    ]
+              ]
+        ts = show @Text @Integer $ round $ utcTimeToPOSIXSeconds now
+        mac = HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.stripeWebhookSecret) (encodeUtf8 @Text @ByteString ts <> "." <> body) :: HMAC.HMAC SHA256
+        sigHeader = "t=" <> ts <> ",v1=" <> decodeUtf8 (B16.encode $ BA.convert mac)
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ LemonSqueezy.stripeWebhookPostH (Just sigHeader) body
+    map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_old"]
 
 
 -- | LemonSqueezy Webhook Tests - Table-driven testing for all webhook events

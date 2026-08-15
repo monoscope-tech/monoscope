@@ -1121,7 +1121,7 @@ manageSubGetH pid = do
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
-          portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
+          portalUrlM <- Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
           case portalUrlM of
             Just url -> redirectCS url >> addRespHeaders mempty
             Nothing -> toastError "Failed to create billing portal" mempty
@@ -1141,23 +1141,23 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
 stripeCheckoutInitH pid form = do
-  void $ Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  -- Trial only for first-time upgrades: no prior subscription on this project.
-  projectM <- Projects.projectById pid
-  let trialEligible = maybe False (\p -> isNothing p.subId && isNothing p.customerId) projectM
+  -- Keyed to the buyer, not the project: people run several projects, and each one
+  -- used to mint its own Stripe customer and hand out its own 30-day trial.
+  billing <- Projects.userBilling sess.user.id
   urlM <-
-    liftIO
-      $ Settings.createStripeCheckoutSession
-        trialEligible
-        envCfg.stripeSecretKey
-        envCfg.hostUrl
-        pid
-        form.plan
-        envCfg.stripePriceIdGraduated
-        envCfg.stripePriceIdGraduatedOverage
-        envCfg.stripePriceIdByos
+    Settings.createStripeCheckoutSession
+      (not billing.hasSubscribedBefore)
+      billing.stripeCustomerId
+      envCfg.stripeSecretKey
+      envCfg.hostUrl
+      pid
+      form.plan
+      envCfg.stripePriceIdGraduated
+      envCfg.stripePriceIdGraduatedOverage
+      envCfg.stripePriceIdByos
   case urlM of
     Just url -> redirectCS url >> addRespHeaders mempty
     Nothing -> toastError "Failed to create checkout session" mempty
@@ -1311,6 +1311,9 @@ deleteProjectGetH pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then addSuccessToast "Can't perform this action on the demon project" Nothing
     else do
+      -- Before the row goes away: a subscription left running on a deleted project
+      -- keeps charging the customer, and their next signup opens a second one.
+      whenJustM (Projects.projectById pid) $ Settings.cancelProjectSubscription appCtx.config
       _ <- Projects.deleteProject pid
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid

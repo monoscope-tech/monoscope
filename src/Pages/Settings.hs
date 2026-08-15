@@ -45,7 +45,7 @@ module Pages.Settings (
   stripeWebhookPostH,
   createStripeCheckoutSession,
   createStripePortalSession,
-  cancelLemonSqueezySubscription,
+  cancelProjectSubscription,
   lemonSqueezyOpts,
   verifyStripeSignature,
   verifyLemonSqueezySignature,
@@ -72,6 +72,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
@@ -1450,16 +1451,20 @@ stripeOpts apiKey =
     & (Wreq.header "Stripe-Version" .~ ["2025-03-31.basil"])
 
 
-stripeRequest :: Text -> Text -> [(ByteString, ByteString)] -> IO (Wreq.Response LByteString)
+stripeRequest :: W.HTTP :> es => Text -> Text -> [(ByteString, ByteString)] -> Eff es (W.Response LByteString)
 stripeRequest apiKey endpoint =
-  Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
+  W.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
 -- | `trialEligible` grants a 30-day trial at checkout. Callers should pass True only
 -- for first-time upgrades on GraduatedPricing (not plan switches / migrations / BYOS),
 -- to avoid giving repeat trials to already-paying or returning customers.
-createStripeCheckoutSession :: Bool -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
-createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
+--
+-- `customerM` is the buyer's existing Stripe customer, when they have one. Omitting
+-- it makes Stripe mint a fresh Customer per session, so one person upgrading a second
+-- project became a second unrelated customer on the same card.
+createStripeCheckoutSession :: W.HTTP :> es => Bool -> Maybe Text -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe Text)
+createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
   let basePrice = case plan of
         "SystemsPricing" -> priceIdBYOS
         _ -> priceIdGraduated
@@ -1476,6 +1481,7 @@ createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduat
         prices
           <> trialParams
           <> managedPaymentsParams
+          <> [("customer", encodeUtf8 c) | c <- maybeToList customerM]
           <> [ ("mode", "subscription")
              , ("client_reference_id", encodeUtf8 pid.toText)
              , ("metadata[project_id]", encodeUtf8 pid.toText)
@@ -1488,7 +1494,7 @@ createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduat
   pure $ AE.decode @AE.Value body >>= jsonField "url"
 
 
-createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
+createStripePortalSession :: W.HTTP :> es => Text -> Text -> Text -> Eff es (Maybe Text)
 createStripePortalSession apiKey customerId returnUrl = do
   resp <-
     stripeRequest
@@ -1508,9 +1514,23 @@ lemonSqueezyOpts apiKey =
     & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
 
 
-cancelLemonSqueezySubscription :: Text -> Text -> IO ()
-cancelLemonSqueezySubscription apiKey subId =
-  void $ Wreq.deleteWith (lemonSqueezyOpts apiKey) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
+-- | Cancel a project's subscription with whichever provider owns it. Deleting a
+-- project must do this: a subscription that outlives its project keeps billing the
+-- customer for something they can no longer see, and the next signup starts a
+-- second subscription on its own fresh trial. Best-effort — a provider outage must
+-- not block the deletion the user asked for, so failures are logged, not thrown.
+cancelProjectSubscription :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
+cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
+  res <- tryAny $ W.deleteWith opts url
+  whenLeft_ res \e ->
+    Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
+  where
+    target = do
+      subId <- find (not . T.null) project.subId
+      case Projects.projectProvider project of
+        Projects.StripeProvider -> Just (stripeOpts envConfig.stripeSecretKey, "https://api.stripe.com/v1/subscriptions/" <> toString subId)
+        Projects.LemonSqueezyProvider -> Just (lemonSqueezyOpts envConfig.lemonSqueezyApiKey, "https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
+        Projects.NoBillingProvider -> Nothing
 
 
 -- Extract a field from a JSON value (safe, returns Nothing for non-objects)
@@ -1564,15 +1584,13 @@ handleStripeCheckout envConfig obj = do
       if maybe False (\p -> p.subId == Just subId) projectM
         then pure "already processed"
         else do
-          -- Cancel any existing LemonSqueezy subscription (auto-migration)
-          whenJust projectM \project ->
-            case Projects.projectProvider project of
-              Projects.LemonSqueezyProvider ->
-                whenJust project.subId
-                  $ liftIO
-                  . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
-              _ -> pass
-          subDetails <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
+          -- Cancel whatever subscription the project held before this checkout — a
+          -- LemonSqueezy one (auto-migration) or an older Stripe one. The idempotency
+          -- guard above means project.subId is never the sub we just created, and the
+          -- row is about to be overwritten with the new sub, so anything left running
+          -- here bills the customer twice with nothing left pointing at it.
+          whenJust projectM $ cancelProjectSubscription envConfig
+          subDetails <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
           when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
           let subItemId = maybe "" (.subItemId) subDetails
           void $ Projects.updateStripeProjectBilling pid plan subId subItemId customerId
@@ -1636,7 +1654,7 @@ handleStripeSubResumed :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
 handleStripeSubResumed envConfig obj =
   case jsonField "id" obj :: Maybe Text of
     Just subId -> do
-      subDetailsM <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
+      subDetailsM <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
       case subDetailsM of
         -- the price id reverse-maps to our internal plan name
         Just BJ.StripeSubDetails{subItemId = itemId, priceId} -> do

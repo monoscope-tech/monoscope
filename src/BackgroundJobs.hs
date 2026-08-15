@@ -85,7 +85,7 @@ import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
-import Network.Wreq (defaults, getWith, header, postWith, responseBody)
+import Network.Wreq (defaults, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -565,7 +565,7 @@ processBackgroundJob authCtx bgJob =
             | Projects.projectProvider project /= Projects.StripeProvider ->
                 Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
             | otherwise -> do
-                details <- liftIO $ getStripeSubDetails authCtx.config.stripeSecretKey subId
+                details <- getStripeSubDetails authCtx.config.stripeSecretKey subId
                 case details of
                   Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft :: Int, subId)
                   Just StripeSubDetails{status, trialEnd} -> case status of
@@ -2776,9 +2776,9 @@ data StripeSubDetails = StripeSubDetails
 
 -- | Returns Nothing on HTTP/network/TLS error or JSON decode miss. Callers
 -- treat Nothing as an actionable failure.
-getStripeSubDetails :: Text -> Text -> IO (Maybe StripeSubDetails)
+getStripeSubDetails :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Eff es (Maybe StripeSubDetails)
 getStripeSubDetails apiKey subId = do
-  respE <- tryAny $ getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  respE <- tryAny $ W.getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
   pure do
     resp <- rightToMaybe respE
     let item0 = AL.key "items" . AL.key "data" . AL.nth 0

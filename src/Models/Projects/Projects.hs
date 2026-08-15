@@ -34,6 +34,8 @@ module Models.Projects.Projects (
   projectById,
   projectByOrderId,
   projectByCustomerId,
+  UserBilling (..),
+  userBilling,
   projectBySubId,
   updateSubItemIdBySubId,
   projectCacheById,
@@ -404,6 +406,36 @@ projectByOrderId oid = EHasql.interpOne [HI.sql| select p.* from projects.projec
 
 projectByCustomerId :: DB es => Text -> Eff es (Maybe Project)
 projectByCustomerId cid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where customer_id=#{cid}|]
+
+
+-- | A user's billing footprint across every project they administer. Both fields
+-- answer a checkout question that must be asked of the person, not the project:
+-- which Stripe customer to reuse (one human is one customer, however many projects
+-- they run) and whether they have subscribed before (a second project is not a
+-- second free trial). Deleted projects count — a deleted project's subscription is
+-- precisely the history we must not lose sight of.
+data UserBilling = UserBilling
+  { stripeCustomerId :: Maybe Text
+  , hasSubscribedBefore :: Bool
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
+
+
+-- | Scoped to @admin@ membership: an invited viewer on someone else's paid project
+-- has not bought anything, and must keep their own trial.
+userBilling :: DB es => UserId -> Eff es UserBilling
+userBilling uid =
+  fromMaybe def
+    <$> EHasql.interpOne
+      [HI.sql|
+        SELECT (ARRAY_AGG(p.customer_id ORDER BY p.created_at DESC)
+                 FILTER (WHERE p.customer_id IS NOT NULL AND p.customer_id <> ''))[1] AS stripe_customer_id,
+               COALESCE(BOOL_OR(p.sub_id IS NOT NULL AND p.sub_id <> ''), FALSE) AS has_subscribed_before
+        FROM projects.projects p
+        JOIN projects.project_members pm ON pm.project_id = p.id
+        WHERE pm.user_id = #{uid} AND pm.deleted_at IS NULL AND pm.permission = 'admin'
+      |]
 
 
 projectBySubId :: DB es => Text -> Eff es (Maybe Project)
