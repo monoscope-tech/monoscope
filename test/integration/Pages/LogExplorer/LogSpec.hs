@@ -25,6 +25,7 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
 import Pkg.DeriveUtils (UUIDId (..))
@@ -574,7 +575,7 @@ spec = around withTestResources do
               , title = Just "errors"
               , byMe = True
               }
-          html = LT.toStrict $ Lucid.renderText $ LogQueryBox.queryLibraryDropdown_ (V.singleton qli) V.empty
+          html = LT.toStrict $ Lucid.renderText $ LogQueryBox.queryLibraryContent_ (V.singleton qli) V.empty
       -- Lucid escapes quotes in attributes, so match quote-free fragments:
       -- "dataset.query)" is the raw pass-through; the Run button renders "dataset.query, true".
       html `shouldSatisfy` T.isInfixOf "dataset.query)"
@@ -584,19 +585,19 @@ spec = around withTestResources do
     -- create → rename → delete round-trip through the DB.
     it "saves, renames, then deletes a query library item" \tr -> do
       title <- ("saved-" <>) . UUID.toText <$> nextRandom
-      (_, saved1) <- testServant tr $ Log.saveQueryH testPid (Log.SaveQueryForm (Just "status_code == \"200\"") Nothing (Just title))
-      let itemsOf (Log.QueryLibraryView _ s _) = s
-          found :: Text -> Log.QueryLibraryView -> Maybe Projects.QueryLibItem
+      (_, saved1) <- testServant tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") Nothing (Just title))
+      let itemsOf (QueryLibrary.QueryLibraryView (s, _)) = s
+          found :: Text -> QueryLibrary.QueryLibraryView -> Maybe Projects.QueryLibItem
           found t v = V.find (\q -> q.title == Just t) (itemsOf v)
       found title saved1 `shouldSatisfy` isJust
 
       let qid = maybe (error "saved item missing") (\q -> q.id.toText) (found title saved1)
       newTitle <- ("renamed-" <>) . UUID.toText <$> nextRandom
-      (_, saved2) <- testServant tr $ Log.saveQueryH testPid (Log.SaveQueryForm (Just "status_code == \"200\"") (Just qid) (Just newTitle))
+      (_, saved2) <- testServant tr $ QueryLibrary.saveQueryH testPid (QueryLibrary.SaveQueryForm (Just "status_code == \"200\"") (Just qid) (Just newTitle))
       found newTitle saved2 `shouldSatisfy` isJust
       found title saved2 `shouldSatisfy` isNothing
 
-      (_, saved3) <- testServant tr $ Log.deleteQueryH testPid qid
+      (_, saved3) <- testServant tr $ QueryLibrary.deleteQueryH testPid qid
       found newTitle saved3 `shouldSatisfy` isNothing
 
   describe "Aggregate viz endpoints (logPatternsH/logSessionsH)" do

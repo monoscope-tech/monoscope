@@ -214,6 +214,7 @@ library
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
+      Pages.LogExplorer.QueryLibrary
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects
@@ -797,6 +798,7 @@ test-suite test-dev
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
+      Pages.LogExplorer.QueryLibrary
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects

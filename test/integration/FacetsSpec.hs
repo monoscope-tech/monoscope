@@ -342,6 +342,10 @@ spec = around withTestResources
         T.isInfixOf "on #filterElement" html `shouldBe` True
         -- Section headers for groups that have populated facets show up.
         T.isInfixOf "Common Filters" html `shouldBe` True
+        -- Group route parameters are derived from the constructors, including
+        -- acronym and multiword names.
+        T.isInfixOf "facets?group=http" html `shouldBe` True
+        T.isInfixOf "facets?group=user-session" html `shouldBe` True
         -- Facets without values still render with the empty-state row.
         T.isInfixOf "no values in window" html `shouldBe` True
 
@@ -351,7 +355,7 @@ spec = around withTestResources
           LogPage.facetDefs
           `shouldBe` True
 
-      it "renders More and Less as peer-controlled label states" $ \_ -> do
+      it "keeps overflow values out of the live DOM until More is opened" $ \_ -> do
         let values = [Catalog.FacetValue ("service-" <> show n) 1 | n <- [1 .. 6 :: Int]]
             summary =
               Catalog.FacetSummary
@@ -361,7 +365,10 @@ spec = around withTestResources
                 , facetJson = Catalog.FacetData $ HM.singleton "resource.service.name" values
                 }
             html = toText $ renderText (LogPage.renderFacets summary)
-        T.isInfixOf "peer-checked/more:[&amp;_.more-label]:hidden" html `shouldBe` True
-        T.isInfixOf "peer-checked/more:[&amp;_.less-label]:inline" html `shouldBe` True
-        T.isInfixOf "<span class=\"more-label\">+ More (1)</span>" html `shouldBe` True
-        T.isInfixOf "<span class=\"less-label hidden\">- Less (1)</span>" html `shouldBe` True
+        T.isInfixOf "hx-get=\"/p/00000000-0000-0000-0000-000000000000/log_explorer/facets?field=resource.service.name\"" html `shouldBe` True
+        T.isInfixOf ">+ More (1)</button>" html `shouldBe` True
+        T.isInfixOf "hx-target=\"closest .facet-tail\"" html `shouldBe` True
+        -- The sixth value is fetched as a Lucid fragment only when this facet is
+        -- opened. It must not exist anywhere in the initial sidebar response.
+        T.count "data-value=\"service-" html `shouldBe` 5
+        T.isInfixOf "service-6" html `shouldBe` False

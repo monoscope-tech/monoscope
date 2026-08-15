@@ -7,16 +7,12 @@ module Pages.LogExplorer.Log (
   logExplorerFacetsH,
   logPatternsH,
   logSessionsH,
-  saveQueryH,
-  deleteQueryH,
   alertFormH,
   apiLogExpandH,
   aiSearchH,
   queryEvents,
   LogsGet (..),
   LogResult (..),
-  QueryLibraryView (..),
-  SaveQueryForm (..),
   PatternsView (..),
   SessionsView (..),
   ApiLogsPageData (..),
@@ -68,7 +64,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_, queryLibraryDropdown_)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -81,8 +77,9 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
+import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
@@ -102,14 +99,12 @@ import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import System.Logging qualified as Log
-import System.Tracing (Tracing, forkWithCtx, withSpan_)
+import System.Tracing (Tracing, withSpan_)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-import Web.FormUrlEncoded (FromForm)
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -213,6 +208,23 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let (_, rp) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "l1" Nothing 100 0 "log", mk "l2" (Just "l1") 900 0 "log"])
 -- >>> fmap (.duration) (viaNonEmpty head rp)
 -- Just 800
+--
+-- A cyclic parent chain terminates. @parent_id@ is instrumentation-supplied, so a broken SDK
+-- can emit @a -> b -> a@; walking that without a visited set spins the request thread forever,
+-- holding its database connection. Each span is visited once and the back-edge is pruned, so
+-- the adjacency that reaches the client is acyclic rather than merely survivable:
+--
+-- >>> let (_, rc) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "a" (Just "b") 100 10 "span", mk "b" (Just "a") 200 10 "span"])
+-- >>> Map.lookup "a" . (.children) =<< viaNonEmpty head rc
+-- Just ["b"]
+-- >>> Map.lookup "b" . (.children) =<< viaNonEmpty head rc
+-- Nothing
+--
+-- A span that is its own parent terminates too:
+--
+-- >>> let (_, rs') = LL.buildTraceTree colIdxS 1 (V.fromList [mk "r" Nothing 100 10 "span", mk "s" (Just "s") 200 10 "span"])
+-- >>> length rs'
+-- 1
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
 buildTraceTree colIdxMap queryResultCount rows
   -- An aggregate result (`| summarize …`) is one or two columns wide while the
@@ -283,27 +295,40 @@ buildTraceTree colIdxMap queryResultCount rows
     buildEntry :: Text -> Map.Map Text [Text] -> Map.Map Text SpanInfo -> Maybe Text -> SpanInfo -> (TraceTreeEntry, [(Int, Int64, Int64)])
     buildEntry tid fullChildrenMap spanMap tst root' =
       let rootEnd = root'.startNs + root'.dur
-          rootKids = fromMaybe [] (Map.lookup root'.spanId fullChildrenMap)
+          -- Same back-edge pruning as `go`, for the one edge it cannot see: a root listed as
+          -- its own child (a span whose parent_id is its own span id).
+          rootKids = filter (/= root'.spanId) $ fromMaybe [] (Map.lookup root'.spanId fullChildrenMap)
           initAcc = Map.fromList [(root'.spanId, rootKids) | not (null rootKids)]
           rootAdj = (root'.rowIdx, root'.startNs, root'.dur)
+          -- `seen` makes the walk terminate on a cyclic parent chain. `parent_id` comes from
+          -- instrumentation, so `a -> b -> a` (or a self-parent) is reachable from any broken
+          -- SDK, and without this the recursion never returns: the request thread spins on a
+          -- core holding its database connection until the process is restarted.
           go _ _ [] st = st
-          go pStart pEnd (x : xs) (minS, maxE, adjs, treeAcc) = case Map.lookup x spanMap of
-            Nothing -> go pStart pEnd xs (minS, maxE, adjs, treeAcc)
-            Just si ->
-              let cStart = si.startNs
-                  delta = pStart - cStart
-                  (adjStart, adjDur) =
-                    if delta > 0
-                      then (cStart + delta, max 0 (min si.dur (pEnd - cStart - delta)))
-                      else (cStart, si.dur)
-                  adjEnd = adjStart + adjDur
-                  kids = fromMaybe [] (Map.lookup x fullChildrenMap)
-                  treeAcc' = if null kids then treeAcc else Map.insert x kids treeAcc
-                  st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc')
-                  st'' = go adjStart adjEnd kids st'
-               in go pStart pEnd xs st''
-          (fullStart, fullEnd, adjustments', subtreeChildren) =
-            go root'.startNs rootEnd rootKids (root'.startNs, rootEnd, [rootAdj], initAcc)
+          go pStart pEnd (x : xs) st@(minS, maxE, adjs, treeAcc, seen)
+            | S.member x seen = go pStart pEnd xs st
+            | otherwise = case Map.lookup x spanMap of
+                Nothing -> go pStart pEnd xs st
+                Just si ->
+                  let cStart = si.startNs
+                      delta = pStart - cStart
+                      (adjStart, adjDur) =
+                        if delta > 0
+                          then (cStart + delta, max 0 (min si.dur (pEnd - cStart - delta)))
+                          else (cStart, si.dur)
+                      adjEnd = adjStart + adjDur
+                      seen' = S.insert x seen
+                      -- Drop back-edges rather than merely declining to follow them, so the
+                      -- adjacency map that goes over the wire is acyclic for every client, not
+                      -- just for the one traversal here. A child already placed elsewhere in
+                      -- this trace keeps its first position.
+                      kids = filter (\k -> not (S.member k seen')) $ fromMaybe [] (Map.lookup x fullChildrenMap)
+                      treeAcc' = if null kids then treeAcc else Map.insert x kids treeAcc
+                      st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc', seen')
+                      st'' = go adjStart adjEnd kids st'
+                   in go pStart pEnd xs st''
+          (fullStart, fullEnd, adjustments', subtreeChildren, _) =
+            go root'.startNs rootEnd rootKids (root'.startNs, rootEnd, [rootAdj], initAcc, one root'.spanId)
           -- Only rows that lasted set the window. A point event carries a time but no
           -- extent, and one log emitted seconds later under the same trace used to define
           -- the axis for every span in it: a 71ms trace whose tail log lands at +3.4s
@@ -413,6 +438,14 @@ facetGroupLabel = \case
   FGErrors -> "Errors & Exceptions"
 
 
+facetGroupParam :: FacetGroup -> Text
+facetGroupParam = toText . toKebab . fromAny . drop 2 . toString . show
+
+
+parseFacetGroup :: Text -> Maybe FacetGroup
+parseFacetGroup value = find ((== value) . facetGroupParam) universe
+
+
 -- | A facet entry the sidebar can render. @path@ is the canonical KQL field
 -- name (the 'FacetData' lookup key and what a user types). Invariant
 -- ('prop_facetsAreFast'): @path@ must be a flat-column reference (in
@@ -494,88 +527,137 @@ facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 -- | Render facet data for Log Explorer sidebar in a compact format.
 -- The facet counts are scaled in the upstream summary based on the selected time range.
 renderFacets :: FacetSummary -> Html ()
-renderFacets facetSummary = do
-  let (FacetData facetMap) = facetSummary.facetJson
-  -- Checkbox↔query sync lives in web-components/src/main.ts (syncFacetCheckboxes),
-  -- wired to `update-query` + `htmx:after:swap` so swapped-in facets re-sync.
-  forM_ (universe :: [FacetGroup]) \g ->
-    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
-  where
-    -- Native <details>/<summary>: open state, toggling, and screen-reader
-    -- announcement come for free — no checkbox, label wiring, or ARIA sync. The
-    -- chevron un-rotates via the [&[open]>summary_.chev] variant (scoped to the
-    -- direct summary so nested facet chevrons don't inherit it).
-    -- No `contain` here: it would become the containing block for the fixed-position
-    -- field-action popover (top layer), trapping it inside this section's overflow clip.
-    collapsible_ :: [Attribute] -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
-    collapsible_ wrapAttrs open summaryAttrs header body =
-      details_ (wrapAttrs <> [class_ " block [&[open]>summary_.chev]:rotate-0 "] <> [open_ "" | open]) do
-        summary_ (summaryAttrs <> [class_ " cursor-pointer list-none [&::-webkit-details-marker]:hidden "]) header
-        body
+renderFacets facetSummary =
+  forM_ (universe :: [FacetGroup]) \facetGroup -> renderFacetGroup (facetGroup == FGCommon) facetGroup facetSummary
 
-    chev_ :: Text -> Html ()
-    chev_ size = faSprite_ "chevron-down" "regular" $ "chev shrink-0 transition-transform -rotate-90 " <> size
 
-    renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName fs facetMap collapsed =
+-- | A group shell is cheap enough for the initial sidebar. Only Common Filters
+-- includes its fields immediately; every closed group fetches and replaces
+-- its shell with the server-rendered Lucid fragment on first open.
+renderFacetGroup :: Bool -> FacetGroup -> FacetSummary -> Html ()
+renderFacetGroup loaded facetGroup facetSummary
+  | loaded =
       collapsible_
         [class_ "facet-section-group"]
-        (not collapsed)
+        True
         [class_ "p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
-        (chev_ "w-3 h-3" >> span_ [class_ "font-medium text-sm"] (toHtml sectionName))
-        $ div_ [class_ "facets-container mt-1"]
-        $ iforM_ fs \idx f -> do
-          let values = HM.lookupDefault [] f.path facetMap
-              open = f.group == FGCommon && idx < 5 && not (null values)
-              (visibleValues, hiddenValues) = splitAt 5 values
-              hiddenCount = length hiddenValues
-              renderFacetValue (FacetValue val count) =
-                -- py-1, not py-0.5: with a 16px checkbox the tighter padding made the row a
-                -- 20px pointer target, under the 24px WCAG 2.5.8 minimum.
-                label_ [class_ "facet-item flex items-center justify-between py-1 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
-                  div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
-                    input_
-                      [ type_ "checkbox"
-                      , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-                      , [__|on click toggleSubQuery(@data-field + ' == "' + @data-value + '"') on #filterElement|]
-                      , -- The label's own text is just the value, so without this a screen
-                        -- reader announces "200, checked" with no idea which field it filters.
-                        -- data-tippy-content carries the same string but is not exposed to AT.
-                        Aria.label_ (f.path <> " equals " <> val)
-                      , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
-                      , term "data-field" f.path
-                      , term "data-value" val
-                      ]
-                    let colorClass = f.color val
-                    unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
-                    span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
-                  span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
-          collapsible_
-            [class_ "facet-section border-t border-strokeWeak"]
-            open
-            [class_ "flex items-center justify-between hover:bg-fillWeak rounded"]
-            do
-              div_
-                [class_ "p-2 flex items-center gap-2 flex-1"]
-                (chev_ "w-2.5 h-2.5" >> span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label))
-              -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
-              div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
-                button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify f.path))
-                  $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                -- Opens below the ⋮, extending right over the log list (top-layer popover),
-                -- so long field names aren't truncated inside the narrow facets sidebar.
-                ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" f.path] <> fieldMenuPanel_ (slugify f.path))
-                  $ fieldContextMenuItems_ (StaticField f.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
-            $ div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1"] do
-              if null values
-                then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
-                else forM_ visibleValues renderFacetValue
-              when (hiddenCount > 0) do
-                input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-" <> f.path]
-                label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline peer-checked/more:[&_.more-label]:hidden peer-checked/more:[&_.less-label]:inline", Lucid.for_ $ "more-" <> f.path] do
-                  span_ [class_ "more-label"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
-                  span_ [class_ "less-label hidden"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
-                div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues renderFacetValue
+        (facetGroupTitle_ facetGroup)
+        (div_ [class_ "facets-container mt-1"] $ renderFacetFields facetGroup facetSummary)
+  | otherwise =
+      details_
+        [ class_ "facet-section-group block [&[open]>summary_.chev]:rotate-0"
+        , hxGet_ url
+        , hxTrigger_ "toggle[target.open] once"
+        , hxTarget_ "this"
+        , hxSwap_ "outerHTML"
+        , hxIndicator_ "find .facet-group-loader"
+        ]
+        $ do
+          summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
+            $ facetGroupTitle_ facetGroup
+          div_ [class_ "facet-group-loader htmx-indicator h-8 flex items-center justify-center"]
+            $ loadingIndicator_ LdXS LdSpinner
+  where
+    url = "/p/" <> facetSummary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
+
+
+facetGroupTitle_ :: FacetGroup -> Html ()
+facetGroupTitle_ facetGroup = do
+  facetChevron_ "w-3 h-3"
+  span_ [class_ "font-medium text-sm"] $ toHtml $ facetGroupLabel facetGroup
+
+
+renderFacetFields :: FacetGroup -> FacetSummary -> Html ()
+renderFacetFields facetGroup facetSummary = do
+  let (FacetData facetMap) = facetSummary.facetJson
+      facets = Map.findWithDefault [] facetGroup facetsByGroup
+  -- Checkbox↔query sync lives in web-components/src/main.ts (syncFacetCheckboxes),
+  -- wired to `update-query` + `htmx:after:swap` so swapped-in facets re-sync.
+  iforM_ facets \idx facet -> do
+    let values = HM.lookupDefault [] facet.path facetMap
+        open = facetGroup == FGCommon && idx < 5 && not (null values)
+        (visibleValues, hiddenValues) = splitAt 5 values
+        hiddenCount = length hiddenValues
+    collapsible_
+      [class_ "facet-section border-t border-strokeWeak"]
+      open
+      [class_ "flex items-center justify-between hover:bg-fillWeak rounded"]
+      do
+        div_
+          [class_ "p-2 flex items-center gap-2 flex-1"]
+          (facetChevron_ "w-2.5 h-2.5" >> span_ [class_ "text-sm", term "data-tippy-content" facet.path] (toHtml facet.label))
+        -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
+        div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
+          button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify facet.path))
+            $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+          ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" facet.path] <> fieldMenuPanel_ (slugify facet.path))
+            $ fieldContextMenuItems_ (StaticField facet.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
+      $ div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1"] do
+        if null values
+          then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
+          else forM_ visibleValues (renderFacetValue facet)
+        when (hiddenCount > 0) do
+          div_ [class_ "facet-tail"]
+            $ button_
+              [ type_ "button"
+              , class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"
+              , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer/facets?field=" <> toUriStr facet.path
+              , hxTarget_ "closest .facet-tail"
+              , hxSwap_ "outerHTML"
+              ]
+            $ toHtml
+            $ "+ More ("
+            <> prettyPrintCount hiddenCount
+            <> ")"
+
+
+-- Native details/summary owns open state and keyboard/AT behavior. No `contain`:
+-- it would trap the fixed-position field-action popover inside the section.
+collapsible_ :: [Attribute] -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
+collapsible_ wrapAttrs open summaryAttrs header body =
+  details_ (wrapAttrs <> [class_ " block [&[open]>summary_.chev]:rotate-0 "] <> [open_ "" | open]) do
+    summary_ (summaryAttrs <> [class_ " cursor-pointer list-none [&::-webkit-details-marker]:hidden "]) header
+    body
+
+
+facetChevron_ :: Text -> Html ()
+facetChevron_ size = faSprite_ "chevron-down" "regular" $ "chev shrink-0 transition-transform -rotate-90 " <> size
+
+
+renderFacetValue :: Facet -> FacetValue -> Html ()
+renderFacetValue f (FacetValue val count) =
+  -- py-1, not py-0.5: with a 16px checkbox the tighter padding made the row a
+  -- 20px pointer target, under the 24px WCAG 2.5.8 minimum.
+  label_ [class_ "facet-item flex items-center justify-between py-1 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
+    div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
+      input_
+        [ type_ "checkbox"
+        , class_ "checkbox checkbox-xs max-md:checkbox-sm"
+        , [__|on click toggleSubQuery(@data-field + ' == "' + @data-value + '"') on #filterElement|]
+        , Aria.label_ (f.path <> " equals " <> val)
+        , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+        , term "data-field" f.path
+        , term "data-value" val
+        ]
+      let colorClass = f.color val
+      unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+      span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
+    span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
+
+
+renderFacetTail :: Text -> FacetSummary -> Html ()
+renderFacetTail field facetSummary =
+  case L.find ((== field) . (.path)) facetDefs of
+    Nothing -> mempty
+    Just facet ->
+      let (FacetData facetMap) = facetSummary.facetJson
+          values = drop 5 $ HM.lookupDefault [] field facetMap
+          count = prettyPrintCount $ length values
+       in details_ [class_ "facet-tail group", open_ ""] do
+            summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
+              span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
+              span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
+            div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
 
 
 -- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
@@ -752,23 +834,13 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   alertDM <- lookupAlert alertM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
-  -- Shell-side queries are just query library + free-tier. Facets lazy-load via
-  -- HTMX (logExplorerFacetsH) and the sessions summary rides the sessions data
-  -- fetch (single scan, injected client-side) — neither is computed here, so the
-  -- shell stays lean.
-  (queryLibE, freeTierStatusE) <- Ki.scoped \scope -> do
-    let aw = Ki.atomically . Ki.await
-    t1 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-    t2 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-    (,) <$> aw t1 <*> aw t2
+  -- Facets and the Query Library lazy-load through their own HTMX endpoints.
+  freeTierStatusE <- tryAny $ checkFreeTierStatus pid project.paymentPlan
 
   let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
-  logErr "queryLib" queryLibE
   logErr "freeTierStatus" freeTierStatusE
 
-  let queryLib = fromRight [] queryLibE
-      freeTierStatus = fromRight def freeTierStatusE
-      (queryLibRecent, queryLibSaved) = partitionQueryLib queryLib
+  let freeTierStatus = fromRight def freeTierStatusE
 
   -- Preload the data fetch before the log-list web component boots. Point it at the endpoint
   -- matching the active viz — otherwise the sessions/patterns page fires a wasted
@@ -794,6 +866,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , headContent = Nothing
           , pageActions = Just $ logExplorerActions_ currentRange
           , navTabs = Just $ explorerNavTabs_ pid "Events"
+          , needsTagify = False
           }
 
   let page =
@@ -804,8 +877,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , query = queryM'
           , source
           , targetSpans = targetSpansM
-          , queryLibRecent
-          , queryLibSaved
           , targetEvent = targetEventM
           , showTrace = showTraceM
           , vizType = effectiveVizType
@@ -895,8 +966,8 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
 -- value rows isn't inlined into the initial page render. Facets are project-wide
 -- (independent of query/time range), so this needs only the project id. Also
 -- queues facet generation for projects that don't have a precomputed summary yet.
-logExplorerFacetsH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-logExplorerFacetsH pid = do
+logExplorerFacetsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -905,7 +976,15 @@ logExplorerFacetsH pid = do
     $ liftIO
     $ withResource authCtx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
-  addRespHeaders $ maybe (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.") renderFacets facetSummary
+  addRespHeaders
+    $ maybe
+      (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
+      ( \summary -> case (fieldM, groupM >>= parseFacetGroup) of
+          (Just field, _) -> renderFacetTail field summary
+          (_, Just facetGroup) -> renderFacetGroup True facetGroup summary
+          _ -> renderFacets summary
+      )
+      facetSummary
 
 
 -- | Enriched span schema for the query editor, served from a dedicated endpoint
@@ -975,48 +1054,6 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
       (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM skip
       -- Summary only rides the first page; later load-more pages don't need it.
       addRespHeaders $ SessionsView total (V.fromList rows) (if skip == 0 then Just summ else Nothing)
-
-
--- | Form body for 'saveQueryH' (HTMX serializes the modal's inputs + hx-vals here).
-data SaveQueryForm = SaveQueryForm {query :: Maybe Text, queryLibId :: Maybe Text, queryTitle :: Maybe Text}
-  deriving stock (Generic)
-  deriving anyclass (FromForm)
-
-
--- | Save (create or rename) a query-library item, returning the refreshed popover fragment.
-saveQueryH :: Projects.ProjectId -> SaveQueryForm -> ATAuthCtx (RespHeaders QueryLibraryView)
-saveQueryH pid form = do
-  (sess, _) <- Projects.sessionAndProject pid
-  let uid = sess.persistentSession.userId
-      queryAST = fromRight [] $ parseQueryToAST (maybeToMonoid form.query)
-  case (,) <$> nonEmptyT form.queryLibId <*> nonEmptyT form.queryTitle of
-    Just (qId, title) -> Projects.queryLibTitleEdit pid uid qId title >> addSuccessToast "Edited Query title successfully" Nothing
-    Nothing -> Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle >> addSuccessToast "Saved to Query Library successfully" Nothing
-  addTriggerEvent "closeModal" ""
-  queryLibraryFragment pid uid
-
-
--- | Delete a query-library item, returning the refreshed popover fragment.
-deleteQueryH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders QueryLibraryView)
-deleteQueryH pid qId = do
-  (sess, _) <- Projects.sessionAndProject pid
-  let uid = sess.persistentSession.userId
-  Projects.queryLibItemDelete pid uid qId
-  addSuccessToast "Deleted from Query Library successfully" Nothing
-  queryLibraryFragment pid uid
-
-
--- | Re-read the caller's query library and wrap it as the popover fragment.
-queryLibraryFragment :: Projects.ProjectId -> Projects.UserId -> ATAuthCtx (RespHeaders QueryLibraryView)
-queryLibraryFragment pid uid = do
-  queryLib <- Projects.queryLibHistoryForUser pid uid
-  let (recent, saved) = partitionQueryLib queryLib
-  addRespHeaders $ QueryLibraryView pid saved recent
-
-
--- | Split a user's query-library items into (recent, saved) — history entries first.
-partitionQueryLib :: [Projects.QueryLibItem] -> (V.Vector Projects.QueryLibItem, V.Vector Projects.QueryLibItem)
-partitionQueryLib = bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType)
 
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
@@ -1308,16 +1345,6 @@ instance AE.ToJSON LogsGet where
   toJSON (LogPage _) = AE.object ["error" AE..= True]
 
 
--- | HTMX fragment for the query-library popover, returned by the save/delete
--- mutation endpoints (hxSelect extracts #queryLibraryContent from it).
-data QueryLibraryView = QueryLibraryView Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-
-
-instance ToHtml QueryLibraryView where
-  toHtml (QueryLibraryView _pid queryLibSaved queryLibRecent) = toHtml $ queryLibraryDropdown_ queryLibSaved queryLibRecent
-  toHtmlRaw = toHtml
-
-
 -- | JSON payload for the patterns visualization endpoint. The 'Bool' flags the
 -- first page (skip=0); when set, the rendered summary header rides along as
 -- @summaryHtml@ so the client injects #page-summary-region without a second scan
@@ -1435,8 +1462,6 @@ data ApiLogsPageData = ApiLogsPageData
   , query :: Maybe Text
   , source :: Text
   , targetSpans :: Maybe Text
-  , queryLibRecent :: V.Vector Projects.QueryLibItem
-  , queryLibSaved :: V.Vector Projects.QueryLibItem
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
   , vizType :: Maybe Text
@@ -1636,8 +1661,6 @@ apiLogsPage page = do
           , targetSpan = page.targetSpans
           , query = page.query
           , vizType = page.vizType
-          , queryLibRecent = page.queryLibRecent
-          , queryLibSaved = page.queryLibSaved
           , updateUrl = True
           , targetWidgetPreview = Nothing
           , alert = isJust page.alert
@@ -1822,6 +1845,12 @@ apiLogsPage page = do
       div_
         [ class_ "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
         , id_ "log_details_container"
+        , -- Detail loads are last-click-wins. htmx's default sync strategy is "queue first",
+          -- which drops a click made while another detail request is in flight: the new row
+          -- never loads and the overlay indicator (added on click) is never cleared, so the
+          -- panel sits on a frozen three-dot loader until a page reload. "replace" aborts the
+          -- in-flight request and issues the new one instead.
+          term "hx-sync" "this:replace"
         , term "data-has-target" (if isJust page.targetEvent then "1" else "0")
         , [__|on checkMobileOpen[window.innerWidth < 768] add .details-open to me
         init

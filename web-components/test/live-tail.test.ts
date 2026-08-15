@@ -127,24 +127,38 @@ describe('Live Tail reconnection', () => {
     // A reconnect that silently widened or narrowed the filter would show rows the user never
     // asked for, or hide the ones they did, with nothing on screen to say the query changed.
     const el = await mount();
-    el.querySelector('[data-service]').value = 'checkout';
-    el.querySelector('[data-environment]').value = 'prod';
-    el.querySelector('[data-query]').value = 'level == "error"';
+    await settle(); // the schema fetch fills the selects; without it there is nothing to pick
 
-    el.start();
+    // Drive the controls the component actually exposes. There are no data-* hooks: the filter
+    // lives in properties fed by these `change` handlers, and the query arrives as an
+    // `update-query` event from the shared editor.
+    const pick = (label: string, value: string) => {
+      const select = el.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement;
+      select.value = value;
+      expect(select.value).toBe(value); // guards against the option not existing
+      select.dispatchEvent(new Event('change'));
+    };
+    pick('Service', 'checkout');
+    pick('Environment', 'prod');
+    el.querySelector('query-editor')!.dispatchEvent(new CustomEvent('update-query', { detail: { value: 'level == "error"' } }));
+    await el.updateComplete;
+
+    // No explicit start: every filter change restarts the stream, which is the behaviour under
+    // test — the last of those restarts is the registration a reconnect has to reproduce.
     await settle(); // registration POST resolves, then the EventSource opens
     FakeEventSource.last!.emit('ready', {});
+    const selectors = { service: 'checkout', environment: 'prod', query: 'level == "error"' };
+    expect(posted.at(-1)).toMatchObject(selectors); // the filter reached the server at all
+    const beforeReconnect = posted.length;
 
     // A transport blip: EventSource fails, LiveStream re-registers from scratch.
     FakeEventSource.last!.onerror!();
     await new Promise(r => setTimeout(r, 1100)); // first backoff step
     await settle();
 
-    expect(posted.length).toBeGreaterThanOrEqual(2);
-    expect(posted[posted.length - 1]).toMatchObject({
-      service: 'checkout',
-      environment: 'prod',
-      query: 'level == "error"',
-    });
+    // Counted from the reconnect, not from zero: the filter changes above each restart the
+    // stream too, so a total of ">= 2" would pass even if the blip re-registered nothing.
+    expect(posted.length).toBeGreaterThan(beforeReconnect);
+    expect(posted.at(-1)).toMatchObject(selectors);
   });
 });

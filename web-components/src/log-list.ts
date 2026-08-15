@@ -50,8 +50,22 @@ import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
 
-// Convert CSS token to hex for ECharts (which can't parse oklch)
-const cssTokenToHex = (token: string): string => toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
+// Convert CSS token to hex for ECharts (which can't parse oklch).
+//
+// Memoised because getComputedStyle forces a style recalc and this is called from the chart
+// mark-area update, which runs on every visibility change while the list is scrolling — it was
+// measurably the second-largest source of forced layout on the page. Token values only change
+// with the theme, so that (an attribute read, no recalc) is the cache key.
+const cssHexCache = new Map<string, string>();
+const cssTokenToHex = (token: string): string => {
+  const key = `${document.body.getAttribute('data-theme') ?? ''}:${token}`;
+  let hex = cssHexCache.get(key);
+  if (hex === undefined) {
+    hex = toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
+    cssHexCache.set(key, hex);
+  }
+  return hex;
+};
 
 // TypeScript declarations for global functions
 declare global {
@@ -86,7 +100,12 @@ type ScrollAnchor = { id: string; offset: number };
 export const virtualItemKey = (item: VirtualListItem) =>
   'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
 
-const MAX_RETAINED_ROWS = 5000;
+// Retained rows are the scroll cost: measured at 4x CPU throttle, an identical scroll workload
+// blocks the main thread 4767ms at 5000 rows and 3660ms at 2500 (400 rows only reaches 2915ms,
+// so the rest is per-scroll work that shrinking the window cannot buy back). Evicting reopens
+// the edge — mergeIntoTree sets hasMore/hasNewer — so a smaller window costs a refetch when you
+// scroll back past it, not access to the rows.
+export const MAX_RETAINED_ROWS = 2500;
 // Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
 const NARROW_VIEWPORT = '(max-width: 767px)';
@@ -157,6 +176,19 @@ export class LogList extends LitElement {
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = true;
   @state() private hasNewer: boolean = false;
+  /**
+   * Bumped whenever the retention window evicts rows, to remount the virtualizer.
+   *
+   * Shrinking `.items` leaves lit-virtualizer's layout holding a scroll size for the old,
+   * longer list (measured: 79989px against a true 73437px). Scroll positions near the end then
+   * map past the last item, the computed range comes back empty, and the list renders *nothing*
+   * — permanently, since every later scroll lands in the same dead zone. It looked to users like
+   * the log explorer went blank and only a page reload brought it back.
+   *
+   * Remounting is what resyncs it; the merge paths already capture a scroll anchor and restore
+   * it immediately after, so the user keeps their place across the swap.
+   */
+  @state() private virtualizerEpoch = 0;
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
@@ -187,7 +219,8 @@ export class LogList extends LitElement {
   @query('#loader') private loaderElement?: HTMLElement;
   @query('#log_details_container') private logDetailsContainer?: HTMLElement;
   @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
-  @query('#details_indicator') private detailsIndicator?: HTMLElement;
+  // Monotonic id for detail-panel loads, so a superseded request can tell it lost the race.
+  private detailRequestSeq = 0;
   private readonly serviceTimePopoverId = `service-time-breakdown-${generateId()}`;
 
   private cachedServerTraces: ServerTraceEntry[] = [];
@@ -623,7 +656,6 @@ export class LogList extends LitElement {
     }
     this.requestUpdate();
   }
-
   private buildRecentFetchUrl(): string {
     // Always build from current browser URL to ensure we have latest query params
     const url = new URL(window.location.href);
@@ -838,6 +870,11 @@ export class LogList extends LitElement {
     this.isNarrow = this.narrowQuery.matches;
     this.narrowQuery.addEventListener('change', this.onNarrowChange);
     window.addEventListener('chart-updated', this.handleChartCountUpdate);
+    // Watchdog for the stuck-blank virtualizer. It has to be a timer: the failure renders
+    // nothing, so no update and no scroll event follows it to hang a check on. One
+    // querySelector every two seconds is far cheaper than leaving a user staring at an empty
+    // list that only a page reload will fix.
+    this.blankWatchdog = setInterval(() => this.healBlankVirtualizer(), 2000);
     this.initWorker();
     this.setupEventListeners();
     // Initialize empty state
@@ -974,7 +1011,60 @@ export class LogList extends LitElement {
     }
   }
 
+  /**
+   * Last-resort recovery for a virtualizer that has stopped rendering entirely.
+   *
+   * Reachable once the retention window starts evicting: lit-virtualizer settles into a state
+   * where it renders no rows at all while `items` is non-empty, and it never comes back on its
+   * own — every subsequent scroll lands in the same dead range. To a user the log list simply
+   * goes blank and stays blank until they reload the page, which is exactly what was reported.
+   *
+   * Resetting the scroll origin is what forces the layout to re-measure; the user is then
+   * returned to the row they were reading. Bounded per eviction so a persistent failure degrades
+   * to "list is at the top" rather than a scroll fight.
+   */
+  private blankWatchdog: ReturnType<typeof setInterval> | null = null;
+  private blankHealAttempts = 0;
+  private blankHealEpoch = -1;
+  private blankHealAt = 0;
+  private healBlankVirtualizer() {
+    const virtualizer = this.querySelector('lit-virtualizer');
+    const container = this.logsContainer;
+    if (!virtualizer || !container || this.isLoading || this.virtualListItems.length === 0) return;
+    // Any rendered row means the virtualizer is healthy; the loadMore/fetchRecent rows count.
+    if (virtualizer.querySelector('tr')) {
+      this.blankHealAttempts = 0;
+      return;
+    }
+    // Budget is per eviction, not for the life of the component: the empty frames that occur
+    // *during* an eviction would otherwise spend it before the user ever sees the stuck state.
+    if (this.blankHealEpoch !== this.virtualizerEpoch) {
+      this.blankHealEpoch = this.virtualizerEpoch;
+      this.blankHealAttempts = 0;
+    }
+    const now = performance.now();
+    if (this.blankHealAttempts >= 3 || now - this.blankHealAt < 500) return;
+    this.blankHealAttempts++;
+    this.blankHealAt = now;
+    const index = Math.min(this.lastVisibilityRange?.first ?? 0, this.virtualListItems.length - 1);
+    container.scrollTop = 0;
+    if (index <= 0) return;
+    // Wait for the re-measure the reset triggered before asking for an index, or the jump is
+    // computed against the same stale geometry that caused the blank and lands near the top.
+    void Promise.resolve(virtualizer.layoutComplete)
+      .then(() => virtualizer.scrollToIndex(index, 'start'))
+      .catch(() => {});
+  }
+
   updated(changedProperties: Map<string, any>) {
+    // Deferred twice: once for the virtualizer to render off this update, once more so a
+    // legitimate mid-update empty frame is not mistaken for the stuck state.
+    requestAnimationFrame(() => requestAnimationFrame(() => this.healBlankVirtualizer()));
+    // An eviction is the one moment the virtualizer is known to get stuck, and once stuck it
+    // renders nothing, so nothing changes and no further update ever arrives to notice. Give it
+    // time to settle, then check on a timer rather than waiting for a render that never comes.
+    if (changedProperties.has('virtualizerEpoch')) setTimeout(() => this.healBlankVirtualizer(), 400);
+
     // Stop live streaming when switching to an aggregate view
     if (changedProperties.has('mode') && this.isAggregate && this.liveStream) {
       this.liveStream.stop();
@@ -1016,6 +1106,10 @@ export class LogList extends LitElement {
   }
 
   disconnectedCallback() {
+    if (this.blankWatchdog) {
+      clearInterval(this.blankWatchdog);
+      this.blankWatchdog = null;
+    }
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
@@ -1709,18 +1803,27 @@ export class LogList extends LitElement {
       prevActive.classList.remove('bg-fillBrand-strong');
     }
     event.currentTarget.classList.add('bg-fillBrand-strong');
-    const indicator = this.detailsIndicator || document.querySelector('#details_indicator');
-    if (indicator) {
-      indicator.classList.add('htmx-request');
-    }
+    // Re-query rather than reuse a cached ref: the indicator is rendered *inside* the container
+    // this request innerHTML-swaps, so every response replaces the node. A ref captured on an
+    // earlier click points at a detached element, and clearing that leaves the live one spinning.
+    const showIndicator = (on: boolean) => document.querySelector('#details_indicator')?.classList.toggle('htmx-request', on);
+    showIndicator(true);
 
     const [rdId, rdCreatedAt, source] = targetInfo;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
+    // Only the newest click owns the indicator: #log_details_container carries
+    // hx-sync="this:replace", so clicking again aborts this request, and the loser settling
+    // must not clear the loader out from under the winner still in flight.
+    const seq = ++this.detailRequestSeq;
     // innerHTML, not morph: measured, the swap is ~7ms of a ~200ms click, and idiomorph's
     // in-place mutation means hyperscript never installs FieldMenuDelegate on the new
     // content, which silently kills the field context menu.
-    (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' });
+    void Promise.resolve((window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' }))
+      .catch(() => {})
+      // A dropped, aborted or failed request still has to hand the loader back — that omission
+      // is what stranded the panel on a frozen three-dot loader until a reload.
+      .finally(() => seq === this.detailRequestSeq && showIndicator(false));
   };
 
   moveColumn(column: string, direction: number) {
@@ -1791,6 +1894,7 @@ export class LogList extends LitElement {
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
+    this.virtualizerEpoch++;
     return kept;
   }
 
@@ -1811,7 +1915,11 @@ export class LogList extends LitElement {
     const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
     const virtualizer = this.querySelector('lit-virtualizer');
     if (index < 0 || !virtualizer) return;
-    virtualizer.element(index)?.scrollIntoView({ block: 'start' });
+    // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows the
+    // virtualizer has already rendered, so anchoring to a row scrolled out of the rendered
+    // window silently did nothing. It is also cheaper — scrollIntoView forces a synchronous
+    // layout and can scroll ancestor scrollers, and the offset correction below re-pins anyway.
+    virtualizer.scrollToIndex(index, 'start');
     try {
       await virtualizer.layoutComplete;
     } catch (error) {
@@ -1820,7 +1928,8 @@ export class LogList extends LitElement {
     }
     requestAnimationFrame(() => {
       const container = this.logsContainer;
-      const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
+      // Target the row by id directly rather than materialising every rendered row to scan it.
+      const row = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
       if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
     });
   }
@@ -1959,6 +2068,10 @@ export class LogList extends LitElement {
   private handleListScroll = () => {
     this.markScrolling();
     this.resumeLiveTailAtEdge();
+    // Also checked here, not only after an update: once the virtualizer is stuck it renders
+    // nothing, so nothing changes, so Lit never updates again — `updated` would never run and
+    // the list would stay blank forever. Scrolling is what the user does when they see it.
+    this.healBlankVirtualizer();
   };
 
   handleVisibilityChange = (e: any) => {
@@ -2270,7 +2383,7 @@ export class LogList extends LitElement {
             : html`
                 <tbody class="min-w-0 text-xs">
                   ${keyed(
-                    this.isAggregate || this.wrapsLines ? 'measured' : 'dense',
+                    `${this.isAggregate || this.wrapsLines ? 'measured' : 'dense'}:${this.virtualizerEpoch}`,
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
                       .keyFunction=${virtualItemKey}

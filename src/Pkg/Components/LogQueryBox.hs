@@ -1,4 +1,4 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryDropdown_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
+module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryContent_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
 import Data.Default
@@ -29,8 +29,6 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , targetSpan :: Maybe Text
   , query :: Maybe Text
   , vizType :: Maybe Text
-  , queryLibRecent :: V.Vector Projects.QueryLibItem
-  , queryLibSaved :: V.Vector Projects.QueryLibItem
   , updateUrl :: Bool
   -- ^ Whether to update the URL when the query changes
   , alert :: Bool
@@ -56,9 +54,8 @@ logQueryBox_ config = do
     , id_ "saveQueryForm"
     , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
-    , hxTarget_ "#queryLibraryContent"
-    , hxSwap_ "outerHTML"
-    , hxSelect_ "#queryLibraryContent"
+    , hxTarget_ "#queryLibraryPopover"
+    , hxSwap_ "innerHTML"
     , hxPushUrl_ "false"
     , [__|on htmx:after:request set #saveQueryMdl.dataset.pendingQuery to null|]
     ]
@@ -253,7 +250,7 @@ logQueryBox_ config = do
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
           whenNothing_ config.targetWidgetPreview
-            $ popularSearchChips_ config.queryLibSaved config.queryLibRecent noActiveQuery
+            $ popularSearchChips_ config.pid noActiveQuery
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
           fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
@@ -283,7 +280,7 @@ logQueryBox_ config = do
               <> [checked_ | config.alert]
             span_ "Create monitor"
 
-  queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType config.pid
+  queryEditorInitializationCode config.vizType config.pid
 
 
 -- | Helper for visualizing the data with different chart types
@@ -354,28 +351,21 @@ queryEditorSkeleton_ query =
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
-queryLibraryDropdown_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibraryDropdown_ queryLibSaved queryLibRecent =
-  div_
-    [ id_ "queryLibraryPopover"
-    , term "popover" "auto"
-    , class_ "bg-bgBase rounded-xl border border-strokeWeak shadow-lg w-[480px] max-w-[90vw] overflow-hidden z-50 mt-1"
-    , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
-    ]
-    do
-      div_ [id_ "queryLibraryContent"]
-        $ div_ [class_ "tabs tabs-box tabs-sm tabs-outline items-center p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
-          tabPanel_ "Popular" True popularQueriesContent_
-          tabPanel_ "Saved" False (queryLibraryContent_ "Saved" queryLibSaved)
-          tabPanel_ "Recent" False (queryLibraryContent_ "Recent" queryLibRecent)
+queryLibraryContent_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+queryLibraryContent_ queryLibSaved queryLibRecent =
+  div_ [id_ "queryLibraryContent"]
+    $ div_ [class_ "tabs tabs-box tabs-sm tabs-outline items-center p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+      tabPanel_ "Popular" True popularQueriesContent_
+      tabPanel_ "Saved" False (queryLibraryItems_ "Saved" queryLibSaved)
+      tabPanel_ "Recent" False (queryLibraryItems_ "Recent" queryLibRecent)
   where
     tabPanel_ :: Text -> Bool -> Html () -> Html ()
     tabPanel_ label isDefault content = do
       input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | isDefault]
       div_ [role_ "tabpanel", class_ "tab-content max-h-[60dvh] overflow-y-auto"] content
 
-    queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
-    queryLibraryContent_ label items = do
+    queryLibraryItems_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
+    queryLibraryItems_ label items = do
       searchBar_ label
       div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items (queryLibItem_ (label == "Recent"))
 
@@ -489,9 +479,8 @@ queryLibItem_ isRecent qli =
                 "Delete query"
                 "trash"
                 [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
-                , hxTarget_ "#queryLibraryContent"
-                , hxSwap_ "outerHTML"
-                , hxSelect_ "#queryLibraryContent"
+                , hxTarget_ "#queryLibraryPopover"
+                , hxSwap_ "innerHTML"
                 , hxPushUrl_ "false"
                 ]
   where
@@ -503,8 +492,8 @@ queryLibItem_ isRecent qli =
 
 -- | Popular search chips + query library dropdown, unified as one component.
 -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
-popularSearchChips_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Bool -> Html ()
-popularSearchChips_ queryLibSaved queryLibRecent showChips =
+popularSearchChips_ :: Projects.ProjectId -> Bool -> Html ()
+popularSearchChips_ pid showChips =
   div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
     when showChips
       $ span_
@@ -528,11 +517,23 @@ popularSearchChips_ queryLibSaved queryLibRecent showChips =
       , class_ "px-1.5 py-0.5 text-textBrand hover:underline cursor-pointer inline-flex items-center gap-1"
       , term "popovertarget" "queryLibraryPopover"
       , style_ "anchor-name: --querylib-anchor"
+      , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/queries"
+      , hxTrigger_ "click once"
+      , hxTarget_ "#queryLibraryPopover"
+      , hxSwap_ "innerHTML"
+      , hxIndicator_ "#queryLibraryLoader"
       ]
       do
         "Library"
         faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
-    queryLibraryDropdown_ queryLibSaved queryLibRecent
+    div_
+      [ id_ "queryLibraryPopover"
+      , term "popover" "auto"
+      , class_ "bg-bgBase rounded-xl border-2 border-strokeStrong shadow-lg w-[480px] max-w-[90vw] min-h-16 overflow-hidden z-50 mt-1"
+      , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
+      ]
+      $ div_ [id_ "queryLibraryLoader", class_ "htmx-indicator h-16 flex items-center justify-center"]
+      $ span_ [class_ "loading loading-spinner loading-sm text-textBrand", role_ "status", Aria.label_ "Loading query library"] ""
 
 
 -- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
@@ -547,11 +548,9 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
-queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Projects.ProjectId -> Html ()
-queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
-  let queryLibData = queryLibRecent <> queryLibSaved
-      queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
-      -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
+queryEditorInitializationCode :: Maybe Text -> Projects.ProjectId -> Html ()
+queryEditorInitializationCode vizTypeM pid = do
+  let -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
       -- rather than inlined, so it's out of the page payload and re-encode path.
       -- Cached in a window promise so it's fetched once per SPA session (reused
       -- across HTMX morph swaps), not on every render.
@@ -631,13 +630,11 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       }
     };
 
-    // Immediate init instead of DOMContentLoaded (which never re-fires on HTMX morph).
-    var _initRetries = 0;
-    (function initEditor() {
+    // Initialise after the interaction-triggered query-editor chunk upgrades the element.
+    customElements.whenDefined('query-editor').then(function initEditor() {
       const editor = document.getElementById('filterElement');
-      const retry = () => { if (++_initRetries < 80) setTimeout(initEditor, 50); };
-      if (!editor || !editor.setQueryLibrary || !window.schemaManager?.setSchemaData) { retry(); return; }
-      editor.setQueryLibrary($queryLibDataJson);
+      if (!editor || !window.schemaManager?.setSchemaData) return;
+      editor.setQueryLibrary?.(window.queryLibraryData || []);
       const loadSchema = () => {
         window.__spanSchemaPromise = window.__spanSchemaPromise || fetch("$schemaUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());
         window.__spanSchemaPromise.then(s => {
@@ -649,7 +646,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       if (window.__spanSchemaPromise) loadSchema();
       else editor.addEventListener('focusin', loadSchema, {once: true});
       if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
-    })();
+    });
 
     // Bucket-bar click handler for the sessions header. Defined here (not in the
     // header markup) so the header stays script-free and can be injected via

@@ -41,8 +41,7 @@ window.addEventListener(
 );
 
 // Monaco is ~1.1MB gzipped and dominates the initial payload of every page carrying a
-// search bar, but nobody types a query during first paint. Load it once the browser goes
-// idle, or the moment the user reaches for the editor — whichever happens first. The
+// search bar. Load it only when the user reaches for the editor. The
 // server renders a matching skeleton inside the element (see LogQueryBox.queryEditorSkeleton_)
 // so the box looks identical for the ~1 frame before Lit replaces it.
 const deferredComponents: Array<[string, () => Promise<unknown>]> = [
@@ -67,16 +66,6 @@ const deferredComponents: Array<[string, () => Promise<unknown>]> = [
   void import('./service-map').then(m => (m.serviceMapChart as (...a: any[]) => void)(...args));
 (window as any).serviceMapFilter = (...args: unknown[]) =>
   void import('./service-map').then(m => (m.serviceMapFilter as (...a: any[]) => void)(...args));
-
-// Idle fires as soon as the main thread has a gap, which on the log explorer is ~1s in — while the
-// table is still waiting on /data and rendering. Monaco is ~300ms of CPU, so waiting for `load`
-// first keeps it off the critical render path. Interaction still bypasses this entirely.
-const whenIdle = (fn: () => void) => {
-  const schedule = () =>
-    'requestIdleCallback' in window ? requestIdleCallback(fn, { timeout: 2000 }) : setTimeout(fn, 300);
-  if (document.readyState === 'complete') schedule();
-  else window.addEventListener('load', schedule, { once: true });
-};
 
 // Elements already wired for deferred loading. Survives htmx swaps: a re-swapped editor is a
 // new node, so the WeakSet lets it be wired again while the old one is collected.
@@ -108,7 +97,6 @@ const loadDeferredComponents = () => deferredComponents.forEach(([selector, load
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
     start(true);
   }, { once: true });
-  whenIdle(() => start(false));
 });
 
 // Components that render their own <query-editor> after this module's initial scan (live-tail)

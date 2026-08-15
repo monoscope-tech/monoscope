@@ -98,6 +98,7 @@ import Pages.GitSync qualified as GitSync
 import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Monitors qualified as Alerts
 import Pages.Monitors qualified as Testing
 import Pages.Onboarding qualified as Onboarding
@@ -539,9 +540,10 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
     -- against otel_logs_and_spans squiggles the metrics table's own columns. Every sibling
     -- endpoint here already takes it.
     logExplorerValidateGet :: mode :- "log_explorer" :> "validate" :> QPT "query" :> QPT "source" :> Get '[JSON] (RespHeaders Log.QueryValidation)
-  , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> Get '[HTML] (RespHeaders (Html ()))
-  , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] Log.SaveQueryForm :> Post '[HTML] (RespHeaders Log.QueryLibraryView)
-  , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders Log.QueryLibraryView)
+  , logExplorerFacetsGet :: mode :- "log_explorer" :> "facets" :> QPT "field" :> QPT "group" :> Get '[HTML] (RespHeaders (Html ()))
+  , queryLibraryGet :: mode :- "log_explorer" :> "queries" :> Get '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
+  , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] QueryLibrary.SaveQueryForm :> Post '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
+  , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
   , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
@@ -957,8 +959,9 @@ logExplorerServer pid =
     , logExplorerSchemaGet = Log.logExplorerSchemaH pid
     , logExplorerValidateGet = Log.logExplorerValidateH pid
     , logExplorerFacetsGet = Log.logExplorerFacetsH pid
-    , saveQueryPost = Log.saveQueryH pid
-    , deleteQueryPost = Log.deleteQueryH pid
+    , queryLibraryGet = QueryLibrary.queryLibraryH pid
+    , saveQueryPost = QueryLibrary.saveQueryH pid
+    , deleteQueryPost = QueryLibrary.deleteQueryH pid
     , alertFormGet = Log.alertFormH pid
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid

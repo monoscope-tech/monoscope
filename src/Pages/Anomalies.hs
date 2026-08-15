@@ -808,6 +808,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
             div_
               [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/2 investigation-details"
               , id_ "log_details_container"
+              , -- Last-click-wins; see the matching note in Pages.LogExplorer.Log.detailsPanel.
+                term "hx-sync" "this:replace"
               , [__|on closeDetailPanel
                 set my *width to '0px'
                 remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>

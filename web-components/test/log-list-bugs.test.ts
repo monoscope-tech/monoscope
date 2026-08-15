@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport } from './log-list-harness';
-import { DenseRowFlowLayout, virtualItemKey } from '../src/log-list';
+import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS } from '../src/log-list';
 import { shouldBufferRecent, atInsertionEdge, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -148,18 +148,18 @@ describe('LogList — MED correctness', () => {
 
   test('pagination bounds retained rows and reopens the evicted edge', async () => {
     const el = await mountList();
-    const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
+    const initial = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
 
     (el as any).spanListTree = (el as any).mergeIntoTree([row('older')], false);
-    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)).toHaveLength(MAX_RETAINED_ROWS);
     expect(ids(el)[0]).toBe('r1');
     expect((el as any).hasNewer).toBe(true);
     expect((el as any).seenIds.has('r0')).toBe(false);
 
     (el as any).spanListTree = (el as any).mergeIntoTree([row('r0')], true);
-    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)).toHaveLength(MAX_RETAINED_ROWS);
     expect(ids(el)[0]).toBe('r0');
     expect(ids(el)).not.toContain('older');
     expect((el as any).hasMore).toBe(true);
@@ -167,10 +167,10 @@ describe('LogList — MED correctness', () => {
 
   test('window trimming captures and restores the visible row before loading', async () => {
     const el = await mountList();
-    const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
+    const initial = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
-    const anchor = { id: 'r4990', offset: 7 };
+    const anchor = { id: `r${MAX_RETAINED_ROWS - 10}`, offset: 7 };
     const capture = vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValueOnce(anchor).mockReturnValue(null);
     const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
     const transport = deferredTransport();
@@ -198,35 +198,37 @@ describe('LogList — MED correctness', () => {
 
   test('anchor restoration pins through the virtualizer proxy and adjusts the rendered row', async () => {
     const el = await mountList();
-    const scrollIntoView = vi.fn();
+    // scrollToIndex, not element(index).scrollIntoView: element() resolves only rows already
+    // rendered, so an anchor scrolled out of the virtualizer's window never got pinned at all.
+    const scrollToIndex = vi.fn();
     const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
     const container = {
       scrollTop: 0,
       getBoundingClientRect: () => ({ top: 0 }),
-      querySelectorAll: () => [renderedRow],
+      querySelector: () => renderedRow,
     };
     Object.defineProperty(el, 'logsContainer', { value: container });
     (el as any).virtualListItems = [row('visible')];
     vi.spyOn(el, 'querySelector').mockReturnValue({
-      element: () => ({ scrollIntoView }),
+      scrollToIndex,
       layoutComplete: Promise.resolve(),
     } as any);
 
     await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
     await new Promise((resolve) => requestAnimationFrame(resolve));
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(scrollToIndex).toHaveBeenCalledWith(0, 'start');
     expect(container.scrollTop).toBe(10);
   });
 
   test('an oversized trace cannot collapse the retained window to zero rows', async () => {
     const el = await mountList();
-    const traceRows = Array.from({ length: 5000 }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
+    const traceRows = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
     (el as any).spanListTree = traceRows;
     (el as any).seenIds = new Set(traceRows.map((r) => r.id));
 
     (el as any).spanListTree = (el as any).mergeIntoTree([{ ...row('tail'), traceId: 'oversized-trace' }], false);
-    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)).toHaveLength(MAX_RETAINED_ROWS);
     expect(ids(el)[0]).toBe('t1');
   });
 
