@@ -185,6 +185,36 @@ describe('LogList — MED correctness', () => {
     expect(restore).toHaveBeenCalledWith(anchor);
   });
 
+  test('ordinary newest-first load-more appends without correcting the scroll anchor', async () => {
+    const el = await mountList();
+    (el as any).spanListTree = [row('visible')];
+    (el as any).seenIds = new Set(['visible']);
+    const anchor = { id: 'visible', offset: 7 };
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue(anchor);
+    const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
+    el.transport = serverTransport(logPage(['older']));
+
+    await el.fetchData('older', false, false, true);
+
+    expect(ids(el)).toEqual(['visible', 'older']);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  test('oldest-first load-more still restores after prepending older rows', async () => {
+    const el = await mountList({ flipDirection: true });
+    (el as any).spanListTree = [row('visible')];
+    (el as any).seenIds = new Set(['visible']);
+    const anchor = { id: 'visible', offset: 7 };
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue(anchor);
+    const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
+    el.transport = serverTransportFlipped(logPage(['older']));
+
+    await el.fetchData('older', false, false, true);
+
+    expect(ids(el)).toEqual(['older', 'visible']);
+    expect(restore).toHaveBeenCalledWith(anchor);
+  });
+
   test('scroll anchoring falls back to the virtualizer range while rows are recycling', async () => {
     const el = await mountList();
     Object.defineProperty(el, 'logsContainer', {

@@ -1657,9 +1657,16 @@ export class LogList extends LitElement {
         }
       } else {
         const anchor = this.captureScrollAnchor() ?? loadMoreAnchor;
+        const epochBeforeMerge = this.virtualizerEpoch;
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
         this.updateVisibleItems();
-        if (anchor) void this.restoreScrollAnchor(anchor);
+        // Newest-first load-more appends after the visible rows, so their geometry does not
+        // move and forcing an anchor correction only makes the virtualizer fight the user's
+        // downward scroll. We need to restore only when older rows are prepended (flipped
+        // direction) or retention-window eviction remounts the virtualizer.
+        const insertedBeforeVisibleRows = this.flipDirection;
+        const remountedAfterEviction = this.virtualizerEpoch !== epochBeforeMerge;
+        if (anchor && (insertedBeforeVisibleRows || remountedAfterEviction)) void this.restoreScrollAnchor(anchor);
       }
       // Count what's actually visible. queryResultCount over-counts because the
       // dedup-dropped boundary row is re-reported on every paginated page.
@@ -1780,6 +1787,7 @@ export class LogList extends LitElement {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
+    const listWasDeepScrolled = (this.logsContainer?.scrollTop ?? 0) > 0;
 
     // Batch DOM reads and writes
     requestAnimationFrame(() => {
@@ -1795,6 +1803,13 @@ export class LogList extends LitElement {
       if (resizerWrapper) {
         resizerWrapper.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
       }
+
+      // Opening the details pane changes the list's width. At a deep virtual scroll offset,
+      // lit-virtualizer can briefly resolve that resize to an empty rendered range. A click
+      // does not otherwise schedule a Lit update, so the ordinary post-update health check
+      // never runs and the user sees a blank flash until the watchdog notices. Check on the
+      // very next frame, while this resize is settling, and recover only if rows disappeared.
+      if (width < 50 && listWasDeepScrolled) requestAnimationFrame(() => this.healBlankVirtualizer());
     });
 
     // Use event delegation instead of querying all rows

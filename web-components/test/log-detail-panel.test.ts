@@ -78,4 +78,16 @@ describe('detail panel loading indicator', () => {
 
     expect(loaderOn()).toBe(false);
   });
+
+  test('opening the panel checks the deep-scrolled virtualizer on the resize frame', async () => {
+    (window as any).htmx = { ajax: () => new Promise(() => {}) };
+    const el = new LogList();
+    Object.defineProperty(el, 'logsContainer', { value: { scrollTop: 5000 } });
+    const heal = vi.spyOn(el as any, 'healBlankVirtualizer').mockImplementation(() => {});
+
+    clickRow(el, 'a');
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    expect(heal).toHaveBeenCalledOnce();
+  });
 });
