@@ -256,20 +256,20 @@ bodyWrapper bcfg child = do
       mapM_
         deferScript
         $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
-        , -- Must load immediately after htmx: restores implicit attribute inheritance
-          -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
-          -- listeners use v4 event names directly, so the shim's legacy-name replay is
-          -- only load-bearing for third-party code (hyperscript binds the legacy load event).
-          assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
-        , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
-        , assetUrl "/public/assets/js/main.js"
-        , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
-          -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
-          -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
-          -- removed defineExtension API (v4 preload ships above; json-enc and
-          -- forward-page-params are re-registered in main.ts via registerExtension).
-          assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
-        ]
+          , -- Must load immediately after htmx: restores implicit attribute inheritance
+            -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
+            -- listeners use v4 event names directly, so the shim's legacy-name replay is
+            -- only load-bearing for third-party code (hyperscript binds the legacy load event).
+            assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
+          , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
+          , assetUrl "/public/assets/js/main.js"
+          , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
+            -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
+            -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
+            -- removed defineExtension API (v4 preload ships above; json-enc and
+            -- forward-page-params are re-registered in main.ts via registerExtension).
+            assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
+          ]
         <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
         <> [assetUrl "/public/assets/js/thirdparty/notyf3.min.js"]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
