@@ -1303,8 +1303,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 Widget.WTTimeseriesLine -> "timeseries_line"
                 Widget.WTLogs -> "logs"
                 _ -> "timeseries"
-            , queryLibRecent = V.empty
-            , queryLibSaved = V.empty
             , updateUrl = False
             , targetWidgetPreview = Just widgetPreviewId
             , alert = False

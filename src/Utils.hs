@@ -1589,7 +1589,6 @@ summaryFilterPath = \case
   "level" -> Just "severity.severity_text"
   "name" -> Just "name"
   "db.system" -> Just "attributes.db.system.name"
-  "db.statement" -> Just "attributes.db.statement"
   "db.query.text" -> Just "attributes.db.query.text"
   "rpc.method" -> Just "attributes.rpc.method"
   "rpc.service" -> Just "attributes.rpc.service"
@@ -1603,7 +1602,7 @@ summaryFilterPath = \case
 -- | Fields whose values can be long (URLs, routes, queries) — truncate to keep
 -- the header scannable and surface the full value via tooltip.
 summaryFieldIsLong :: Text -> Bool
-summaryFieldIsLong f = f `elem` ["url", "route", "resource", "target", "db.statement", "db.query.text", "span_name"]
+summaryFieldIsLong f = f `elem` ["url", "route", "resource", "target", "db.query.text", "span_name"]
 
 
 -- | Parse a `field;style⇒value` segment. Returns Nothing for malformed input.

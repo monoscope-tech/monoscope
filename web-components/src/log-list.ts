@@ -1915,10 +1915,20 @@ export class LogList extends LitElement {
     const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
     const virtualizer = this.querySelector('lit-virtualizer');
     if (index < 0 || !virtualizer) return;
+
+    const container = this.logsContainer;
+    const renderedRow = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
+    if (container && renderedRow) {
+      // The normal pagination case keeps the anchor inside the virtualizer's runway. Correct
+      // that row in place: scrollToIndex('start') would first snap it to the top, then the
+      // offset correction below would move it back a frame later — the visible load-more jump.
+      container.scrollTop += renderedRow.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+      return;
+    }
+
     // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows the
-    // virtualizer has already rendered, so anchoring to a row scrolled out of the rendered
-    // window silently did nothing. It is also cheaper — scrollIntoView forces a synchronous
-    // layout and can scroll ancestor scrollers, and the offset correction below re-pins anyway.
+    // virtualizer has already rendered. This fallback is needed after retention-window eviction
+    // remounts the virtualizer and recycles the anchor row out of the DOM.
     virtualizer.scrollToIndex(index, 'start');
     try {
       await virtualizer.layoutComplete;
@@ -1927,10 +1937,12 @@ export class LogList extends LitElement {
       return;
     }
     requestAnimationFrame(() => {
-      const container = this.logsContainer;
       // Target the row by id directly rather than materialising every rendered row to scan it.
-      const row = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
-      if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+      const currentContainer = this.logsContainer;
+      const row = currentContainer?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
+      if (currentContainer && row) {
+        currentContainer.scrollTop += row.getBoundingClientRect().top - currentContainer.getBoundingClientRect().top - anchor.offset;
+      }
     });
   }
 

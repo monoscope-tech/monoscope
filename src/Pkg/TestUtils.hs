@@ -1203,7 +1203,7 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
               [ "http.request.method" .= method
               , "http.request.path" .= path
               , "http.response.status_code" .= (200 :: Int)
-              , "net.host.name" .= host
+              , "server.address" .= host
               , "url.path" .= path
               , "url.full" .= path
               ]

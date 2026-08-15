@@ -57,13 +57,14 @@ getRequestDetails spanRecord = do
   if
     | Map.member "http" m -> Just ("HTTP", txt "http.request.method", fromMaybe "/" $ url "http" <|> url "url", status "http.response")
     | Map.member "rpc" m -> Just ("GRPC", txt "rpc.service", txt "rpc.method", status "rpc")
-    | Map.member "db" m -> Just ("DB", txt "db.system", if T.null query then txt "db.statement" else query, status "db")
+    -- Modern semconv key first, deprecated one as the fallback for pre-migration rows.
+    | Map.member "db" m -> Just ("DB", fromMaybe "" $ firstOf ["db.system.name", "db.system"], fromMaybe "" $ firstOf ["db.query.text", "db.statement"], status "db")
     | otherwise -> Nothing
   where
     txt k = fromMaybe "" $ atMapText k spanRecord
-    query = txt "db.query"
+    firstOf = viaNonEmpty head . filter (not . T.null) . map txt
     status pfx = fromMaybe 0 $ Telemetry.atMapInt (pfx <> ".status_code") spanRecord
-    url pfx = viaNonEmpty head $ filter (not . T.null) [txt (pfx <> "." <> k) | k <- ["route", "path", "url", "target"]]
+    url pfx = firstOf [pfx <> "." <> k | k <- ["route", "path", "url", "target"]]
 
 
 isHttpSpan :: Telemetry.OtelLogsAndSpans -> Bool

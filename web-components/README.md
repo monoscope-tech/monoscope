@@ -252,7 +252,7 @@ level               // Severity level field
 ## 3.2 Nested JSON Fields
 ```mql
 request_body.message        // Nested field access
-attributes.http.method      // Deep nesting
+attributes.http.request.method  // Deep nesting
 resource.service.name       // OpenTelemetry resource fields
 ```
 
@@ -470,7 +470,7 @@ summarize count() by service_name
 summarize avg(duration) by service_name, endpoint
 
 // Group by nested fields
-summarize count() by attributes.http.method, response.status_code
+summarize count() by attributes.http.request.method, response.status_code
 ```
 
 ### Time-Series Aggregation
@@ -711,10 +711,10 @@ AQL follows KQL conventions for the `where` keyword:
 
 ## 9.1 Find Slow Database Queries
 ```mql
-attributes.db.statement exists 
+attributes.db.query.text exists
 and duration > 500ms 
-and attributes.db.system == "postgresql"
-| project timestamp, service_name, attributes.db.statement, duration
+and attributes.db.system.name == "postgresql"
+| project timestamp, service_name, attributes.db.query.text, duration
 | sort by duration desc
 ```
 

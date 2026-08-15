@@ -161,11 +161,17 @@ httpKeyOf canonicalTemplates otelSpan =
                 <|> (truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number)
             )
           >>= guarded (\c -> c >= 100 && c < 600)
+      -- server.address first: it is the canonical semconv key, it is what ingest
+      -- normalises every legacy host attribute onto, and it is the only one host
+      -- resolution reads. The deprecated keys stay as fallbacks for rows written
+      -- before the migration. Empties are skipped so an SDK span that sent no host
+      -- still picks up the url-derived server.address instead of hashing on "".
       !host =
         fromMaybe ""
-          $ (attrValue ^? key "net" . key "host" . key "name" . _String)
-          <|> (attrValue ^? key "server" . key "address" . _String)
-          <|> (attrValue ^? key "http" . key "host" . _String)
+          $ asum
+            [ attrValue ^? p . _String >>= guarded (not . T.null)
+            | p <- [key "server" . key "address", key "net" . key "host" . key "name", key "http" . key "host"]
+            ]
       !sdkTypeStr =
         fromMaybe "unknown"
           $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)

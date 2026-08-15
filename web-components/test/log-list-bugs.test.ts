@@ -196,16 +196,36 @@ describe('LogList — MED correctness', () => {
     expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0 });
   });
 
-  test('anchor restoration pins through the virtualizer proxy and adjusts the rendered row', async () => {
+  test('anchor restoration adjusts a rendered row in place without first snapping it to the top', async () => {
     const el = await mountList();
-    // scrollToIndex, not element(index).scrollIntoView: element() resolves only rows already
-    // rendered, so an anchor scrolled out of the virtualizer's window never got pinned at all.
     const scrollToIndex = vi.fn();
     const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
     const container = {
       scrollTop: 0,
       getBoundingClientRect: () => ({ top: 0 }),
       querySelector: () => renderedRow,
+    };
+    Object.defineProperty(el, 'logsContainer', { value: container });
+    (el as any).virtualListItems = [row('visible')];
+    vi.spyOn(el, 'querySelector').mockReturnValue({
+      scrollToIndex,
+      layoutComplete: Promise.resolve(),
+    } as any);
+
+    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
+
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(10);
+  });
+
+  test('anchor restoration asks the virtualizer for a row that has been recycled', async () => {
+    const el = await mountList();
+    const scrollToIndex = vi.fn();
+    const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
+    const container = {
+      scrollTop: 0,
+      getBoundingClientRect: () => ({ top: 0 }),
+      querySelector: vi.fn().mockReturnValueOnce(null).mockReturnValue(renderedRow),
     };
     Object.defineProperty(el, 'logsContainer', { value: container });
     (el as any).virtualListItems = [row('visible')];

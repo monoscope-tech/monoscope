@@ -39,7 +39,7 @@ mkPageCtx pid = do
   -- reported. getFacetSummary ignores the time range.
   facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
   let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, envOptions})
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, envOptions, needsTagify = True})
   where
     envValues (SchemaCatalog.FacetData m) =
       V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
@@ -164,6 +164,7 @@ data BWConfig = BWConfig
   , freeTierStatus :: FreeTierStatus
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , needsGridStack :: Bool
+  , needsTagify :: Bool
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
@@ -214,7 +215,7 @@ bodyWrapper bcfg child = do
       -- Preload critical CSS and Inter before their stylesheet declarations are
       -- encountered. Inter uses a block period, so fallback glyphs never paint.
       link_ [rel_ "preload", href_ (assetUrl "/public/assets/css/tailwind.min.css"), term "as" "style"]
-      link_ [rel_ "preload", href_ "/public/assets/fonts/InterVariable.woff2", term "as" "font", type_ "font/woff2", term "crossorigin" "anonymous"]
+      link_ [rel_ "preload", href_ "/public/assets/fonts/InterVariable-Latin.woff2", term "as" "font", type_ "font/woff2", term "crossorigin" "anonymous"]
 
       -- View Transitions API (Chrome 111+, graceful fallback for others)
       meta_ [name_ "view-transition", content_ "same-origin"]
@@ -244,8 +245,7 @@ bodyWrapper bcfg child = do
         , assetUrl "/public/assets/css/thirdparty/rrweb.css"
         ]
       mapM_ css
-        $ [ assetUrl "/public/assets/css/thirdparty/tagify.min.css"
-          ]
+        $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
         <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
         <> [ assetUrl "/public/assets/css/tailwind.min.css"
            , assetUrl "/public/assets/web-components/dist/css/index.css"
@@ -255,7 +255,7 @@ bodyWrapper bcfg child = do
 
       mapM_
         deferScript
-        [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
+        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
         , -- Must load immediately after htmx: restores implicit attribute inheritance
           -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
           -- listeners use v4 event names directly, so the shim's legacy-name replay is
@@ -269,9 +269,9 @@ bodyWrapper bcfg child = do
           -- removed defineExtension API (v4 preload ships above; json-enc and
           -- forward-page-params are re-registered in main.ts via registerExtension).
           assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
-        , assetUrl "/public/assets/deps/tagify/tagify.min.js"
-        , assetUrl "/public/assets/js/thirdparty/notyf3.min.js"
         ]
+        <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
+        <> [assetUrl "/public/assets/js/thirdparty/notyf3.min.js"]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
       mapM_

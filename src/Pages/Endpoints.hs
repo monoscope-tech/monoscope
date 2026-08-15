@@ -192,7 +192,7 @@ renderCatalogMainCol pid vm = do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ reqTypeLabel <> " request"] $ faSprite_ arrowIcon "solid" arrowClass
       a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> reqTypeLabel, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
-      a_ ([href_ $ logExplorerHref pid $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
+      a_ ([href_ $ logExplorerHref pid $ "attributes.server.address==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
     servicesBadges_
       sourceLabel
       (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\"")
@@ -373,9 +373,11 @@ activityCell_ = sparkline_ . V.toList
 renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
 renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
   let outgoing = currentTab == "Outgoing"
-      hostAttr = bool "attributes.net.host.name" "attributes.server.address" outgoing
       (kindVal, sourceLabel) = directionLabels outgoing
-      q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
+      -- server.address in both directions: the local server on a server span, the remote
+      -- one on a client span. It is also the column apis.endpoints.host is resolved from,
+      -- so the filter matches the stored host exactly.
+      q = "attributes.server.address==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
   div_ [class_ "flex flex-col gap-1 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do

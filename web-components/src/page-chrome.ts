@@ -206,9 +206,9 @@ onReady(function(){
           ["method", "attributes.http.request.method"],
           ["query_params", "attributes.http.request.query_params"],
           ["path_params", "attributes.http.request.path_params"],
-          ["host", "attributes.net.host.name"],
+          ["host", "attributes.server.address"],
           ["urlPath", "attributes.http.route"],
-          ["raw_url", "attributes.http.target"],
+          ["raw_url", "attributes.url.full"],
           ["status_code", "attributes.http.response.status_code"],
         ]
         let { fieldPath: path, fieldValue: value } = ((event.target as HTMLElement).closest('[data-field-path]') as HTMLElement).dataset as Record<string, string>;

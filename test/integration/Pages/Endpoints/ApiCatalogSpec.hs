@@ -11,6 +11,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -20,7 +21,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
-import Utils (toXXHash)
+import Utils (toUriStr, toXXHash)
 
 
 -- These helper functions are now in Pkg.TestUtils
@@ -45,6 +46,17 @@ getEndpointsPage tr host page perPage = do
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ tbl) ->
       pure (tbl.rows, maybe 0 (.totalCount) tbl.features.pagination)
+    _ -> error "Unexpected response from endpointListGetH"
+
+
+-- | The endpoints table as a user sees it, for asserting on rendered links.
+getEndpointsHtml :: TestResources -> Maybe Text -> IO Text
+getEndpointsHtml tr filterParam = do
+  (_, resp) <-
+    testServant tr
+      $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
+  case resp of
+    ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure $ toStrict $ renderText $ toHtml tbl
     _ -> error "Unexpected response from endpointListGetH"
 
 
@@ -307,6 +319,14 @@ spec = sequential $ aroundAll withTestResources do
 
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
+
+    -- Regression: the incoming tab filtered host with the deprecated attributes.net.host.name
+    -- while ingest normalises every host onto server.address (the column apis.endpoints.host is
+    -- resolved from), so "View logs" landed on an empty explorer for OTLP-sourced endpoints.
+    it "endpoint View logs link filters host on server.address, not deprecated net.host.name" \tr -> do
+      html <- getEndpointsHtml tr (Just "Endpoints")
+      html `shouldSatisfy` T.isInfixOf (toUriStr "attributes.server.address==\"api.test.com\"")
+      html `shouldSatisfy` (not . T.isInfixOf "net.host.name")
 
     -- it "handles anomaly bulk actions correctly" \tr -> do
     --   -- First ensure endpoints are created and all background jobs are processed

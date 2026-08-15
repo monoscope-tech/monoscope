@@ -2590,8 +2590,7 @@ generateSpanSummary otel =
         , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
         , routeOrUrl
         , tag "db.system" "neutral" <$> dbSys
-        , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> atMapText "db.query.text" attrsM)
-        , tag "db.statement" "neutral" . T.take 200 <$> atMapText "db.statement" attrsM
+        , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> (atMapText "db.query.text" attrsM <|> atMapText "db.statement" attrsM))
         , tag "rpc.method" "neutral" <$> rpcMethod
         , tag "rpc.service" "neutral" <$> atMapText "rpc.service" attrsM
         , spanNameFallback
