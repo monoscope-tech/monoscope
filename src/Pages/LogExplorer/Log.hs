@@ -297,7 +297,7 @@ buildTraceTree colIdxMap queryResultCount rows
       let rootEnd = root'.startNs + root'.dur
           -- Same back-edge pruning as `go`, for the one edge it cannot see: a root listed as
           -- its own child (a span whose parent_id is its own span id).
-          rootKids = filter (/= root'.spanId) $ fromMaybe [] (Map.lookup root'.spanId fullChildrenMap)
+          rootKids = filter (/= root'.spanId) $ Map.findWithDefault [] root'.spanId fullChildrenMap
           initAcc = Map.fromList [(root'.spanId, rootKids) | not (null rootKids)]
           rootAdj = (root'.rowIdx, root'.startNs, root'.dur)
           -- `seen` makes the walk terminate on a cyclic parent chain. `parent_id` comes from
@@ -322,7 +322,7 @@ buildTraceTree colIdxMap queryResultCount rows
                       -- adjacency map that goes over the wire is acyclic for every client, not
                       -- just for the one traversal here. A child already placed elsewhere in
                       -- this trace keeps its first position.
-                      kids = filter (\k -> not (S.member k seen')) $ fromMaybe [] (Map.lookup x fullChildrenMap)
+                      kids = filter (`S.notMember` seen') $ Map.findWithDefault [] x fullChildrenMap
                       treeAcc' = if null kids then treeAcc else Map.insert x kids treeAcc
                       st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc', seen')
                       st'' = go adjStart adjEnd kids st'

@@ -494,6 +494,21 @@ spec = around withTestResources do
       r <- fetchData tr Nothing Nothing Nothing Nothing Nothing Nothing
       r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
 
+  -- The client half of last-click-wins lives in web-components (log-detail-panel.test.ts);
+  -- this is the server half. htmx defaults to `hx-sync: queue first`, which DROPS a detail
+  -- request issued while another is in flight: the newly clicked row never loads and the
+  -- overlay indicator, added on click, is never cleared — a frozen three-dot loader until the
+  -- user reloads. Deleting the attribute reintroduces that with every JS test still green.
+  describe "Detail panel request sync" do
+    it "logExplorerH_detailsContainer_replacesTheInFlightRequest" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      -- Scoped to the container's own tag, not the page: `lazyLoad_` and the widget loader
+      -- already carry the same attribute, so a page-wide search passes with this one deleted.
+      -- Splitting on '<' makes it independent of attribute order within the tag.
+      find (T.isInfixOf "id=\"log_details_container\"") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "hx-sync=\"this:replace\"")
+
   describe "Trace Tree" do
     -- Regression: startNs was folded with a 0 seed, so every synthetic orphan
     -- header started at 0 and its duration spanned from the epoch to the last span.
