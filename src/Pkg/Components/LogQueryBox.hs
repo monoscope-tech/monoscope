@@ -550,13 +550,14 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
 queryEditorInitializationCode :: Maybe Text -> Projects.ProjectId -> Html ()
 queryEditorInitializationCode vizTypeM pid = do
-  let -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
-      -- rather than inlined, so it's out of the page payload and re-encode path.
-      -- Cached in a window promise so it's fetched once per SPA session (reused
-      -- across HTMX morph swaps), not on every render.
-      schemaUrl = "/p/" <> pid.toText <> "/log_explorer/schema"
-      popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
-      vizType = fromMaybe "logs" vizTypeM
+  let
+    -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
+    -- rather than inlined, so it's out of the page payload and re-encode path.
+    -- Cached in a window promise so it's fetched once per SPA session (reused
+    -- across HTMX morph swaps), not on every render.
+    schemaUrl = "/p/" <> pid.toText <> "/log_explorer/schema"
+    popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
+    vizType = fromMaybe "logs" vizTypeM
   script_
     [text|
     // Set initial visualization type

@@ -6,8 +6,8 @@ module Pages.LogExplorer.QueryLibrary (
   deleteQueryH,
 ) where
 
-import Data.List qualified as L
 import Data.Aeson qualified as AE
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Lucid
