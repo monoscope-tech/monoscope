@@ -235,11 +235,15 @@ cmd_publish() { # [file]
 }
 
 publish_attestation() { # <check> [fingerprint] [caps] [platform]
-  local fp caps plat ref tree commit
+  local fp caps plat ref tree commit runner_id
   fp=${2:-$(fingerprint "$1")}
   caps=${3:-$(detect_caps)}
   plat=${4:-$(platform_tag)}
   ref=$(attest_ref "$1" "$fp" "$caps" "$plat")
+  # Who proved it, so a ref traces back to a run or a machine. NOT
+  # ${X:+a$X}${X:-b} — the :- arm yields $X itself when set, which emitted the
+  # run id twice and made the link unusable.
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then runner_id="github-run-$GITHUB_RUN_ID"; else runner_id="$(whoami)@$(hostname)"; fi
   tree=$(git mktree </dev/null)
   commit=$(GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-ci-attest} GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-ci@monoscope.tech} \
            GIT_COMMITTER_NAME=${GIT_COMMITTER_NAME:-ci-attest} GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-ci@monoscope.tech} \
@@ -248,7 +252,7 @@ fingerprint=$fp
 caps=$caps
 platform=$plat
 commit=$(git rev-parse HEAD)
-runner=${GITHUB_RUN_ID:+github-run-$GITHUB_RUN_ID}${GITHUB_RUN_ID:-$(whoami)@$(hostname)}")
+runner=$runner_id")
   if git push -q "$REMOTE" "${commit}:${ref}" 2>/dev/null; then
     note "attested $1 → $ref"
   else
