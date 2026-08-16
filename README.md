@@ -369,6 +369,7 @@ Real-time metrics and performance monitoring with AI-powered insights.
 - [Configuration](docs/configuration.md)
 - [Kubernetes Guide](docs/kubernetes.md)
 - [Development Guide](docs/DEVELOPMENT.md)
+- [Running CI Locally](docs/local-ci.md)
 
 <br/>
 

@@ -119,6 +119,49 @@ cabal test unit-tests --test-options='--match="/pattern/"'
 make live-test-reload-unit
 ```
 
+## Running CI Locally
+
+Our GitHub runners are small. Your laptop probably isn't. `make ci` runs **the
+same checks CI runs, in the same container images**, so you can find a failure in
+minutes instead of waiting on a queue:
+
+```bash
+make ci                                # everything CI runs
+make ci CHECKS="doctests unit-tests"   # just these
+make ci-status                         # what CI would run right now, without running it
+make ci-down                           # stop the containers (build caches kept)
+```
+
+`ci/checks.tsv` is the single definition of what CI is — the GitHub workflows and
+`make ci` both read it, so the two can't drift apart.
+
+### CI skips what you already proved
+
+Each check is fingerprinted over the content it depends on. When one passes,
+the result is published as a git ref, and CI's gate skips any check already
+proven for the exact tree it's about to test. Run `make ci` before you push and
+CI has little or nothing left to do.
+
+Two things worth knowing:
+
+- **The first run is a cold build** and takes as long as a cold CI run. Every run
+  after that is incremental — the caches live in Docker volumes that survive
+  `make ci-down`. Start it and go do something else.
+- **Publishing a result requires push access**, so if you're contributing from a
+  fork, `make ci` still gives you fast local feedback but CI will re-run the
+  checks itself. That's deliberate: an attestation is only as trustworthy as the
+  ability to push code in the first place.
+
+Reuse is conservative by design. Each check declares the capabilities it needs
+(`ghc`, `pg`, `minio`, `tf-real`) and each result records what the environment
+actually had, so a run that fell back to a stub service can never stand in for
+one that needs the real thing. On Apple Silicon, where TimeFusion has no image,
+`integration-tests` is refused rather than weakly cached — run it with
+`CI_ALLOW_DEGRADED=true` for feedback and CI will still verify it properly.
+
+Full reference, including every knob and how to add or change a check:
+[docs/local-ci.md](docs/local-ci.md).
+
 ## Code Style
 
 ### Formatting
