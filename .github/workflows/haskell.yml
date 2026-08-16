@@ -7,11 +7,45 @@ on:
 
 env:
   LANG: C.UTF-8
+  # Kill switch for the attestation cache: set the repo variable to "true" and
+  # every job runs every check again, no code change needed.
+  CI_ATTEST_DISABLED: ${{ vars.CI_ATTEST_DISABLED }}
+
+permissions:
+  contents: write # to publish attestation refs under refs/ci-attest/*
 
 jobs:
+  # What CI does NOT have to do. Every check in ci/checks.tsv is fingerprinted over
+  # the content it depends on; if the identical content was already proven — by the
+  # PR run that produced this merge, an earlier attempt, or a developer's `make ci`
+  # — the result is on the remote as a ref and the job below skips it. A squash
+  # merge keeps the PR head's tree, so master normally skips the lot and the deploy
+  # is bounded by the image build. See docs/local-ci.md.
+  gate:
+    name: Gate
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      fingerprints: ${{ steps.checks.outputs.fingerprints }}
+      skip_build: ${{ steps.checks.outputs.skip_build }}
+      skip_doctests: ${{ steps.checks.outputs.skip_doctests }}
+      skip_unit_tests: ${{ steps.checks.outputs.skip_unit_tests }}
+      skip_cli_tests: ${{ steps.checks.outputs.skip_cli_tests }}
+      skip_integration_tests: ${{ steps.checks.outputs.skip_integration_tests }}
+      skip_haskell: ${{ steps.haskell.outputs.skip_all }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: checks
+        run: scripts/ci/ci.sh gate
+      # Whether the whole container job (image pull + service containers + cabal
+      # cache restore, ~7 minutes before a single test runs) can be skipped outright.
+      - id: haskell
+        run: scripts/ci/ci.sh gate build doctests unit-tests cli-tests integration-tests
+
   # Build frontend once and share via artifacts
   frontend:
     name: Build Frontend
+    needs: gate
+    if: needs.gate.outputs.skip_haskell != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -25,16 +59,16 @@ jobs:
             package-lock.json
             web-components/package-lock.json
 
+      # Through ci.sh so the bundle CI ships and the bundle `make ci` builds come
+      # from one recipe (ci/checks.tsv -> run_body frontend).
       - name: Build frontend assets
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
         run: |
-          mkdir -p static/public/assets/css
-          mkdir -p static/public/assets/web-components/dist/js
-          mkdir -p static/public/assets/web-components/dist/css
-          npm ci
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          cd web-components
-          npm ci
-          NODE_ENV=production npx vite build --mode production --sourcemap false
+          mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+          # CI_FORCE: this job exists for the ARTIFACTS, not the verdict — an
+          # existing attestation would skip the build and leave nothing to upload.
+          CI_FORCE=true CI_FINGERPRINTS=.ci/fingerprints.tsv scripts/ci/ci.sh run frontend
 
       - name: Upload frontend artifacts
         uses: actions/upload-artifact@v7
@@ -47,7 +81,8 @@ jobs:
 
   build-and-test:
     name: Build and Test
-    needs: frontend
+    needs: [gate, frontend]
+    if: needs.gate.outputs.skip_haskell != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # 30 was under budget and the job was silently truncating: on 2026-08-11 the
     # integration suite got 19 seconds before the wall, and the run before that
@@ -75,8 +110,12 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
+      # bitnami/minio was emptied from Docker Hub in the Aug-2025 Bitnami catalog
+      # change (that repository now has no tags at all); the pre-change images were
+      # relocated verbatim to bitnamilegacy. CI only kept working off a runner-side
+      # cache. Pinned here so a cache eviction can't take the suite down.
       minio:
-        image: bitnami/minio:latest
+        image: bitnamilegacy/minio:latest
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
@@ -124,6 +163,20 @@ jobs:
           TIMEFUSION_FOYER_DISABLED: 'true'
           TIMEFUSION_BUFFER_MAX_MEMORY_MB: '512'
           OTEL_TRACES_EXPORTER: none
+    env:
+      # Every step below runs through scripts/ci/ci.sh, which reads these both to
+      # decide the environment's capabilities and to point the suite at the services.
+      USE_EXTERNAL_DB: 'true'
+      DB_HOST: postgres
+      LOG_LEVEL: warn
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
+      TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
+      DISCORD_CLIENT_ID: '1328384474395967631'
+      CI_SHARDS: '4'
+      CI_FINGERPRINTS: .ci/fingerprints.tsv
     steps:
       - uses: actions/checkout@v6
 
@@ -148,6 +201,14 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
+      # Attest the fingerprints the gate looked up. hpack below rewrites
+      # monoscope.cabal, which is one of the inputs — recomputing after it would
+      # attest a fingerprint no gate will ever ask for, and nothing would be reused.
+      - name: Pin fingerprints from gate
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
+        run: mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+
       - name: Install hpack
         run: cabal install --install-method=copy --overwrite-policy=always hpack
 
@@ -155,70 +216,34 @@ jobs:
         run: hpack
 
       - name: Build
-        run: cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+        if: needs.gate.outputs.skip_build != 'true'
+        run: scripts/ci/ci.sh run build
 
       - name: Run doctests
-        run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
+        if: needs.gate.outputs.skip_doctests != 'true'
+        run: scripts/ci/ci.sh run doctests
 
       - name: Run unit-tests
-        run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
+        if: needs.gate.outputs.skip_unit_tests != 'true'
+        run: scripts/ci/ci.sh run unit-tests
 
-      # The CLI package builds without libpq, so its tests are cheap and can't
-      # be skipped for want of a database.
+      # The CLI package builds without libpq, so its tests are cheap and can't be
+      # skipped for want of a database.
       - name: Run cli-tests
-        run: cabal test monoscope-cli:cli-tests --ghc-options="-O0" --test-show-details=direct
+        if: needs.gate.outputs.skip_cli_tests != 'true'
+        run: scripts/ci/ci.sh run cli-tests
 
       # No explicit wait: the TF service container starts at "Initialize
-      # containers" (before the multi-minute build) and boots in ~1s, so it's
-      # long ready by the time integration tests connect. The hasql TF pool also
+      # containers" (before the multi-minute build) and boots in ~1s, so it's long
+      # ready by the time integration tests connect. The hasql TF pool also
       # retries, and TF's early-bind responder holds :5432 from the start.
       - name: Run integration-tests
-        env:
-          USE_EXTERNAL_DB: true
-          DB_HOST: postgres
-          TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
-          DISCORD_CLIENT_ID: "1328384474395967631"
-          LOG_LEVEL: warn
-          MINIO_ENDPOINT: http://minio:9000
-          MINIO_ACCESS_KEY: minioadmin
-          MINIO_SECRET_KEY: minioadmin
-          # Real TimeFusion leg: TestUtils sets tfEnabled + tfPgTypes=False.
-          TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
-        # Process-sharded (see test/integration/Main.hs): 4 binary copies, each its own
-        # RTS running a disjoint shard (SHARD_INDEX/SHARD_TOTAL) sequentially. Sidesteps
-        # the in-process hspec `parallel` deadlock; 4 * ~9 conns < Postgres
-        # max_connections. Inlined (no `make` in the deps image).
-        run: |
-          bin=$(cabal list-bin integration-tests)
-          rm -f build-shard-*.log
-          for i in 0 1 2 3; do
-            ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=4 "$bin" --color > build-shard-$i.log 2>&1; echo "[shard-time] $(( $(date +%s) - start ))s" >> build-shard-$i.log ) &
-          done
-          wait
-          echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
-          for i in 0 1 2 3; do printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' build-shard-$i.log | tail -1)" "$(grep -hE 'examples?, [0-9]+ failures?' build-shard-$i.log | tail -1)"; done
-          green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
-          # green==4 already means every shard printed a clean "0 failures" summary; don't grep
-          # for "error:" too — the app logs error: lines at LOG_LEVEL=warn on passing runs.
-          if [ "$green" -ne 4 ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
-            echo "SHARDED RUN FAILED ($green/4 green):"
-            for f in build-shard-*.log; do
-              grep -qE "examples?, 0 failures" "$f" && continue
-              echo "### $f"
-              # The whole Failures section, not a fixed tail. hspec spends ~8 lines per
-              # failure, so `tail -40` stopped after the first one and the rest of the
-              # names existed only inside the runner — leaving a red gate no one could
-              # diagnose without pushing a commit to re-print it.
-              sed -n '/^Failures:/,$p' "$f"
-              # A shard killed before hspec's summary has no Failures section to print.
-              grep -q '^Failures:' "$f" || tail -60 "$f"
-            done
-            exit 1
-          fi
-          echo "ALL SHARDS GREEN"
+        if: needs.gate.outputs.skip_integration_tests != 'true'
+        run: scripts/ci/ci.sh run integration-tests
 
-      # The step above prints the failures; this keeps the surrounding output (setup,
-      # per-example progress, the app's own logs) for anything the summary can't explain.
+      # The step above prints the failures; this keeps the surrounding output
+      # (setup, per-example progress, the app's own logs) for anything the summary
+      # can't explain.
       - name: Upload integration shard logs
         if: failure()
         uses: actions/upload-artifact@v7
@@ -276,17 +301,28 @@ jobs:
             GIT_HASH=${{ github.sha }}
             GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
 
-  # The gate. `needs` is what enforces it: a failed, cancelled, or timed-out
-  # test job leaves this skipped, and the image sits in the registry unused.
-  # Do NOT add `if: always()` here — that is exactly what let untested builds
-  # reach prod for months.
+  # The gate. `if` is what enforces it, and it is deliberately spelled out rather
+  # than left to `needs`: build-and-test is now allowed to be SKIPPED, but only
+  # when the gate job says every Haskell check was already proven for this exact
+  # tree. Any other skip — a failure, a cancellation, a timeout, a gate job that
+  # itself failed and so has an empty output — leaves this condition false and the
+  # image sits in the registry unused. Do NOT relax this to a bare `always()`;
+  # that is exactly what let untested builds reach prod for months.
   deploy:
     name: Deploy to CapRover
-    needs: [build-image, build-and-test]
+    needs: [gate, build-image, build-and-test]
+    if: >-
+      always()
+      && needs.build-image.result == 'success'
+      && (needs.build-and-test.result == 'success'
+          || (needs.build-and-test.result == 'skipped' && needs.gate.outputs.skip_haskell == 'true'))
     runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Note why this deploy was allowed
+        run: |
+          echo "build-and-test: ${{ needs.build-and-test.result }} (all Haskell checks pre-proven: ${{ needs.gate.outputs.skip_haskell }})" >> "$GITHUB_STEP_SUMMARY"
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
       # release lands straight in the deploy path. caprover 2.4.0 (2026-08-05)

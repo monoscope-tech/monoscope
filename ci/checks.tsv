@@ -1,0 +1,27 @@
+# The single source of truth for what "CI" is. Both .github/workflows/*.yml and
+# `make ci` (scripts/ci/ci.sh) read this file, so a check can never exist in one
+# and not the other.
+#
+#   name   requires   inputs
+#
+# requires  space-separated capabilities the environment must provide for the
+#           check to be RUNNABLE and for its result to be TRUSTED. The gate only
+#           reuses an attestation whose recorded capabilities are a superset of
+#           these, so a run that fell back to a stub service can never satisfy a
+#           check that needs the real one.
+# inputs    pathspecs whose content the check's result depends on. @-names expand
+#           to the sets in scripts/ci/ci.sh (see PATHSET_*). Every check also gets
+#           @meta (this file + the runner + the workflows), so changing what a
+#           check DOES invalidates it everywhere.
+#
+# Narrow `inputs` only where it is provably sound. A too-wide set costs a rerun;
+# a too-narrow one ships an untested change.
+frontend	node	@fe
+build	ghc	@hs @fe
+doctests	ghc	@hs @fe
+unit-tests	ghc	@hs @fe
+cli-tests	ghc	@cli
+integration-tests	ghc pg minio tf-real	@hs @fe
+weeder	ghc	@hs @fe
+hlint	hlint	src .hlint.yaml
+ui-tests	node	@fe

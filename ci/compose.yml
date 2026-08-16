@@ -1,0 +1,132 @@
+# The CI job, as containers you can run on your laptop. Service images, env and
+# tuning are kept identical to .github/workflows/*.yml on purpose — a result is
+# only worth caching if it was produced under the conditions CI would have used.
+#
+# Driven by `scripts/ci/ci.sh local` (see `make ci`). Not for running the app;
+# docker-compose.yml at the repo root is that.
+name: monoscope-ci
+
+x-tf-env: &tf-env
+  PGWIRE_PORT: '5432'
+  PGWIRE_PASSWORD: postgres
+  TIMEFUSION_ALLOW_INSECURE_AUTH: 'true'
+  AWS_S3_BUCKET: timefusion
+  AWS_S3_ENDPOINT: http://minio:9000
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_REGION: us-east-1
+  AWS_ALLOW_HTTP: 'true'
+  TIMEFUSION_DATA_DIR: /tmp/tf-data
+  # Flush each bucket immediately so a test's writes are queryable within the
+  # test's lifetime instead of after the 10-minute default.
+  TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY: 'true'
+  TIMEFUSION_FOYER_DISABLED: 'true'
+  TIMEFUSION_BUFFER_MAX_MEMORY_MB: '512'
+  OTEL_TRACES_EXPORTER: none
+
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg16-all
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: monoscope
+    # The suite runs one template DB plus a database per shard; the stock 100 is
+    # tight once you shard wider than CI's 4.
+    command: postgres -c max_connections=300
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    tmpfs: ['/var/lib/postgresql/data:size=4g']
+
+  minio:
+    # Relocated from bitnami/minio, which the Aug-2025 Bitnami catalog change
+    # emptied. Same image, same env contract.
+    image: bitnamilegacy/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # The timefusion bucket must exist before TF opens its Delta table.
+      MINIO_DEFAULT_BUCKETS: monoscope-test,timefusion
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  timefusion:
+    # No arm64 image is published, so on Apple Silicon this runs emulated. That
+    # works but is slow; point MONOSCOPE_CI_TF_IMAGE at a locally built arm64
+    # image (`make -C ../timefusion docker-build`) and set the platform to match
+    # if you want the integration suite at full speed.
+    image: ${MONOSCOPE_CI_TF_IMAGE:-ghcr.io/monoscope-tech/timefusion:latest}
+    platform: ${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64}
+    # TF's WAL uses io_uring, which Docker's default seccomp profile blocks
+    # (append_batch fails with EPERM).
+    security_opt: ['seccomp=unconfined']
+    environment: *tf-env
+    depends_on:
+      minio: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/127.0.0.1/5432']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  runner:
+    image: ${MONOSCOPE_CI_DEPS_IMAGE:-ghcr.io/monoscope-tech/monoscope-deps:latest}
+    working_dir: /build
+    # `ci.sh local` overrides this; the default makes `docker compose run runner`
+    # by hand do the obvious thing.
+    command: ['scripts/ci/ci.sh', 'run']
+    volumes:
+      - ..:/build
+      # Shadow every host build directory. The host's are macOS/arm64 artifacts
+      # (and node_modules carries platform-native esbuild binaries) — sharing
+      # them with the Linux container corrupts both. Named volumes also make the
+      # second `make ci` fast: the cabal store and dist-newstyle survive.
+      - dist:/build/dist-newstyle
+      # The cabal STORE, where dependency builds land. Without this the runner is
+      # --rm'd with them inside and every `make ci` rebuilds every dep that isn't
+      # already in the image. Docker seeds an empty named volume from the image's
+      # content, so the first run inherits the deps image's prebuilt 3.1GB store
+      # and later runs add to it.
+      - cabal:/root/.cabal
+      - node:/build/node_modules
+      - wc-node:/build/web-components/node_modules
+      # CI has no .env. Mount an empty one so a developer's local secrets and
+      # DATABASE_URL (which points at PRODUCTION) cannot change the result — the
+      # whole point is to reproduce CI, not your laptop.
+      - ./empty.env:/build/.env:ro
+    environment:
+      CABAL_DIR: /root/.cabal
+      LANG: C.UTF-8
+      LOG_LEVEL: warn
+      USE_EXTERNAL_DB: 'true'
+      DB_HOST: postgres
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
+      DISCORD_CLIENT_ID: '1328384474395967631'
+      CI_SHARDS: ${CI_SHARDS:-4}
+      # The container has no push credentials (origin is ssh); it records results
+      # here and the host publishes them after the run.
+      CI_ATTEST_OUT: /build/.ci/attest.tsv
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /build
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      # Deliberately NOT timefusion: it has no arm64 image and dies under emulation
+      # on Apple Silicon, and a hard dependency there would stop every other check
+      # from running. `ci.sh local` starts it best-effort and the capability model
+      # refuses to attest anything that needed it. See docs/local-ci.md.
+
+volumes:
+  cabal:
+  dist:
+  node:
+  wc-node:

@@ -1,0 +1,24 @@
+# Attestation refs accumulate one per (check, tree, environment). They are empty
+# commits, so the storage is nil, but every gate run lists them — keep the
+# namespace small enough that listing stays a sub-second operation.
+name: Prune CI attestations
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Delete attestations older than this many days
+        default: '30'
+
+permissions:
+  contents: write
+
+jobs:
+  gc:
+    name: Prune
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - run: scripts/ci/ci.sh gc "${{ github.event.inputs.days || 30 }}"
