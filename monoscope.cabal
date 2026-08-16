@@ -157,6 +157,7 @@ extra-source-files:
     static/migrations/0126_git_rename_compat_views.sql
     static/migrations/0126_live_tail_scope.sql
     static/migrations/0127_live_tail_events.sql
+    static/migrations/0129_live_tail_kind.sql
 
 source-repository head
   type: git
@@ -225,6 +226,7 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AI
+      Pkg.AssetManifestFingerprint
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table
@@ -809,6 +811,7 @@ test-suite test-dev
       Pages.Share
       Pages.Telemetry
       Pkg.AI
+      Pkg.AssetManifestFingerprint
       Pkg.Components.LogQueryBox
       Pkg.Components.ServiceMap
       Pkg.Components.Table

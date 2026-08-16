@@ -81,6 +81,7 @@ import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
 import Relude
 import Relude.Extra.Enum (safeToEnum)
@@ -496,14 +497,15 @@ stripAssetHash p = do
 -- queried URL is a second module identity — the browser would evaluate the whole graph
 -- twice and every @customElements.define@ in it would throw on the second pass.
 viteAssetFile :: FilePath -> TH.Q TH.Exp
-viteAssetFile key = do
-  let dir = "/public/assets/web-components/dist/"
-      manifest = "static" <> dir <> "manifest.json"
-  TH.qAddDependentFile manifest
-  chunks <- TH.runIO $ AE.eitherDecodeFileStrict' @AE.Object manifest
-  either (fail . (("viteAssetFile " <> manifest <> ": ") <>)) (TH.lift . (dir <>) . toString @Text)
-    $ chunks
-    >>= AET.parseEither (\o -> o AE..: fromString key >>= (AE..: "file"))
+viteAssetFile key =
+  assetManifestFingerprint `seq` do
+    let dir = "/public/assets/web-components/dist/"
+        manifest = "static" <> dir <> "manifest.json"
+    TH.qAddDependentFile manifest
+    chunks <- TH.runIO $ AE.eitherDecodeFileStrict' @AE.Object manifest
+    either (fail . (("viteAssetFile " <> manifest <> ": ") <>)) (TH.lift . (dir <>) . toString @Text)
+      $ chunks
+      >>= AET.parseEither (\o -> o AE..: fromString key >>= (AE..: "file"))
 
 
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"
