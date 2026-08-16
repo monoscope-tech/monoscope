@@ -33,6 +33,12 @@ CAPS=''
 
 cd "$ROOT"
 
+# Container CI jobs run as root over a checkout owned by another uid, and git then
+# refuses every command in it with "detected dubious ownership" (exit 128). Only
+# touches the global config when git is already unusable here, which is the same
+# thing anyone would have to do by hand.
+git rev-parse --git-dir >/dev/null 2>&1 || git config --global --add safe.directory "$ROOT"
+
 die() { echo "ci: $*" >&2; exit 1; }
 note() { echo "── $*" >&2; }
 
@@ -374,7 +380,10 @@ cmd_run() {
     fi
     note "running $c"
     if run_body "$c"; then
-      case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] || record_result "$c" ;; esac
+      # A green check stays green even if we cannot record it. Publishing touches
+      # the network and the object store; neither is part of what the check proved.
+      case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
+        || record_result "$c" || note "could not record $c — it still passed, just isn't cached" ;; esac
     else
       rc=1
       note "FAILED $c"
@@ -439,7 +448,11 @@ cmd_local() {
   return $rc
 }
 
-cmd_shell() { compose up -d --wait postgres minio timefusion; compose run --rm runner bash; }
+cmd_shell() {
+  compose up -d --wait postgres minio
+  compose up -d --wait timefusion 2>/dev/null || note "TimeFusion did not start; the shell has no tf-real"
+  compose run --rm runner bash
+}
 # Volumes survive `down` on purpose: they hold the cabal store and dist-newstyle,
 # and losing them means the next `make ci` is a cold build. `clean` is the nuke.
 cmd_down() { compose down --remove-orphans; }
@@ -472,8 +485,7 @@ cmd_selftest() {
   # Every check in the TSV must have a body and a fingerprint.
   local c seen=''
   for c in $(checks_all); do
-    grep -q "^    $c)" "$0" || grep -q "^    $c|" "$0" || grep -q "    $c)" "$0" \
-      || { echo "FAIL $c has no run_body case"; SELFTEST_RC=1; }
+    grep -q "^    $c)" "$0" || { echo "FAIL $c has no run_body case"; SELFTEST_RC=1; }
     seen="$seen $(fingerprint "$c")"
   done
   assert "fingerprints distinct" "$(echo $seen | tr ' ' '\n' | wc -l | tr -d ' ')" \
