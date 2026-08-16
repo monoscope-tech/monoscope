@@ -140,22 +140,29 @@ window.getTimeRange = function () {
   };
 };
 
-window.setParams = (
-  (state = { ...Object.fromEntries(new URLSearchParams(window.location.search)) }) =>
-  (newState: any, load = false) => {
-    Object.assign(state, newState);
+// Merge `newState` over the params currently in the URL.
+//
+// This used to close over a snapshot taken when main.ts loaded. The app navigates by HTMX
+// morph, so main.ts loads once per session while other paths — the query editor, the
+// column and facet sync, chart zoom — keep writing params straight through
+// history.replaceState. Rebuilding the URL from that stale snapshot silently dropped every
+// one of them the next time the time range changed: the reader's query and column
+// selection vanished, including from a link they had already shared.
+//
+// null/undefined values are dropped; an empty string is kept, which is how the time picker
+// clears `since` against `from`/`to` without losing the key.
+window.setParams = (newState: Record<string, unknown>, load = false) => {
+  const merged = { ...Object.fromEntries(new URLSearchParams(window.location.search)), ...newState };
+  const url =
+    '?' +
+    new URLSearchParams(
+      Object.entries(merged)
+        .filter(([_key, value]) => value != null)
+        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB)) as [string, string][]
+    ).toString();
 
-    const url =
-      '?' +
-      new URLSearchParams(
-        Object.entries(state)
-          .filter(([_key, value]) => value != null)
-          .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-      ).toString();
-
-    load ? window.location.assign(url) : history.replaceState(null, '', url);
-  }
-)();
+  load ? window.location.assign(url) : history.replaceState(null, '', url);
+};
 
 window.updateTimePicker = function (
   timeRange: { since?: string; from?: string; to?: string },

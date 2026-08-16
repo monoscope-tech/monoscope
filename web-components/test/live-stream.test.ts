@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { LiveStream, tableRowToArray } from '../src/live-stream';
-import { mountList, COLS, ids, row, fakeLiveTransport } from './log-list-harness';
+import { mountList, COLS, ids, row, fakeLiveTransport, stubContainer } from './log-list-harness';
 
 // Live mode is a server push, not a poll — polling could never beat TimeFusion's
 // write-visibility latency, since a row has to clear its ingest batch and land before any
@@ -237,7 +237,7 @@ describe('pushed Events rows', () => {
     (el as any).colIdxMap = COLS;
     (el as any).isLiveStreaming = true;
     Object.defineProperty(el, 'logsContainer', {
-      value: { scrollTop: 400, clientHeight: 500, scrollHeight: 5000 },
+      value: stubContainer({ scrollTop: 400, scrollHeight: 5000 }),
     });
     const timestamp = new Date().toISOString();
     const pushed = (id: string, parent_id: string | null) => ({
@@ -262,7 +262,7 @@ describe('pushed Events rows', () => {
     (el as any).seenIds = new Set(['already-read']);
     (el as any).updateVisibleItems();
     Object.defineProperty(el, 'logsContainer', {
-      value: { scrollTop: 0, clientHeight: 100, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [] },
+      value: stubContainer({ clientHeight: 100 }),
     });
     const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
 

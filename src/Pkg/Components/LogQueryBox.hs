@@ -287,10 +287,18 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    let defaultVizType = fromMaybe (bool "logs" "timeseries" alert) vizTypeM
+    -- A widget container means we are in the dashboard widget editor rather than the
+    -- log explorer.
+    let inWidgetEditor = isJust widgetContainerId
+        -- A dashboard widget starts as a chart. Logs is a full log table — the most
+        -- expensive thing on a dashboard and the wrong thing to drop on one by default.
+        defaultVizType = fromMaybe (bool "logs" "timeseries" (alert || inWidgetEditor)) vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-        -- Sessions tab is hidden in alert mode (not a valid alerting surface).
-        visible = bool visTypes (filter (\(_, _, t, _) -> t /= "sessions") visTypes) alert
+        -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
+        -- views with no corresponding WidgetType, so a widget set to either could not be
+        -- decoded on save: the tab was offered and simply did not work.
+        hidden = bool [] ["sessions"] alert <> bool [] ["patterns", "sessions"] inWidgetEditor
+        visible = filter (\(_, _, t, _) -> t `notElem` hidden) visTypes
     forM_ visible \(_icon, label, vizType, emoji) ->
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
         input_

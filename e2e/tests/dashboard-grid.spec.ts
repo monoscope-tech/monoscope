@@ -299,4 +299,49 @@ test.describe("dashboard gridstack", () => {
       { timeout: 10000 },
     );
   });
+
+  // The drag and resize tests above prove gridstack moved the widget; they say nothing
+  // about whether the move survived. Everything the reader does to a canvas is debounced
+  // into a widget-order PATCH, and that handler rebuilds the dashboard's widget list
+  // purely from the patch — so "it moved" and "it was saved" are genuinely separate
+  // claims, and only the second one is what the reader gets back tomorrow.
+  test("a move survives a reload, and the server rebuilds the same canvas", async ({ page }) => {
+    await openFirstDashboard(page);
+    const before = await snapshot(page);
+
+    const target = before.find((l) => l.x > 0);
+    expect(target, "dashboard has no widget offset from column 0 to drag").toBeTruthy();
+    const widget = byId(page, target!.id);
+    await widget.scrollIntoViewIfNeeded();
+    const box = (await widget.boundingBox())!;
+
+    // Wait for the PATCH itself rather than a timeout: it is the whole point of the test,
+    // and a silent 4xx would otherwise read as a passing drag.
+    const saved = page.waitForResponse(
+      (r) => r.url().includes("/widgets_order") && r.request().method() === "PATCH" && r.status() < 400,
+      { timeout: 15000 },
+    );
+    await dragBy(page, widget.locator(".grid-stack-handle").first(), -box.width * 0.8, 0);
+    await saved;
+
+    const moved = await layoutOf(widget);
+    expect(moved, "the drag did not land").not.toBeNull();
+    expect(moved!.x !== target!.x || moved!.y !== target!.y, "the widget never moved").toBe(true);
+
+    await page.reload();
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 15000 });
+    await page.locator(".ui-resizable-se").first().waitFor({ state: "attached", timeout: 15000 });
+
+    // Same widget, same cell, straight off the server's own markup.
+    const reloaded = await layoutOf(byId(page, target!.id));
+    expect(reloaded, "the widget is gone after a reload — the patch dropped it").not.toBeNull();
+    expect({ x: reloaded!.x, y: reloaded!.y }).toEqual({ x: moved!.x, y: moved!.y });
+
+    // And nothing else fell off the canvas: the patch rebuilds the whole list, so a
+    // widget missing from it is deleted rather than left alone.
+    const afterIds = (await snapshot(page)).map((l) => l.id).sort();
+    expect(afterIds).toEqual(before.map((l) => l.id).sort());
+
+    await restore(page, before);
+  });
 });

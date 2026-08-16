@@ -1,9 +1,83 @@
 import { describe, test, expect, vi } from 'vitest';
-import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport } from './log-list-harness';
-import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS } from '../src/log-list';
+import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport, stubContainer, stubVirtualizer } from './log-list-harness';
+import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, HISTORY_PREFETCH_ROWS } from '../src/log-list';
 import { shouldBufferRecent, atInsertionEdge, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
+  test('prefetches history before the virtual load-more row is mounted', async () => {
+    const el = await mountList();
+    (el as any).virtualListItems = Array.from({ length: 200 }, (_, i) => row(`r${i}`));
+    (el as any).hasMore = true;
+    const fetch = vi.spyOn(el, 'fetchData').mockResolvedValue(undefined);
+    vi.spyOn(el as any, 'buildLoadMoreUrl').mockReturnValue('next-page');
+
+    el.handleVisibilityChange({ first: 130, last: 150 });
+    el.handleVisibilityChange({ first: 140, last: 200 - 1 - HISTORY_PREFETCH_ROWS });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith('next-page', false, false, true);
+  });
+
+  test('does not prefetch away from the history edge or while a page is in flight', async () => {
+    const el = await mountList();
+    (el as any).virtualListItems = Array.from({ length: 200 }, (_, i) => row(`r${i}`));
+    (el as any).hasMore = true;
+    const fetch = vi.spyOn(el, 'fetchData').mockResolvedValue(undefined);
+
+    el.handleVisibilityChange({ first: 50, last: 80 });
+    (el as any).isLoadingMore = true;
+    el.handleVisibilityChange({ first: 150, last: 190 });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test('prefetches from the start of an oldest-first virtual list, including index zero', async () => {
+    const el = await mountList();
+    (el as any).virtualListItems = Array.from({ length: 200 }, (_, i) => row(`r${i}`));
+    (el as any).flipDirection = true;
+    (el as any).hasMore = true;
+    const fetch = vi.spyOn(el, 'fetchData').mockResolvedValue(undefined);
+    vi.spyOn(el as any, 'buildLoadMoreUrl').mockReturnValue('older-page');
+
+    el.handleVisibilityChange({ first: 60, last: 80 });
+    el.handleVisibilityChange({ first: 0, last: 20 });
+
+    expect(fetch).toHaveBeenCalledWith('older-page', false, false, true);
+    expect((el as any).lastVisibilityRange).toEqual({ first: 0, last: 20 });
+  });
+
+  test('does not cascade another prefetch when a page merge changes visibility while stationary', async () => {
+    const el = await mountList();
+    (el as any).virtualListItems = Array.from({ length: 100 }, (_, i) => row(`r${i}`));
+    (el as any).prefetchBaseline = { first: 50, last: 70 };
+    (el as any).hasMore = true;
+    const fetch = vi.spyOn(el, 'fetchData').mockResolvedValue(undefined);
+
+    el.handleVisibilityChange({ first: 50, last: 70 });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Prepending newer rows raises every index by the page size. Measured against the
+  // previous range that reads as a scroll toward history, and the prefetch cascaded
+  // through pages the reader never approached.
+  test('a merge that renumbers rows is not read as a scroll toward the history edge', async () => {
+    const el = await mountList();
+    const rows = Array.from({ length: 100 }, (_, i) => row(`r${i}`));
+    (el as any).spanListTree = rows;
+    (el as any).seenIds = new Set(rows.map((r) => r.id));
+    (el as any).hasMore = true;
+    (el as any).updateVisibleItems();
+    const fetch = vi.spyOn(el, 'fetchData').mockResolvedValue(undefined);
+
+    el.handleVisibilityChange({ first: 50, last: 70 }); // reader parks near the history edge
+    (el as any).spanListTree = (el as any).mergeIntoTree([row('newer')], true);
+    (el as any).updateVisibleItems();
+    el.handleVisibilityChange({ first: 51, last: 71 }); // same rows, shifted by the prepend
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   // Lo2: a resized-then-hidden column must not retain its width (which would
   // resurrect on re-add and grow columnMaxWidthMap unboundedly).
   test('hideColumn prunes its stored width', async () => {
@@ -233,7 +307,7 @@ describe('LogList — MED correctness', () => {
   test('scroll anchoring falls back to the virtualizer range while rows are recycling', async () => {
     const el = await mountList();
     Object.defineProperty(el, 'logsContainer', {
-      value: { getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [] },
+      value: stubContainer(),
     });
     (el as any).virtualListItems = [{ type: 'fetchRecent' }, row('visible'), { type: 'loadMore' }];
     (el as any).lastVisibilityRange = { first: 1, last: 2 };
@@ -245,17 +319,10 @@ describe('LogList — MED correctness', () => {
     const el = await mountList();
     const scrollToIndex = vi.fn();
     const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
-    const container = {
-      scrollTop: 0,
-      getBoundingClientRect: () => ({ top: 0 }),
-      querySelector: () => renderedRow,
-    };
+    const container = stubContainer({ querySelector: () => renderedRow });
     Object.defineProperty(el, 'logsContainer', { value: container });
     (el as any).virtualListItems = [row('visible')];
-    vi.spyOn(el, 'querySelector').mockReturnValue({
-      scrollToIndex,
-      layoutComplete: Promise.resolve(),
-    } as any);
+    vi.spyOn(el, 'querySelector').mockReturnValue(stubVirtualizer({ scrollToIndex }) as any);
 
     await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
 
@@ -267,17 +334,10 @@ describe('LogList — MED correctness', () => {
     const el = await mountList();
     const scrollToIndex = vi.fn();
     const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
-    const container = {
-      scrollTop: 0,
-      getBoundingClientRect: () => ({ top: 0 }),
-      querySelector: vi.fn().mockReturnValueOnce(null).mockReturnValue(renderedRow),
-    };
+    const container = stubContainer({ querySelector: vi.fn().mockReturnValueOnce(null).mockReturnValue(renderedRow) });
     Object.defineProperty(el, 'logsContainer', { value: container });
     (el as any).virtualListItems = [row('visible')];
-    vi.spyOn(el, 'querySelector').mockReturnValue({
-      scrollToIndex,
-      layoutComplete: Promise.resolve(),
-    } as any);
+    vi.spyOn(el, 'querySelector').mockReturnValue(stubVirtualizer({ scrollToIndex }) as any);
 
     await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
     await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -302,7 +362,7 @@ describe('LogList — MED correctness', () => {
     (el as any).spanListTree = [row('old')];
     (el as any).seenIds = new Set(['old']);
     (el as any).updateVisibleItems();
-    const container = { scrollTop: 100, clientHeight: 100, scrollHeight: 1000 };
+    const container = stubContainer({ scrollTop: 100, clientHeight: 100 });
     Object.defineProperty(el, 'logsContainer', { value: container });
     vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue({ id: 'old', offset: 0 });
     const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
@@ -641,7 +701,7 @@ describe('LogList — live tail resumes when scrolled back to the edge', () => {
   const withBuffer = async (scrollTop: number, over: Partial<Record<string, unknown>> = {}, scrollHeight = 5000) => {
     const el = await mountList();
     Object.assign(el as any, { isLiveStreaming: true, flipDirection: false, recentDataToBeAdded: [row('n1'), row('n2')], ...over });
-    Object.defineProperty(el, 'logsContainer', { configurable: true, get: () => ({ scrollTop, clientHeight: 500, scrollHeight }) });
+    Object.defineProperty(el, 'logsContainer', { configurable: true, get: () => stubContainer({ scrollTop, scrollHeight }) });
     return el;
   };
 

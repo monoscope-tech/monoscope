@@ -3,8 +3,31 @@ import { vi } from 'vitest';
 
 // main.ts runs at import time and calls these globals; stub them so any component
 // (e.g. log-list → widgets → main) is importable in jsdom without throwing.
-(window as any).htmx = { defineExtension: vi.fn(), ajax: vi.fn(), process: vi.fn() };
+// main.ts registers an htmx extension at import time; without registerExtension any
+// test that imports it dies before a single case runs.
+(window as any).htmx = { defineExtension: vi.fn(), registerExtension: vi.fn(), ajax: vi.fn(), process: vi.fn() };
 (window as any).interpolateVarTemplates = vi.fn();
+
+// jsdom in this setup ships no working localStorage, and component constructors read it
+// (SessionReplay restores its panel width there), so a bare `new Component()` throws before
+// a single case runs. Shim it once here rather than per test file.
+if (typeof (globalThis as any).localStorage?.getItem !== 'function') {
+  const store = new Map<string, string>();
+  const shim = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  };
+  (globalThis as any).localStorage = shim;
+  try {
+    Object.defineProperty(window, 'localStorage', { value: shim, configurable: true });
+  } catch {
+    /* window.localStorage may be read-only; the globalThis shim suffices */
+  }
+}
 
 // Mock document.queryCommandSupported and execCommand for Monaco Editor clipboard support
 document.queryCommandSupported = vi.fn(() => false);
