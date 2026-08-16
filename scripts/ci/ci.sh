@@ -264,7 +264,13 @@ runner=$runner_id")
 
 # ---------------------------------------------------------------- check bodies
 
-CABAL_OPTS='--ghc-options=-O0'
+# ONE ghc-options string for every cabal invocation. cabal's build plan hash
+# includes these, so `build` and the test checks disagreeing means each test step
+# recompiles all ~184 modules that `build` just compiled. That is most of the
+# waste in this job, and it is also a memory cliff: without -A64m GHC uses its
+# default allocation area, and on a 4-vCPU runner the recompile OOMs and dies
+# with no error at all — the failure mode that blocked the deploy of b052d6cf4.
+CABAL_OPTS='--ghc-options=-O0 +RTS -A64m -n2m -RTS'
 
 run_body() { # <check>
   case "$1" in
@@ -274,10 +280,10 @@ run_body() { # <check>
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
-    build)      cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS" ;;
-    doctests)   cabal test doctests $CABAL_OPTS --test-show-details=direct ;;
-    unit-tests) cabal test unit-tests $CABAL_OPTS --test-show-details=direct ;;
-    cli-tests)  cabal test monoscope-cli:cli-tests $CABAL_OPTS --test-show-details=direct ;;
+    build)      cabal build all -j "$CABAL_OPTS" ;;
+    doctests)   cabal test doctests "$CABAL_OPTS" --test-show-details=direct ;;
+    unit-tests) cabal test unit-tests "$CABAL_OPTS" --test-show-details=direct ;;
+    cli-tests)  cabal test monoscope-cli:cli-tests "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config config/weeder.toml --hie-directory dist-newstyle
@@ -301,7 +307,7 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
-  cabal build integration-tests --ghc-options="-O0 +RTS -A64m -RTS"
+  cabal build integration-tests "$CABAL_OPTS"
   bin=$(cabal list-bin integration-tests)
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
