@@ -359,7 +359,10 @@ jobs:
         run: |
           {
             echo "build-and-test: ${{ needs.build-and-test.result }} (all Haskell checks pre-proven: ${{ needs.gate.outputs.skip_haskell }})"
-            scripts/ci/ci.sh image-who "${{ github.sha }}"
+            # Never fatal: this is a note about the deploy, not a condition of it.
+            # A provenance lookup that cannot reach the remote must not be the
+            # reason a green, gated build fails to reach production.
+            scripts/ci/ci.sh image-who "${{ github.sha }}" || echo "built by: (could not read provenance)"
           } >> "$GITHUB_STEP_SUMMARY"
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
