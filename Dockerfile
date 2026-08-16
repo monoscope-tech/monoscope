@@ -62,13 +62,18 @@ COPY test ./test
 COPY app ./app
 COPY proto ./proto
 
-# Build frontend assets (npm deps already installed in deps image)
+# Build frontend assets (npm deps already installed in deps image).
+# Pkg.DeriveUtils reads Vite's manifest through Template Haskell. Its object
+# can survive in the persistent dist-newstyle cache even though Vite emitted a
+# new entry hash, producing HTML that requests a chunk absent from the image.
+# Make the generated manifest newer than the TH consumer explicitly.
 COPY config ./config
 COPY static ./static
 COPY web-components ./web-components
 RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
-  cd .. && workbox generateSW config/workbox-config.js
+  cd .. && workbox generateSW config/workbox-config.js && \
+  touch src/Pkg/DeriveUtils.hs
 
 # Build Haskell executable (dist-newstyle persisted via BuildKit cache mount).
 # The binary is located with `cabal list-bin`, not `find … | head -1`: dist-newstyle is a
@@ -80,7 +85,11 @@ RUN --mount=type=cache,target=/root/.cabal/store \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
-    cp "$(cabal list-bin exe:monoscope-server)" /build/dist/
+    cp "$(cabal list-bin exe:monoscope-server)" /build/dist/ && \
+    entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
+    test -f "static/public/assets/web-components/dist/$entry" && \
+    grep -aFq "/public/assets/web-components/dist/$entry" /build/dist/monoscope-server || \
+      { echo "server binary was compiled against a different Vite manifest entry" >&2; exit 1; }
 
 # Final runtime image
 FROM debian:12-slim
