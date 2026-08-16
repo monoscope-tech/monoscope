@@ -53,8 +53,12 @@ PATHSET_hs='app src shared cli test tests config proto static/migrations package
 PATHSET_fe='web-components/src web-components/test web-components/package.json web-components/package-lock.json web-components/vite.config.mjs web-components/tsconfig.json web-components/vitest.config.ts web-components/index.html package.json package-lock.json config/tailwind.config.js static/public/assets/css/tailwind.css'
 # The CLI package links only monoscope-shared, so its tests cannot observe src/.
 PATHSET_cli='cli shared cabal.project cabal.project.freeze'
-# Prepended to every check: changing what a check DOES must invalidate it.
-PATHSET_meta='ci/checks.tsv scripts/ci .github/workflows'
+# Prepended to every check: changing what a check DOES, or the environment it
+# runs in, must invalidate it. Named precisely rather than as `.github/workflows`
+# — an edit to the Claude review or CLI release workflow says nothing about the
+# test suite, and invalidating a 40-minute suite over it would train people to
+# distrust the cache.
+PATHSET_meta='ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml'
 
 pathset() { eval "printf '%s' \"\${PATHSET_$1:-}\""; }
 

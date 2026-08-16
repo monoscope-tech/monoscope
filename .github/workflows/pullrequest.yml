@@ -81,7 +81,14 @@ jobs:
     needs: [gate, frontend]
     if: needs.gate.outputs.skip_haskell != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
+    # 60, matching Deploy. 30 was measured as below the floor there (~1.5m
+    # containers + 16m build + 6m doctests leaves nothing for the integration
+    # suite) and raised; this file kept the old number, so PR runs have been
+    # walling before the suite finishes. That was merely wasteful when every run
+    # started from scratch. Now it is worse: a truncated run publishes no
+    # attestation for the checks it never reached, so the next run pays for them
+    # again — the wall would quietly defeat the caching.
+    timeout-minutes: 60
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       env:
