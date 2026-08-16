@@ -65,6 +65,11 @@ Two deliberate differences from your normal `make test`:
 - **Your `.env` is not visible.** `ci/compose.yml` mounts an empty file over it.
   A local secret — or a `DATABASE_URL` pointing at production — changing the
   result is exactly what makes "passes locally, fails in CI" happen.
+- **Editing `ci.sh` mid-run is safe.** The container runs from a copy, because
+  bash reads a script incrementally by file offset — editing the original while
+  it runs would otherwise make the running shell resume at a stale offset and die
+  with `syntax error near unexpected token`. A run lasts tens of minutes, so
+  editing it meanwhile is normal, not a mistake.
 - **Build directories are container-private.** `dist-newstyle` and both
   `node_modules` are named volumes; your host's are macOS/arm64 artifacts and
   sharing them corrupts both. The volumes persist, so the second `make ci` is
