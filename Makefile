@@ -369,4 +369,34 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
+# ---------------------------------------------------------------------------
+# Local CI. Runs the same checks GitHub Actions runs, in the same images, and
+# publishes a signed-by-push attestation so CI skips whatever you already proved.
+# Restrict to some of them with CHECKS: `make ci CHECKS="doctests unit-tests"`.
+# See docs/local-ci.md.
+CHECKS ?=
+
+ci:
+	./scripts/ci/ci.sh local $(CHECKS)
+
+# What CI would do with the tree as it stands right now, without doing any of it.
+ci-status:
+	./scripts/ci/ci.sh gate $(CHECKS)
+
+ci-shell:
+	./scripts/ci/ci.sh shell
+
+ci-down:
+	./scripts/ci/ci.sh down
+
+# Also deletes the cached cabal store and dist-newstyle volumes — the next
+# `make ci` will be a cold build.
+ci-clean:
+	./scripts/ci/ci.sh clean
+
+ci-selftest:
+	./scripts/ci/ci.sh selftest
+
+.PHONY: ci ci-status ci-shell ci-down ci-clean ci-selftest
+
 .PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

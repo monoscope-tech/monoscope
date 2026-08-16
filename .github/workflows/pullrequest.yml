@@ -4,11 +4,45 @@ on: pull_request
 
 env:
   LANG: C.UTF-8
+  # Kill switch for the attestation cache: set the repo variable to "true" and
+  # every job runs every check again, no code change needed.
+  CI_ATTEST_DISABLED: ${{ vars.CI_ATTEST_DISABLED }}
+
+permissions:
+  contents: write # to publish attestation refs under refs/ci-attest/*
 
 jobs:
+  # What CI does NOT have to do. Every check in ci/checks.tsv is fingerprinted over
+  # the content it depends on; if someone already ran it — this runner, an earlier
+  # run, or a developer's `make ci` — the result is on the remote as a ref and the
+  # job below skips it. See docs/local-ci.md.
+  gate:
+    name: Gate
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      fingerprints: ${{ steps.checks.outputs.fingerprints }}
+      skip_build: ${{ steps.checks.outputs.skip_build }}
+      skip_doctests: ${{ steps.checks.outputs.skip_doctests }}
+      skip_unit_tests: ${{ steps.checks.outputs.skip_unit_tests }}
+      skip_cli_tests: ${{ steps.checks.outputs.skip_cli_tests }}
+      skip_integration_tests: ${{ steps.checks.outputs.skip_integration_tests }}
+      skip_hlint: ${{ steps.checks.outputs.skip_hlint }}
+      skip_ui_tests: ${{ steps.checks.outputs.skip_ui_tests }}
+      skip_haskell: ${{ steps.haskell.outputs.skip_all }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: checks
+        run: scripts/ci/ci.sh gate
+      # Whether the whole container job (image pull + service containers + cabal
+      # cache restore, ~7 minutes before a single test runs) can be skipped outright.
+      - id: haskell
+        run: scripts/ci/ci.sh gate build doctests unit-tests cli-tests integration-tests
+
   # Build frontend once and share via artifacts
   frontend:
     name: Build Frontend
+    needs: gate
+    if: needs.gate.outputs.skip_haskell != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -22,16 +56,16 @@ jobs:
             package-lock.json
             web-components/package-lock.json
 
+      # Through ci.sh so the bundle CI ships and the bundle `make ci` builds come
+      # from one recipe (ci/checks.tsv -> run_body frontend).
       - name: Build frontend assets
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
         run: |
-          mkdir -p static/public/assets/css
-          mkdir -p static/public/assets/web-components/dist/js
-          mkdir -p static/public/assets/web-components/dist/css
-          npm ci
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          cd web-components
-          npm ci
-          NODE_ENV=production npx vite build --mode production --sourcemap false
+          mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+          # CI_FORCE: this job exists for the ARTIFACTS, not the verdict — an
+          # existing attestation would skip the build and leave nothing to upload.
+          CI_FORCE=true CI_FINGERPRINTS=.ci/fingerprints.tsv scripts/ci/ci.sh run frontend
 
       - name: Upload frontend artifacts
         uses: actions/upload-artifact@v7
@@ -44,9 +78,17 @@ jobs:
 
   build-and-test:
     name: Build and Test
-    needs: frontend
+    needs: [gate, frontend]
+    if: needs.gate.outputs.skip_haskell != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
+    # 60, matching Deploy. 30 was measured as below the floor there (~1.5m
+    # containers + 16m build + 6m doctests leaves nothing for the integration
+    # suite) and raised; this file kept the old number, so PR runs have been
+    # walling before the suite finishes. That was merely wasteful when every run
+    # started from scratch. Now it is worse: a truncated run publishes no
+    # attestation for the checks it never reached, so the next run pays for them
+    # again — the wall would quietly defeat the caching.
+    timeout-minutes: 60
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       env:
@@ -62,12 +104,16 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-      # bitnami/minio starts the server on :9000 by default (no custom CMD
-      # needed), so it works as a plain GitHub Actions service. Replay
-      # integration tests probe MINIO_ENDPOINT and `pendingWith` if not
-      # reachable, but in CI we want a hard guarantee — hence the service.
+      # Starts the server on :9000 by default (no custom CMD needed), so it works
+      # as a plain GitHub Actions service. Replay integration tests probe
+      # MINIO_ENDPOINT and `pendingWith` if unreachable, but in CI we want a hard
+      # guarantee — hence the service.
+      # bitnami/minio was emptied from Docker Hub in the Aug-2025 Bitnami catalog
+      # change (that repository now has no tags at all); the pre-change images were
+      # relocated verbatim to bitnamilegacy. CI only kept working off a runner-side
+      # cache. Pinned here so a cache eviction can't take the suite down.
       minio:
-        image: bitnami/minio:latest
+        image: bitnamilegacy/minio:latest
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
@@ -112,6 +158,26 @@ jobs:
           TIMEFUSION_FOYER_DISABLED: 'true'
           TIMEFUSION_BUFFER_MAX_MEMORY_MB: '512'
           OTEL_TRACES_EXPORTER: none
+    env:
+      # Every step below runs through scripts/ci/ci.sh, which reads these both to
+      # decide the environment's capabilities and to point the suite at the services.
+      USE_EXTERNAL_DB: 'true'
+      DB_HOST: postgres
+      LOG_LEVEL: warn
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
+      TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
+      DISCORD_CLIENT_ID: '1328384474395967631'
+      # CLI E2E tests run against the prod demo project by default
+      # (https://api.monoscope.tech, project 00000000-…). Only the API key has no
+      # safe default — set MONOSCOPE_DEMO_API_KEY in repo secrets to a read-only
+      # key minted on that demo project. Tests mark themselves pending when it is
+      # absent (e.g. PRs from forks, where secrets aren't exposed).
+      MONOSCOPE_API_KEY: ${{ secrets.MONOSCOPE_DEMO_API_KEY }}
+      CI_SHARDS: '4'
+      CI_FINGERPRINTS: .ci/fingerprints.tsv
     steps:
       - uses: actions/checkout@v6
 
@@ -136,117 +202,115 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
+      # Attest the fingerprints the gate looked up, not ones recomputed after the
+      # steps below have rewritten files in the tree.
+      - name: Pin fingerprints from gate
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
+        run: mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+
+      # package.yaml already passes -fwrite-ide-info; the build emits .hie files
+      # alongside .o files in dist-newstyle, which weeder walks below.
       - name: Build
-        # package.yaml already passes -fwrite-ide-info; the build emits .hie
-        # files alongside .o files in dist-newstyle, which weeder walks below.
-        run: cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+        if: needs.gate.outputs.skip_build != 'true'
+        run: scripts/ci/ci.sh run build
 
       - name: Check unused code (weeder)
-        # Informational only for now — there's a real backlog of findings we
-        # want to surface but not block PRs on. Flip to `false` once the
-        # current src/ findings are triaged.
+        # Informational only for now — there's a real backlog of findings we want
+        # to surface but not block PRs on. Note it is NOT attested while it can't
+        # fail: a check that always passes proves nothing worth caching.
         continue-on-error: true
-        run: |
-          command -v weeder >/dev/null 2>&1 \
-            || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
-          weeder --config config/weeder.toml --hie-directory dist-newstyle
+        run: CI_NO_ATTEST=true scripts/ci/ci.sh run weeder
 
       - name: Run doctests
-        run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
+        if: needs.gate.outputs.skip_doctests != 'true'
+        run: scripts/ci/ci.sh run doctests
 
       - name: Run unit-tests
-        run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
+        if: needs.gate.outputs.skip_unit_tests != 'true'
+        run: scripts/ci/ci.sh run unit-tests
+
+      - name: Run cli-tests
+        if: needs.gate.outputs.skip_cli_tests != 'true'
+        run: scripts/ci/ci.sh run cli-tests
 
       # No explicit wait: the TF service container starts at "Initialize
-      # containers" (before the multi-minute build) and boots in ~1s, so it's
-      # long ready by the time integration tests connect. The hasql TF pool also
+      # containers" (before the multi-minute build) and boots in ~1s, so it's long
+      # ready by the time integration tests connect. The hasql TF pool also
       # retries, and TF's early-bind responder holds :5432 from the start.
       - name: Run integration-tests
-        env:
-          USE_EXTERNAL_DB: true
-          DB_HOST: postgres
-          TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
-          DISCORD_CLIENT_ID: "1328384474395967631"
-          LOG_LEVEL: warn
-          # CLI E2E tests run against the prod demo project by default
-          # (https://api.monoscope.tech, project 00000000-…). Only the API
-          # key has no safe default — set MONOSCOPE_API_KEY in repo secrets
-          # to a read-only key minted on that demo project. Tests gracefully
-          # mark themselves pending when the secret is absent (e.g. on PRs
-          # from forks where secrets aren't exposed).
-          MONOSCOPE_API_KEY: ${{ secrets.MONOSCOPE_DEMO_API_KEY }}
-          # Service container hostname inside the job's docker network.
-          MINIO_ENDPOINT: http://minio:9000
-          MINIO_ACCESS_KEY: minioadmin
-          MINIO_SECRET_KEY: minioadmin
-          # Real TimeFusion leg: TestUtils sets tfEnabled + tfPgTypes=False.
-          TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
-        # Process-sharded: 4 binary copies (one per vCPU), each its own RTS running a
-        # disjoint shard (by SHARD_INDEX/SHARD_TOTAL) sequentially. In-process hspec
-        # `parallel` deadlocks on the per-test resource-pool lifecycle (see
-        # test/integration/Main.hs); sharding sidesteps it. 4 * ~9 conns = 36 < the
-        # Postgres default max_connections (100). Inlined (no `make` in the deps image).
-        run: |
-          bin=$(cabal list-bin integration-tests)
-          rm -f build-shard-*.log
-          for i in 0 1 2 3; do
-            ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=4 "$bin" --color > build-shard-$i.log 2>&1; echo "[shard-time] $(( $(date +%s) - start ))s" >> build-shard-$i.log ) &
-          done
-          wait
-          echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
-          for i in 0 1 2 3; do printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' build-shard-$i.log | tail -1)" "$(grep -hE 'examples?, [0-9]+ failures?' build-shard-$i.log | tail -1)"; done
-          green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
-          # green==4 already means every shard printed a clean "0 failures" summary (a failed or
-          # crashed shard can't). Don't also grep for "error:" — at LOG_LEVEL=warn the app emits
-          # error: log lines on passing runs, which would false-fail a fully green run.
-          if [ "$green" -ne 4 ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
-            echo "SHARDED RUN FAILED ($green/4 green):"
-            for f in build-shard-*.log; do grep -qE "examples?, 0 failures" "$f" || { echo "### $f"; tail -40 "$f"; }; done
-            exit 1
-          fi
-          echo "ALL SHARDS GREEN"
+        if: needs.gate.outputs.skip_integration_tests != 'true'
+        run: scripts/ci/ci.sh run integration-tests
+
+      # The step above prints the failures; this keeps the surrounding output
+      # (setup, per-example progress, the app's own logs) for anything the summary
+      # can't explain.
+      - name: Upload integration shard logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-shard-logs
+          path: build-shard-*.log
+          retention-days: 14
 
   lint:
     name: Lint (hlint)
+    needs: gate
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
-      # Pin to the PR head SHA instead of head_ref: head_ref is the branch
-      # name, which checkout fetches with a glob refspec that 404s on deleted
-      # or fork branches (see i18n-yaml PR fetch failure).
+      # Pin to the PR head SHA instead of head_ref: head_ref is the branch name,
+      # which checkout fetches with a glob refspec that 404s on deleted or fork
+      # branches (see i18n-yaml PR fetch failure).
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: haskell-actions/hlint-setup@v2
-      - name: Run hlint and apply refactorings
-        id: hlint
+      - name: Apply hlint refactorings
+        if: needs.gate.outputs.skip_hlint != 'true'
+        id: refactor
         run: |
           hlint src/ --refactor --refactor-options="--inplace" || true
+          # Recorded before the push is attempted, because the push is what forks
+          # and dependabot can't do — the tree still changed either way, and that
+          # is what decides whether the check below may be attested.
+          if [[ -n $(git status -s src/) ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
       # Dependabot PRs run with a read-only token; pushing autorefactors 403s.
       # Skip the push for them (and forks) but still run hlint below.
       - name: Commit and push refactorings
-        if: github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+        if: steps.refactor.outputs.changed == 'true' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          if [[ -n $(git status -s) ]]; then
-            git add -A
-            git commit -m "Apply hlint refactorings"
-            git push origin HEAD:${{ github.event.pull_request.head.ref }}
-          fi
-      - uses: haskell-actions/hlint-run@v2
-        # The previous refactor step can only push fixes on same-repository PRs.
-        # On forks it cannot update the branch, so pre-existing hlint warnings
-        # would fail unrelated external contributions.
+          git add -A
+          git commit -m "Apply hlint refactorings"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+      - name: Run hlint
+        if: needs.gate.outputs.skip_hlint != 'true'
+        # The refactor step can only push fixes on same-repository PRs. On forks it
+        # cannot update the branch, so pre-existing warnings would fail unrelated
+        # external contributions.
         continue-on-error: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
-        with:
-          path: src/
-          fail-on: warning
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
+        run: |
+          # Only cacheable when the tree still is what the gate fingerprinted. If
+          # the refactor rewrote src/, this run proves nothing about the commit the
+          # gate looked at — and the pushed commit gets its own gate run anyway.
+          if [ "${{ steps.refactor.outputs.changed }}" = "true" ]; then
+            export CI_NO_ATTEST=true
+          else
+            mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+            export CI_FINGERPRINTS=.ci/fingerprints.tsv
+          fi
+          scripts/ci/ci.sh run hlint
 
   ui-tests:
     name: UI Tests
+    needs: gate
+    if: needs.gate.outputs.skip_ui_tests != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -257,7 +321,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web-components/package-lock.json
       - name: Run UI tests
+        env:
+          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
         run: |
-          cd web-components
-          npm ci
-          npm test
+          mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
+          CI_FINGERPRINTS=.ci/fingerprints.tsv scripts/ci/ci.sh run ui-tests
