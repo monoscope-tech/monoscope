@@ -75,7 +75,7 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
   cd .. && workbox generateSW config/workbox-config.js && \
   entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
-  printf 'module Pkg.AssetManifestFingerprint (assetManifestFingerprint) where\n\nassetManifestFingerprint :: String\nassetManifestFingerprint = "%s"\n' "$entry" \
+  printf 'module Pkg.AssetManifestFingerprint (assetManifestFingerprint) where\n\nimport Relude (String)\n\nassetManifestFingerprint :: String\nassetManifestFingerprint = "%s"\n' "$entry" \
     > src/Pkg/AssetManifestFingerprint.hs
 
 # Build Haskell executable (dist-newstyle persisted via BuildKit cache mount).
