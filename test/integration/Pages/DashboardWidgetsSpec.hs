@@ -13,7 +13,7 @@ import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Lucid (renderText)
+import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.GitSync qualified as GitSync
@@ -155,6 +155,32 @@ spec = sequential $ aroundAll withTestResources do
       only <- onlyWidget =<< storedWidgets tr dashId
 
       only.query `shouldBe` Just "name != null"
+
+  -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
+  -- resize it, then re-read the dashboard the way the next page load does. Every type goes
+  -- through the same three handlers, so looping is what makes "every single kind of widget"
+  -- cheap to assert — and a type that silently fails to persist shows up as its own line in
+  -- the diff rather than as one opaque failure.
+  it "every widget type survives add, move, resize and reload" \tr -> do
+    dashId <- newDashboard tr "Widget Lifecycle"
+    addWidgets tr dashId [widgetOf wt (show @Text wt) | wt <- allWidgetTypes]
+    added <- storedWidgets tr dashId
+    map (show @Text . (.wType)) added `shouldBe` map (show @Text) allWidgetTypes
+
+    -- Move and resize every one to a position and size unique to its index, so a widget
+    -- landing on another's coordinates cannot pass.
+    let placed = [(wid, (i * 2) `mod` 12, i, 1 + (i `mod` 4), 2 + (i `mod` 3)) | (i, wid) <- zip [0 ..] (mapMaybe (.id) added)]
+        patch = fromList [(wid, (def :: Dashboards.WidgetReorderItem){Dashboards.x = Just x, Dashboards.y = Just y, Dashboards.w = Just w, Dashboards.h = Just h}) | (wid, x, y, w, h) <- placed]
+    _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing patch
+
+    -- The reload: read it back through the same path a fresh request renders from.
+    reloaded <- storedWidgets tr dashId
+    let geometryOf w = (w.id, w.layout >>= (.x), w.layout >>= (.y), w.layout >>= (.w), w.layout >>= (.h))
+        expected = sort [(Just wid, Just x, Just y, Just w, Just h) | (wid, x, y, w, h) <- placed]
+    sort (map geometryOf reloaded) `shouldBe` expected
+    -- And nothing changed identity along the way: same types, same count, no duplicates.
+    sort (map (show @Text . (.wType)) reloaded) `shouldBe` sort (map (show @Text) allWidgetTypes)
+    length (ordNub (mapMaybe (.id) reloaded)) `shouldBe` length allWidgetTypes
 
   describe "Moving and resizing on the canvas" do
     it "a drag persists the new position across a reload" \tr -> do
