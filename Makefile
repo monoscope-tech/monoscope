@@ -397,6 +397,13 @@ ci-clean:
 ci-selftest:
 	./scripts/ci/ci.sh selftest
 
-.PHONY: ci ci-status ci-shell ci-down ci-clean ci-selftest
+# Build and push the production image for HEAD yourself, so CI's build-image
+# job finds it already in the registry and skips ~4 minutes. Requires a clean
+# tree (the image must match the SHA it is tagged with) and `docker login ghcr.io`.
+# Prod is amd64; on Apple Silicon this is Rosetta-emulated, not QEMU.
+deploy-image:
+	./scripts/ci/ci.sh image $(SHA)
+
+.PHONY: ci ci-status ci-shell ci-down ci-clean ci-selftest deploy-image
 
 .PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

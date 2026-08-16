@@ -17,6 +17,8 @@
 #   scripts/ci/ci.sh shell                    a shell inside the local CI container
 #   scripts/ci/ci.sh down                     stop the local CI containers (keeps build caches)
 #   scripts/ci/ci.sh clean                    …and delete the cached build volumes
+#   scripts/ci/ci.sh image [sha]              build+push the deploy image for a commit (linux/amd64)
+#   scripts/ci/ci.sh image-who <sha>          who built the deploy image for a commit
 #   scripts/ci/ci.sh gc [days]                delete attestations older than N days (default 30)
 #   scripts/ci/ci.sh selftest                 exercise this script's own logic
 #
@@ -466,6 +468,46 @@ cmd_shell() {
 cmd_down() { compose down --remove-orphans; }
 cmd_clean() { compose down -v --remove-orphans; }
 
+# ---------------------------------------------------------------- deploy image
+
+# The deploy image is keyed by commit SHA, so the REGISTRY is its cache and the
+# tag is its fingerprint — no attestation needed to decide whether to build it.
+# What an attestation does add is provenance: an image is the artifact that runs
+# in production, and unlike a fingerprint it can't be re-derived from source
+# (a Haskell build isn't bit-reproducible), so "who built what's running" has to
+# be recorded at build time or it is unanswerable.
+IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
+
+image_exists() { docker manifest inspect "$IMAGE:$1" >/dev/null 2>&1; }
+
+cmd_image() { # [sha] — build and push the production image for a commit
+  local sha date
+  sha=${1:-$(git rev-parse HEAD)}
+  [ -z "$(git status --porcelain)" ] || die "working tree is dirty; the image would not match $sha"
+  git cat-file -e "$sha^{commit}" 2>/dev/null || die "unknown commit $sha"
+  if image_exists "$sha"; then
+    note "$IMAGE:$sha already exists — nothing to do (CI will skip its build)"
+    return 0
+  fi
+  date=$(git show -s --format=%cI "$sha")
+  note "building $IMAGE:$sha for linux/amd64 (prod runs amd64; this is Rosetta-emulated on Apple Silicon)"
+  docker buildx build --platform linux/amd64 -f Dockerfile \
+    --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$date" \
+    --provenance=false --push -t "$IMAGE:$sha" .
+  # Record who built it BEFORE anyone can deploy it.
+  publish_attestation image "$sha" docker linux-amd64
+  note "pushed. Push commit $sha and CI will reuse this image instead of rebuilding."
+}
+
+cmd_image_who() { # <sha> — one line naming who built the image for this commit
+  local ref
+  ref=$(remote_refs | grep "^$NS/image/$1/" | head -1 || true)
+  if [ -z "$ref" ]; then echo "built by: CI (no local-build record)"; return 0; fi
+  git fetch -q "$REMOTE" "$ref" 2>/dev/null \
+    && echo "built by: $(git cat-file commit FETCH_HEAD | sed -n 's/^runner=//p')" \
+    || echo "built by: (record exists but could not be read) $ref"
+}
+
 # ---------------------------------------------------------------- selftest
 
 assert() { # <desc> <expected> <actual>
@@ -553,6 +595,8 @@ case "$cmd" in
   shell)       cmd_shell ;;
   down)        cmd_down ;;
   clean)       cmd_clean ;;
+  image)       cmd_image "$@" ;;
+  image-who)   cmd_image_who "$@" ;;
   gc)          cmd_gc "$@" ;;
   selftest)    cmd_selftest ;;
   checks)      checks_all ;;
