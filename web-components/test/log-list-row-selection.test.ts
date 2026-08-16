@@ -1,10 +1,11 @@
 // Selecting a row to open its detail panel.
 //
-// The clicked row is marked with `bg-fillBrand-strong` and the previously selected one is
-// unmarked. That same class is also what paints the latency bar *inside* every row and a
-// handful of other in-row elements, so "find the previously selected row" has to mean the
-// row, not the first descendant that happens to share the class. Getting it wrong leaves
-// two rows looking selected and strips the colour off a latency bar.
+// The open row used to be marked by adding `bg-fillBrand-strong` in the click handler and
+// searching the DOM to unmark the previous one. That search also matched the latency bar
+// *inside* a row (same class), so it stripped a bar's colour while leaving the old row
+// marked — two rows looking selected at once. And because the virtualizer destroys a row's
+// element when it scrolls out of the runway, the mark did not survive scrolling away and
+// back. Selection is now state the template renders, so both problems are unrepresentable.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mountList } from './log-list-harness';
 
@@ -59,29 +60,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('selecting a row', () => {
-  test('marks the clicked row', async () => {
+  test('records the clicked row as the open one', async () => {
     const el = await mountList();
     const rows = buildRows(2);
 
     clickRow(el, rows[0].tr, 'r0');
 
-    expect(rows[0].tr.classList.contains(SELECTED)).toBe(true);
+    expect((el as any).openRowId).toBe('r0');
   });
 
-  // The bug: scoping the "previously selected" lookup to descendants matched a latency bar
-  // long before it reached the previous row, so the old row stayed marked.
-  test('unmarks the previously selected row', async () => {
-    const el = await mountList();
-    const rows = buildRows(3);
-
-    clickRow(el, rows[0].tr, 'r0');
-    clickRow(el, rows[2].tr, 'r2');
-
-    expect(rows[2].tr.classList.contains(SELECTED)).toBe(true);
-    expect(rows[0].tr.classList.contains(SELECTED)).toBe(false);
-  });
-
-  test('exactly one row is ever selected', async () => {
+  // Exactly one row can be open, because it is a single value rather than a class the
+  // handler has to remember to remove from somewhere.
+  test('opening another row replaces the first', async () => {
     const el = await mountList();
     const rows = buildRows(4);
 
@@ -89,12 +79,10 @@ describe('selecting a row', () => {
     clickRow(el, rows[3].tr, 'r3');
     clickRow(el, rows[0].tr, 'r0');
 
-    expect(rows.filter((r) => r.tr.classList.contains(SELECTED)).map((_, i) => i)).toHaveLength(1);
-    expect(rows[0].tr.classList.contains(SELECTED)).toBe(true);
+    expect((el as any).openRowId).toBe('r0');
   });
 
-  // The same class paints the latency bar. Stripping it turns a bar colourless — and the
-  // bar is the row's whole point in a waterfall.
+  // The same class paints the latency bar inside every row. The old DOM search stripped it.
   test('leaves the latency bars inside rows alone', async () => {
     const el = await mountList();
     const rows = buildRows(3);
@@ -105,14 +93,28 @@ describe('selecting a row', () => {
     expect(rows.every((r) => r.bar.classList.contains(SELECTED))).toBe(true);
   });
 
-  test('re-clicking the selected row keeps it selected', async () => {
+  // The virtualizer destroys and recreates row elements as they leave and re-enter its
+  // runway. State survives that; a class added to the element did not.
+  test('the open row survives the list re-rendering around it', async () => {
+    const el = await mountList();
+    const rows = buildRows(2);
+    clickRow(el, rows[0].tr, 'r0');
+
+    document.body.innerHTML = ''; // every row element is gone
+    buildRows(2); // ...and rebuilt, as the virtualizer would
+    await el.updateComplete;
+
+    expect((el as any).openRowId).toBe('r0');
+  });
+
+  test('re-clicking the open row keeps it open', async () => {
     const el = await mountList();
     const rows = buildRows(2);
 
     clickRow(el, rows[0].tr, 'r0');
     clickRow(el, rows[0].tr, 'r0');
 
-    expect(rows[0].tr.classList.contains(SELECTED)).toBe(true);
+    expect((el as any).openRowId).toBe('r0');
   });
 });
 

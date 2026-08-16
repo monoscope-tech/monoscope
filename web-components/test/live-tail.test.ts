@@ -162,3 +162,129 @@ describe('Live Tail reconnection', () => {
     expect(posted.at(-1)).toMatchObject(selectors);
   });
 });
+
+// The connection state machine and what a restart resets. Live tail is watched during an
+// incident, so "is this still receiving?" has to be answerable from the screen — a stream
+// that stopped while showing its last rows is indistinguishable from a quiet service.
+describe('Live Tail connection state', () => {
+  test('only connecting, live and reconnecting count as running', async () => {
+    const el = await mount();
+    for (const [state, isRunning] of [
+      ['idle', false],
+      ['connecting', true],
+      ['live', true],
+      ['reconnecting', true],
+      ['stopped', false],
+      ['expired', false],
+    ] as const) {
+      el.streamState = state;
+      expect([state, el.running]).toEqual([state, isRunning]);
+    }
+  });
+
+  // The status line is what the reader checks. A state change that left the previous
+  // state's message behind would describe a connection that no longer exists.
+  test('the status message belongs to the current state', async () => {
+    const el = await mount();
+    el.restart();
+    const stream = (el as any).stream;
+
+    stream.opts.onState('reconnecting', 'lost the connection');
+    await el.updateComplete;
+    expect([el.streamState, el.statusMessage]).toEqual(['reconnecting', 'lost the connection']);
+
+    stream.opts.onState('live', undefined);
+    await el.updateComplete;
+    expect([el.streamState, el.statusMessage]).toEqual(['live', '']);
+  });
+
+  test('server-side drops are reported as a total, not accumulated twice', async () => {
+    const el = await mount();
+    el.restart();
+    const stream = (el as any).stream;
+
+    stream.opts.onState('live', undefined);
+    stream.opts.onDropped(12);
+    stream.opts.onDropped(30); // the server reports a running total
+    await el.updateComplete;
+
+    expect(el.droppedServer).toBe(30);
+  });
+});
+
+describe('Live Tail restart', () => {
+  // Restarting means a new filter: rows matched against the old one are not results for
+  // the new one, and carrying over a drop count would attribute them to the wrong query.
+  test('clears the rows and drop counts from the previous filter', async () => {
+    const el = await mount();
+    el.restart();
+    el.appendRows(pushed(0, 5).map((r: any) => r.log));
+    (el as any).droppedServer = 7;
+    (el as any).droppedClient = 3;
+    await el.updateComplete;
+
+    el.restart();
+    await el.updateComplete;
+
+    expect(el.rows).toEqual([]);
+    expect(el.buffer).toEqual([]);
+    expect(el.droppedServer).toBe(0);
+    expect(el.droppedClient).toBe(0);
+  });
+
+  test('replaces the old connection rather than leaving two open', async () => {
+    const el = await mount();
+    el.restart();
+    const first = (el as any).stream;
+
+    el.restart();
+
+    expect((el as any).stream).not.toBe(first);
+    expect(first.isRunning).toBe(false);
+  });
+
+  // A plain /live_tail link must stay plain: only a filter the reader actually chose
+  // belongs in the URL they might copy.
+  test('writes only the filters that differ from the defaults into the URL', async () => {
+    const el = await mount();
+    window.history.replaceState({}, '', '/p/p1/live_tail');
+    const param = (k: string) => new URLSearchParams(window.location.search).get(k);
+
+    el.service = 'checkout';
+    el.environment = 'prod';
+    el.kind = 'spans';
+    el.restart();
+    expect([param('service'), param('env'), param('kind')]).toEqual(['checkout', 'prod', 'spans']);
+
+    // Cleared filters are removed rather than left as empty keys, and `logs` is the
+    // default kind so it never appears — a plain /live_tail link stays plain.
+    el.service = '';
+    el.environment = '';
+    el.kind = 'logs';
+    el.restart();
+    expect([param('service'), param('env'), param('kind')]).toEqual([null, null, null]);
+  });
+
+  test('the registration body carries the chosen filters', async () => {
+    const el = await mount();
+    el.service = 'checkout';
+    el.environment = 'prod';
+    el.query = 'level == "error"';
+
+    el.restart();
+    const body = (el as any).stream.opts.body();
+
+    expect(body).toMatchObject({ service: 'checkout', environment: 'prod', query: 'level == "error"' });
+  });
+
+  test('an unset filter is sent as null, not an empty string', async () => {
+    const el = await mount();
+    el.service = '';
+    el.environment = '';
+    el.query = '';
+
+    el.restart();
+
+    expect((el as any).stream.opts.body()).toMatchObject({ service: null, environment: null, query: null });
+  });
+});

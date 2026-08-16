@@ -284,6 +284,11 @@ export class LogList extends LitElement {
   // aria-activedescendant plus the active outline: lit-virtualizer recycles row nodes, so
   // DOM focus placed on a row dies with the node as soon as the list scrolls.
   @state() private focusedRowId: string | null = null;
+  // The row whose detail panel is open. Rendered from state rather than by adding a class
+  // in the click handler: the virtualizer destroys a row's element when it scrolls out of
+  // the runway, so an imperative class was lost the moment the reader scrolled away and
+  // back — during an incident, losing track of which row you are reading.
+  @state() private openRowId: string | null = null;
   private barChart: any = null;
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1894,15 +1899,10 @@ export class LogList extends LitElement {
       }
     });
 
-    // `:scope >` — sibling ROWS only. bg-fillBrand-strong also paints the latency bar inside
-    // every row, so an unscoped descendant search matched the first bar long before it reached
-    // the previously selected row: that bar lost its colour and the old row stayed marked, so
-    // two rows looked selected at once.
-    const prevActive = event.currentTarget.parentElement?.querySelector(':scope > .bg-fillBrand-strong');
-    if (prevActive) {
-      prevActive.classList.remove('bg-fillBrand-strong');
-    }
-    event.currentTarget.classList.add('bg-fillBrand-strong');
+    // One assignment, and the template does the rest. The previous approach searched the
+    // DOM for the last marked row, which also matched the latency bar *inside* a row (same
+    // class) — stripping its colour while leaving the old row marked — and could not
+    // survive the virtualizer recycling the row's element.
     // Re-query rather than reuse a cached ref: the indicator is rendered *inside* the container
     // this request innerHTML-swaps, so every response replaces the node. A ref captured on an
     // earlier click points at a detached element, and clearing that leaves the live one spinning.
@@ -1910,6 +1910,7 @@ export class LogList extends LitElement {
     showIndicator(true);
 
     const [rdId, rdCreatedAt, source] = targetInfo;
+    this.openRowId = rdId;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
     // Only the newest click owns the indicator: #log_details_container carries
@@ -3403,6 +3404,7 @@ export class LogList extends LitElement {
         // and only summary is forced onto its own line below them.
         this.isNarrow ? 'flex-wrap items-center gap-x-2 py-1.5 px-1 border-b border-strokeWeak' : 'whitespace-nowrap',
         rowData.id === this.focusedRowId && 'outline outline-2 -outline-offset-2 outline-strokeBrand-strong',
+        rowData.id === this.openRowId && 'bg-fillBrand-strong',
         rowHoverBg,
         !ov && 'contain-layout-style',
         isPatterns && (this.wrapsLines ? 'items-start' : 'items-center'),
