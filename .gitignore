@@ -68,3 +68,6 @@ scripts/local/
 
 # Local-CI attestation staging (scripts/ci/ci.sh)
 .ci/
+
+# Playwright run output
+test-results/

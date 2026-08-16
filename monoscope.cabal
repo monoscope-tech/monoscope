@@ -737,6 +737,7 @@ test-suite integration-tests
     , servant-htmx
     , servant-server
     , silently
+    , slugify
     , stm
     , text
     , text-display
