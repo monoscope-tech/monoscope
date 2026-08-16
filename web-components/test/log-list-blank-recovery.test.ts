@@ -3,8 +3,7 @@
 // rendering nothing means nothing changes, so no further update or visibilityChanged event ever
 // arrives to notice. Users saw the log list go blank and stay blank until they reloaded.
 import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { mountList } from './log-list-harness';
-import { row } from './log-list-harness';
+import { mountList, row, stubContainer } from './log-list-harness';
 
 const stubVirtualizer = (el: any, renderedRows: number, visible = true) => {
   const rows = Array.from({ length: renderedRows }, () => ({
@@ -19,7 +18,7 @@ const stubVirtualizer = (el: any, renderedRows: number, visible = true) => {
   return virtualizer;
 };
 
-const container = () => ({ scrollTop: 5000, getBoundingClientRect: () => ({ top: 0, bottom: 500 }) });
+const container = () => stubContainer({ scrollTop: 5000 });
 
 describe('blank virtualizer recovery', () => {
   beforeEach(() => vi.restoreAllMocks());

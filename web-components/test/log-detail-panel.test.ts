@@ -6,6 +6,7 @@
 // Pages.LogExplorer.Log.detailsPanel); these guard the client half of the contract.
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { LogList } from '../src/log-list';
+import { stubContainer } from './log-list-harness';
 
 const mountPanelDom = () => {
   document.body.innerHTML = `
@@ -82,7 +83,7 @@ describe('detail panel loading indicator', () => {
   test('opening the panel checks the deep-scrolled virtualizer during and after resize', async () => {
     (window as any).htmx = { ajax: () => new Promise(() => {}) };
     const el = new LogList();
-    Object.defineProperty(el, 'logsContainer', { value: { scrollTop: 5000 } });
+    Object.defineProperty(el, 'logsContainer', { value: stubContainer({ scrollTop: 5000 }) });
     const heal = vi.spyOn(el as any, 'healBlankVirtualizer').mockImplementation(() => {});
 
     clickRow(el, 'a');

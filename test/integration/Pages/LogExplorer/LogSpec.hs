@@ -38,6 +38,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
+import Pkg.Parser qualified as Parser
 import Utils qualified
 import "base64" Data.Base64.Types qualified as B64T
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -55,7 +56,13 @@ nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
 -- log-list web component actually fetches, and return the raw LogResult so the
 -- assertions inspect the payload structurally, as before.
 fetchData :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchData tr q cols cur since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur Nothing since from to Nothing Nothing)
+fetchData tr q cols cur since from to = fetchDataDir tr q cols cur Nothing since from to
+
+
+-- As above, with the pagination direction the live-tail path uses. Defaulting to
+-- PageOlder is what every existing caller relied on.
+fetchDataDir :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Parser.PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
+fetchDataDir tr q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur dir since from to Nothing Nothing)
 
 
 seedFacetSummary :: TestResources -> IO ()
@@ -386,6 +393,84 @@ spec = around withTestResources do
       page3Ids <- pageIdsFor r3.logsData r3.colIdxMap
       page3Ids `shouldBe` [5]
       r3.hasMore `shouldBe` False
+
+    -- The other half of pagination: live tail and "Load newer events" page with
+    -- direction=newer, and nothing exercised it server-side. The client builds that
+    -- cursor from its newest retained row, so if the server answered with the newest N
+    -- rows instead of the N adjacent to the cursor, a burst of traffic would leave a
+    -- permanent hole in the middle of the list that no amount of scrolling recovers.
+    it "paging newer returns the rows adjacent to the cursor, newest-first, without a gap" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "newer-pagination-key"
+      marker <- ("nw-" <>) . UUID.toText <$> nextRandom
+      let resource = mkResource apiKey []
+          -- idx 1 is the oldest, idx 6 the newest.
+          rowAt :: Int -> IO ()
+          rowAt i = do
+            sid <- show <$> nextRandom
+            tid <- show <$> nextRandom
+            let ts = addUTCTime (fromIntegral (negate (10 - i))) frozenTime
+                attrs = [mkAttr "nw.marker" marker, mkAttr "nw.idx" (show i)]
+            void
+              $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+              $ Proto (mkSpanRequest tid sid Nothing ("nw.row." <> show i) [] Nothing attrs resource ts)
+      mapM_ rowAt [1 .. 6 :: Int]
+
+      let idxOf :: V.Vector (V.Vector AE.Value) -> HashMap.HashMap Text Int -> IO [Int]
+          idxOf rows colIdxMap = do
+            let spanIdAt r = HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
+                  AE.String t -> Just t
+                  _ -> Nothing
+                spanIds = V.toList $ V.mapMaybe spanIdAt rows
+            -- Preserve the response's own row order: the display contract is what is
+            -- under test, so re-sorting here would hide exactly the bug we are after.
+            attrs <- forM spanIds \sid ->
+              withPool tr.trPool
+                $ DBT.query
+                  [sql| SELECT attributes->'nw'->>'idx' FROM otel_logs_and_spans WHERE project_id = ? AND context___span_id = ? |]
+                  (testPid, sid)
+                :: IO (V.Vector (Only (Maybe Text)))
+            pure $ mapMaybe (\v -> V.headM v >>= \(Only m) -> m >>= readMaybe . toString) attrs
+
+          q = Just $ "attributes.nw.marker == \"" <> marker <> "\" | limit 2"
+          fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          -- The client's cursor: the newest row it already holds.
+          cursorAt i = Just $ addUTCTime (fromIntegral (negate (10 - i))) frozenTime
+
+      -- Cursor at row 3 (inclusive: the filter is timestamp >= cursor), page size 2.
+      -- The answer must be the two rows adjacent to the cursor — 3 and 4 — NOT the newest
+      -- two (5 and 6), which would strand 3 and 4 in a hole no scrolling can reach.
+      newer <- fetchDataDir tr q Nothing (cursorAt 3) (Just Parser.PageNewer) Nothing fromTime toTime
+      adjacentIdx <- idxOf newer.logsData newer.colIdxMap
+      adjacentIdx `shouldBe` [4, 3]
+
+      -- Newest-first is the canonical display order regardless of the scan direction.
+      adjacentIdx `shouldBe` sortOn Down adjacentIdx
+
+      -- Every row it returns really is at or newer than the cursor.
+      all (>= 3) adjacentIdx `shouldBe` True
+
+    it "paging newer from the newest row returns nothing, so the client can close that edge" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "newer-edge-key"
+      marker <- ("nwe-" <>) . UUID.toText <$> nextRandom
+      let resource = mkResource apiKey []
+      for_ ([1 .. 3] :: [Int]) \i -> do
+        sid <- show <$> nextRandom
+        tid <- show <$> nextRandom
+        let ts = addUTCTime (fromIntegral (negate (10 - i))) frozenTime
+            attrs = [mkAttr "nwe.marker" marker, mkAttr "nwe.idx" (show i)]
+        void
+          $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+          $ Proto (mkSpanRequest tid sid Nothing ("nwe.row." <> show i) [] Nothing attrs resource ts)
+
+      let q = Just $ "attributes.nwe.marker == \"" <> marker <> "\""
+          fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          -- One millisecond past the newest row, which is what buildRecentFetchUrl sends.
+          pastNewest = Just $ addUTCTime 0.001 $ addUTCTime (fromIntegral (negate (10 - 3 :: Int))) frozenTime
+
+      atEdge <- fetchDataDir tr q Nothing pastNewest (Just Parser.PageNewer) Nothing fromTime toTime
+      V.length atEdge.logsData `shouldBe` 0
 
     -- Regression: synthesized "Upstream span missing" orphan-header rows are a
     -- DISPLAY augmentation and must not count toward the page-fill check.

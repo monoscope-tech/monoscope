@@ -748,6 +748,11 @@ function buildWidgetOrder(container: HTMLElement) {
 
   items.forEach((el) => {
     if (!el.id || !el.id.endsWith('_widgetEl')) return;
+    // GridStack attaches gridstackNode when it adopts an element, which is a frame or two
+    // after HTMX puts it in the DOM. Reading a position off a not-yet-adopted item threw,
+    // and the throw aborted the whole walk — so the user's drag was silently never saved.
+    // It has no position to report yet; the next save picks it up.
+    if (!el.gridstackNode) return;
     const widgetId = el.id.slice(0, -'_widgetEl'.length);
     const nestedGrid = el.querySelector('.nested-grid') as HTMLElement | null;
 
@@ -810,18 +815,23 @@ window.dashboardRefreshInterval = DEFAULT_REFRESH_INTERVAL;
 function setRefreshInterval(detail: { interval: string }) {
   if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
   const interval = parseInt(detail.interval);
-  if (interval > 0) {
-    window.dashboardRefreshTimer = setInterval(() => {
-      window.dispatchEvent(new CustomEvent('update-query'));
-    }, interval);
-  }
+  const running = interval > 0;
+  // Both handles are public state on window and have to describe what is actually
+  // running: the interval was set once at load and never updated, so anything reading
+  // it saw "paused" regardless of the user's selection, and the stale timer id made a
+  // cleared timer look live.
+  window.dashboardRefreshInterval = running ? interval : DEFAULT_REFRESH_INTERVAL;
+  window.dashboardRefreshTimer = running
+    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval)
+    : null;
 }
 
 // Custom event handler for setting the refresh interval programmatically
 window.addEventListener('setRefreshInterval', function (e: any) {
-  if (e.detail !== undefined) {
-    setRefreshInterval(e.detail);
-  }
+  // A CustomEvent constructed without detail carries `null`, not `undefined`, so the
+  // original `!== undefined` guard let it through and setRefreshInterval threw reading
+  // `.interval` off it — an uncaught listener error on a plain `send setRefreshInterval`.
+  if (e.detail != null) setRefreshInterval(e.detail);
 });
 
 function bindFunctionsToObjects(rootObj: any, obj: any) {

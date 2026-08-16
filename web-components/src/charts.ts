@@ -298,17 +298,61 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
 
 window.flameGraphChart = flameGraphChart;
 
-function buildHierarchy(spans: FlameGraphItem[]): FlameGraphItem[] {
+/**
+ * Parent→child tree from a flat span list.
+ *
+ * `parentId` comes from instrumentation, so the shapes here are only as well-formed as
+ * the SDK that emitted them: a span can name itself as its parent, or two spans can name
+ * each other. Previously any such span was attached as some node's child and never
+ * reached from a root, so it simply did not appear on the flamegraph — the trace looked
+ * complete and was quietly missing spans, which is the worst way to lose data on a screen
+ * someone is debugging from.
+ *
+ * Attaching breadth-first from the roots makes reachability explicit: a self-parent has no
+ * real parent so it starts at the root, nothing is attached twice, and whatever remains
+ * unreachable is surfaced at the root rather than dropped. It also bounds the recursion the
+ * renderer then does over `children`.
+ */
+export function buildHierarchy(spans: FlameGraphItem[]): FlameGraphItem[] {
   const spanMap = new Map<string, FlameGraphItem>();
   const roots: FlameGraphItem[] = [];
   for (const span of structuredClone(spans)) {
     span.children = [];
     spanMap.set(span.spanId, span);
   }
+  // Index candidate children by parent once. Walking every span per visited node instead
+  // would be quadratic, and a whole trace is exactly what this renders.
+  const byParent = new Map<string, FlameGraphItem[]>();
   for (const span of spanMap.values()) {
-    const parent = span.parentId ? spanMap.get(span.parentId) : null;
-    parent ? parent.children.push(span) : roots.push(span);
+    // A self-parent has no real parent, so it belongs in the root set.
+    const parentId = span.parentId && span.parentId !== span.spanId ? span.parentId : null;
+    const parent = parentId ? spanMap.get(parentId) : null;
+    if (!parent) {
+      roots.push(span);
+      continue;
+    }
+    // Push into the existing array rather than rebuilding it: one trace can fan out to
+    // thousands of siblings, and copying per child is quadratic all over again.
+    const siblings = byParent.get(parentId!);
+    if (siblings) siblings.push(span);
+    else byParent.set(parentId!, [span]);
   }
+  // Attach breadth-first from the roots, so a span is linked once and a cycle can never
+  // close back onto an ancestor. A cursor, not shift(), which is O(n) per dequeue.
+  const attached = new Set(roots.map((r) => r.spanId));
+  const queue = [...roots];
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
+    for (const child of byParent.get(node.spanId) ?? []) {
+      if (attached.has(child.spanId)) continue;
+      attached.add(child.spanId);
+      node.children.push(child);
+      queue.push(child);
+    }
+  }
+  // Whatever is left is inside a cycle with no root: surface it rather than dropping
+  // those spans off the chart entirely.
+  for (const span of spanMap.values()) if (!attached.has(span.spanId)) roots.push(span);
   return roots;
 }
 

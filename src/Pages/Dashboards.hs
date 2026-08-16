@@ -34,6 +34,7 @@ module Pages.Dashboards (
   findTabBySlug,
   WidgetData,
   resolveDashboardParams,
+  addVariableDefaults,
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
@@ -586,6 +587,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       |]
 
 
+-- | The hidden form that persists a drag/resize. Every layout edit the reader makes goes
+-- through it, so a failure here loses their work — and until the error handlers below it
+-- did so in total silence: the widget stayed where it was dropped, and the change was gone
+-- on the next load. `hx-vals` runs `buildWidgetOrder`, which throws outright if the
+-- web-components bundle failed to load (a stale asset manifest after a deploy will do it),
+-- and htmx swallows that into an event nothing was listening for.
 widgetOrderTriggerForm_ :: Text -> Bool -> Html ()
 widgetOrderTriggerForm_ url isOob =
   form_
@@ -596,6 +603,11 @@ widgetOrderTriggerForm_ url isOob =
       , hxExt_ "json-enc"
       , hxSwap_ "none"
       , hxTrigger_ "widget-order-changed from:body"
+      , -- Scoped to this form rather than a global handler: the app aborts requests on
+        -- purpose elsewhere (the log detail panel uses hx-sync="this:replace"), and those
+        -- must not toast.
+        [__|on htmx:responseError or htmx:sendError or htmx:error
+              send errorToast(value: ['Layout not saved — your change may be lost on reload.']) to document.body|]
       ]
         <> [hxSwapOob_ "true" | isOob]
     )
@@ -2074,17 +2086,22 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
               }
 
       let targetTabs = fold targetDash.tabs
-          firstTabM = viaNonEmpty head targetTabs
+          -- The copy belongs beside the original, on the tab the user is actually looking
+          -- at — this used to always land on the first tab, so duplicating a widget on any
+          -- other tab made the copy appear somewhere the user was not. Falling back to the
+          -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
+          destinationTabM = (tabSlugM >>= \slug -> find (\t -> slugify t.name == slug) targetTabs) <|> viaNonEmpty head targetTabs
 
       Log.logTrace "Widget duplication"
         $ AE.object
           [ "widgetId" AE..= widgetId
           , "targetDashboardId" AE..= targetDashId
-          , "addedToTab" AE..= isJust firstTabM
+          , "sourceTab" AE..= tabSlugM
+          , "destinationTab" AE..= (slugify . (.name) <$> destinationTabM)
           , "targetTabCount" AE..= length targetTabs
           ]
 
-      let updatedDash = maybe (targetDash & #widgets %~ (<> [widgetCopy])) (\t -> updateTabBySlug (slugify t.name) (#widgets %~ (<> [widgetCopy])) targetDash) firstTabM
+      let updatedDash = maybe (targetDash & #widgets %~ (<> [widgetCopy])) (\t -> updateTabBySlug (slugify t.name) (#widgets %~ (<> [widgetCopy])) targetDash) destinationTabM
       _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
       syncDashboardAndQueuePush pid targetDashId
 
@@ -2228,6 +2245,10 @@ queryStringFrom = decodeUtf8 . URI.renderQuery True . map (bimap encodeUtf8 (fma
 
 -- | Add variable defaults to params for any variable not already in params.
 -- This ensures constants can reference variables like {{var-resource}} even when not in URL.
+-- | Fill in a dashboard's declared variables that the request did not supply.
+--
+-- The URL always wins, and "supplied but empty" counts as supplied — a reader who clears
+-- a variable must not have the dashboard's default put straight back on the next load.
 addVariableDefaults :: [(Text, Maybe Text)] -> Maybe [Dashboards.Variable] -> [(Text, Maybe Text)]
 addVariableDefaults params varsM = params <> defaults
   where

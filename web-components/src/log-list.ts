@@ -110,6 +110,14 @@ export const MAX_RETAINED_ROWS = 2500;
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
 const NARROW_VIEWPORT = '(max-width: 767px)';
 const NARROW_COLUMNS = ['id', 'timestamp', 'created_at', 'service', 'summary'];
+// Start one history request before the virtualizer mounts its load-more sentinel. Forty dense
+// rows are ~1120px: enough runway to hide ordinary network latency without fetching pages the
+// user has not approached. This is a range comparison only; it performs no layout reads.
+export const HISTORY_PREFETCH_ROWS = 40;
+
+// Who can ask the list to refetch. Two targets because the dispatchers disagree: the time
+// picker triggers on document, the dashboard auto-refresh and variable fallback on window.
+const UPDATE_QUERY_TARGETS: EventTarget[] = [window, document];
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
 // initial estimate inflated the virtual scroll range roughly 3.5×.
@@ -189,6 +197,31 @@ export class LogList extends LitElement {
    * it immediately after, so the user keeps their place across the swap.
    */
   @state() private virtualizerEpoch = 0;
+  /**
+   * Number of reasons the list's scroll position is still in motion.
+   *
+   * A retention eviction remounts the virtualizer, and a freshly mounted one reports a
+   * zero-height scroll range until it lays out. For that frame the browser clamps
+   * scrollTop to 0 and *both* edge sentinels sit inside the viewport at once — so the
+   * "Load newer events" row at the top fired while the reader was paging history at the
+   * bottom, and its reveal threw them back to the top mid-read.
+   *
+   * Every automatic fetch (the two sentinel observers and the proximity prefetch) is
+   * therefore suspended from the remount until the layout and any scroll restoration have
+   * landed. Explicit clicks are never suspended: the reader asked.
+   */
+  private scrollSettling = 0;
+  // Which end the retention window last cut, so a reader whose anchor row went with it can
+  // be put back on that end. null when the last merge retained everything.
+  private evictedEdge: 'start' | 'end' | null = null;
+  private get isRepositioning() {
+    return this.scrollSettling > 0;
+  }
+  private holdRepositioningForRemount() {
+    this.scrollSettling++;
+    // Two frames: one for the keyed remount to render, one for the new virtualizer to lay out.
+    requestAnimationFrame(() => requestAnimationFrame(() => this.scrollSettling--));
+  }
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
@@ -312,6 +345,17 @@ export class LogList extends LitElement {
   };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
+  /**
+   * Previous visible range, used only to tell a scroll toward history from a merge.
+   *
+   * Kept apart from lastVisibilityRange (which drives the chart mark area and is
+   * seeded synthetically) because a merge renumbers rows: prepending newer rows
+   * raises `last` while the reader sits still, and reading that as movement made the
+   * prefetch cascade through pages nobody had scrolled to. updateVisibleItems clears
+   * it whenever the row count changes, so movement is only ever measured between two
+   * events that describe the same list.
+   */
+  private prefetchBaseline: { first: number; last: number } | null = null;
   private isScrolling = false;
   private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
   private worker: Worker | null = null;
@@ -509,8 +553,12 @@ export class LogList extends LitElement {
     // Form submit listener
     document.addEventListener('submit', this.handleFormSubmit);
 
-    // Filter element update listener
-    document.addEventListener('update-query', this.handleUpdateQuery);
+    // Both targets: the time picker triggers on `document`, while the dashboard
+    // auto-refresh timer and the variable fallback dispatch on `window` — and a
+    // window-dispatched event never reaches a document listener, so an embedded logs
+    // widget sat frozen while every chart around it refreshed. An event that reaches
+    // both fires the handler twice; refetchLogs is debounced, so that collapses to one.
+    UPDATE_QUERY_TARGETS.forEach((t) => t.addEventListener('update-query', this.handleUpdateQuery));
 
     // Window lifecycle events
     window.addEventListener('pagehide', this.handlePageHide);
@@ -1032,6 +1080,10 @@ export class LogList extends LitElement {
   private blankHealAt = 0;
   private detailResizeHealTimer: ReturnType<typeof setTimeout> | null = null;
   private healBlankVirtualizer() {
+    // Driven by a 2s watchdog interval, so it can fire against a list that has since been
+    // removed (tab switch, HTMX swap). A detached list has no viewport to heal, and the
+    // scroll nudge below would be measuring and mutating a node nobody is looking at.
+    if (!this.isConnected) return;
     const virtualizer = this.querySelector('lit-virtualizer');
     const container = this.logsContainer;
     if (!virtualizer || !container || this.isLoading || this.virtualListItems.length === 0) return;
@@ -1107,16 +1159,12 @@ export class LogList extends LitElement {
   }
 
   scrollToBottom() {
-    // Use ref instead of DOM query
-    if (this.logsContainer) {
-      // Batch all DOM operations in a single animation frame
-      requestAnimationFrame(() => {
-        if (this.logsContainer) {
-          // Direct assignment without reading first - browser handles this efficiently
-          this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
-        }
-      });
-    }
+    // Deferred a frame to batch the write — so the pin is re-read *here*, not at the call
+    // site. A render while the list was pinned queued this; by the time it ran the reader
+    // could have scrolled up to page history, and the stale frame dragged them back down.
+    requestAnimationFrame(() => {
+      if (this.logsContainer && this.shouldScrollToBottom) this.logsContainer.scrollTop = this.logsContainer.scrollHeight;
+    });
   }
 
   disconnectedCallback() {
@@ -1174,7 +1222,7 @@ export class LogList extends LitElement {
     }
     ['submit', 'add-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
     document.removeEventListener('submit', this.handleFormSubmit);
-    document.removeEventListener('update-query', this.handleUpdateQuery);
+    UPDATE_QUERY_TARGETS.forEach((t) => t.removeEventListener('update-query', this.handleUpdateQuery));
     this.liveBtn?.removeEventListener('change', this.handleLiveToggle);
     this.liveBtn = null;
     window.removeEventListener('pagehide', this.handlePageHide);
@@ -1278,6 +1326,7 @@ export class LogList extends LitElement {
       }
     }
 
+    if (virtualItems.length !== this.virtualListItems.length) this.prefetchBaseline = null;
     this.virtualListItems = virtualItems;
 
     // Trigger initial chart mark area update after virtual items are set
@@ -1643,6 +1692,11 @@ export class LogList extends LitElement {
         // they don't render stale rows from the previous query under a surviving key.
         this.expandedAggregates = {};
         this.hasNewer = false;
+        // The live-tail buffer holds rows matched against the PREVIOUS query. Carrying it
+        // over leaves the "N new" pill offering to insert rows the new query excludes —
+        // and the drop warning describing a stream that no longer exists.
+        this.recentDataToBeAdded = [];
+        this.liveDropped = 0;
         this.spanListTree = dedupeById(tree);
         this.seenIds = new Set(this.spanListTree.map((r) => r.id));
         this.updateVisibleItems();
@@ -1691,23 +1745,22 @@ export class LogList extends LitElement {
       this.loadedCount = this.spanListTree.length;
       this.updateRowCountDisplay();
 
-      // Defer column width calculation
-      if ('requestIdleCallback' in window) {
-        (window as any).requestIdleCallback(
-          () => {
-            this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
-          },
-          { timeout: 2000 }
-        );
-      } else {
-        setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
-      }
+      // Defer column width calculation. The isConnected guard matters because this runs
+      // up to 2s later: a list removed in between (tab switch, HTMX swap) would otherwise
+      // measure and lay out a detached element it no longer owns.
+      const measure = () => {
+        if (this.isConnected) this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
+      };
+      if ('requestIdleCallback' in window) (window as any).requestIdleCallback(measure, { timeout: 2000 });
+      else setTimeout(measure, 100);
     } catch (error) {
       // A newer full fetch owns the UI now. Do not surface an error from the
       // obsolete request or replace the newer request's loading state.
       if (gen !== this.fetchGeneration) return;
       console.error(error);
-      const msg = error instanceof Error ? error.message : 'Network error';
+      // An Error with an empty message (a bare `new Error()`, some DOM exceptions) took the
+      // first branch and produced a blank toast — a failure the reader is shown nothing about.
+      const msg = (error instanceof Error && error.message) || 'Network error';
       // Show inline error when initial load fails (no data yet), toast otherwise
       if (this.spanListTree.length === 0) {
         this.fetchError = msg;
@@ -1841,8 +1894,11 @@ export class LogList extends LitElement {
       }
     });
 
-    // Use event delegation instead of querying all rows
-    const prevActive = event.currentTarget.parentElement?.querySelector('.bg-fillBrand-strong');
+    // `:scope >` — sibling ROWS only. bg-fillBrand-strong also paints the latency bar inside
+    // every row, so an unscoped descendant search matched the first bar long before it reached
+    // the previously selected row: that bar lost its colour and the old row stayed marked, so
+    // two rows looked selected at once.
+    const prevActive = event.currentTarget.parentElement?.querySelector(':scope > .bg-fillBrand-strong');
     if (prevActive) {
       prevActive.classList.remove('bg-fillBrand-strong');
     }
@@ -1923,11 +1979,15 @@ export class LogList extends LitElement {
       return true;
     });
     const merged = this.orderMerge(this.spanListTree, fresh, isRecentFetch);
-    if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) return merged;
+    if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) {
+      this.evictedEdge = null;
+      return merged;
+    }
 
     // Evict from the edge opposite the fetch. Move the cut past a trace boundary
     // so a root and its children are never split across retained/evicted state.
     const dropStart = this.flipDirection === isRecentFetch;
+    this.evictedEdge = dropStart ? 'start' : 'end';
     const boundedCut = dropStart ? merged.length - MAX_RETAINED_ROWS : MAX_RETAINED_ROWS;
     let cut = boundedCut;
     if (dropStart) {
@@ -1950,6 +2010,7 @@ export class LogList extends LitElement {
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
     this.virtualizerEpoch++;
+    this.holdRepositioningForRemount();
     return kept;
   }
 
@@ -1965,40 +2026,71 @@ export class LogList extends LitElement {
     return item ? { id: item.id, offset: 0 } : null;
   }
 
+  // Holds the auto-fetch suspension for its whole duration: until the anchor row is back
+  // under the reader's eyes, every sentinel in the viewport is an artefact of the merge.
   private async restoreScrollAnchor(anchor: ScrollAnchor) {
-    await this.updateComplete;
-    const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
-    const virtualizer = this.querySelector('lit-virtualizer');
-    if (index < 0 || !virtualizer) return;
+    this.scrollSettling++;
+    try {
+      await this.updateComplete;
+      const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
+      const virtualizer = this.querySelector('lit-virtualizer');
+      // The anchor row is gone, which for an eviction means the reader was parked on the
+      // very edge the retention window cut — live tail trimming history out from under a
+      // reader who had paged deep into it. Leave them at that edge, next to the nearest
+      // surviving rows, rather than at the top the remount clamped them to.
+      if (index < 0) {
+        if (this.evictedEdge !== 'end') return;
+        // Wait for the remounted virtualizer to lay out: until it does, its scroll range
+        // is zero and "the end of the list" is still the top.
+        await this.afterLayout(virtualizer);
+        const container = this.logsContainer;
+        if (container) container.scrollTop = container.scrollHeight;
+        return;
+      }
+      if (!virtualizer) return;
 
-    const container = this.logsContainer;
-    const renderedRow = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
-    if (container && renderedRow) {
       // The normal pagination case keeps the anchor inside the virtualizer's runway. Correct
       // that row in place: scrollToIndex('start') would first snap it to the top, then the
       // offset correction below would move it back a frame later — the visible load-more jump.
-      container.scrollTop += renderedRow.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
-      return;
-    }
+      if (this.alignAnchor(anchor)) return;
 
-    // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows the
-    // virtualizer has already rendered. This fallback is needed after retention-window eviction
-    // remounts the virtualizer and recycles the anchor row out of the DOM.
-    virtualizer.scrollToIndex(index, 'start');
+      // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows the
+      // virtualizer has already rendered. This fallback is needed after retention-window eviction
+      // remounts the virtualizer and recycles the anchor row out of the DOM.
+      virtualizer.scrollToIndex(index, 'start');
+      if (await this.afterLayout(virtualizer)) this.alignAnchor(anchor);
+    } catch (error) {
+      // Every caller is fire-and-forget (`void this.restoreScrollAnchor(...)`), so a throw
+      // here would escape as an unhandled rejection rather than as anything actionable —
+      // and trip error reporting for what costs the reader their scroll position, not their
+      // data. Report it and let the list carry on.
+      console.error('[log-list] scroll restore failed', error);
+    } finally {
+      this.scrollSettling--;
+    }
+  }
+
+  // Settle the virtualizer's layout and paint one frame on top of it, so the geometry read
+  // afterwards is the geometry the reader sees. False once the component is gone.
+  private async afterLayout(virtualizer: { layoutComplete?: Promise<void> } | null): Promise<boolean> {
     try {
-      await virtualizer.layoutComplete;
+      await virtualizer?.layoutComplete;
     } catch (error) {
       if (this.isConnected) throw error;
-      return;
+      return false;
     }
-    requestAnimationFrame(() => {
-      // Target the row by id directly rather than materialising every rendered row to scan it.
-      const currentContainer = this.logsContainer;
-      const row = currentContainer?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
-      if (currentContainer && row) {
-        currentContainer.scrollTop += row.getBoundingClientRect().top - currentContainer.getBoundingClientRect().top - anchor.offset;
-      }
-    });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    return this.isConnected;
+  }
+
+  // Put the anchor row back at its captured offset. False when it is not mounted.
+  // Targets the row by id rather than materialising every rendered row to scan it.
+  private alignAnchor(anchor: ScrollAnchor): boolean {
+    const container = this.logsContainer;
+    const row = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
+    if (!container || !row) return false;
+    container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+    return true;
   }
 
   // The <table> is the tab stop, so entering it with nothing active starts at the top.
@@ -2013,7 +2105,15 @@ export class LogList extends LitElement {
     if (!rowIndexes.length) return;
     const current = rowIndexes.findIndex((i) => (this.virtualListItems[i] as EventLine).id === this.focusedRowId);
     const target =
-      to === 'first' ? 0 : to === 'last' ? rowIndexes.length - 1 : Math.max(0, Math.min(rowIndexes.length - 1, (current < 0 ? 0 : current) + to));
+      to === 'first'
+        ? 0
+        : to === 'last'
+          ? rowIndexes.length - 1
+          : // With nothing focused yet, the first move selects the first row rather than
+            // counting from it: `0 + 1` skipped straight past row one.
+            current < 0
+            ? 0
+            : Math.max(0, Math.min(rowIndexes.length - 1, current + to));
     const index = rowIndexes[target];
     const id = (this.virtualListItems[index] as EventLine).id;
     if (id === this.focusedRowId && current >= 0) return;
@@ -2053,13 +2153,11 @@ export class LogList extends LitElement {
     }
   }
 
-  handleRecentClick() {
-    const container = document.querySelector('#logs_list_container_inner');
-    if (container) {
-      container.scrollTop = 0;
-    }
+  handleRecentClick = () => {
+    // This list's own container, not the first one on the page: dashboards embed several.
+    if (this.logsContainer) this.logsContainer.scrollTop = 0;
     this.handleRecentConcatenation();
-  }
+  };
 
   /**
    * Colour for one value of the breakdown dimension.
@@ -2098,6 +2196,21 @@ export class LogList extends LitElement {
   }
   private _legendCache: { key: string; rows: { label: string; ns: number; pct: number; color: string }[] } | null = null;
 
+  /**
+   * Oldest-first pins the viewport to the newest edge, and `updated` re-asserts that pin on
+   * every render. Nothing ever cleared it on scroll, so a reader who scrolled up to page
+   * history was thrown back to the bottom by the very render their load-more caused — the
+   * same complaint as the newest-first jump-to-top, from the opposite end of the list.
+   *
+   * Skipped while the list is repositioning: a remounted virtualizer reports a zero-height
+   * scroll range, which reads as "at the bottom" for exactly the frame it is not.
+   */
+  private syncBottomPin() {
+    const container = this.logsContainer;
+    if (!container || !this.flipDirection || this.isRepositioning) return;
+    this.shouldScrollToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+  }
+
   // Flush the live-tail buffer if the viewport is parked at the edge new rows arrive at.
   // Public so the visibility handler and any future scroll source share one rule.
   resumeLiveTailAtEdge() {
@@ -2134,6 +2247,7 @@ export class LogList extends LitElement {
 
   private handleListScroll = () => {
     this.markScrolling();
+    this.syncBottomPin();
     this.resumeLiveTailAtEdge();
     // Also checked here, not only after an update: once the virtualizer is stuck it renders
     // nothing, so nothing changes, so Lit never updates again — `updated` would never run and
@@ -2144,8 +2258,10 @@ export class LogList extends LitElement {
   handleVisibilityChange = (e: any) => {
     const first = e.first;
     const last = e.last;
-    if (!first || !last) return;
+    if (!Number.isInteger(first) || !Number.isInteger(last)) return;
 
+    const previousRange = this.prefetchBaseline;
+    this.prefetchBaseline = { first, last };
     // Store visibility range for deferred chart update
     this.lastVisibilityRange = { first, last };
 
@@ -2156,6 +2272,20 @@ export class LogList extends LitElement {
     // scroll positions. The other direction is why the scroll binding exists too — already
     // showing the first row, nudging the last few pixels to 0 changes no row's visibility.
     this.resumeLiveTailAtEdge();
+
+    // IntersectionObserver cannot prefetch early in a virtual list: the sentinel itself is not
+    // mounted until it enters the virtualizer's short render runway. The range is already known
+    // here, so a pair of integer comparisons starts one page early with no scroll/layout reads.
+    // Require movement toward that edge: visibilityChanged also fires after an items merge, and
+    // proximity alone could otherwise cascade through several pages while the user is stationary.
+    // fetchData sets isLoadingMore synchronously, making repeated movement events single-flight.
+    const nearHistoryEdge = this.flipDirection
+      ? first <= HISTORY_PREFETCH_ROWS
+      : last >= this.virtualListItems.length - 1 - HISTORY_PREFETCH_ROWS;
+    const movingTowardHistory = previousRange !== null && (this.flipDirection ? first < previousRange.first : last > previousRange.last);
+    if (nearHistoryEdge && movingTowardHistory && this.hasMore && !this.isLoading && !this.isLoadingMore && !this.isRepositioning) {
+      void this.fetchData(this.buildLoadMoreUrl(), false, false, true);
+    }
 
     // Debounced chart update (runs at most every 100ms)
     this.debouncedUpdateChartMarkArea();
@@ -3025,7 +3155,7 @@ export class LogList extends LitElement {
       class="w-full flex relative h-[28px] cursor-pointer hover:bg-fillWeaker"
       id=${id || nothing}
       aria-busy=${loading}
-      @click=${onClick}
+      @click=${() => loading || onClick()}
       ${ref(rowRef ?? noopRef)}
     >
       <td colspan=${String(this.displayColumns.length)} class="relative pl-[calc(40vw-10ch)]">
@@ -3041,11 +3171,15 @@ export class LogList extends LitElement {
     </tr>
   `;
 
+  // expandTimeRange is left alone on click: it is what keeps this row — and the spinner
+  // the reader is watching — mounted while the page is in flight. Clearing it here swapped
+  // the row for an empty <tr> the moment it was clicked, so the click read as doing nothing
+  // and the list shifted by the row's height under the pointer. fetchData resolves the flag
+  // from the response: a page that arrives sets hasMore and this row becomes "Load more".
   renderExpandTimeRangeButton = () =>
-    this.createLoadingRow(null, 'Show earlier events', this.isLoading || this.isLoadingMore, () => {
-      this.fetchData(this.expandTimeRangeUrl(), false, false, true);
-      this.expandTimeRange = false;
-    });
+    this.createLoadingRow(null, 'Show earlier events', this.isLoading || this.isLoadingMore, () =>
+      this.fetchData(this.expandTimeRangeUrl(), false, false, true)
+    );
 
   renderLoadMoreButton = () => {
     if (this.fetchError && this.spanListTree.length === 0) {
@@ -3068,7 +3202,7 @@ export class LogList extends LitElement {
       if (loadMoreRef.value && !this.isLoadingMore && !this.isLoading) {
         const observer = new IntersectionObserver(
           ([entry]) => {
-            if (entry.isIntersecting && !this.isLoadingMore && !this.isLoading) {
+            if (entry.isIntersecting && !this.isLoadingMore && !this.isLoading && !this.isRepositioning) {
               this.debouncedFetchData(this.buildLoadMoreUrl(), false, false, true);
               observer.disconnect();
             }
@@ -3114,8 +3248,11 @@ export class LogList extends LitElement {
         if (!fetchRecentRef.value || this.isFetchingRecent || this.isLoading) return;
         const observer = new IntersectionObserver(
           ([entry]) => {
-            if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading) {
-              this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
+            if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading && !this.isRepositioning) {
+              // No revealRecent: the observer fired because the reader is already at this edge,
+              // so the rows arrive in view on their own. Forcing scrollTop to 0 here is what
+              // teleported a reader who was paging history at the other end of the list.
+              this.fetchData(this.buildRecentFetchUrl(), false, true, false, false);
               observer.disconnect();
             }
           },

@@ -213,6 +213,8 @@ tests:
       # LiveTailSpec races registrations through a ki scope, and fakes a broker that throws.
       - ki
       - safe-exceptions
+      # DashboardWidgetsSpec slugifies widget titles the way the page does.
+      - slugify
       - hasql
       - hasql-interpolate
       - hasql-pool

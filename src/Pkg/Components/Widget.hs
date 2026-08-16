@@ -100,7 +100,10 @@ data WidgetType
   | WTFlamegraph
   | WTServiceMap -- Service dependency graph visualization
   | WTHeatmap -- Latency distribution heatmap
-  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
+  -- Bounded so every widget type can be enumerated ([minBound ..]) rather than listed by
+  -- hand: adding a constructor then extends the round-trip/render specs automatically
+  -- instead of silently shipping untested.
+  deriving stock (Bounded, Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
 

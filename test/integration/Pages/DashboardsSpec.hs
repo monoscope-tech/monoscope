@@ -87,6 +87,42 @@ spec = sequential $ aroundAll withTestResources do
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
 
+    -- Dashboard variables are backend-persisted schema, but their live values come from
+    -- the URL. The precedence rule is what makes a dashboard shareable: a link carries the
+    -- reader's selections, and clearing one must stay cleared rather than snapping back to
+    -- the dashboard's default on the next load.
+    it "URL variable values win over the dashboard's declared defaults" \_ -> do
+      let var k v =
+            DashboardModel.Variable
+              { key = k
+              , title = Nothing
+              , multi = Nothing
+              , required = Nothing
+              , reloadOnChange = Nothing
+              , helpText = Nothing
+              , _vType = DashboardModel.VTValues
+              , sql = Nothing
+              , facetField = Nothing
+              , query = Nothing
+              , options = Nothing
+              , value = v
+              , dependsOn = Nothing
+              }
+          vars = Just [var "env" (Just "prod"), var "region" (Just "eu")]
+          resolve params = Dashboards.addVariableDefaults params vars
+
+      -- Nothing supplied: both defaults apply.
+      sortOn fst (resolve []) `shouldBe` [("var-env", Just "prod"), ("var-region", Just "eu")]
+
+      -- A supplied value wins, and the untouched variable still gets its default.
+      sortOn fst (resolve [("var-env", Just "staging")]) `shouldBe` [("var-env", Just "staging"), ("var-region", Just "eu")]
+
+      -- Explicitly cleared counts as supplied: the default must not come back.
+      sortOn fst (resolve [("var-env", Nothing)]) `shouldBe` [("var-env", Nothing), ("var-region", Just "eu")]
+
+      -- A dashboard with no variables leaves the request's params untouched.
+      Dashboards.addVariableDefaults [("since", Just "1H")] Nothing `shouldBe` [("since", Just "1H")]
+
     it "overview template uses the native metric store" \_ -> do
       overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
       overview `shouldSatisfy` isJust
