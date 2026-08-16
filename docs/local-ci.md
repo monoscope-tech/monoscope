@@ -85,6 +85,36 @@ Postgres-as-TimeFusion fallback. That is genuinely useful feedback and it is
 exercise. On a Linux/amd64 box the real service starts and the whole suite
 attests.
 
+## Building the deploy image yourself
+
+The image build is the rest of the deploy: with tests cached it is ~4 of the ~4.5
+minutes. It is not fingerprinted like the other checks, because it produces an
+*artifact* rather than a verdict — skipping it would leave nothing to deploy. Its
+cache is the registry, and its fingerprint is the commit SHA:
+
+```bash
+make deploy-image          # build + push ghcr.io/…/monoscope:<HEAD sha>, linux/amd64
+```
+
+Push that commit and CI's `build-image` job finds the tag already there and skips
+the build. The same check makes a re-run, a `workflow_dispatch` of an existing
+commit, or a revert to an already-built SHA into a ~30-second deploy for free.
+
+Two things to know before using it:
+
+- **It refuses a dirty tree.** The image is tagged with a commit SHA and must
+  actually be that commit, or the tag lies about what is running in production.
+- **It records who built it.** An image cannot be re-derived from source to check
+  (a Haskell build is not bit-reproducible), so unlike an attestation there is no
+  way to verify after the fact that a pushed image matches its tag. The deploy job
+  therefore prints `built by: …` in its summary, every deploy, sourced from a
+  `refs/ci-attest/v1/image/<sha>/…` record written at build time. If that line
+  ever names someone unexpected, that is the signal.
+
+Prod is `linux/amd64`. On Apple Silicon that is emulated — but by **Rosetta**, not
+QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
+~10 GB of free disk for the amd64 deps image the first time.
+
 ## Knobs
 
 | Variable | Effect |

@@ -276,7 +276,37 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
 
+      # The registry is the cache and the commit SHA is the fingerprint: an image
+      # tagged with this SHA is by construction the image for this commit, so
+      # rebuilding it produces the same thing at a cost of ~4 minutes. Turns a
+      # re-run, a workflow_dispatch of an existing commit, or a revert to an
+      # already-built SHA into a ~30-second deploy. It does nothing for a genuinely
+      # new commit, which is the common case — this is for the repeat ones.
+      #
+      # It also lets a developer pre-build and push the image themselves (see
+      # `make deploy-image`); the deploy job records who built it either way.
+      - name: Is this commit's image already in the registry?
+        id: probe
+        run: |
+          img=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          if docker manifest inspect "$img:${{ github.sha }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image for \`${{ github.sha }}\` already in the registry — skipping the build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Skipping the build must not leave :latest pointing at an older commit —
+      # docker-compose.yml (self-hosters) pulls :latest. Re-point it at the image
+      # we just decided to reuse; this copies a manifest, it does not rebuild.
+      - name: Point :latest at the existing image
+        if: steps.probe.outputs.exists == 'true'
+        run: |
+          img=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          docker buildx imagetools create -t "$img:latest" "$img:${{ github.sha }}"
+
       - name: Build and push Docker Image
+        if: steps.probe.outputs.exists != 'true'
         uses: useblacksmith/build-push-action@v2
         with:
           context: .
@@ -320,9 +350,20 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Note why this deploy was allowed
+      - uses: actions/checkout@v6
+
+      # An image cannot be re-derived from source to check it (a Haskell build is
+      # not bit-reproducible), so the only way "what is running in prod, and who
+      # built it" stays answerable is to say so here, every time.
+      - name: Note why this deploy was allowed, and who built the image
         run: |
-          echo "build-and-test: ${{ needs.build-and-test.result }} (all Haskell checks pre-proven: ${{ needs.gate.outputs.skip_haskell }})" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "build-and-test: ${{ needs.build-and-test.result }} (all Haskell checks pre-proven: ${{ needs.gate.outputs.skip_haskell }})"
+            # Never fatal: this is a note about the deploy, not a condition of it.
+            # A provenance lookup that cannot reach the remote must not be the
+            # reason a green, gated build fails to reach production.
+            scripts/ci/ci.sh image-who "${{ github.sha }}" || echo "built by: (could not read provenance)"
+          } >> "$GITHUB_STEP_SUMMARY"
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
       # release lands straight in the deploy path. caprover 2.4.0 (2026-08-05)
