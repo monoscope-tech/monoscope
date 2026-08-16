@@ -455,9 +455,14 @@ cmd_local() {
   local rc=0
   # --rm so a failed run leaves nothing behind; the caches live in named volumes.
   # Forward the run's knobs; `compose run` only passes what it is told to.
+  # Run from a COPY inside the container, not from the bind mount. bash reads a
+  # script incrementally by file offset, so editing scripts/ci/ci.sh while a run
+  # is in flight makes the running shell resume at a stale offset and die with
+  # "syntax error near unexpected token". A `make ci` lasts tens of minutes —
+  # long enough that editing it meanwhile is a normal thing to do, not a mistake.
   compose run --rm \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
-    runner scripts/ci/ci.sh run "$@" || rc=$?
+    runner sh -c 'cp scripts/ci/ci.sh /tmp/ci-run.sh && exec bash /tmp/ci-run.sh run "$@"' ci-run "$@" || rc=$?
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
   [ "$rc" -eq 0 ] || note "local CI failed (exit $rc); services left up for debugging — \`make ci-down\` to clean up"
