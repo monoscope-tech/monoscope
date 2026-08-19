@@ -16,8 +16,9 @@ ROOT=$(pwd)
 
 PORT=${E2E_PORT:-8081}
 DB=${E2E_DB:-monoscope_e2e}
-PGHOST=${E2E_PGHOST:-localhost}
-PGPORT=${E2E_PGPORT:-5432}
+# DB_HOST/DB_PORT are what CI sets and what its `pg` capability probes.
+PGHOST=${E2E_PGHOST:-${DB_HOST:-localhost}}
+PGPORT=${E2E_PGPORT:-${DB_PORT:-5432}}
 export PGPASSWORD=${E2E_PGPASSWORD:-postgres}
 
 # Refuse to reuse a port someone else holds. macOS will happily let a second server bind

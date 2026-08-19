@@ -26,7 +26,10 @@
 set -euo pipefail
 
 NS=refs/ci-attest/v1
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# CI_ROOT because `ci.sh local` runs this script from a COPY at /tmp (so that editing it
+# mid-run is safe). Deriving the root from the script's own path then resolves to `/`, and
+# every check dies with "unknown check" before doing any work.
+ROOT=${CI_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 REMOTE=${CI_ATTEST_REMOTE:-origin}
 # Bump to invalidate every attestation at once (e.g. after fixing a fingerprint bug).
 EPOCH=1
@@ -290,6 +293,13 @@ run_body() { # <check>
       ;;
     hlint)   hlint src/ ;;
     ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
+    # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
+    # 8081 against a throwaway database, so this only has to supply the binary and chromium.
+    e2e)
+      cabal build monoscope-server "$CABAL_OPTS"
+      (cd e2e && npm ci --prefer-offline --no-audit && npx playwright install --with-deps chromium)
+      scripts/e2e.sh
+      ;;
     integration-tests) run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
@@ -461,6 +471,7 @@ cmd_local() {
   # "syntax error near unexpected token". A `make ci` lasts tens of minutes —
   # long enough that editing it meanwhile is a normal thing to do, not a mistake.
   compose run --rm \
+    -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
     runner sh -c 'cp scripts/ci/ci.sh /tmp/ci-run.sh && exec bash /tmp/ci-run.sh run "$@"' ci-run "$@" || rc=$?
   # Publish whatever passed even if a later check failed — a green check is green.

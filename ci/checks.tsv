@@ -25,3 +25,4 @@ integration-tests	ghc pg minio tf-real	@hs @fe
 weeder	ghc	@hs @fe
 hlint	hlint	src .hlint.yaml
 ui-tests	node	@fe
+e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh

@@ -28,6 +28,7 @@ jobs:
       skip_integration_tests: ${{ steps.checks.outputs.skip_integration_tests }}
       skip_hlint: ${{ steps.checks.outputs.skip_hlint }}
       skip_ui_tests: ${{ steps.checks.outputs.skip_ui_tests }}
+      skip_e2e: ${{ steps.checks.outputs.skip_e2e }}
       skip_haskell: ${{ steps.haskell.outputs.skip_all }}
     steps:
       - uses: actions/checkout@v6
@@ -36,7 +37,7 @@ jobs:
       # Whether the whole container job (image pull + service containers + cabal
       # cache restore, ~7 minutes before a single test runs) can be skipped outright.
       - id: haskell
-        run: scripts/ci/ci.sh gate build doctests unit-tests cli-tests integration-tests
+        run: scripts/ci/ci.sh gate build doctests unit-tests cli-tests integration-tests e2e
 
   # Build frontend once and share via artifacts
   frontend:
@@ -241,6 +242,13 @@ jobs:
       - name: Run integration-tests
         if: needs.gate.outputs.skip_integration_tests != 'true'
         run: scripts/ci/ci.sh run integration-tests
+
+      # Runs here rather than in its own job because this is the only one that already
+      # has all three capabilities the check needs: ghc to build the server, node for
+      # Playwright, and the postgres service. scripts/e2e.sh starts its own server.
+      - name: Run e2e
+        if: needs.gate.outputs.skip_e2e != 'true'
+        run: scripts/ci/ci.sh run e2e
 
       # The step above prints the failures; this keeps the surrounding output
       # (setup, per-example progress, the app's own logs) for anything the summary
