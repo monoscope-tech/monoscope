@@ -1,4 +1,4 @@
-module System.Config (EnvConfig (..), AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..)) where
+module System.Config (EnvConfig (..), AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe

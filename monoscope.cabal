@@ -651,6 +651,7 @@ test-suite integration-tests
       SchemaLearningSpec
       Spec
       SpecHook
+      System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
       Web.ClientMetadataSpec
@@ -920,6 +921,7 @@ test-suite test-dev
       SchemaLearningSpec
       Spec
       SpecHook
+      System.MigrationRunnerSpec
       Web.ApiV1Spec
       Web.AuthSpec
       Web.ClientMetadataSpec
