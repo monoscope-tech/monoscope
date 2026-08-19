@@ -335,6 +335,37 @@ spec = sequential $ aroundAll withTestResources do
       m <- fetchMonitor tr skipMonId
       m.currentStatus `shouldBe` Monitors.MSNormal
 
+    -- The guard against an infinite re-evaluation loop: a monitor whose query throws must
+    -- still have its watermark advanced, or every tick re-picks it and hammers whatever
+    -- backend is already failing. checkTriggeredQueryMonitors catches per monitor and
+    -- updates lastEvaluated on that path specifically.
+    it "a monitor whose evaluation throws still advances lastEvaluated" \tr -> do
+      let brokenMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "66666666-6666-6666-6666-666666666666"
+      insertPipelineMonitor tr brokenMonId "SELECT 1::float8" 100 Nothing "above" Nothing Nothing
+      setMonitorQuery tr brokenMonId "SELECT * FROM a_table_that_does_not_exist"
+
+      evalMonitorsAt t0 tr
+
+      m <- fetchMonitor tr brokenMonId
+      m.lastEvaluated `shouldSatisfy` (> addUTCTime (-86400) t0)
+      -- Pins that this went down the failure branch rather than quietly succeeding: a query
+      -- that cannot run must not also produce an alert.
+      m.currentStatus `shouldBe` Monitors.MSNormal
+
+    -- ...and one broken monitor must not stop the ones after it in the same tick.
+    it "a broken monitor does not prevent the others from being evaluated" \tr -> do
+      let brokenId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "77777777-7777-7777-7777-777777777777"
+          healthyId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "88888888-8888-8888-8888-888888888888"
+      insertPipelineMonitor tr brokenId "SELECT 1::float8" 100 Nothing "above" Nothing Nothing
+      setMonitorQuery tr brokenId "SELECT * FROM another_missing_table"
+      insertPipelineMonitor tr healthyId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
+      resetLastEvaluated tr healthyId
+
+      evalMonitorsAt t0 tr
+
+      healthy <- fetchMonitor tr healthyId
+      healthy.currentStatus `shouldBe` Monitors.MSAlerting
+
     describe "Renotify and Stop-After" do
       let renotifyMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "55555555-5555-5555-5555-555555555555"
 
