@@ -9,10 +9,12 @@ test.describe("Billing page", () => {
   });
 
   test("shows plan info and change plan button", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Billing" })).toBeVisible();
-    await expect(page.getByText("This month")).toBeVisible();
-    await expect(page.getByText("Requests")).toBeVisible();
-    await expect(page.getByText("Estimated cost")).toBeVisible();
+    // Two headings legitimately carry this name: the settings shell's page title and the
+    // section's own h2.
+    await expect(page.getByRole("heading", { name: "Billing" }).first()).toBeVisible();
+    await expect(page.getByText(/Billing cycle \(since/)).toBeVisible();
+    await expect(page.getByText("Estimated this cycle")).toBeVisible();
+    await expect(page.getByText(/\d+ requests/)).toBeVisible();
     await expect(page.getByText("/mo")).toBeVisible();
     await expect(page.getByText("Change plan")).toBeVisible();
   });
@@ -20,9 +22,9 @@ test.describe("Billing page", () => {
   test("plan picker modal opens with plan cards", async ({ page }) => {
     await page.getByText("Change plan").click();
     await expect(page.getByText("Compare Plans")).toBeVisible();
-    await expect(page.locator("#freePlan")).toBeVisible();
-    await expect(page.locator("#popularPlan")).toBeVisible();
-    await expect(page.locator("#systemsPlan")).toBeVisible();
+    await expect(page.locator("#freePricing")).toBeVisible();
+    await expect(page.locator("#GraduatedPricing")).toBeVisible();
+    await expect(page.locator("#SystemsPricing")).toBeVisible();
     await expect(page.getByText("Free tier")).toBeVisible();
     await expect(
       page.getByText("Bring nothing", { exact: true }),
@@ -33,12 +35,12 @@ test.describe("Billing page", () => {
   test("clicking upgrade posts to stripe_checkout", async ({ page }) => {
     await page.getByText("Change plan").click();
     await expect(page.getByText("Compare Plans")).toBeVisible();
-    await assertStripeCheckout(page, "#popularPlan button");
+    await assertStripeCheckout(page, "#GraduatedPricing button");
   });
 
   test("BYOS plan posts to stripe_checkout", async ({ page }) => {
     await page.getByText("Change plan").click();
     await expect(page.getByText("Compare Plans")).toBeVisible();
-    await assertStripeCheckout(page, "#systemsPlan button");
+    await assertStripeCheckout(page, "#SystemsPricing button");
   });
 });

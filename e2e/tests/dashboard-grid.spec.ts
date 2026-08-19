@@ -29,13 +29,76 @@ const ROOT_ITEMS = `${ROOT_GRID} > .grid-stack-item`;
 
 type Layout = { id: string; x: number; y: number; w: number; h: number };
 
+test("a dashboard can be created without assigning a team", async ({ page }) => {
+  // The team picker is optional, and an empty one posts `teams=` — a single empty value.
+  // Decoding that into [UUID] failed, so the whole form 400'd with a raw "Bad Request"
+  // page rather than the toast the handler raises for other invalid input. Creating a
+  // dashboard is the entry point to everything else in this spec.
+  const responses: number[] = [];
+  page.on("response", r => { if (r.request().method() === "POST") responses.push(r.status()); });
+
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.getByText("Blank dashboard").click();
+  await page.locator('input[name="title"]').first().fill("No Team Dashboard");
+  await page.getByRole("button", { name: "Create" }).first().click();
+
+  await expect.poll(() => responses.length).toBeGreaterThan(0);
+  expect(responses).not.toContain(400);
+  await expect
+    .poll(async () => {
+      await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+      return page.getByText("No Team Dashboard").count();
+    }, { timeout: 20000 })
+    .toBeGreaterThan(0);
+});
+
+const FIXTURE = "E2E Grid Fixture";
+
 /**
- * Open the first dashboard in the demo project. Ids are per-database, so never
- * hardcode one.
+ * Open this spec's own dashboard, creating it the first time. Ids are per-database, so
+ * never hardcode one.
+ *
+ * It is addressed by title rather than "the first dashboard in the list": the project also
+ * holds dashboards other tests create, and opening whichever sorted first meant this spec's
+ * assertions ran against someone else's canvas. It also created nothing itself, so it only
+ * passed on a database an earlier run had already populated — the opposite of reproducible.
  */
 async function openFirstDashboard(page: Page) {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`).first().click();
+
+  const links = page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`, { hasText: FIXTURE });
+  if ((await links.count()) === 0) {
+    await page.locator('label[for="newDashboardMdl"]').first().click();
+    // A template, not "Blank dashboard": this spec is about the grid adopting widgets, and
+    // the nested-group case needs a canvas that actually contains a group widget. Apache
+    // ships one and — unlike Endpoint Analytics — declares no variables, so opening it
+    // never raises the picker that blocks grid initialisation.
+    await page.getByText("Apache HTTP Server").first().click();
+    // `title` is required; without it HTML validation blocks the submit and HTMX never
+    // fires, so the click looks like it worked and nothing is created.
+    await page.locator('input[name="title"]').fill(FIXTURE);
+    await page.getByRole("button", { name: "Create" }).click();
+    // The handler redirects to the new dashboard. Wait for that rather than polling the
+    // list — navigating while the redirect is in flight aborts it (net::ERR_ABORTED).
+    await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  }
+
+  await links.first().click();
+
+  // A dashboard with unanswered required variables opens a full-screen picker (z-index
+  // 99999) that deliberately blocks the grid — one per unset variable, so they stack. This
+  // has to come before the init wait, not after: while a picker is up the grid never
+  // initialises, so waiting first just times out. Raw clicks, not locator clicks: the
+  // topmost intercepts the others, and clicking the backdrop itself is what dismisses it.
+  const backdrops = page.locator(".var-picker-backdrop");
+  for (let i = 0; i < 6 && (await backdrops.count()) > 0; i++) {
+    await page.mouse.click(5, 5);
+    await page.waitForTimeout(250);
+  }
+  await expect(backdrops).toHaveCount(0);
+
   // The detail route redirects to /tab/<slug>; a DOMContentLoaded handler adds this
   // class once GridStack.init returns.
   await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 15000 });
@@ -46,15 +109,7 @@ async function openFirstDashboard(page: Page) {
   await page.locator(".ui-resizable-se").first().waitFor({ state: "attached", timeout: 15000 });
   await page.waitForTimeout(2500);
 
-  // A dashboard with unanswered required variables opens a full-screen picker
-  // (z-index 99999) that deliberately blocks the grid — one per unset variable, so
-  // they stack. Raw clicks, not locator clicks: the topmost intercepts the others,
-  // and clicking the backdrop itself is what dismisses it.
-  const backdrops = page.locator(".var-picker-backdrop");
-  for (let i = 0; i < 6 && (await backdrops.count()) > 0; i++) {
-    await page.mouse.click(5, 5);
-    await page.waitForTimeout(250);
-  }
+  // Nothing re-opened a picker while the widgets were loading.
   await expect(backdrops).toHaveCount(0);
 }
 

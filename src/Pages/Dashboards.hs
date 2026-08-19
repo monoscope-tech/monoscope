@@ -1430,7 +1430,9 @@ data WidgetAlertForm = WidgetAlertForm
   , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
+  -- Posted by the widget alert config with the same @getTagValues@ hx-vals as
+  -- 'DashboardForm', so an empty picker sends @teams=@ here too.
+  deriving (FromForm) via (FormWithOptional "teams" WidgetAlertForm)
 
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -1809,7 +1811,9 @@ data DashboardForm = DashboardForm
   , fileDir :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
+  -- An empty team picker posts @teams=@, which the plain derived decoder read as a
+  -- malformed UUID and rejected the whole form over. See 'FormWithOptional'.
+  deriving (FromForm) via (FormWithOptional "teams" DashboardForm)
 
 
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)

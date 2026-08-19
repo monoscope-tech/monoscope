@@ -1,5 +1,19 @@
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { QueryEditorComponent, schemaManager, monaco } from '../src/query-editor/query-editor';
+import { computeSuggestions, type SchemaAccess } from '../src/query-editor/completion';
+
+// Drives the table below against the real completion logic. Until this existed the table
+// reached for `monaco.languages.CompletionItemProviderRegistry` — a private internal that
+// no longer exists — behind an unguarded `if`, so every case passed asserting nothing.
+//
+// Identical to the component's own `schemaAccess`, so these cases exercise the same field
+// and value resolution the editor uses rather than a reimplementation that could drift.
+const tableSchema: SchemaAccess = {
+  tables: () => schemaManager.getSchemas(),
+  defaultTable: () => schemaManager.getDefaultSchema(),
+  fields: (table, prefix) => schemaManager.resolveNested(table, prefix),
+  values: (table, field) => schemaManager.resolveValues(table, field),
+};
 
 // Setup schema data for testing
 const testSchemaData = {
@@ -383,7 +397,9 @@ describe('Monaco AQL Editor Integration Tests', () => {
 
       // ==================== LOGICAL OPERATORS ====================
       { category: 'Logical Operators', query: 'spans | status_code == "OK" ', expect: ['and', 'or', '|'], mode: 'contains' },
-      { category: 'Logical Operators', query: 'spans | status_code ', expect: ['not', 'exists'] },
+      // Only operators the KQL grammar actually parses (Pkg/Parser/Expr.hs) — it has no
+      // `exists` and no postfix `not`, so suggesting those would build unparseable queries.
+      { category: 'Logical Operators', query: 'spans | status_code ', expect: ['==', 'has', 'contains'] },
       { category: 'Logical Operators', query: 'spans | status_code == "OK" and ', expect: ['method', 'path'] },
 
       // ==================== AGGREGATIONS ====================
@@ -447,39 +463,14 @@ describe('Monaco AQL Editor Integration Tests', () => {
       const testName = `${category}: "${query}" → should suggest ${expectedItems.join(', ')}`;
 
       test(testName, async () => {
-        const model = editor.getModel();
-        if (!model) throw new Error('No model');
+        const labels = (await computeSuggestions(query, tableSchema)).map((s) => s.label);
 
-        editor.setValue(query);
-        const position = { lineNumber: 1, column: query.length + 1 };
-
-        const providers = (monaco.languages as any).CompletionItemProviderRegistry;
-        if (providers && providers._providers) {
-          const aqlProviders = Array.from(providers._providers.values()).find((p: any) =>
-            p.some((item: any) => item.triggerCharacters)
-          );
-
-          if (aqlProviders && aqlProviders.length > 0) {
-            const provider = aqlProviders[0];
-            const result = await provider.provideCompletionItems(
-              model,
-              position,
-              { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
-              { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) }
-            );
-
-            const labels = result.suggestions.map((s: any) => s.label);
-
-            if (mode === 'contains') {
-              expectedItems.forEach((item) => {
-                expect(labels.some((l: string) => l.includes(item))).toBe(true);
-              });
-            } else {
-              expectedItems.forEach((item) => {
-                expect(labels).toContain(item);
-              });
-            }
-          }
+        if (mode === 'contains') {
+          expectedItems.forEach((item) => {
+            expect(labels.some((l: string) => l.includes(item)), `${item} in [${labels.join(', ')}]`).toBe(true);
+          });
+        } else {
+          expectedItems.forEach((item) => expect(labels).toContain(item));
         }
       });
     });

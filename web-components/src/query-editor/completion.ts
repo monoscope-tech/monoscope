@@ -181,10 +181,12 @@ export async function computeSuggestions(text: string, schema: SchemaAccess): Pr
     return (await schema.fields(table, '')).map(fieldSuggestion);
   }
 
-  // `spans ` — the source is chosen; offer commands and its fields. Checked
-  // before the field-then-operator rule below, which would otherwise read the
-  // table name as a field and offer `==`.
-  if (segments.length === 1 && tables.includes(last.toLowerCase())) {
+  // `spans ` / `... | ` — a segment boundary: a command comes next, though a bare
+  // filter is valid too, so fields follow. Checked before the field-then-operator
+  // rule below, which would otherwise read the table name as a field and offer `==`.
+  // The empty-last-segment half matters after a pipe, where nothing has been named
+  // yet and the fallback at the end would otherwise offer comparison operators.
+  if ((segments.length === 1 && tables.includes(last.toLowerCase())) || (segments.length > 1 && last === '')) {
     const commands: Suggestion[] = [...AGGREGATION_COMMANDS, 'limit'].map((k) => ({ label: k, kind: 'keyword' as const, insertText: `${k} ` }));
     return [...commands, ...(await schema.fields(table, '')).map(fieldSuggestion)];
   }

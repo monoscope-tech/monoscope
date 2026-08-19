@@ -288,3 +288,75 @@ describe('Live Tail restart', () => {
     expect((el as any).stream.opts.body()).toMatchObject({ service: null, environment: null, query: null });
   });
 });
+
+// Following the live edge.
+//
+// The rule is asymmetric and that asymmetry is the whole point: rows arriving must pin the
+// view to the bottom, but only while the reader left it there. Scrolling up to read something
+// is exactly when a yank back to the edge is most destructive — it is the standalone-component
+// twin of the log-list bug where an eviction remount threw the reader to the top.
+describe('Live Tail follows the edge only while the reader is at it', () => {
+  const GEOM = { clientHeight: 400, scrollHeight: 4000 };
+
+  /** jsdom lays nothing out, so the scroller's geometry is supplied. */
+  const withScroller = (el: any) => {
+    const list = el.querySelector('[data-rows]') as HTMLElement;
+    Object.defineProperty(list, 'clientHeight', { value: GEOM.clientHeight, configurable: true });
+    Object.defineProperty(list, 'scrollHeight', { value: GEOM.scrollHeight, configurable: true });
+    return list;
+  };
+
+  const scrollTo = async (el: any, list: HTMLElement, top: number) => {
+    list.scrollTop = top;
+    list.dispatchEvent(new Event('scroll'));
+    await el.updateComplete;
+  };
+
+  test('rows arriving keep the view pinned to the newest', async () => {
+    const el = await mount();
+    const list = withScroller(el);
+
+    el.appendRows(pushed(0, 5).map((r: any) => r.log));
+    await el.updateComplete;
+
+    expect(list.scrollTop).toBe(GEOM.scrollHeight);
+  });
+
+  test('scrolled up to read, an arriving batch does not move the viewport', async () => {
+    const el = await mount();
+    const list = withScroller(el);
+    await scrollTo(el, list, 1000); // well above the bottom
+    expect(el.stickToBottom).toBe(false);
+
+    el.appendRows(pushed(0, 20).map((r: any) => r.log));
+    await el.updateComplete;
+
+    expect(list.scrollTop).toBe(1000);
+  });
+
+  test('returning to the bottom re-engages following', async () => {
+    const el = await mount();
+    const list = withScroller(el);
+    await scrollTo(el, list, 1000);
+
+    await scrollTo(el, list, GEOM.scrollHeight - GEOM.clientHeight);
+    expect(el.stickToBottom).toBe(true);
+
+    el.appendRows(pushed(0, 5).map((r: any) => r.log));
+    await el.updateComplete;
+    expect(list.scrollTop).toBe(GEOM.scrollHeight);
+  });
+
+  // The 40px slack is what keeps following from breaking on fractional row heights, where
+  // scrollTop + clientHeight lands a pixel short of scrollHeight and never reads as "bottom".
+  test('a few pixels short of the bottom still counts as the bottom', async () => {
+    const el = await mount();
+    const list = withScroller(el);
+
+    await scrollTo(el, list, GEOM.scrollHeight - GEOM.clientHeight - 39);
+    expect(el.stickToBottom).toBe(true);
+
+    await scrollTo(el, list, GEOM.scrollHeight - GEOM.clientHeight - 41);
+    expect(el.stickToBottom).toBe(false);
+  });
+});

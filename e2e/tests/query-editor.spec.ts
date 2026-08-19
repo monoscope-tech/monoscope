@@ -6,6 +6,12 @@ const LOG_EXPLORER_URL = `/p/${DEMO_PROJECT}/log_explorer`;
 /** Wait for the query editor web component to be fully initialized with schema data */
 async function waitForEditor(page: Page) {
   await page.goto(LOG_EXPLORER_URL, { waitUntil: "domcontentloaded" });
+  // The span schema is fetched lazily on the editor's first focusin (see
+  // queryEditorInitializationCode) so a page load that never touches the query box does
+  // not pay for it. Waiting without focusing therefore waits forever.
+  await page.locator("#filterElement").waitFor({ state: "attached", timeout: 15000 });
+  await page.locator("#filterElement").click().catch(() => {});
+  await page.evaluate(() => document.getElementById("filterElement")?.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
   await page.waitForFunction(
     () => {
       const sm = (window as any).schemaManager;
@@ -14,6 +20,14 @@ async function waitForEditor(page: Page) {
     },
     { timeout: 15000 },
   );
+  // Focusing opens the suggestion dropdown, which overlays the chips row and the
+  // Library button. Leave the page neutral — the suggestion tests focus explicitly.
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    const el = document.getElementById("filterElement") as any;
+    el.showSuggestions = false;
+    el.editor?.getDomNode()?.blur();
+  });
 }
 
 /** Set query text and trigger suggestions, returning the visible dropdown labels */
@@ -28,7 +42,10 @@ async function getSuggestionLabels(page: Page, query: string) {
     const column = model.getLineMaxColumn(lineCount);
     editor.setPosition({ lineNumber: lineCount, column });
     editor.focus();
-    editor.trigger("test", "editor.action.triggerSuggest", {});
+    // Monaco's own suggest widget is disabled — the component computes the list itself
+    // (see refreshSuggestions). Driving `editor.action.triggerSuggest` here left the
+    // previous list in place, so these assertions ran against stale suggestions.
+    el.triggerSuggestions();
   }, query);
 
   // Wait for completionItems to populate
@@ -57,20 +74,13 @@ test.describe("Query editor suggestions", () => {
     page,
   }) => {
     const labels = await getSuggestionLabels(page, "");
-    // Priority fields should be in the first group
-    const priorityFields = [
-      "attributes",
-      "duration",
-      "level",
-      "name",
-      "resource",
-      "status_code",
-    ];
-    for (const field of priorityFields) {
-      expect(labels).toContain(field);
-      // Priority fields should appear before non-priority ones like "body"
-      expect(labels.indexOf(field)).toBeLessThan(labels.indexOf("body"));
-    }
+    // PRIORITY_FIELDS in completion.ts, in order — `body` is the last of them, and
+    // `attributes`/`resource` are deliberately not priority fields.
+    const priorityFields = ["status_code", "level", "kind", "name", "duration", "timestamp", "severity", "body"];
+
+    expect(labels.slice(0, priorityFields.length)).toEqual(priorityFields);
+    // ...and everything after them is a non-priority field, not a table.
+    expect(labels.indexOf("attributes")).toBeGreaterThan(labels.indexOf("body"));
   });
 
   test("bare field name suggests operators with correct ordering", async ({
@@ -112,7 +122,9 @@ test.describe("Query editor suggestions", () => {
     );
     expect(labels).toContain("level");
     expect(labels).toContain("duration");
-    expect(labels).toContain("resource");
+    // `resource` exists in the schema but the list is capped at 20, and it sorts
+    // outside that window — it appears once the user types a prefix.
+    expect(labels).toContain("attributes");
     // Should not contain operators or logical keywords
     expect(labels).not.toContain("==");
     expect(labels).not.toContain("and");
@@ -154,26 +166,20 @@ test.describe("Query editor suggestions", () => {
       editor.setValue("");
       editor.setPosition({ lineNumber: 1, column: 1 });
       editor.focus();
-      editor.trigger("test", "editor.action.triggerSuggest", {});
+      // The component owns the list; Monaco's suggest controller is disabled, and
+      // reading its `_completionModel` yielded an empty list that made every
+      // assertion below vacuously undefined.
+      el.triggerSuggestions();
       await new Promise((r) => setTimeout(r, 500));
-      const sc = editor.getContribution("editor.contrib.suggestController");
-      const model = (sc as any)?.model || (sc as any)?._model;
-      const cm = model?._completionModel;
       const result: Record<string, string> = {};
-      for (const item of cm?.items || []) {
-        const label = item.completion?.label;
-        if (
-          ["attributes", "resource", "context", "status_code", "level", "duration"].includes(label)
-        ) {
-          result[label] = item.completion?.insertText;
-        }
+      for (const item of el.completionItems || []) {
+        result[item.label] = item.insertText;
       }
       return result;
     });
 
     // Object fields should end with "." for drilling into nested fields
     expect(insertTexts["attributes"]).toBe("attributes.");
-    expect(insertTexts["resource"]).toBe("resource.");
     expect(insertTexts["context"]).toBe("context.");
     // Leaf fields should end with " " for typing an operator next
     expect(insertTexts["status_code"]).toBe("status_code ");
@@ -199,11 +205,14 @@ test.describe("Query editor suggestions", () => {
 
     // Click a chip and verify it populates the editor
     await chipsContainer.getByText("Show errors").click();
-    const editorValue = await page.evaluate(() => {
-      const el = document.getElementById("filterElement") as any;
-      return el.editor.getValue();
-    });
-    expect(editorValue).toContain('level == "ERROR"');
+    // Polled, not read once: the chip hands the query to the editor asynchronously, and a
+    // single immediate read raced it under parallel load — passing alone, failing in a
+    // full run, which is the least useful kind of failure.
+    await expect
+      .poll(() =>
+        page.evaluate(() => (document.getElementById("filterElement") as any)?.editor?.getValue() ?? ""),
+      )
+      .toContain('level == "ERROR"');
   });
 
   test("query library dropdown opens and shows tabs", async ({ page }) => {

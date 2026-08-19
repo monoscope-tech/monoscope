@@ -360,14 +360,18 @@ tmux-web-components-watch:
 e2e-install:
 	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
 
+# These go through scripts/e2e.sh, which starts a throwaway server on 8081 against
+# monoscope_e2e. Do not "simplify" them back to a bare `npx playwright test`: that talks
+# to whatever holds the port, and `make live-reload` holds 8080 against the PRODUCTION
+# database. See e2e/README.md.
 test-e2e: e2e-install
-	cd e2e && npx playwright test
+	scripts/e2e.sh
 
 test-e2e-real: e2e-install
-	cd e2e && E2E_REAL_PROVIDERS=true npx playwright test
+	E2E_REAL_PROVIDERS=true scripts/e2e.sh
 
 test-e2e-ui: e2e-install
-	cd e2e && npx playwright test --ui
+	scripts/e2e.sh --ui
 
 # ---------------------------------------------------------------------------
 # Local CI. Runs the same checks GitHub Actions runs, in the same images, and

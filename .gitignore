@@ -47,6 +47,7 @@ static/public/assets/web-components/dist/
 build*.log
 css.log
 web-components.log
+e2e-server.log
 .ghc.environment.*
 cabal.project.local
 stack-work

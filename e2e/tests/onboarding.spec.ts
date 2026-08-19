@@ -78,15 +78,15 @@ test.describe("Onboarding flow", () => {
   test("step 5: pricing page shows plans", async ({ page }) => {
     await page.goto(`${ONBOARDING_URL}?step=Pricing`);
     await expect(page.getByText("Step 5 of 5")).toBeVisible();
-    await expect(page.locator("#freePlan")).toBeVisible();
-    await expect(page.locator("#popularPlan")).toBeVisible();
-    await expect(page.locator("#systemsPlan")).toBeVisible();
+    await expect(page.locator("#freePricing")).toBeVisible();
+    await expect(page.locator("#GraduatedPricing")).toBeVisible();
+    await expect(page.locator("#SystemsPricing")).toBeVisible();
   });
 
   test("step 5: selecting a paid plan triggers checkout", async ({ page }) => {
     await page.goto(`${ONBOARDING_URL}?step=Pricing`);
-    await expect(page.locator("#popularPlan")).toBeVisible();
-    await assertStripeCheckout(page, "#popularPlan button");
+    await expect(page.locator("#GraduatedPricing")).toBeVisible();
+    await assertStripeCheckout(page, "#GraduatedPricing button");
   });
 
   test("complete step shows success and dashboard link", async ({ page }) => {

@@ -75,6 +75,7 @@ module Utils (
   -- NUL-byte scrubbing for PG `jsonb` ingest paths.
   scrubNulText,
   scrubNulValue,
+  FormWithOptional (..),
 )
 where
 
@@ -105,6 +106,8 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
+import GHC.Generics (Rep)
+import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -122,6 +125,8 @@ import Text.MMark qualified as MMark
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
+import Web.FormUrlEncoded (Form (..), FromForm (..), defaultFormOptions, genericFromForm)
+import Web.Internal.FormUrlEncoded (GFromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
@@ -1764,6 +1769,48 @@ calculateCycleStartDate start current =
         | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
         | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
+
+
+-- | Drop empty values for @key@ before a form is decoded.
+--
+-- A tag picker with nothing in it posts @key=@ — one empty value, meaning "none selected".
+-- The derived @[UUID]@ decoder reads that as a malformed UUID and rejects the /whole/ form,
+-- so creating a dashboard or an alert without assigning a team answered with a bare 400
+-- page instead of the toast those handlers raise for every other kind of bad input.
+--
+-- Only the named key is touched. Dropping empties everywhere would turn a legitimately
+-- blank text field into an absent one, which fails a required field for a different reason.
+--
+-- >>> dropEmptyFormValues "teams" (Form (HM.fromList [("teams", [""])]))
+-- fromList []
+-- >>> dropEmptyFormValues "teams" (Form (HM.fromList [("teams", ["a", "", "b"])]))
+-- fromList [("teams","a"),("teams","b")]
+--
+-- A blank value under any other key is left alone, and an absent key is not invented:
+--
+-- >>> dropEmptyFormValues "teams" (Form (HM.fromList [("title", [""])]))
+-- fromList [("title","")]
+-- >>> dropEmptyFormValues "teams" (Form (HM.fromList [("title", ["x"])]))
+-- fromList [("title","x")]
+dropEmptyFormValues :: T.Text -> Form -> Form
+dropEmptyFormValues key = Form . HM.adjust (filter (not . T.null)) key . unForm
+
+
+-- | @deriving (FromForm) via (FormWithOptional "teams" MyForm)@ — the derived decoder,
+-- with 'dropEmptyFormValues' applied to @key@ first.
+--
+-- Plain @deriving anyclass (FromForm)@ cannot express this: it gives exactly the class
+-- default, @genericFromForm defaultFormOptions@, which is the decoder that rejects an
+-- empty picker. Everything else stays derived — field names, @Maybe@ handling and
+-- repeated values are still whatever the generic instance does.
+newtype FormWithOptional (key :: Symbol) a = FormWithOptional a
+
+
+instance (GFromForm a (Rep a), Generic a, KnownSymbol key) => FromForm (FormWithOptional key a) where
+  fromForm =
+    fmap FormWithOptional
+      . genericFromForm defaultFormOptions
+      . dropEmptyFormValues (toText $ symbolVal (Proxy @key))
 
 
 -- | Strip NUL bytes from a 'Text'. Postgres' @jsonb@ rejects NUL in text

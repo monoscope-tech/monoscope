@@ -10,11 +10,11 @@ const LIVE_TAIL_URL = `/p/${DEMO_PROJECT}/live_tail`;
  * vitest suite stubs `fetch`, so it happily passes while the component reads a response key the
  * server never sends — which is exactly what shipped: `loadFacets` asked for a top-level
  * `services` array, the schema endpoint returns `{fields: {...}}`, and the service dropdown was
- * therefore always empty. Since a service is a hard gate, Live Tail could not be started at
- * all, and every server-side test still passed.
+ * therefore always empty — so narrowing a tail was impossible, and every server-side test
+ * still passed.
  *
  * So the assertions here are deliberately about *seams*, not logic: the page mounts, the
- * selector fills from the live schema response, and the gate refuses an empty selection. Row
+ * selector fills from the live schema response, and a selection round-trips the URL. Row
  * streaming is not asserted — that needs ingest traffic, and the server-side specs already pin
  * matching and delivery.
  */
@@ -64,20 +64,33 @@ test.describe("Live Tail", () => {
     const component = page.locator("live-tail");
     await expect(component).toBeVisible();
 
-    await expect(component.locator("[data-service] option")).toHaveText([/Select a service/, "checkout", "billing"]);
-    await expect(component.locator("[data-environment] option")).toHaveText([/All environments/, "prod"]);
+    await expect(component.getByLabel("Service").locator("option")).toHaveText([/All services/, "checkout", "billing"]);
+    await expect(component.getByLabel("Environment").locator("option")).toHaveText([/All environments/, "prod"]);
   });
 
-  test("refuses to start without a service, and says why", async ({ page }) => {
+  // "The selection is the control" — there is deliberately no start button and no service
+  // gate (see the header comment in live-tail.ts): the page opens tailing everything and
+  // narrowing is a choice, not a precondition. What is worth pinning is the other half of
+  // that decision — the selection round-trips through the URL, so a tail pasted into an
+  // incident channel opens on the same stream, while an unnarrowed link stays plain.
+  test("the selection is the control: narrowing writes the URL, the default stays plain", async ({ page }) => {
+    await page.route("**/log_explorer/schema", async (route) => {
+      await route.fulfill({
+        json: { fields: { "resource.service.name": { field_type: "string", description: "", examples: ["checkout"] } } },
+      });
+    });
     await page.goto(LIVE_TAIL_URL, { waitUntil: "domcontentloaded" });
     const component = page.locator("live-tail");
     await expect(component).toBeVisible();
 
-    await component.getByRole("button", { name: "Start tail" }).click();
+    // A plain link carries no filter params.
+    expect(new URL(page.url()).searchParams.get("service")).toBeNull();
 
-    // The gate is what bounds Live Tail's volume, so a silent no-op here would be worse than
-    // an error: the user would think the tail was running.
-    await expect(component).toContainText(/select a service/i);
+    await component.getByLabel("Service").selectOption("checkout");
+
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get("service"))
+      .toBe("checkout");
   });
 
   test("the Explorer tab strip leads with Live Tail but still lands on Events", async ({ page }) => {

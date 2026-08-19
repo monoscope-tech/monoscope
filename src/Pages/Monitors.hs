@@ -69,7 +69,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), checkFreeTierStatus, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -108,7 +108,9 @@ data AlertUpsertForm = AlertUpsertForm
   , stopAfter :: Maybe Int
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
+  -- The alert editor posts @teams@ through the same @getTagValues@ hx-vals as the
+  -- dashboard forms, and an empty picker sends @teams=@.
+  deriving (FromForm) via (FormWithOptional "teams" AlertUpsertForm)
 
 
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
