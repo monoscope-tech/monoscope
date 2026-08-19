@@ -71,8 +71,11 @@ export function initializeDefaultSchema(): void {
     // Direct field lookup in flattened schema
     const fieldInfo = currentSchema.fields[field];
 
-    // Check for examples
-    if (fieldInfo && fieldInfo.examples) {
+    // Only when there are examples to offer. `examples: []` is what the schema endpoint
+    // sends for a field nothing has been observed for yet, and it is truthy — so returning
+    // here on an empty array suppressed every fallback below, leaving `status_code == `,
+    // `timestamp > ` and boolean fields with no suggestions at all.
+    if (fieldInfo?.examples?.length) {
       return fieldInfo.examples.map((v) => String(v));
     }
 
