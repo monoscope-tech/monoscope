@@ -595,6 +595,7 @@ test-suite integration-tests
       BackgroundJobs.DigestFlushSpec
       BackgroundJobs.ExpirySpec
       BackgroundJobs.NotificationsSpec
+      BackgroundJobs.ReportUsageSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec
@@ -863,6 +864,7 @@ test-suite test-dev
       BackgroundJobs.DigestFlushSpec
       BackgroundJobs.ExpirySpec
       BackgroundJobs.NotificationsSpec
+      BackgroundJobs.ReportUsageSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec

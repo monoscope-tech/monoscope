@@ -1759,6 +1759,37 @@ summaryForDetailView = V.fromList . ordNubOn key . V.toList . V.mapMaybe step
 -- | Given the subscription start date and current time, returns the UTC
 -- timestamp of the start of the current billing cycle. The cycle renews on
 -- the same day-of-month as the original start date.
+--
+-- This is what bounds a usage-reporting window (see the @ReportUsage@ job), so it decides
+-- what a customer is charged for. Past the billing day, the cycle started this month:
+--
+-- >>> let start = UTCTime (fromGregorian 2024 1 15) (secondsToDiffTime 37800)
+-- >>> calculateCycleStartDate start (UTCTime (fromGregorian 2024 3 20) 0)
+-- 2024-03-15 10:30:00 UTC
+--
+-- Before it, the cycle is still the previous month's — and in January that is December of
+-- the previous year, not month zero:
+--
+-- >>> calculateCycleStartDate start (UTCTime (fromGregorian 2024 3 10) 0)
+-- 2024-02-15 10:30:00 UTC
+-- >>> calculateCycleStartDate start (UTCTime (fromGregorian 2024 1 5) 0)
+-- 2023-12-15 10:30:00 UTC
+--
+-- The time of day comes from the subscription, not from @current@, so the window is stable
+-- no matter what hour the job happens to run.
+--
+-- A day-of-month that the target month does not have is clipped rather than rejected, so a
+-- subscription started on the 31st still has a cycle start in February:
+--
+-- >>> let endOfMonth = UTCTime (fromGregorian 2024 1 31) 0
+-- >>> calculateCycleStartDate endOfMonth (UTCTime (fromGregorian 2024 3 20) 0)
+-- 2024-02-29 00:00:00 UTC
+--
+-- On the billing day itself the comparison is strict, so the cycle is still reckoned from
+-- the previous month and only rolls over the day after:
+--
+-- >>> calculateCycleStartDate start (UTCTime (fromGregorian 2024 3 15) 0)
+-- 2024-02-15 10:30:00 UTC
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
 calculateCycleStartDate start current =
   let (_startYear, _startMonth, startDay) = toGregorian $ utctDay start
