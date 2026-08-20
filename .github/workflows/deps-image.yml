@@ -30,7 +30,7 @@ jobs:
           - platform: linux/arm64
             runner: blacksmith-4vcpu-ubuntu-2404-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free Disk Space
         run: |
@@ -41,7 +41,7 @@ jobs:
           sudo docker image prune --all --force
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       - name: Login to Container Registry
         uses: docker/login-action@v4
