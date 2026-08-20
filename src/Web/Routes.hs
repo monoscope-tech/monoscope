@@ -474,6 +474,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -900,6 +901,7 @@ cookieProtectedServer =
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
+    , widgetSqlText = Dashboards.widgetSqlTextGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsLiveGet = Reports.reportsLiveGetH
