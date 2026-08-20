@@ -196,6 +196,7 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
@@ -785,6 +786,7 @@ test-suite test-dev
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
@@ -1174,6 +1176,7 @@ test-suite unit-tests
       Models.DashboardTemplatesSpec
       Models.Telemetry.DeterministicIdSpec
       Models.Telemetry.MetricServiceNameSpec
+      ProcessMessage.DeterministicIdSpec
       Models.Telemetry.TimestampMicrosSpec
       Pkg.DrainSpec
       Pkg.GitSpec
