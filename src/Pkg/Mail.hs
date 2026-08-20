@@ -280,8 +280,26 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
         ]
     btn label style url = AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (label :: Text), "emoji" AE..= True], "url" AE..= url, "style" AE..= (style :: Text)]
     -- Secondary "View trace" jumps into Log Explorer filtered by trace_id — complements
-    -- "Investigate" (fingerprint view) with raw-event context.
-    traceBtn = err.traceId >>= \tid -> guard (not (T.null tid)) $> btn "View trace" "default" (projectUrl <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\"")))
+    -- "Investigate" (fingerprint view) with raw-event context. Log Explorer defaults to the
+    -- last 1H when since/from/to are absent (TimePicker.defaultSince), so a bare query= link
+    -- silently returns zero rows for anything older — escalating/regressed alerts routinely
+    -- carry an occurrence from well before that window. Pin an explicit +/-5min range around
+    -- when the trace actually happened, same convention as the in-app issue Logs tab.
+    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
+    traceBtn =
+      err.traceId >>= \tid ->
+        guard (not (T.null tid))
+          $> btn
+            "View trace"
+            "default"
+            ( projectUrl
+                <> "/log_explorer?query="
+                <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
+                <> "&from="
+                <> isoT (addUTCTime (-300) err.when)
+                <> "&to="
+                <> isoT (addUTCTime 300 err.when)
+            )
     buttons = btn "🔍 Investigate" "primary" targetUrl : maybeToList traceBtn
 
 
