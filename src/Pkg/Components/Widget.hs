@@ -657,7 +657,30 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
               |]
                   ]
                   (toHtml $ "Copy " <> label)
-        copyItem "Copy generated SQL to clipboard" "SQL" "widgetData.sql or widgetData.query or 'No SQL available'"
+        let pid = projectIdText widget
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block cursor-pointer"
+            , data_ "tippy-content" "Copy generated SQL to clipboard"
+            , term
+                "_"
+                [text|
+              on click
+              set widgetEl to the closest <[data-widget]/>
+              set widgetData to JSON.parse(widgetEl.dataset.widget)
+              set txt to widgetData.sql
+              if not txt and widgetData.query then
+                fetch ('/p/${pid}/widget/sql-text?query=' + encodeURIComponent(widgetData.query)) as text
+                set txt to it
+              end
+              if not txt then set txt to 'No SQL available' end
+              if 'clipboard' in window.navigator then
+                call navigator.clipboard.writeText(txt)
+                send successToast(value:['SQL copied to clipboard']) to <body/>
+              end
+            |]
+            ]
+            "Copy SQL"
         copyItem "Copy KQL query to clipboard" "KQL" "widgetData.query or 'No KQL available'"
         whenJust widget.pngUrl \url ->
           li_

@@ -44,6 +44,7 @@ module Pages.Dashboards (
   widgetAlertDeleteH,
   -- SQL debug preview
   widgetSqlPreviewGetH,
+  widgetSqlTextGetH,
   -- YAML schema editing
   YamlForm (..),
   dashboardYamlGetH,
@@ -2138,16 +2139,32 @@ dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit"
 
 
+-- | SqlQueryCfg for a project/time-range window, shared by the SQL preview and copy-SQL endpoints.
+widgetSqlCfg :: Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> SqlQueryCfg
+widgetSqlCfg pid now sinceStr fromDStr toDStr = defSqlQueryCfg pid now Nothing Nothing & #dateRange .~ dateRange
+  where
+    (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+    dateRange = (fromD, toD)
+
+
+-- | Plain-text SQL for the widget menu's "Copy SQL" action on KQL-backed widgets
+-- (raw-SQL widgets already carry their SQL in @Widget.sql@ and never call this).
+widgetSqlTextGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders Text)
+widgetSqlTextGetH pid queryM sinceStr fromDStr toDStr = do
+  _ <- Projects.sessionAndProject pid
+  now <- Time.currentTime
+  let generatedSql query = (.finalSqlQuery) . snd <$> parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query
+  addRespHeaders $ either id id $ generatedSql =<< maybeToRight "No query provided" queryM
+
+
 -- | SQL preview endpoint for debugging KQL queries (shows generated SQL)
 widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      sqlCfg = defSqlQueryCfg pid now Nothing Nothing & #dateRange .~ (fromD, toD)
   addRespHeaders case queryM of
     Nothing -> div_ [class_ "p-3 text-textWeak text-xs"] "No query provided"
-    Just query -> case parseQueryToComponents sqlCfg query of
+    Just query -> case parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query of
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err

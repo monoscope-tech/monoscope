@@ -406,3 +406,23 @@ spec = sequential $ aroundAll withTestResources do
       offered `shouldSatisfy` (not . null)
       for_ offered \vizType ->
         (vizType, isRight (AE.eitherDecode @Widget.WidgetType (AE.encode vizType))) `shouldBe` (vizType, True)
+
+  -- Regression: every KQL-backed widget (i.e. every chart in Log Explorer and most
+  -- dashboard widgets) has Widget.sql = Nothing, since .sql is reserved for the raw-SQL
+  -- data-source widget type. "Copy SQL" used to fall back to widgetData.query in that
+  -- case, so it silently copied the KQL instead — see widgetSqlTextGetH.
+  describe "Copy SQL widget menu action" do
+    it "does not fall back to copying the KQL for a widget with no .sql field" \_ -> do
+      let w = (widgetOf Widget.WTTimeseries "All traces"){Widget.id = Just "wgt-1", Widget._projectId = Just testPid}
+          copySqlBlock = snd $ T.breakOn "Copy generated SQL to clipboard" $ toStrict $ renderText $ Widget.widget_ w
+      copySqlBlock `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/widget/sql-text?query=")
+      copySqlBlock `shouldNotSatisfy` T.isInfixOf "widgetData.sql or widgetData.query"
+
+    it "translates a KQL query into real SQL, not an echo of the input" \tr -> do
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing
+      T.toUpper sql `shouldSatisfy` T.isInfixOf "SELECT"
+      sql `shouldNotBe` "status_code == \"ERROR\""
+
+    it "reports a clear message instead of blank/failing when no query is given" \tr -> do
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing
+      sql `shouldBe` "No query provided"
