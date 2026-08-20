@@ -1173,9 +1173,9 @@ type WriteFailure = These SomeException SomeException
 
 
 -- | Which stores a (re)write should attempt. Live ingest writes both; DLQ
--- replay narrows to the leg that originally failed so the still-durable leg
--- isn't duplicated (PG inserts aren't idempotent — a 'tf-failed' message is
--- already in PG, dual-write replay would double the row).
+-- replay narrows to the leg that originally failed. PostgreSQL additionally
+-- ignores conflicts once the event-identity unique index is activated; the
+-- targeting remains useful because it avoids needless writes to the healthy leg.
 data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
   deriving stock (Eq, Ord, Show)
 
@@ -1572,7 +1572,7 @@ bulkInsertOtelLogsAndSpans usePgTypes records
 -- text→Variant (VariantInsertRewriter) — pass 'False'. The array bind params are
 -- identical either way; only these columns' SELECT projection differs.
 insertUnnestStmt :: Bool -> V.Vector OtelRow -> Statement () Int64
-insertUnnestStmt = unnestInsert "otel_logs_and_spans" otelColumns ""
+insertUnnestStmt = unnestInsert "otel_logs_and_spans" otelColumns " ON CONFLICT DO NOTHING"
 
 
 -- | The single INSERT…SELECT…unnest statement for a table, built from its

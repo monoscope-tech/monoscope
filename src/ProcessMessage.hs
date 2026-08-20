@@ -8,6 +8,7 @@
 
 module ProcessMessage (
   processMessages,
+  requestEventIds,
   processSpanToEntities,
   stampHashesAtIngest,
   extractObservation,
@@ -38,7 +39,6 @@ import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
@@ -58,6 +58,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.DeterministicId qualified as DeterministicId
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
@@ -76,7 +77,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
 
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
@@ -110,8 +111,7 @@ processMessages msgs attrs =
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
                 !isFreeTier = Projects.isFreeTier cache.paymentPlan
             guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
-            spanId <- lift UUID.genUUID
-            trId <- lift $ UUID.toText <$> UUID.genUUID
+            let (spanId, trId) = requestEventIds msg
             pure $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
 
           pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList (catMaybes paired)))
@@ -538,6 +538,25 @@ data RequestMessage = RequestMessage
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RequestMessage
+
+
+-- | Stable IDs for the legacy SDK event path. Pub/Sub and DLQ retries decode
+-- the same semantic request and therefore derive the same IDs. Prefer the
+-- SDK's event id when present, so retry-time enrichment drift cannot re-id the
+-- event. Older SDK payloads without it fall back to the full semantic request;
+-- consequently two byte-distinct deliveries that decode to exactly the same
+-- request (including project and timestamp) are intentionally indistinguishable.
+-- Canonical JSON makes object-key order irrelevant; separate namespaces prevent
+-- a trace ID from aliasing its span ID for the same request.
+requestEventIds :: RequestMessage -> (UUID.UUID, Text)
+requestEventIds request =
+  ( DeterministicId.eventUuid DeterministicId.LegacyRequestSpanId identityValue
+  , UUID.toText $ DeterministicId.eventUuid DeterministicId.LegacyRequestTraceId identityValue
+  )
+  where
+    identityValue = case request.msgId of
+      Just msgId -> AE.object ["project_id" AE..= request.projectId, "msg_id" AE..= msgId]
+      Nothing -> AE.toJSON request
 
 
 -- Untagged codec for the SDK's referer field: a bare string or an array of strings
