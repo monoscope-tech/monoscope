@@ -1025,7 +1025,10 @@ widgetToECharts widget =
             AE..= AE.object
               [ "show" AE..= fromMaybe True widget.showTooltip
               , "trigger" AE..= ("axis" :: Text)
-              , "appendToBody" AE..= True
+              , "appendToBody" AE..= False
+              , "confine" AE..= True
+              , "enterable" AE..= True
+              , "extraCssText" AE..= ("box-sizing: border-box; max-height: calc(100% - 16px); overflow-y: auto; overscroll-behavior: contain;" :: Text)
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]

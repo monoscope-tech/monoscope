@@ -1184,6 +1184,7 @@ test-suite unit-tests
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       Pkg.WidgetLazySpec
+      Pkg.WidgetTooltipSpec
       RequestMessagesSpec
       Spec
       System.ServerSpec
