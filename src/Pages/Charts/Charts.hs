@@ -104,6 +104,23 @@ sourceTable = \case
   _ -> "otel_logs_and_spans"
 
 
+-- | Select the storage semantics used by both SQL generation and execution.
+-- Keeping this decision in one helper prevents PostgreSQL queries from being
+-- generated with TimeFusion-only functions while still targeting the PG pool.
+--
+-- >>> usesTimefusionBackend False Nothing
+-- False
+-- >>> usesTimefusionBackend True (Just "postgres")
+-- False
+-- >>> usesTimefusionBackend False (Just "timefusion")
+-- True
+usesTimefusionBackend :: Bool -> Maybe Text -> Bool
+usesTimefusionBackend enableTimefusionReads = \case
+  Just "postgres" -> False
+  Just "timefusion" -> True
+  _ -> enableTimefusionReads
+
+
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -130,7 +147,11 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
 -- the KQL-generated query.
 runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
 runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM mappngSQL now fromD toD = do
-  let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
+  let sqlQueryCfg =
+        (defSqlQueryCfg pid now source Nothing)
+          { dateRange = (fromD, toD)
+          , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+          }
 
   case querySQLM of
     Just querySQL -> do
@@ -150,7 +171,10 @@ runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM m
           (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     Nothing ->
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource (decoderFor respDataType queryAST) pid source queryAST sqlQueryCfg queryM now fromD toD
+      let actualDataType = decoderFor respDataType queryAST
+       in convertTimestampsToMs
+            . coerceBinnedScalar respDataType actualDataType
+            <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -165,13 +189,40 @@ runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM m
 --   * anything else (@by <field>@,
 --     or no summarize at all)       → label/value rows    → 'DTText'
 --
--- An explicit @data_type@ always wins.
+-- A scalar request for a binned query is the one exception to the explicit
+-- type rule. Stat widgets can carry the same binned KQL as a chart; decoding
+-- that three-column result as one float fails before the widget can select its
+-- latest value. Decode the actual series shape, then 'coerceBinnedScalar'
+-- extracts the newest point for the scalar response.
 decoderFor :: DataType -> [Section] -> DataType
 decoderFor requested queryAST
+  | requested == DTFloat && QC.hasSummarizeWithBin queryAST = DTMetric
   | requested /= DTMetric = requested
   | isScalarSummarize queryAST = DTFloat
   | QC.hasSummarizeWithBin queryAST = DTMetric
   | otherwise = DTText
+
+
+-- | Return the newest value when a scalar widget supplied binned KQL.
+-- The metric decoder pivots rows to @[timestamp, series…]@ and sorts them by
+-- timestamp ascending, so the last cell in the last row is the newest
+-- aggregate value.
+--
+-- >>> let md = def{dataset = V.fromList [V.fromList [Just 10, Just 7], V.fromList [Just 20, Just 42]]}
+-- >>> (coerceBinnedScalar DTFloat DTMetric md).dataFloat
+-- Just 42.0
+-- >>> (coerceBinnedScalar DTMetric DTMetric md).dataFloat
+-- Nothing
+coerceBinnedScalar :: DataType -> DataType -> MetricsData -> MetricsData
+coerceBinnedScalar requested actual md
+  | requested == DTFloat && actual == DTMetric = md{dataFloat = latestMetricValue}
+  | otherwise = md
+  where
+    latestMetricValue = do
+      guard $ not (V.null md.dataset)
+      let row = V.last md.dataset
+      guard $ not (V.null row)
+      row V.! (V.length row - 1)
 
 
 -- | A summarize with no @by@ clause at all — yields one scalar row.
@@ -323,7 +374,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
   let pool = case dbSource of
         Just "postgres" -> authCtx.pool
         Just "timefusion" -> authCtx.timefusionPgPool
-        _ -> if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
+        _ -> if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource then authCtx.timefusionPgPool else authCtx.pool
   let baseMetricsData = emptyMetricsFor now fromD toD
   let runQ :: FromRow r => IO [r]
       runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)

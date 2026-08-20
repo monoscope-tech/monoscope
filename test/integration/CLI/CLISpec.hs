@@ -131,6 +131,17 @@ spec = around withTestResources do
       checkJsonValue (AE.toJSON result) $ \obj ->
         shouldHaveKeys obj ["headers", "dataset", "rows_count"]
 
+    it "coerces a binned chart query to the latest value for stat widgets" \tr -> do
+      key <- createTestAPIKey tr testPid "binned-stat-chart"
+      ingestLog tr key "binned stat entry" frozenTime
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      result <-
+        runQueryEffect tr $
+          Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) (Just "spans") []
+      result.error `shouldBe` Nothing
+      result.dataFloat `shouldSatisfy` isJust
+
     it "schema JSON has field definitions" \_ -> do
       checkJsonValue Schema.telemetrySchemaJson $ \obj -> do
         shouldHaveKeys obj ["fields"]
