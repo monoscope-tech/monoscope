@@ -338,8 +338,13 @@ spec = around withTestResources
         -- hyperscript pseudo-command reads them off the element at click time
         -- (no inline interpolation to escape).
         T.isInfixOf "data-value=\"GET\"" html `shouldBe` True
-        T.isInfixOf "toggleSubQuery(@data-field" html `shouldBe` True
-        T.isInfixOf "on #filterElement" html `shouldBe` True
+        T.isInfixOf "toggleSubQuery(me.dataset.field" html `shouldBe` True
+        -- Reached by id through an optional call, not by a hyperscript `on #id`
+        -- reference: the element is absent on some renders and the bare
+        -- reference threw a null-check error (fixed in a82a0aa65). Matched
+        -- without the surrounding quotes, which Lucid escapes to &#39;.
+        T.isInfixOf "getElementById(" html `shouldBe` True
+        T.isInfixOf "filterElement" html `shouldBe` True
         -- Section headers for groups that have populated facets show up.
         T.isInfixOf "Common Filters" html `shouldBe` True
         -- Group route parameters are derived from the constructors, including
