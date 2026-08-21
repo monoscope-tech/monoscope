@@ -17,15 +17,11 @@ module Models.Apis.Endpoints (
   getEndpointById,
   -- Endpoint template discovery
   getUnmergedEndpoints,
+  getCanonicalTemplateKeys,
+  unmergedScanLimit,
   setEndpointCanonical,
   insertCanonicalEndpoints,
-  -- Endpoint embedding + merge
-  getUnembeddedEndpoints,
-  fetchEndpointTexts,
-  updateEndpointEmbeddings,
-  getCanonicalEndpoints,
-  assignEndpointsToCanonical,
-  setEndpointCanonicalTemplate,
+  -- Endpoint merge cleanup
   getMergedEndpointPairs,
   migrateAndDeleteMergedEndpoints,
 )
@@ -51,7 +47,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB, UUIDId (..), rawSql, showPGFloatArray)
+import Pkg.DeriveUtils (DB, UUIDId (..), rawSql)
 import Relude
 
 
@@ -461,12 +457,31 @@ getEndpointById pid eid =
 
 -- Endpoint template discovery ---------------------------------------------------
 
+-- | Endpoints scanned per discovery run. Bounded so one exploded project cannot
+-- monopolise a job slot; the run logs when it hit the limit and the next one
+-- picks up where it left off.
+unmergedScanLimit :: Int
+unmergedScanLimit = 5000
+
+
 getUnmergedEndpoints :: DB es => Projects.ProjectId -> Eff es [(Text, Text, Text, Text)]
 getUnmergedEndpoints pid =
   Hasql.interp
     [HI.sql| SELECT hash, method, host, url_path FROM apis.endpoints
         WHERE project_id = #{pid} AND canonical_hash IS NULL AND merge_override = FALSE
-        ORDER BY created_at ASC LIMIT 5000 |]
+        ORDER BY created_at ASC LIMIT #{unmergedScanLimit} |]
+
+
+-- | (method, host, canonical_path) for templates this project already has, so
+-- discovery can assign a lone straggler to a template the population already
+-- proved — without which a project re-inflates one row at a time after the
+-- bulk merge.
+getCanonicalTemplateKeys :: DB es => Projects.ProjectId -> Eff es (V.Vector (Text, Text, Text))
+getCanonicalTemplateKeys pid =
+  V.fromList
+    <$> Hasql.interp
+      [HI.sql| SELECT DISTINCT method, host, canonical_path FROM apis.endpoints
+          WHERE project_id = #{pid} AND canonical_path IS NOT NULL |]
 
 
 setEndpointCanonical :: DB es => [(Text, Text, Text)] -> Eff es Int64
@@ -492,65 +507,6 @@ insertCanonicalEndpoints rows =
     (pids, tpls, methods, hosts, hashes) = L.unzip5 rows
 
 
--- Endpoint embedding + merge ---------------------------------------------------
-
-fetchEndpointTexts :: DB es => [EndpointId] -> Eff es (Map EndpointId Text)
-fetchEndpointTexts [] = pure mempty
-fetchEndpointTexts ids =
-  Map.fromList
-    <$> Hasql.interp [HI.sql| SELECT id, url_path FROM apis.endpoints WHERE id = ANY(#{ids}) |]
-
-
-getUnembeddedEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text, Text)]
-getUnembeddedEndpoints pid =
-  Hasql.interp
-    [HI.sql| SELECT id, hash, url_path FROM apis.endpoints
-        WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
-          AND url_path != ''
-        LIMIT 500 |]
-
-
-updateEndpointEmbeddings :: DB es => [(EndpointId, [Float])] -> Eff es Int64
-updateEndpointEmbeddings [] = pure 0
-updateEndpointEmbeddings pairs =
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.endpoints SET
-          embedding = u.emb::float4[],
-          embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
-        WHERE apis.endpoints.id = u.id |]
-  where
-    (ids, embs) = unzip $ map (second showPGFloatArray) pairs
-
-
-getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
-getCanonicalEndpoints pid =
-  map (second (V.toList @Float))
-    <$> Hasql.interp
-      [HI.sql| SELECT id, embedding FROM apis.endpoints
-        WHERE project_id = #{pid} AND canonical_hash IS NULL
-          AND embedding IS NOT NULL AND merge_override = FALSE
-        LIMIT 10000 |]
-
-
-assignEndpointsToCanonical :: DB es => [(EndpointId, EndpointId)] -> Eff es Int64
-assignEndpointsToCanonical [] = pure 0
-assignEndpointsToCanonical pairs =
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.endpoints e SET canonical_hash = canon.hash
-        FROM (SELECT unnest(#{pids}::uuid[]) AS id, unnest(#{cids}::uuid[]) AS canonical) u
-        JOIN apis.endpoints canon ON canon.id = u.canonical
-        WHERE e.id = u.id |]
-  where
-    (pids, cids) = unzip pairs
-
-
--- | Set a centroid endpoint's url_path and canonical_path to an LLM-suggested template.
-setEndpointCanonicalTemplate :: DB es => EndpointId -> Text -> Eff es Int64
-setEndpointCanonicalTemplate eid ePath =
-  Hasql.interpExecute [HI.sql| UPDATE apis.endpoints SET url_path = #{ePath}, canonical_path = #{ePath} WHERE id = #{eid} |]
-
-
 getMergedEndpointPairs :: DB es => Projects.ProjectId -> Eff es [(Text, Text)]
 getMergedEndpointPairs pid =
   Hasql.interp
@@ -563,34 +519,72 @@ getMergedEndpointPairs pid =
 -- Legacy apis.shapes/fields/formats migration steps removed (tables dropped in 0090);
 -- the schema-learning catalog (apis.schema_catalog) re-derives structure on the fly per
 -- canonical key, so no explicit row migration is needed for the new model.
-migrateAndDeleteMergedEndpoints :: DB es => [(Text, Text)] -> Eff es ()
-migrateAndDeleteMergedEndpoints [] = pass
-migrateAndDeleteMergedEndpoints pairs = do
+-- | Fold merged-out endpoints' anomalies and issues onto their canonical
+-- endpoint, then delete the merged-out rows.
+--
+-- N endpoints collapsing onto one template means N rows want the same
+-- @(project_id, target_hash)@, and both tables have unique indexes on exactly
+-- that. The obvious @UPDATE … WHERE NOT EXISTS@ does not save you: the guard is
+-- evaluated against the pre-statement snapshot, so every colliding row passes
+-- it and the statement dies on the index. So consolidation is explicit —
+-- newest row per canonical group wins, the rest are deleted. On a project with
+-- 18k endpoints and one open issue each, most of those issues only exist
+-- because the endpoints failed to collapse in the first place.
+--
+-- Scoped by project so @(project_id, LEFT(target_hash, 8))@ can be indexed;
+-- without the project column the predicate seq-scans a multi-million-row table.
+--
+-- Re-runnable: once a batch is remapped its rows no longer match
+-- @LEFT(target_hash, 8) = old@, so a crashed run simply repeats.
+migrateAndDeleteMergedEndpoints :: DB es => Projects.ProjectId -> [(Text, Text)] -> Eff es ()
+migrateAndDeleteMergedEndpoints _ [] = pass
+migrateAndDeleteMergedEndpoints pid pairs = do
   let (oldArr, canonArr) = bimap V.fromList V.fromList $ unzip pairs
-  -- Remap anomalies (skip if canonical target already exists for same project)
+      -- Rows whose remapped target would duplicate a survivor's. Ranked newest
+      -- first so the issue a user is most likely looking at is the one kept.
+      anomalyTargets =
+        [HI.sql|
+          SELECT a.id, m.canonical || substring(a.target_hash FROM 9) AS new_hash,
+                 row_number() OVER (PARTITION BY m.canonical || substring(a.target_hash FROM 9)
+                                    ORDER BY a.created_at DESC, a.id) AS rn
+          FROM apis.anomalies a
+          JOIN unnest(#{oldArr}::text[], #{canonArr}::text[]) m(old, canonical) ON LEFT(a.target_hash, 8) = m.old
+          WHERE a.project_id = #{pid} |]
+      issueTargets =
+        [HI.sql|
+          SELECT i.id, m.canonical AS canonical, m.canonical || substring(i.target_hash FROM 9) AS new_hash,
+                 CASE WHEN i.acknowledged_at IS NULL AND i.archived_at IS NULL
+                      THEN row_number() OVER (
+                             -- Open api_change issues are additionally unique per
+                             -- endpoint_hash, so they dedupe on the endpoint, not the target.
+                             PARTITION BY m.canonical, i.issue_type,
+                                          CASE WHEN i.issue_type = 'api_change' THEN '' ELSE substring(i.target_hash FROM 9) END,
+                                          i.acknowledged_at IS NULL AND i.archived_at IS NULL
+                             ORDER BY i.updated_at DESC, i.id)
+                      ELSE 1 END AS rn
+          FROM apis.issues i
+          JOIN unnest(#{oldArr}::text[], #{canonArr}::text[]) m(old, canonical) ON LEFT(i.target_hash, 8) = m.old
+          WHERE i.project_id = #{pid} |]
   Hasql.interpExecute_
-    [HI.sql|
-      UPDATE apis.anomalies a
-          SET target_hash = m.canonical || substring(a.target_hash FROM 9)
-          FROM unnest(#{oldArr}::text[], #{canonArr}::text[]) m(old, canonical)
-          WHERE LEFT(a.target_hash, 8) = m.old
-            AND NOT EXISTS (SELECT 1 FROM apis.anomalies a2
-                           WHERE a2.project_id = a.project_id
-                             AND a2.target_hash = m.canonical || substring(a.target_hash FROM 9)) |]
-  -- Remap issues (skip if canonical target already exists for same project+type)
+    $ [HI.sql| DELETE FROM apis.anomalies a USING ( |]
+    <> anomalyTargets
+    <> [HI.sql| ) t WHERE a.id = t.id AND (t.rn > 1
+          OR EXISTS (SELECT 1 FROM apis.anomalies o WHERE o.project_id = #{pid} AND o.target_hash = t.new_hash
+                       AND NOT (LEFT(o.target_hash, 8) = ANY(#{oldArr})))) |]
   Hasql.interpExecute_
-    [HI.sql|
-      UPDATE apis.issues i
-          SET endpoint_hash = m.canonical,
-              target_hash = m.canonical || substring(i.target_hash FROM 9)
-          FROM unnest(#{oldArr}::text[], #{canonArr}::text[]) m(old, canonical)
-          WHERE LEFT(i.target_hash, 8) = m.old
-            AND NOT EXISTS (SELECT 1 FROM apis.issues i2
-                           WHERE i2.project_id = i.project_id
-                             AND i2.target_hash = m.canonical || substring(i.target_hash FROM 9)
-                             AND i2.issue_type = i.issue_type
-                             AND i2.acknowledged_at IS NULL AND i2.archived_at IS NULL) |]
-  -- Delete leftover anomalies/issues for the merged-out endpoints, then the endpoints themselves.
-  Hasql.interpExecute_ [HI.sql| DELETE FROM apis.anomalies WHERE LEFT(target_hash, 8) = ANY(#{oldArr}) |]
-  Hasql.interpExecute_ [HI.sql| DELETE FROM apis.issues WHERE LEFT(target_hash, 8) = ANY(#{oldArr}) |]
-  Hasql.interpExecute_ [HI.sql| DELETE FROM apis.endpoints WHERE hash = ANY(#{oldArr}) |]
+    $ [HI.sql| UPDATE apis.anomalies a SET target_hash = t.new_hash FROM ( |]
+    <> anomalyTargets
+    <> [HI.sql| ) t WHERE a.id = t.id |]
+  Hasql.interpExecute_
+    $ [HI.sql| DELETE FROM apis.issues i USING ( |]
+    <> issueTargets
+    <> [HI.sql| ) t WHERE i.id = t.id AND (t.rn > 1
+          OR EXISTS (SELECT 1 FROM apis.issues o WHERE o.project_id = #{pid} AND o.target_hash = t.new_hash
+                       AND o.issue_type = i.issue_type AND o.acknowledged_at IS NULL AND o.archived_at IS NULL
+                       AND i.acknowledged_at IS NULL AND i.archived_at IS NULL
+                       AND NOT (LEFT(o.target_hash, 8) = ANY(#{oldArr})))) |]
+  Hasql.interpExecute_
+    $ [HI.sql| UPDATE apis.issues i SET endpoint_hash = t.canonical, target_hash = t.new_hash FROM ( |]
+    <> issueTargets
+    <> [HI.sql| ) t WHERE i.id = t.id |]
+  Hasql.interpExecute_ [HI.sql| DELETE FROM apis.endpoints WHERE project_id = #{pid} AND hash = ANY(#{oldArr}) |]

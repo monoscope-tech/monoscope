@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, endpointMergeCleanup, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -12,6 +12,7 @@ import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
@@ -21,6 +22,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List (partition)
+import Data.List qualified as L
 import Data.List.Extra (chunksOf, groupBy, headDef)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -110,7 +112,7 @@ import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (extractObservation, parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
+import ProcessMessage (classifyUrlPath, extractObservation, parseCanonicalPaths, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -168,6 +170,7 @@ data BgJobs
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
+  | EndpointMergeCleanup UTCTime Projects.ProjectId
   | -- | Per-minute dispatcher: atomically lease due Prometheus targets (SKIP LOCKED,
     -- multi-node safe) and fan out one PrometheusScrapeOne per target.
     PrometheusScrapeTick UTCTime
@@ -446,6 +449,7 @@ processBackgroundJob authCtx bgJob =
                 sched 96 900 (`PatternEmbeddingAndMerge` p)
                 sched 96 900 (`LogPatternPeriodicProcessing` p)
                 sched 4 21600 (`EndpointTemplateDiscovery` p)
+                sched 4 21600 (`EndpointMergeCleanup` p)
                 sched 24 3600 (`LogPatternHourlyProcessing` p)
                 -- The extraction worker owns live span/log/error derivation.
                 -- SafetyNetReprocess is the hourly catch-up for
@@ -625,6 +629,7 @@ processBackgroundJob authCtx bgJob =
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 3600 $ endpointTemplateDiscovery pid
+    EndpointMergeCleanup scheduledTime pid -> unlessStale "EndpointMergeCleanup" scheduledTime 3600 $ endpointMergeCleanup pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
         $ tryStep "detectLogPatternSpikes"
@@ -3405,73 +3410,147 @@ embeddingConfig ctx =
     }
 
 
--- | Only merge endpoints with the same number of path segments.
--- Prevents e.g. /api/v2/users/auth0|abc from merging into /api/v2/users.
---
--- >>> import "monoscope" BackgroundJobs qualified as BJ
--- >>> BJ.sameSegmentCount "/api/v1/users/{param}" "/api/v1/users/123"
--- True
---
--- >>> BJ.sameSegmentCount "/api/users" "/api/users/{param}"
--- False
-sameSegmentCount :: Text -> Text -> Bool
-sameSegmentCount a b = T.count "/" a == T.count "/" b
-
-
 -- Endpoint template discovery ---------------------------------------------------
 
+-- | Collapse a project's concrete endpoints onto path templates.
+--
+-- Two mechanisms, deliberately held to different standards of evidence:
+--
+--   * /assign & group/ — re-classify every unmerged path with 'classifyUrlPath'
+--     and group on the result. Two paths that classify identically /are/ the
+--     same route, so this needs no inference: a group matching a template that
+--     already exists is assigned even at size one (the straggler that arrives
+--     after the bulk has merged), and a new template needs two members.
+--     This is where essentially all of the collapse comes from, and re-running
+--     it is what backfills old rows every time the classifier learns a shape.
+--
+--   * /population inference/ — 'proposePathTemplates' guesses templates from
+--     the shape of the population, for ids no classifier recognises. It is
+--     __report-only__: it logs proposals and writes nothing. An earlier
+--     subtree-similarity version of it proposed merging @deactivate_user@,
+--     @verify_reset_pin_otp@ and @reset-password@ into one endpoint, so it does
+--     not get to touch rows until its proposals have been reviewed in the wild.
+--
+-- Cleanup of merged-out rows is 'endpointMergeCleanup', a separate job.
 endpointTemplateDiscovery :: Projects.ProjectId -> ATBackgroundCtx ()
 endpointTemplateDiscovery pid = do
-  -- Step 1: Deterministic template discovery via tokenization grouping
   endpoints <- Endpoints.getUnmergedEndpoints pid
+  existing <- Endpoints.getCanonicalTemplateKeys pid
   unless (null endpoints) do
-    let grouped =
-          HM.toList
-            $ HM.fromListWith (<>)
-            $ map
-              ( \(h, m, host, path) ->
-                  let tp = T.intercalate "/" $ map (\t -> bool "{param}" t (t /= "<*>")) $ V.toList $ tokenizeUrlPath path
-                   in ((m, host, tp), [h])
-              )
-              endpoints
+    let known = S.fromList $ V.toList existing
+        grouped = HM.toList $ HM.fromListWith (<>) [((m, host, classifyUrlPath path), [h]) | (h, m, host, path) <- endpoints]
+        -- An existing template vouches for its group; a new one has to be
+        -- witnessed twice and must actually be a template.
+        isEligible ((m, host, tp), hs) = S.member (m, host, tp) known || (length hs >= 2 && T.isInfixOf "{param}" tp)
+        (eligible, leftovers) = L.partition isEligible grouped
         (!allUpdates, !allInserts) =
           foldMap
-            ( \((method, host, tp), hs) ->
-                let ch = toXXHash $ pid.toText <> host <> method <> tp
-                 in (map (,ch,tp) hs, [(pid, tp, method, host, ch)])
-            )
-            $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
+            (\((method, host, tp), hs) -> let ch = toXXHash $ pid.toText <> host <> method <> tp in (map (,ch,tp) hs, [(pid, tp, method, host, ch)]))
+            eligible
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
-    Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
-  -- Step 2: Embedding + LLM merge for remaining ambiguous endpoints
-  ctx <- ask @Config.AuthContext
-  unless (T.null ctx.config.openaiApiKey) $ tryStep "endpointEmbedding" do
-    unembedded <- Endpoints.getUnembeddedEndpoints pid
-    embedAndMerge
-      pid
-      ctx
-      MergeConfig
-        { label = "endpoint"
-        , items = unembedded
-        , itemText = \(_, _, path) -> path
-        , normalizeEmb = id
-        , toId = view _1
-        , updateEmbs = Endpoints.updateEndpointEmbeddings
-        , getCentroids = Endpoints.getCanonicalEndpoints pid
-        , assignCanonical = Endpoints.assignEndpointsToCanonical
-        , fetchTexts = Endpoints.fetchEndpointTexts
-        , canMerge = sameSegmentCount
-        , judgeFn = mkJudge PatternMerge.buildEndpointJudgePrompt
-        , onCanonicalPath = \eid path -> void $ Endpoints.setEndpointCanonicalTemplate eid path
-        , verifyMerge = Nothing
-        }
-  -- Step 3: Migrate data and delete all merged endpoints
+    Log.logInfo
+      "Endpoint template discovery complete"
+      ("project_id", pid.toText, "scanned", length endpoints, "assigned", length allUpdates, "templates", length allInserts, "truncated", length endpoints >= Endpoints.unmergedScanLimit)
+    -- Report-only population inference over what grouping could not collapse.
+    -- Learned per (project, method) across hosts: per-host populations starve —
+    -- a project fanning out to hundreds of tenant domains never reaches the
+    -- evidence floor on any one of them.
+    let proposals =
+          [ (method, T.intercalate "/" segs)
+          | (method, paths) <- HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" tp]) | ((m, _, tp), _) <- leftovers]
+          , segs <- proposePathTemplates paths
+          , "{param}" `elem` segs
+          ]
+    unless (null proposals)
+      $ Log.logInfo "Endpoint template proposals (report-only, not applied)" ("project_id", pid.toText, "proposal_count", length proposals, "proposals", take 50 proposals)
+
+
+-- | Migrate anomalies/issues onto canonical endpoints and delete the merged-out
+-- rows. Split out of discovery because it is the destructive half: it deletes
+-- endpoint rows and the issues that cannot be consolidated onto the canonical
+-- one, so it wants its own scheduling, batch size and rollout controls.
+endpointMergeCleanup :: Projects.ProjectId -> ATBackgroundCtx ()
+endpointMergeCleanup pid = do
   mergedPairs <- Endpoints.getMergedEndpointPairs pid
-  Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)
-  Endpoints.migrateAndDeleteMergedEndpoints mergedPairs
-  unless (null mergedPairs)
-    $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
+  unless (null mergedPairs) do
+    Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)
+    -- Batched: each batch is independently re-runnable, because once a batch
+    -- remaps its rows they no longer match `LEFT(target_hash,8) = old`.
+    forM_ (chunksOf 1000 mergedPairs) $ Endpoints.migrateAndDeleteMergedEndpoints pid
+    Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
+
+
+-- | Character-class run signature of a segment: @deactivate_user@ → @a_a@,
+-- @SB-91673E0634FB@ → @A-9A9A9A9@, @KKKR-3184@ → @A-9@.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> map BJ.runShape ["deactivate_user", "SB-91A2", "abc123", "verify_phone"]
+-- ["a_a","A-9A9","a9","a_a"]
+runShape :: Text -> Text
+runShape = toText . mapMaybe (viaNonEmpty head) . group . map cls . toString
+  where
+    cls c
+      | isDigit c = '9'
+      | isAsciiLower c = 'a'
+      | isAsciiUpper c = 'A'
+      | otherwise = c
+
+
+-- | Templates inferred from the shape of a population, for ids no per-segment
+-- classifier recognises (@\/lnx\/IOWp@, @\/v1\/Lockers\/Lagos@).
+--
+-- A node's children collapse only when they look like draws from one generator:
+-- at least eight of them, one 'runShape' covering at least 80%, near-uniform
+-- length, and near-identical subtrees. Children outside the dominant shape stay
+-- literal rather than being folded in.
+--
+-- The shape gate is the load-bearing guard, and it has to include the digit
+-- requirement to work. Subtree similarity alone does not separate a parameter
+-- from a flat family of RPC verbs: @verify_phone@, @deactivate_user@,
+-- @update_email@ and friends are same-shaped (@a_a@) leaves of similar length,
+-- so they clear the structural tests, the 80% rule and the length test — and
+-- collapsing them merges eight real routes into one. Requiring a digit run in
+-- the shared shape separates them, because generated ids carry digits and route
+-- words do not. The cost is that an all-alphabetic random id (@\/lnx\/IOWp@)
+-- is never inferred; under-merging leaves a spare row, over-merging destroys an
+-- endpoint's identity and its issues.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> import Data.Text qualified as T
+-- >>> let run = map (T.intercalate "/") . BJ.proposePathTemplates . map (T.splitOn "/")
+--
+-- Eight same-shaped ids collapse:
+--
+-- >>> run ["/t/JOD4VFEA","/t/JOD4VFEB","/t/JOD4VFEC","/t/JOD4VFED","/t/JOD4VFEE","/t/JOD4VFEF","/t/JOD4VFEG","/t/JOD4VFEH"]
+-- ["/t/{param}"]
+--
+-- A flat family of route words does not, however many there are:
+--
+-- >>> run ["/a/verify_phone","/a/verify_email","/a/deactivate_user","/a/reset-password","/a/send_otp","/a/biometric_login","/a/update_email","/a/random_username"]
+-- ["/a/biometric_login","/a/deactivate_user","/a/random_username","/a/reset-password","/a/send_otp","/a/update_email","/a/verify_email","/a/verify_phone"]
+proposePathTemplates :: [[Text]] -> [[Text]]
+proposePathTemplates paths =
+  [[] | any null paths]
+    <> ["{param}" : rest | not (S.null folded), rest <- proposePathTemplates $ foldMap kidsOf $ S.toList folded]
+    <> sort [k : rest | (k, vs) <- HM.toList groups, not (S.member k folded), rest <- proposePathTemplates vs]
+  where
+    groups = HM.fromListWith (<>) [(s, [ss]) | (s : ss) <- paths]
+    kidsOf k = HM.lookupDefault [] k groups
+    keys = filter (/= "{param}") $ HM.keys groups
+    cand = filter ((== domShape) . runShape) keys
+    domShape = maybe "" fst $ viaNonEmpty last $ sortWith snd $ HM.toList $ HM.fromListWith (+) [(runShape k, 1 :: Int) | k <- keys]
+    lens = map (fromIntegral . T.length) cand :: [Double]
+    mean = sum lens / fromIntegral (length lens)
+    lengthCV = sqrt (sum [(l - mean) ** 2 | l <- lens] / fromIntegral (length lens)) / mean
+    -- Depth-1 subtree signature: immediate child keys plus "does a path end here".
+    subSigs = S.fromList [(any null (kidsOf k), S.fromList [s | (s : _) <- kidsOf k]) | k <- cand]
+    folded
+      | length keys < 8 || length cand * 5 < length keys * 4 = S.empty
+      | not (T.any (== '9') domShape) = S.empty
+      | mean > 0 && lengthCV > 0.35 = S.empty
+      | S.size subSigs * 4 > length cand = S.empty
+      | otherwise = S.fromList cand
 
 
 -- | Run @k@ with a project's sync config and a live connection to its host, or log why it

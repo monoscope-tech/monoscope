@@ -19,9 +19,15 @@ module ProcessMessage (
   ensureUrlParams,
   dedupFields,
   isUrlIdLike,
+  tokenIsGenerated,
+  isBracedPlaceholder,
+  isRoutePlaceholder,
+  percentDecodeLenient,
   matchCanonicalPath,
   pathMatchesTemplate,
   parseCanonicalPaths,
+  CanonicalPathIndex,
+  classifyUrlPath,
   tokenizeUrlPath,
   hostFromRawUrl,
 )
@@ -37,7 +43,7 @@ import Data.Aeson.Lens (key, _Number, _Object, _String)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
-import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
+import Data.Char (digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
@@ -145,7 +151,7 @@ data HttpKey = HttpKey
   }
 
 
-httpKeyOf :: HM.HashMap (Text, Text) [([Text], Text)] -> Telemetry.OtelLogsAndSpans -> HttpKey
+httpKeyOf :: CanonicalPathIndex -> Telemetry.OtelLogsAndSpans -> HttpKey
 httpKeyOf canonicalTemplates otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
@@ -179,10 +185,16 @@ httpKeyOf canonicalTemplates otelSpan =
       !sdkType = fromMaybe LogQueries.SDKUnknown $ readMaybe $ toString sdkTypeStr
       !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
       !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
-      !urlPath =
-        if hasDyn
-          then urlPathDyn
-          else fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
+      -- A path with its own captured params still has to be matched against the
+      -- project's templates. It labels them by type (@/users/{uuid}/posts@) while
+      -- discovery writes @{param}@, so without this the two spell the same route
+      -- as two hashes: ingest mints the typed one, discovery merges it into the
+      -- template, cleanup deletes it, and the next span mints it again — a
+      -- mint/merge/delete loop, one new-endpoint notification per cycle.
+      -- 'pathMatchesTemplate' treats either spelling as a wildcard, so once a
+      -- template exists ingest settles on it.
+      !candidate = bool urlPath' urlPathDyn hasDyn
+      !urlPath = fromMaybe candidate $ matchCanonicalPath canonicalTemplates method host candidate
    in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
 
 
@@ -197,7 +209,7 @@ httpKeyOf canonicalTemplates otelSpan =
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities :: CanonicalPathIndex -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       HttpKey{method, host, urlPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
@@ -263,7 +275,7 @@ stampHashesAtIngest caches = V.map \r -> fromMaybe r do
 -- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
 -- applied so PII never enters the catalog.
 extractObservation
-  :: HM.HashMap (Text, Text) [([Text], Text)]
+  :: CanonicalPathIndex
   -> OtelLogsAndSpans
   -> SchemaHot.ObservationInput
 extractObservation canonicalTemplates otelSpan =
@@ -843,51 +855,131 @@ valueToFormatStr val = snd <$> find (\(regex, _) -> matched (val ?=~ regex)) com
 --
 -- >>> let (url, _, hasDyn) = ensureUrlParams "" in (url, hasDyn)
 -- ("",False)
+--
+-- Segments that are already a template (@{uuid}@, @{param}@) pass through
+-- verbatim, which is what makes the function idempotent: re-running it over a
+-- stored template — as the discovery job does on every pass — must not relabel
+-- or re-suffix anything.
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "/users/{uuid}/posts" in (url, hasDyn)
+-- ("/users/{uuid}/posts",True)
+--
+-- >>> let (url, _, _) = ensureUrlParams "/users/12345/orders/67890" in ensureUrlParams url
+-- ("/users/{number}/orders/{number_1}",Object (fromList []),True)
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
 ensureUrlParams "" = ("", AE.object [], False)
-ensureUrlParams url = (T.intercalate "/" segs, pathParams, not (null dynSegs))
+ensureUrlParams url = (T.intercalate "/" segs, pathParams, any isBracedPlaceholder segs)
   where
-    (segsR, valsR) = foldl' step ([], []) (T.splitOn "/" url)
-    step (sAcc, vAcc) x = maybe (x : sAcc, vAcc) (\lbl -> (addNewSegment sAcc lbl, x : vAcc)) (dynSegmentLabel x)
+    (segsR, prsR) = foldl' step ([], []) (T.splitOn "/" url)
+    step (sAcc, pAcc) x
+      | isBracedPlaceholder x = (x : sAcc, pAcc)
+      | otherwise = case dynSegmentLabel x of
+          Nothing -> (x : sAcc, pAcc)
+          Just lbl -> let s = newSegment sAcc lbl in (s : sAcc, (s, x) : pAcc)
     segs = reverse segsR
-    vals = reverse valsR
-    dynSegs = filter (T.isPrefixOf "{") segs
-    pathParams = AE.object [AEK.fromText (T.tail k) AE..= v | (k, v) <- zip dynSegs vals]
+    -- Built from the replaced segments only. Zipping the rendered @{…}@ segments
+    -- against the captured values would misalign the moment a path carried a
+    -- pass-through placeholder, silently naming a param after its neighbour.
+    pathParams = AE.object [AEK.fromText (T.dropEnd 1 $ T.drop 1 k) AE..= v | (k, v) <- reverse prsR]
+
+
+-- | Is this segment already a rendered template segment, e.g. @{uuid}@?
+--
+-- >>> map isBracedPlaceholder ["{uuid}", "{param}", "{}", "users", "{unclosed"]
+-- [True,True,False,False,False]
+isBracedPlaceholder :: Text -> Bool
+isBracedPlaceholder t = T.length t > 2 && T.isPrefixOf "{" t && T.isSuffixOf "}" t
+
+
+-- | A path segment written by a web framework's router rather than a client,
+-- in any of the four syntaxes SDKs report: @:id@, @{id}@, @\<id\>@, @[id]@.
+--
+-- >>> map isRoutePlaceholder [":id", "{orderId}", "<slug>", "[id]", "users", ":", "{}"]
+-- [True,True,True,True,False,False,False]
+isRoutePlaceholder :: Text -> Bool
+isRoutePlaceholder t = case T.uncons t of
+  Just (':', rest) -> not (T.null rest)
+  Just ('{', _) -> closedBy '}'
+  Just ('<', _) -> closedBy '>'
+  Just ('[', _) -> closedBy ']'
+  _ -> False
+  where
+    closedBy c = T.length t > 2 && T.last t == c
+
+
+-- | Percent-decode a segment, leaving malformed escapes untouched.
+--
+-- Used for classification only — 'ensureUrlParams' stores the original text for
+-- any segment it keeps, so a segment carrying @%2F@ can never decode into a
+-- slash and change a path's segment count.
+--
+-- >>> map percentDecodeLenient ["auth0%7Cabc", "%7Bid%7D", "plain", "100%", "%zz", "a%2Fb"]
+-- ["auth0|abc","{id}","plain","100%","%zz","a/b"]
+percentDecodeLenient :: Text -> Text
+percentDecodeLenient t
+  | not (T.any (== '%') t) = t
+  | otherwise = go t
+  where
+    go s =
+      let (before, rest) = T.break (== '%') s
+       in if T.null rest
+            then before
+            else case toString (T.take 3 rest) of
+              ['%', a, b] | isHexDigit a, isHexDigit b -> before <> one (chr $ digitToInt a * 16 + digitToInt b) <> go (T.drop 3 rest)
+              _ -> before <> "%" <> go (T.drop 1 rest)
 
 
 -- | The parameter name a URL segment collapses to, or 'Nothing' if it is static.
+--
+-- Classification happens on the percent-decoded segment so encoded ids
+-- (@auth0%7C…@) and encoded router placeholders (@%7Bid%7D@) resolve the same
+-- as their plain forms.
+--
+-- >>> map dynSegmentLabel ["auth0%7Cabc123def456", "%7Bid%7D", ":orderId", "users"]
+-- [Just "param",Just "param",Just "param",Nothing]
 dynSegmentLabel :: Text -> Maybe Text
-dynSegmentLabel x = case valueToFormatStr x of
-  Nothing -> if isUrlIdLike x then Just "param" else Nothing
-  Just "{uuid}" -> Just "uuid"
-  Just v
-    | v
-        `elem` [ "{mm/dd/yyyy}"
-               , "{mm-dd-yyyy}"
-               , "{mm.dd.yyyy}"
-               , "{dd/mm/yyyy}"
-               , "{dd-mm-yyyy}"
-               , "{dd.mm.yyyy}"
-               , "{YYYY-MM-DD}"
-               , "{YYYY/MM/DD}"
-               , "{YYYYMMDD}"
-               , "{YYYY-MM-DDThh:mm:ss.sTZD}"
-               ] ->
-        Just "date"
-    | v `elem` ["{ip}", "{ipv6}"] -> Just "ip_address"
-    | v `elem` ["{integer}", "{float}", "{hex}"] -> Just "number"
-    | otherwise -> Just "param"
+dynSegmentLabel x0
+  | isRoutePlaceholder x = Just "param"
+  | otherwise = case valueToFormatStr x of
+      Nothing -> if isUrlIdLike x then Just "param" else Nothing
+      Just "{uuid}" -> Just "uuid"
+      Just v
+        | v
+            `elem` [ "{mm/dd/yyyy}"
+                   , "{mm-dd-yyyy}"
+                   , "{mm.dd.yyyy}"
+                   , "{dd/mm/yyyy}"
+                   , "{dd-mm-yyyy}"
+                   , "{dd.mm.yyyy}"
+                   , "{YYYY-MM-DD}"
+                   , "{YYYY/MM/DD}"
+                   , "{YYYYMMDD}"
+                   , "{YYYY-MM-DDThh:mm:ss.sTZD}"
+                   ] ->
+            Just "date"
+        | v `elem` ["{ip}", "{ipv6}"] -> Just "ip_address"
+        | v `elem` ["{integer}", "{float}", "{hex}"] -> Just "number"
+        | otherwise -> Just "param"
+  where
+    x = percentDecodeLenient x0
 
 
--- | Append a @{label}@ segment, suffixing @_n@ when the label already occurs.
-addNewSegment :: [Text] -> Text -> [Text]
-addNewSegment segs seg =
+-- | Render a @{label}@ segment, suffixing @_n@ when the label already occurs.
+newSegment :: [Text] -> Text -> Text
+newSegment segs seg =
   let pfx = "{" <> seg
       pos = length [s | s <- segs, pfx `T.isPrefixOf` s]
-   in (if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}") : segs
+   in if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}"
 
 
--- | Detect ID-like URL segments that valueToFormatStr misses (compound IDs, tokens, etc.)
+-- | Detect ID-like URL segments that 'valueToFormatStr' misses.
+--
+-- Works on tokens, not on the whole segment: the segment is split on every
+-- non-alphanumeric character and is dynamic when /any/ token is machine-generated.
+-- One rule then covers prefixed ids (@SB-91673E0634FB@, @WALLET_3D16EFF38182@),
+-- ids embedded in filenames, and whatever shape the next customer invents —
+-- rather than one regex per id format, which is what let a customer's entire
+-- primary-key format through as static and minted 18k endpoints for one API.
 --
 -- >>> map isUrlIdLike ["auth0|69a4b387381d604d626299ec", "google-oauth2|123456789"]
 -- [True,True]
@@ -915,23 +1007,58 @@ addNewSegment segs seg =
 --
 -- >>> map isUrlIdLike ["V2", "API", "S3", "route53"]
 -- [False,False,False,False]
+--
+-- Prefixed and delimited ids — the shapes the whole-segment rules used to miss,
+-- because a @-@ or @_@ made the segment non-alphanumeric:
+--
+-- >>> map isUrlIdLike ["SB-91673E0634FB", "WALLET_3D16EFF38182", "27ad70cdce4a", "JOD4VFEC"]
+-- [True,True,True,True]
+--
+-- >>> isUrlIdLike "539f2ca8-7b83-49e0-a0d7-b6c923067b12_photo.jpg"
+-- True
+--
+-- The rejections matter as much as the acceptances: these are route words that
+-- an over-eager length rule collapses, merging real endpoints into one.
+--
+-- >>> map isUrlIdLike ["transactions", "subscriptions", "notifications", "beneficiaries"]
+-- [False,False,False,False]
+--
+-- >>> map isUrlIdLike ["deactivate_user", "verify_reset_pin_otp", "reset-password", "2023-07"]
+-- [False,False,False,False]
 isUrlIdLike :: Text -> Bool
 isUrlIdLike seg
   | T.null seg = False
   | T.elem '|' seg = True -- compound IDs: auth0|abc, google-oauth2|123
   | not (T.isPrefixOf ":" seg) && T.elem ':' seg = True -- namespaced: type:value
-  | len > 20 && hasMixed = True -- long mixed alphanumeric (no hyphens — excludes slugs)
-  | len > 16 && isBase64Url = True -- base64url-encoded token (requires digits)
-  | len >= 6 && hasMixed && isLowVowel = True -- short IDs: mixed alphanumeric with few vowels
-  | otherwise = False
+  | otherwise = any tokenIsGenerated $ T.split (not . isAlphaNum) seg
+
+
+-- | Is one alphanumeric token machine-generated rather than a word a human typed?
+--
+-- >>> map tokenIsGenerated ["91673E0634FB", "27ad70cdce4a", "JOD4VFEC", "HQTGWGPNH4"]
+-- [True,True,True,True]
+--
+-- >>> map tokenIsGenerated ["transactions", "restaurants", "WALLET", "deadbeef", "2025"]
+-- [False,False,False,False,False]
+tokenIsGenerated :: Text -> Bool
+tokenIsGenerated t
+  | len < 6 = False
+  -- Hex needs a digit, else English hex-words ("deadbeef", "facade") classify as ids.
+  | T.all isHexDigit t = len >= 16 || (len >= 8 && T.any isDigit t)
+  -- No vowel among the letters: consonant soup no human named a route after.
+  | T.any isAlpha t && not (T.any (`T.elem` "aeiouAEIOU") t) = True
+  -- Frequent digit/letter alternation. Words have runs; generated ids interleave.
+  | otherwise = classSwitches * 4 >= len
   where
-    len = T.length seg
-    hasMixed = T.any isAlpha seg && T.any isDigit seg && T.all isAlphaNum seg
-    isBase64Url = T.all (\c -> isAlphaNum c || c == '-' || c == '_') seg && T.any isUpper seg && T.any isLower seg && T.any isDigit seg
-    isLowVowel = T.length (T.filter (`T.elem` "aeiouAEIOU") seg) * 4 < len
+    len = T.length t
+    classSwitches = let ds = map isDigit (toString t) in length $ filter (uncurry (/=)) $ zip ds (drop 1 ds)
 
 
--- | Check if a concrete URL path matches a pre-split template with {param} wildcards.
+-- | Check if a concrete URL path matches a pre-split template.
+--
+-- Any @{…}@ segment is a wildcard, not just @{param}@: ingest labels captured
+-- params @{uuid}@/@{number}@/@{date}@ while the discovery job writes @{param}@,
+-- and a concrete path has to match whichever of the two minted its template.
 --
 -- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users/john_doe/profile") (T.splitOn "/" "/api/v2/users/{param}/profile")
 -- True
@@ -941,24 +1068,91 @@ isUrlIdLike seg
 --
 -- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users") (T.splitOn "/" "/api/v2/users/{param}")
 -- False
+-- >>> pathMatchesTemplate (T.splitOn "/" "/users/550e8400-e29b-41d4-a716-446655440000") (T.splitOn "/" "/users/{uuid}")
+-- True
 pathMatchesTemplate :: [Text] -> [Text] -> Bool
-pathMatchesTemplate ps ts = length ps == length ts && and (zipWith (\p t -> t == "{param}" || p == t) ps ts)
+pathMatchesTemplate ps ts = length ps == length ts && and (zipWith (\p t -> isBracedPlaceholder t || p == t) ps ts)
 
 
--- | Find the first matching canonical template for a request path.
--- Templates are indexed by (method, host) for O(1) lookup per span.
-matchCanonicalPath :: HM.HashMap (Text, Text) [([Text], Text)] -> Text -> Text -> Text -> Maybe Text
+-- | Canonical templates for matching at ingest, keyed by (method, host, segment count).
+type CanonicalPathIndex = HM.HashMap (Text, Text, Int) [([Text], Text)]
+
+
+-- | Number of literal (non-wildcard) segments — a template's specificity.
+templateLiterals :: [Text] -> Int
+templateLiterals = length . filter (not . isBracedPlaceholder)
+
+
+-- | The canonical template a request path belongs to, or 'Nothing'.
+--
+-- Most-specific-wins, the same rule an HTTP router uses: @\/users\/search@ beats
+-- @\/users\/{param}@, so a literal route can never be swallowed by a wildcard
+-- one that happens to be enumerated first. Two templates of /equal/ specificity
+-- both matching is genuine ambiguity, and answers 'Nothing' — an extra endpoint
+-- row is recoverable, a wrong merge deletes the endpoint's issues.
+--
+-- >>> let idx = parseCanonicalPaths (V.fromList ["GET|api.x|/users/{param}/posts", "GET|api.x|/users/search/posts"])
+-- >>> matchCanonicalPath idx "GET" "api.x" "/users/search/posts"
+-- Just "/users/search/posts"
+--
+-- A path ingest already labelled by type resolves onto the same template, so the
+-- two spellings of one route settle on one endpoint hash instead of trading it:
+--
+-- >>> matchCanonicalPath idx "GET" "api.x" "/users/{uuid}/posts"
+-- Just "/users/{param}/posts"
+--
+-- >>> matchCanonicalPath idx "GET" "api.x" "/orders/1/posts"
+-- Nothing
+matchCanonicalPath :: CanonicalPathIndex -> Text -> Text -> Text -> Maybe Text
 matchCanonicalPath idx reqMethod reqHost reqPath =
-  let !reqSegs = T.splitOn "/" reqPath
-   in snd <$> find (pathMatchesTemplate reqSegs . fst) (HM.findWithDefault [] (reqMethod, reqHost) idx)
-
-
--- | Parse pipe-delimited canonical path entries ("method|host|template") into a HashMap keyed by (method, host).
--- Call once per ProjectCache, not per span.
-parseCanonicalPaths :: V.Vector Text -> HM.HashMap (Text, Text) [([Text], Text)]
-parseCanonicalPaths = V.foldl' step HM.empty
+  case filter (pathMatchesTemplate reqSegs . fst) $ HM.findWithDefault [] (reqMethod, reqHost, length reqSegs) idx of
+    (a : b : _) | templateLiterals (fst a) == templateLiterals (fst b) -> Nothing
+    (a : _) -> Just $ snd a
+    [] -> Nothing
   where
-    step m t = case T.splitOn "|" t of [method, host, p] -> HM.insertWith (<>) (method, host) [(T.splitOn "/" p, p)] m; _ -> m
+    !reqSegs = T.splitOn "/" reqPath
+
+
+-- | Parse pipe-delimited canonical path entries ("method|host|template") into a
+-- matcher index. Call once per 'Projects.ProjectCache', not per span.
+--
+-- Keyed by segment count as well as (method, host): post-collapse a project
+-- carries one to two thousand templates, and a per-span linear scan over all of
+-- them is the cost this whole change would otherwise move onto the hot path.
+-- Within a bucket, most-literal-first, then lexically — so the winner does not
+-- depend on the order Postgres aggregated the rows in.
+parseCanonicalPaths :: V.Vector Text -> CanonicalPathIndex
+parseCanonicalPaths = HM.map (sortOn (\(segs, p) -> (negate $ templateLiterals segs, p))) . V.foldl' step HM.empty
+  where
+    step m t = case T.splitOn "|" t of
+      [method, host, p] -> let segs = T.splitOn "/" p in HM.insertWith (<>) (method, host, length segs) [(segs, p)] m
+      _ -> m
+
+
+-- | Re-derive a stored path's template with the current classifier.
+--
+-- The discovery job's grouping key, and its backfill mechanism: every time the
+-- classifier learns a new id shape, re-running this over old rows collapses
+-- them, so a missed format is a self-healing condition rather than a permanent
+-- table of one-row endpoints. Emits a single @{param}@ label for every dynamic
+-- segment — grouping wants paths that differ only in /which kind/ of id they
+-- carry to land together, which the typed labels 'ensureUrlParams' stores
+-- would split apart.
+--
+-- >>> classifyUrlPath "/v1/shipments/tracking/SB-91673E0634FB"
+-- "/v1/shipments/tracking/{param}"
+--
+-- >>> classifyUrlPath "/api/v1/customers/auth0%7C6a5ebc849d77a9a4717b0980/devices"
+-- "/api/v1/customers/{param}/devices"
+--
+-- Idempotent, so the job can group a template and a concrete path together:
+--
+-- >>> map classifyUrlPath ["/users/{uuid}/posts", "/users/{param}/posts", "/orders/:id"]
+-- ["/users/{param}/posts","/users/{param}/posts","/orders/{param}"]
+classifyUrlPath :: Text -> Text
+classifyUrlPath = T.intercalate "/" . map seg . T.splitOn "/"
+  where
+    seg s = if isBracedPlaceholder s || isJust (dynSegmentLabel s) then "{param}" else s
 
 
 -- | Tokenize URL path for Drain: split by "/" and pre-normalize with valueToFormatStr/isUrlIdLike.

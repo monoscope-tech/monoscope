@@ -31,12 +31,33 @@ insertTestEndpoints tr endpoints = forM_ endpoints \(method, host, path) ->
     (pid, path, AE.object [], method, host, toXXHash (pid.toText <> host <> method <> path), False :: Bool)
 
 
+-- | An open api_change issue pinned to one endpoint hash. Four of these across
+-- four endpoints that later merge is what used to abort the whole cleanup on
+-- @idx_issues_project_target_type_open@.
+insertOpenIssue :: TestResources -> Text -> IO ()
+insertOpenIssue tr endpointHash =
+  void $ withPool tr.trPool $ DBT.execute
+    [sql| INSERT INTO apis.issues (project_id, issue_type, endpoint_hash, target_hash, title)
+          VALUES (?, 'api_change', ?, ?, 'test issue') |]
+    (pid, endpointHash, endpointHash)
+
+
+-- | target_hash of every open issue for this project.
+queryOpenIssueTargets :: TestResources -> IO (V.Vector Text)
+queryOpenIssueTargets tr =
+  V.map (\(Only t) -> t) <$> withPool tr.trPool (DBT.query
+    [sql| SELECT target_hash FROM apis.issues
+          WHERE project_id = ? AND acknowledged_at IS NULL AND archived_at IS NULL |]
+    (Only pid))
+
+
 -- | Clear test endpoints for this project before each test group.
 clearTestEndpoints :: TestResources -> IO ()
 clearTestEndpoints tr =
   void $ withPool tr.trPool $ DBT.execute
     [sql| DELETE FROM apis.endpoints WHERE project_id = ? |]
     (Only pid)
+    >> void (withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.issues WHERE project_id = ? |] (Only pid))
 
 
 -- | After endpointTemplateDiscovery, merged endpoints are deleted and only the
@@ -57,28 +78,16 @@ queryAllEndpoints tr = withPool tr.trPool $ DBT.query
   (Only pid)
 
 
--- | Count endpoints with embeddings stored.
-queryEmbeddedCount :: TestResources -> IO Int
-queryEmbeddedCount tr = do
-  result <- withPool tr.trPool $ DBT.query
-    [sql| SELECT COUNT(*)::int FROM apis.endpoints
-          WHERE project_id = ? AND embedding IS NOT NULL |]
-    (Only pid) :: IO (V.Vector (Only Int))
-  pure $ maybe 0 (\(Only n) -> n) $ result V.!? 0
-
-
 spec :: Spec
 spec = around withTestResources do
   describe "Endpoint Template Discovery" do
-    describe "End-to-end: tokenization + embedding + merge + cleanup" do
-      it "full pipeline: tokenizes ID-like paths, embeds static paths, merges similar, cleans up" \tr -> do
+    describe "End-to-end: group, merge, clean up" do
+      it "collapses ID-like paths onto one template and leaves everything else alone" \tr -> do
         clearTestEndpoints tr
 
-        -- Mix of endpoint types in a single batch:
-        -- 1) ID-like endpoints → should be tokenized to {param} template
-        -- 2) Static endpoint → should be embedded, become centroid
-        -- 3) Unrelated endpoint → should survive untouched
-        -- 4) Short path → should NOT merge with longer paths (segment count guard)
+        -- 1) ID-like endpoints  -> one {param} template
+        -- 2) static sibling     -> survives untouched
+        -- 3) shorter path       -> never merges into a longer template
         insertTestEndpoints tr
           [ ("GET", "api.example.com", "/api/v1/users/auth0|abc123def456")
           , ("GET", "api.example.com", "/api/v1/users/auth0|xyz789ghi012")
@@ -87,50 +96,15 @@ spec = around withTestResources do
           , ("GET", "api.example.com", "/api/v1/health")
           , ("GET", "api.example.com", "/api/v1/users")
           ]
-
-        -- Pass 1: tokenization merges auth0 endpoints, embeds static ones as centroids
         runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
 
-        -- auth0 endpoints should be merged into {param} template
-        templates1 <- queryCanonicalTemplates tr
-        let templatePaths = V.toList $ V.map (\(p, _, _) -> p) templates1
+        templatePaths <- V.toList . V.map (\(p, _, _) -> p) <$> queryCanonicalTemplates tr
         templatePaths `shouldSatisfy` elem "/api/v1/users/{param}"
 
-        -- /api/v1/users (short path) should survive independently — not merged with 4-segment paths
-        usersEndpoint <- withPool tr.trPool $ DBT.query
-          [sql| SELECT url_path FROM apis.endpoints
-                WHERE project_id = ? AND url_path = '/api/v1/users' |]
-          (Only pid) :: IO (V.Vector (Only Text))
-        V.length usersEndpoint `shouldBe` 1
-
-        -- Static endpoints should have embeddings now
-        embCount1 <- queryEmbeddedCount tr
-        embCount1 `shouldSatisfy` (>= 2)
-
-        -- Pass 2: add a semantically similar endpoint to trigger embedding comparison
-        -- "get-all" vs "list-all" cosine ~0.90 → ambiguous zone → goes to LLM judge
-        insertTestEndpoints tr
-          [ ("GET", "api.example.com", "/api/v1/users/get-all")
-          ]
-        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-
-        -- get-all should now have an embedding (it went through the embedding pipeline)
-        embCount2 <- queryEmbeddedCount tr
-        embCount2 `shouldSatisfy` (> embCount1)
-
-        -- Both endpoints should still exist (the LLM judge processes the ambiguous pair
-        -- and its golden response determines the merge outcome)
-        allPaths <- withPool tr.trPool $ DBT.query
-          [sql| SELECT url_path FROM apis.endpoints
-                WHERE project_id = ? ORDER BY url_path |]
-          (Only pid) :: IO (V.Vector (Only Text))
-        let paths = V.toList $ V.map (\(Only p) -> p) allPaths
-        -- /api/v1/health should still exist independently (not similar to users)
-        paths `shouldSatisfy` elem "/api/v1/health"
-        -- The {param} template from tokenization should survive
-        paths `shouldSatisfy` elem "/api/v1/users/{param}"
-        -- /api/v1/users (short path) should survive (segment count guard)
-        paths `shouldSatisfy` elem "/api/v1/users"
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        sort paths
+          `shouldBe` ["/api/v1/health", "/api/v1/users", "/api/v1/users/list-all", "/api/v1/users/{param}"]
 
       it "running discovery twice is idempotent" \tr -> do
         clearTestEndpoints tr
@@ -140,11 +114,12 @@ spec = around withTestResources do
           , ("GET", "api.example.com", "/api/v1/dashboard/overview")
           ]
         runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
         endpoints1 <- queryAllEndpoints tr
 
         runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
-        endpoints2 <- queryAllEndpoints tr
-        endpoints1 `shouldBe` endpoints2
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        queryAllEndpoints tr >>= (`shouldBe` endpoints1)
 
     describe "Edge cases" do
       it "requires at least 2 endpoints to form a tokenization template" \tr -> do
@@ -186,3 +161,90 @@ spec = around withTestResources do
 
       it "keeps static segments unchanged" \_ ->
         V.toList (tokenizeUrlPath "/api/v1/health") `shouldBe` ["", "api", "v1", "health"]
+
+    -- The failure this whole change exists to prevent: a customer whose primary
+    -- key is "SB-<hex>" got 18,213 endpoint rows for ~1,900 routes, because no
+    -- rule recognised a prefixed id. Prefixed/encoded/short-hex ids must collapse
+    -- and route words must not, and the two have to hold simultaneously.
+    describe "Prefixed and encoded ids collapse; route words survive" do
+      it "collapses SB-<hex>, WALLET_<hex> and percent-encoded ids into one template each" \tr -> do
+        clearTestEndpoints tr
+        insertTestEndpoints tr
+          $ [("GET", "api.example.com", "/v1/shipments/tracking/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
+          <> [("GET", "api.example.com", "/v1/wallet/complete-fund/WALLET_" <> h) | h <- ["3D16EFF38182", "A1B2C3D4E5F6"]]
+          <> [("GET", "api.example.com", "/api/v1/customers/auth0%7C" <> h) | h <- ["6a5ebc849d77a9a4717b0980", "66a12f77bc56dad584b79c8b"]]
+          <> [("GET", "api.example.com", "/v1/shipbubble/products/" <> h <> "/stock_status") | h <- ["27ad70cdce4a", "40e1beed4b9e"]]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        sort paths
+          `shouldBe` [ "/api/v1/customers/{param}"
+                     , "/v1/shipbubble/products/{param}/stock_status"
+                     , "/v1/shipments/tracking/{param}"
+                     , "/v1/wallet/complete-fund/{param}"
+                     ]
+
+      it "never folds a flat family of route words into a parameter" \tr -> do
+        clearTestEndpoints tr
+        let verbs = ["verify_phone", "verify_email", "deactivate_user", "reset-password", "send_otp", "biometric_login", "update_email", "random_username", "transactions", "notifications"]
+        insertTestEndpoints tr [("POST", "api.example.com", "/v1/account/" <> v) | v <- verbs]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        sort paths `shouldBe` sort [("/v1/account/" <>) v | v <- verbs]
+
+      it "keeps a literal route alongside the wildcard one it sits next to" \tr -> do
+        clearTestEndpoints tr
+        insertTestEndpoints tr
+          $ ("GET", "api.example.com", "/v1/orders/search")
+          : ("GET", "api.example.com", "/v1/orders/summary")
+          : [("GET", "api.example.com", "/v1/orders/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        sort paths `shouldBe` ["/v1/orders/search", "/v1/orders/summary", "/v1/orders/{param}"]
+
+      it "assigns a later straggler to an existing template without re-deriving it" \tr -> do
+        clearTestEndpoints tr
+        insertTestEndpoints tr [("GET", "api.example.com", "/v1/track/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1"]]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        -- One new concrete path, alone: too little evidence to mint a template,
+        -- but the template already exists and vouches for it.
+        insertTestEndpoints tr [("GET", "api.example.com", "/v1/track/SB-000000000001")]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        paths `shouldBe` ["/v1/track/{param}"]
+
+    describe "Merge cleanup consolidates rather than colliding" do
+      it "folds many endpoints' open issues onto one canonical issue per type" \tr -> do
+        clearTestEndpoints tr
+        let hashes = ["SB-" <> h | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA", "D5AC39C066E5"]]
+        insertTestEndpoints tr [("GET", "api.example.com", "/v1/ship/" <> h) | h <- hashes]
+        -- One open api_change issue per endpoint: 4 rows that all want the same
+        -- (project_id, target_hash, issue_type) once their endpoints merge.
+        forM_ hashes \h -> insertOpenIssue tr $ toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/" <> h)
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        paths `shouldBe` ["/v1/ship/{param}"]
+        -- Survives as exactly one issue, pointed at the canonical endpoint.
+        issues <- queryOpenIssueTargets tr
+        V.length issues `shouldBe` 1
+        issues V.!? 0 `shouldBe` Just (toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/{param}"))
+
+      it "is re-runnable: a second cleanup pass changes nothing" \tr -> do
+        clearTestEndpoints tr
+        insertTestEndpoints tr [("GET", "api.example.com", "/v1/x/SB-" <> h) | h <- ["91673E0634FB", "5A3469F964B1"]]
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        before <- queryAllEndpoints tr
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+        queryAllEndpoints tr >>= (`shouldBe` before)
