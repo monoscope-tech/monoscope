@@ -42,6 +42,17 @@ insertOpenIssue tr endpointHash =
     (pid, endpointHash, endpointHash)
 
 
+-- | Which open issues have been notified, and which are still deferred.
+queryNotifiedSplit :: TestResources -> IO (Int, Int)
+queryNotifiedSplit tr = do
+  r <- withPool tr.trPool $ DBT.query
+    [sql| SELECT count(*) FILTER (WHERE last_notified_at IS NOT NULL)::int,
+                 count(*) FILTER (WHERE last_notified_at IS NULL)::int
+          FROM apis.issues WHERE project_id = ? AND archived_at IS NULL |]
+    (Only pid) :: IO (V.Vector (Int, Int))
+  pure $ fromMaybe (0, 0) (r V.!? 0)
+
+
 -- | target_hash of every open issue for this project.
 queryOpenIssueTargets :: TestResources -> IO (V.Vector Text)
 queryOpenIssueTargets tr =
@@ -239,6 +250,29 @@ spec = around withTestResources do
         issues <- queryOpenIssueTargets tr
         V.length issues `shouldBe` 1
         issues V.!? 0 `shouldBe` Just (toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/{param}"))
+
+      -- The ordering bug this guards: a concrete path is announced by mail the
+      -- moment it is ingested, and merged away hours later. Discovery is what
+      -- decides whether it was ever a distinct route, so it is what announces it.
+      it "announces only the endpoints that survive discovery, not the ones it merges away" \tr -> do
+        clearTestEndpoints tr
+        let ids = ["SB-" <> h | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
+        insertTestEndpoints tr $ ("GET", "api.example.com", "/v1/ship/status") : [("GET", "api.example.com", "/v1/ship/" <> h) | h <- ids]
+        -- Every endpoint arrives with an un-notified issue, exactly as ingest leaves them.
+        forM_ ("status" : ids) \h -> insertOpenIssue tr $ toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/" <> h)
+        (notifiedBefore, deferredBefore) <- queryNotifiedSplit tr
+        notifiedBefore `shouldBe` 0
+        deferredBefore `shouldBe` 4
+
+        runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
+        runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
+
+        -- The three ids collapsed into one template and their issues were
+        -- consolidated; only the literal route is left to announce.
+        paths <- V.toList . V.map fst <$> queryAllEndpoints tr
+        sort paths `shouldBe` ["/v1/ship/status", "/v1/ship/{param}"]
+        (notifiedAfter, _) <- queryNotifiedSplit tr
+        notifiedAfter `shouldSatisfy` (< 4)
 
       it "is re-runnable: a second cleanup pass changes nothing" \tr -> do
         clearTestEndpoints tr

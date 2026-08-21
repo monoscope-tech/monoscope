@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, endpointMergeCleanup, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -448,8 +448,11 @@ processBackgroundJob authCtx bgJob =
                 -- the hypertable, and are unaffected by the derivation path.
                 sched 96 900 (`PatternEmbeddingAndMerge` p)
                 sched 96 900 (`LogPatternPeriodicProcessing` p)
-                sched 4 21600 (`EndpointTemplateDiscovery` p)
-                sched 4 21600 (`EndpointMergeCleanup` p)
+                -- Discovery is what releases deferred new-endpoint alerts, so
+                -- its period is the worst-case delay on one. Cleanup gates
+                -- nothing and is the destructive half, so it stays hourly.
+                sched 96 900 (`EndpointTemplateDiscovery` p)
+                sched 24 3600 (`EndpointMergeCleanup` p)
                 sched 24 3600 (`LogPatternHourlyProcessing` p)
                 -- The extraction worker owns live span/log/error derivation.
                 -- SafetyNetReprocess is the hourly catch-up for
@@ -628,7 +631,7 @@ processBackgroundJob authCtx bgJob =
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
-    EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 3600 $ endpointTemplateDiscovery pid
+    EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
     EndpointMergeCleanup scheduledTime pid -> unlessStale "EndpointMergeCleanup" scheduledTime 3600 $ endpointMergeCleanup pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
@@ -3148,45 +3151,123 @@ processAPIChangeAnomalies pid targetHashes = do
   preexisting <-
     SchemaCatalog.existingEndpointHashes
       (V.fromList [(pid, h) | (h, _, _, _) <- newEndpointInfos])
-  let candidates =
-        [ (iid, row)
-        | (h, iid, row, unr) <- newEndpointInfos
-        , not unr
-        , not (HashSet.member (pid, h) preexisting)
-        ]
-      candidateIssueIds = V.fromList $ map fst candidates
-  when (not (null candidates) && not authCtx.config.pauseNotifications) do
+  -- A concrete path may still be an un-recognised id — template discovery
+  -- decides, and it has not run yet. Announcing it now is how a single
+  -- unknown id format turns into one "new endpoint" mail per id, for
+  -- endpoints that get merged away and deleted hours later. Paths that are
+  -- already templates cannot collapse further, so they go out immediately;
+  -- the rest wait for 'notifyDiscoveredEndpoints' to confirm them.
+  let (ready, deferred) =
+        L.partition
+          (\(_, row) -> T.isInfixOf "{" row.label)
+          [ (iid, row)
+          | (h, iid, row, unr) <- newEndpointInfos
+          , not unr
+          , not (HashSet.member (pid, h) preexisting)
+          ]
+  unless (null deferred)
+    $ Log.logInfo "Deferred new-endpoint notifications until template discovery confirms them" ("project_id", pid.toText, "deferred", length deferred)
+  sendNewEndpointAlerts pid (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes) ready
+
+
+-- | New-endpoint notifications a project may send per hour before the rest are
+-- rolled into a @+N more@ line.
+--
+-- The bound exists because the cost of a classifier that fails to recognise a
+-- customer's id format is paid in their inbox: one mail per id. Correctness
+-- fixes stop the formats we know about; this caps the damage from the next one.
+newEndpointAlertsPerHour :: Int
+newEndpointAlertsPerHour = 10
+
+
+-- | Claim and send new-endpoint alerts, capped per project per hour.
+--
+-- Claiming is a single UPDATE-RETURNING: it is the only point at which an issue
+-- commits to being notified, so two concurrent jobs cannot both pass a
+-- read-then-write check and double-send. Issues over the hourly budget are left
+-- unclaimed rather than dropped — they keep @last_notified_at IS NULL@ and the
+-- next run picks them up.
+sendNewEndpointAlerts :: Projects.ProjectId -> Text -> [(Issues.IssueId, ET.EndpointAlertRow)] -> ATBackgroundCtx ()
+sendNewEndpointAlerts _ _ [] = pass
+sendNewEndpointAlerts pid alertHash candidates = do
+  authCtx <- ask @Config.AuthContext
+  unless authCtx.config.pauseNotifications do
     now <- Time.currentTime
-    -- Atomic per-issue claim. UPDATE-RETURNING is the only point at which an
-    -- issue commits to being notified — so two concurrent NewAnomaly jobs
-    -- can't both pass a read-then-write check and double-send. Each row is
-    -- claimed at most once per 30-min window (last_notified_at) and respects
-    -- any live acknowledgement set from the UI.
-    claimedIds :: V.Vector Issues.IssueId <-
-      Hasql.interp
-        [HI.sql|
-          UPDATE apis.issues
-          SET last_notified_at = #{now}
-          WHERE id = ANY(#{candidateIssueIds}::uuid[])
-            AND archived_at IS NULL
-            AND (last_notified_at IS NULL OR last_notified_at < #{now}::timestamptz - INTERVAL '30 minutes')
-            AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
-          RETURNING id
-        |]
-    let claimedSet = HashSet.fromList (V.toList claimedIds)
-        notifiableRows = [row | (iid, row) <- candidates, HashSet.member iid claimedSet]
-    unless (null notifiableRows)
-      $ whenJustM (Projects.projectById pid) \project -> do
-        users <- Projects.usersByProjectId pid
-        when project.endpointAlerts do
-          let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-          teamM <- ProjectMembers.getEveryoneTeam pid
-          broadcastToEveryone teamM alert pid project.title (projectUrl authCtx pid)
-          when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
-            $ forM_ users \u -> do
-              let anomalyUrl = projectUrl authCtx pid <> "/issues"
-                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
-              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+    sentThisHour :: Int64 <-
+      fromMaybe 0
+        <$> Hasql.interpOne
+          [HI.sql| SELECT count(*)::int8 FROM apis.issues
+                 WHERE project_id = #{pid} AND issue_type = 'api_change'
+                   AND last_notified_at > #{now}::timestamptz - INTERVAL '1 hour' |]
+    let budget = newEndpointAlertsPerHour - fromIntegral sentThisHour
+    if budget <= 0
+      then Log.logInfo "New-endpoint alerts over hourly budget, deferring" ("project_id", pid.toText, "pending", length candidates)
+      else do
+        let (toSend, overflow) = splitAt budget candidates
+            claimIds = V.fromList $ map fst toSend
+        claimedIds :: V.Vector Issues.IssueId <-
+          Hasql.interp
+            [HI.sql|
+              UPDATE apis.issues
+              SET last_notified_at = #{now}
+              WHERE id = ANY(#{claimIds}::uuid[])
+                AND archived_at IS NULL
+                AND (last_notified_at IS NULL OR last_notified_at < #{now}::timestamptz - INTERVAL '30 minutes')
+                AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
+              RETURNING id
+            |]
+        let claimedSet = HashSet.fromList (V.toList claimedIds)
+            claimedRows = [row | (iid, row) <- toSend, HashSet.member iid claimedSet]
+            -- The overflow is named, not silently swallowed: a reader who gets
+            -- a truncated list must be able to tell it was truncated.
+            digest = [ET.EndpointAlertRow{label = "+" <> show (length overflow) <> " more new endpoints", host = Nothing, service = Nothing, environment = Nothing} | not (null overflow)]
+            notifiableRows = claimedRows <> digest
+        unless (null overflow)
+          $ Log.logInfo "New-endpoint alerts truncated to hourly budget" ("project_id", pid.toText, "sent", length claimedRows, "rolled_up", length overflow)
+        unless (null claimedRows)
+          $ whenJustM (Projects.projectById pid) \project -> do
+            users <- Projects.usersByProjectId pid
+            when project.endpointAlerts do
+              let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = alertHash}
+              teamM <- ProjectMembers.getEveryoneTeam pid
+              broadcastToEveryone teamM alert pid project.title (projectUrl authCtx pid)
+              when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
+                $ forM_ users \u -> do
+                  let anomalyUrl = projectUrl authCtx pid <> "/issues"
+                      (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
+                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+
+
+-- | Announce the new endpoints template discovery has just confirmed are
+-- distinct routes rather than un-recognised ids.
+--
+-- Ingest defers every concrete path; this is where those become mail. An
+-- endpoint qualifies once discovery has run over it and left it unmerged
+-- (@canonical_hash IS NULL@) — which is a far better signal than any time
+-- window, because it is the same decision that would have deleted the row.
+-- Bounded to the last day so enabling this cannot replay old history.
+notifyDiscoveredEndpoints :: Projects.ProjectId -> ATBackgroundCtx ()
+notifyDiscoveredEndpoints pid = do
+  rows :: [(Issues.IssueId, Text, Text, Maybe Text, Maybe Text, Maybe Text)] <-
+    Hasql.interp
+      [HI.sql| SELECT i.id, e.method, e.url_path, e.host, e.service_name, e.environment
+             FROM apis.issues i
+             JOIN apis.endpoints e ON e.project_id = i.project_id AND e.hash = i.endpoint_hash
+             WHERE i.project_id = #{pid}
+               AND i.issue_type = 'api_change'
+               AND i.last_notified_at IS NULL
+               AND i.acknowledged_at IS NULL AND i.archived_at IS NULL
+               AND i.created_at > now() - INTERVAL '24 hours'
+               AND e.canonical_hash IS NULL
+               AND e.url_path <> ''
+             ORDER BY i.created_at
+             LIMIT 200 |]
+  sendNewEndpointAlerts
+    pid
+    (maybe "" (view _1 >>> show) $ viaNonEmpty head rows)
+    [ (iid, ET.EndpointAlertRow{label = method <> " " <> path, host, service, environment})
+    | (iid, method, path, host, service, environment) <- rows
+    ]
 
 
 -- | Group anomalies by endpoint hash
@@ -3464,6 +3545,10 @@ endpointTemplateDiscovery pid = do
           ]
     unless (null proposals)
       $ Log.logInfo "Endpoint template proposals (report-only, not applied)" ("project_id", pid.toText, "proposal_count", length proposals, "proposals", take 50 proposals)
+  -- Ingest deferred every concrete path to here. Now that this run has decided
+  -- which of them collapse, the survivors are genuinely new routes and can be
+  -- announced.
+  notifyDiscoveredEndpoints pid
 
 
 -- | Migrate anomalies/issues onto canonical endpoints and delete the merged-out
