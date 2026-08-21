@@ -1040,18 +1040,29 @@ isUrlIdLike seg
 --
 -- >>> map tokenIsGenerated ["transactions", "restaurants", "WALLET", "deadbeef", "2025"]
 -- [False,False,False,False,False]
+--
+-- A short prefix on a long digit run — tracking numbers, order references — has
+-- neither the alternation nor the missing vowels the other rules look for:
+--
+-- >>> map tokenIsGenerated ["KWI026306565847", "14FI12032648", "GAVD17082604"]
+-- [True,True,True]
 tokenIsGenerated :: Text -> Bool
 tokenIsGenerated t
   | len < 6 = False
   -- Hex needs a digit, else English hex-words ("deadbeef", "facade") classify as ids.
   | T.all isHexDigit t = len >= 16 || (len >= 8 && T.any isDigit t)
+  -- An unbroken run of six or more digits is a counter, serial or packed
+  -- timestamp. A slug's year ("best-restaurants-2025-guide") is four.
+  | longestDigitRun >= 6 = True
   -- No vowel among the letters: consonant soup no human named a route after.
   | T.any isAlpha t && not (T.any (`T.elem` "aeiouAEIOU") t) = True
   -- Frequent digit/letter alternation. Words have runs; generated ids interleave.
   | otherwise = classSwitches * 4 >= len
   where
     len = T.length t
-    classSwitches = let ds = map isDigit (toString t) in length $ filter (uncurry (/=)) $ zip ds (drop 1 ds)
+    digits = map isDigit (toString t)
+    longestDigitRun = snd $ foldl' (\(run, best) d -> let r = if d then run + 1 else 0 in (r, max best r)) (0 :: Int, 0 :: Int) digits
+    classSwitches = length $ filter (uncurry (/=)) $ zip digits (drop 1 digits)
 
 
 -- | Check if a concrete URL path matches a pre-split template.
