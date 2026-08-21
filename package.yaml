@@ -215,6 +215,9 @@ tests:
       - safe-exceptions
       # DashboardWidgetsSpec slugifies widget titles the way the page does.
       - slugify
+      # MigrationRunnerSpec drives the real runner over a temp migrations dir.
+      - postgresql-migration
+      - temporary
       - hasql
       - hasql-interpolate
       - hasql-pool
