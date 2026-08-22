@@ -1920,7 +1920,9 @@ export class LogList extends LitElement {
     // innerHTML, not morph: measured, the swap is ~7ms of a ~200ms click, and idiomorph's
     // in-place mutation means hyperscript never installs FieldMenuDelegate on the new
     // content, which silently kills the field context menu.
-    void Promise.resolve((window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' }))
+    void Promise.resolve(
+      (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+    )
       .catch(() => {})
       // A dropped, aborted or failed request still has to hand the loader back — that omission
       // is what stranded the panel on a frozen three-dot loader until a reload.
@@ -2130,7 +2132,14 @@ export class LogList extends LitElement {
     // Controls inside a cell own their own keys — a button's Enter must not also
     // open the row behind it, and typing in a header filter must not scroll the list.
     if ((event.target as HTMLElement).closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
-    const moves: Record<string, number | 'first' | 'last'> = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10, Home: 'first', End: 'last' };
+    const moves: Record<string, number | 'first' | 'last'> = {
+      ArrowDown: 1,
+      ArrowUp: -1,
+      PageDown: 10,
+      PageUp: -10,
+      Home: 'first',
+      End: 'last',
+    };
     if (event.key in moves) {
       event.preventDefault();
       void this.moveRowFocus(moves[event.key]);
@@ -2529,7 +2538,9 @@ export class LogList extends LitElement {
           aria-activedescendant=${this.focusedRowId ? `logrow-${this.focusedRowId}` : nothing}
           @focus=${this.activateFirstRow}
           @keydown=${this.handleGridKeydown}
-          class="table-fixed ${isAggregate || this.wrapsLines || this.isNarrow ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
+          class="table-fixed ${isAggregate || this.wrapsLines || this.isNarrow
+            ? 'w-full'
+            : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
             this.logsColumns.reduce(
               (acc, column) => {
@@ -2573,7 +2584,9 @@ export class LogList extends LitElement {
                   })
                 : html`
                     ${this.displayColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-                    ${this.displayColumns.includes('latency_breakdown') && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
+                    ${this.displayColumns.includes('latency_breakdown') && !isAggregate
+                      ? this.logTableHeading('latency_breakdown')
+                      : nothing}
                   `}
             </tr>
           </thead>
@@ -3367,7 +3380,9 @@ export class LogList extends LitElement {
       const isPatterns = effectiveMode === 'patterns';
       const isAggregate = isPatterns;
       const s = rowData.type === 'log' ? 'logs' : 'spans';
-      const targetInfo: [string, string, string] = isAggregate ? ['', '', s] : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
+      const targetInfo: [string, string, string] = isAggregate
+        ? ['', '', s]
+        : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
@@ -3517,10 +3532,14 @@ export class LogList extends LitElement {
             <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.hideColumn(column)}>Hide column</button>
           </li>
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
-            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, -1)}>Move column left</button>
+            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, -1)}>
+              Move column left
+            </button>
           </li>
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
-            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, 1)}>Move column right</button>
+            <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.moveColumn(column, 1)}>
+              Move column right
+            </button>
           </li>
           ${column === 'latency_breakdown'
             ? (['service', 'kind'] as LatencyDim[]).map(
@@ -3645,7 +3664,6 @@ export class LogList extends LitElement {
       }}
     >
       ${faSprite('play', 'solid', 'w-3 h-3')}
-      <span class="text-xs font-medium">Replay</span>
     </button>
   `;
 
