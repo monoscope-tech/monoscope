@@ -1025,11 +1025,21 @@ newSegment segs seg =
 --
 -- >>> map isUrlIdLike ["deactivate_user", "verify_reset_pin_otp", "reset-password", "2023-07"]
 -- [False,False,False,False]
+--
+-- A multi-select rendered into the path is a parameter, however readable each
+-- of its values is on its own:
+--
+-- >>> map isUrlIdLike ["aramex,chowdeck,dhl-nigeria", "gigl", "STD-DELIVERY"]
+-- [True,False,False]
 isUrlIdLike :: Text -> Bool
 isUrlIdLike seg
   | T.null seg = False
   | T.elem '|' seg = True -- compound IDs: auth0|abc, google-oauth2|123
   | not (T.isPrefixOf ":" seg) && T.elem ':' seg = True -- namespaced: type:value
+  -- A comma-joined segment is a multi-value parameter, not a route: every
+  -- combination the caller picks would otherwise become its own endpoint.
+  -- One courier-selection route accounted for 128 of a customer's 551 paths.
+  | length (filter (not . T.null) (T.splitOn "," seg)) >= 2 = True
   | otherwise = any tokenIsGenerated $ T.split (not . isAlphaNum) seg
 
 
@@ -1046,6 +1056,9 @@ isUrlIdLike seg
 --
 -- >>> map tokenIsGenerated ["KWI026306565847", "14FI12032648", "GAVD17082604"]
 -- [True,True,True]
+--
+-- >>> map tokenIsGenerated ["SHO3KOOWWN", "BUMEHU37XD", "INS2UWNWIZ", "STDDELIVERY"]
+-- [True,True,True,False]
 tokenIsGenerated :: Text -> Bool
 tokenIsGenerated t
   | len < 6 = False
@@ -1054,6 +1067,11 @@ tokenIsGenerated t
   -- An unbroken run of six or more digits is a counter, serial or packed
   -- timestamp. A slug's year ("best-restaurants-2025-guide") is four.
   | longestDigitRun >= 6 = True
+  -- Shouty alphanumeric carrying a digit: the SKU/reference house style
+  -- (@SHO3KOOWWN@, @BUMEHU37XD@). Routes are written in lower case, so the
+  -- casing is doing real work here — without it these read as ordinary words
+  -- to every other rule, since they have vowels and barely alternate.
+  | len >= 8 && T.all isAlphaNum t && T.toUpper t == t && T.any isDigit t = True
   -- No vowel among the letters: consonant soup no human named a route after.
   | T.any isAlpha t && not (T.any (`T.elem` "aeiouAEIOU") t) = True
   -- Frequent digit/letter alternation. Words have runs; generated ids interleave.
