@@ -279,27 +279,10 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
         , field "Trace" (T.take 16 $ fromMaybe "" err.traceId)
         ]
     btn label style url = AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (label :: Text), "emoji" AE..= True], "url" AE..= url, "style" AE..= (style :: Text)]
-    -- Secondary "View trace" jumps into Log Explorer filtered by trace_id — complements
-    -- "Investigate" (fingerprint view) with raw-event context. Log Explorer defaults to the
-    -- last 1H when since/from/to are absent (TimePicker.defaultSince), so a bare query= link
-    -- silently returns zero rows for anything older — escalating/regressed alerts routinely
-    -- carry an occurrence from well before that window. Pin an explicit +/-5min range around
-    -- when the trace actually happened, same convention as the in-app issue Logs tab.
-    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
     traceBtn =
       err.traceId >>= \tid ->
         guard (not (T.null tid))
-          $> btn
-            "View trace"
-            "default"
-            ( projectUrl
-                <> "/log_explorer?query="
-                <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
-                <> "&from="
-                <> isoT (addUTCTime (-300) err.when)
-                <> "&to="
-                <> isoT (addUTCTime 300 err.when)
-            )
+          $> btn "View trace" "default" (traceExplorerUrl projectUrl tid err.when)
     buttons = btn "🔍 Investigate" "primary" targetUrl : maybeToList traceBtn
 
 
@@ -367,6 +350,27 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
         | Just h <- groupHeader hostM ctxM -> [context h, section (bulletList labels)]
         | otherwise -> [section (bulletList labels)]
       groups -> groups <&> \((hostM, ctxM), labels) -> section (maybe "" (<> "\n") (groupHeader hostM ctxM) <> bulletList labels)
+
+
+-- | Explorer URL pinned to a trace id, over a 1h window centred on when the trace happened.
+-- Log Explorer falls back to "last 1H" when since/from/to are absent (TimePicker.defaultSince),
+-- so a bare query= link silently returns zero rows for anything older — escalating/regressed
+-- alerts routinely carry an occurrence from well before that window.
+--
+-- >>> import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
+-- >>> traceExplorerUrl "https://app" "abc" (UTCTime (fromGregorian 2026 8 22) (secondsToDiffTime 43200))
+-- "https://app/log_explorer?query=trace_id%20%3D%3D%20%22abc%22&from=2026-08-22T11:30:00Z&to=2026-08-22T12:30:00Z"
+traceExplorerUrl :: Text -> Text -> UTCTime -> Text
+traceExplorerUrl projectUrl tid when' =
+  projectUrl
+    <> "/log_explorer?query="
+    <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
+    <> "&from="
+    <> isoT (addUTCTime (-1800) when')
+    <> "&to="
+    <> isoT (addUTCTime 1800 when')
+  where
+    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
