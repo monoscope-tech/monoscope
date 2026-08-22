@@ -460,7 +460,7 @@ queryLibItem_ isRecent qli =
     , data_ "query-id" qli.id.toText
     ]
     do
-      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query); " <> hidePopoverJS] do
+      div_ [class_ "pr-8", onclick_ $ "window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query); " <> hidePopoverJS] do
         div_ [class_ "flex items-baseline gap-2 mb-1"] do
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
@@ -469,7 +469,7 @@ queryLibItem_ isRecent qli =
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
-        actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
+        actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
         actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
         when qli.byMe
           $ if isRecent
@@ -587,10 +587,8 @@ queryEditorInitializationCode vizTypeM pid = do
         }
         
         // Call the query editor's handleVisualizationChange method to update the query
-        if (editor?.handleVisualizationChange) {
-          const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-          editor.handleVisualizationChange(vizTypeMap[vizType] || vizType);
-        }
+        const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
+        window.queryEditorCall('handleVisualizationChange', vizTypeMap[vizType] || vizType);
       });
     };
 
@@ -611,7 +609,7 @@ queryEditorInitializationCode vizTypeM pid = do
     window.applyQuery = function(q, replace = true, closeAiSearch = true) {
       const chk = document.getElementById('ai-search-chkbox');
       if (chk && closeAiSearch) chk.checked = false;
-      document.getElementById('filterElement')?.handleAddQuery(q, replace);
+      window.queryEditorCall('handleAddQuery', q, replace);
     };
 
     // Routes one /ai_search response into the subsystems it can touch. Lives here, not

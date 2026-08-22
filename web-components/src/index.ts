@@ -44,8 +44,11 @@ window.addEventListener(
 // search bar. Load it only when the user reaches for the editor. The
 // server renders a matching skeleton inside the element (see LogQueryBox.queryEditorSkeleton_)
 // so the box looks identical for the ~1 frame before Lit replaces it.
-const deferredComponents: Array<[string, () => Promise<unknown>]> = [
-  ['query-editor, query-builder', async () => {
+let queryEditorLoad: Promise<unknown> | null = null;
+// Memoised, not just relying on import() caching: initializeDefaultSchema() must run once, and
+// the still-armed {once:true} pointerdown listeners call this again after a shim-driven load.
+const loadQueryEditor = () =>
+  (queryEditorLoad ??= (async () => {
     await import('./query-editor/query-editor');
     // Schema list, default schema and the nested-field resolver. These feed Monaco's completion
     // provider and nothing else, so they belong here rather than at DOMContentLoaded — which is
@@ -53,12 +56,29 @@ const deferredComponents: Array<[string, () => Promise<unknown>]> = [
     const { initializeDefaultSchema } = await import('./query-editor/query-editor-config');
     initializeDefaultSchema();
     await import('./query-editor/query-builder');
-  }],
+  })());
+
+const deferredComponents: Array<[string, () => Promise<unknown>]> = [
+  ['query-editor, query-builder', loadQueryEditor],
   ['yaml-editor', async () => {
     await import('./query-editor/query-editor');
     await import('./yaml-editor');
   }],
 ];
+
+// Inline handlers all over the app (facet checkboxes, saved-query rows, the field-action menu,
+// viz tabs) call methods on <query-editor>. Monaco is loaded lazily, so until the user touches
+// the search box that element is still un-upgraded and those calls threw "toggleSubQuery is not
+// a function" — the click silently did nothing. Route them all through here: load the chunk if
+// needed, wait for firstUpdated to create the Monaco instance every one of those methods bails
+// without, then invoke.
+(window as any).queryEditorCall = async (method: string, ...args: unknown[]) => {
+  const el = document.getElementById('filterElement') as (HTMLElement & Record<string, any>) | null;
+  if (!el) return; // no query editor on this page (e.g. shared/standalone item views)
+  if (typeof el[method] !== 'function') await loadQueryEditor();
+  await el.updateComplete;
+  el[method]?.(...args);
+};
 
 // The trace page's inline initTraceCharts and the map's filter input can call these before
 // the lazy module has loaded, so forward through shims; service-map.ts replaces them on load.

@@ -633,10 +633,9 @@ renderFacetValue f (FacetValue val count) =
       input_
         [ type_ "checkbox"
         , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-        , -- `toggleSubQuery` lives on the <query-editor> custom element, not as a hyperscript-callable
-          -- global — "fn(...) on target" only works for hyperscript's built-in commands, so this always
-          -- threw a null-check error. Call the element method directly from a js block instead.
-          [__|on click js(me) document.getElementById('filterElement')?.toggleSubQuery(me.dataset.field + ' == "' + me.dataset.value + '"') end|]
+        , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
+          -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
+          [__|on click js(me) window.queryEditorCall('toggleSubQuery', me.dataset.field + ' == "' + me.dataset.value + '"') end|]
         , Aria.label_ (f.path <> " equals " <> val)
         , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
         , term "data-field" f.path

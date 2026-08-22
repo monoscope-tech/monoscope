@@ -219,10 +219,8 @@ onReady(function(){
           }
         })
 
-        const editor = document.getElementById("filterElement") as (HTMLElement & { handleAddQuery: (q: string, replace: boolean) => void }) | null;
-        if (!editor) return; // no query editor on this page (e.g. shared/standalone item views)
         const operator = operation === 'NotEq' ? '!=' : '==';
-        editor.handleAddQuery(path + ' ' + operator + ' ' + value, operation === 'Replace');
+        (window as any).queryEditorCall('handleAddQuery', path + ' ' + operator + ' ' + value, operation === 'Replace');
     }
 
     function viewFieldPatterns(fieldPath: string) {
