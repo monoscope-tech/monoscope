@@ -3616,7 +3616,14 @@ reviewResidualEndpointGroups pid = do
           ]
         keyed = [(gkey, toXXHash (T.intercalate "," kids), length kids, prefix, kids) | (gkey, prefix, kids) <- groups]
     seen <- Endpoints.getReviewedGroupHashes pid
-    let fresh = take endpointGroupReviewBatch [g | g@(gkey, mhash, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
+    -- Biggest first. The budget is a handful of groups per run against a backlog
+    -- of hundreds, and the distribution is wildly skewed — one customer's
+    -- four-character token family is 1,262 endpoints while the median group is
+    -- three. Taking them in hash order spends every run on the median and never
+    -- reaches the answer worth having.
+    let fresh =
+          take endpointGroupReviewBatch
+            $ sortOn (\(_, _, n, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
     unless (null fresh) do
       reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, c) <- fresh]) ctx.config.openaiApiKey
       case reply of
