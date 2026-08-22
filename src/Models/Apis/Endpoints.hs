@@ -18,6 +18,8 @@ module Models.Apis.Endpoints (
   -- Endpoint template discovery
   getUnmergedEndpoints,
   getCanonicalTemplateKeys,
+  getReviewedGroupHashes,
+  recordGroupReviews,
   unmergedScanLimit,
   setEndpointCanonical,
   insertCanonicalEndpoints,
@@ -31,6 +33,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
@@ -519,6 +522,35 @@ getMergedEndpointPairs pid =
 -- Legacy apis.shapes/fields/formats migration steps removed (tables dropped in 0090);
 -- the schema-learning catalog (apis.schema_catalog) re-derives structure on the fly per
 -- canonical key, so no explicit row migration is needed for the new model.
+-- | Membership hash of every group already reviewed, so a group is re-asked
+-- exactly when its members change and never merely because time passed.
+getReviewedGroupHashes :: DB es => Projects.ProjectId -> Eff es (HM.HashMap Text Text)
+getReviewedGroupHashes pid =
+  HM.fromList
+    <$> Hasql.interp
+      [HI.sql| SELECT group_key, members_hash FROM apis.endpoint_group_reviews WHERE project_id = #{pid} |]
+
+
+-- | Upsert group verdicts. A changed membership replaces the old verdict rather
+-- than accumulating history: the question it answered is no longer the question.
+recordGroupReviews :: DB es => Projects.ProjectId -> [(Text, Text, Int, Text, Text)] -> Eff es ()
+recordGroupReviews _ [] = pass
+recordGroupReviews pid rows =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.endpoint_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape)
+           SELECT #{pid}, k, h, n, v, s
+           FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
+           ON CONFLICT (project_id, group_key)
+           DO UPDATE SET members_hash = EXCLUDED.members_hash, member_count = EXCLUDED.member_count,
+                         verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW() |]
+  where
+    keys = V.fromList [k | (k, _, _, _, _) <- rows]
+    hashes = V.fromList [h | (_, h, _, _, _) <- rows]
+    counts = V.fromList [fromIntegral n :: Int64 | (_, _, n, _, _) <- rows]
+    verdicts = V.fromList [v | (_, _, _, v, _) <- rows]
+    shapes = V.fromList [s | (_, _, _, _, s) <- rows]
+
+
 -- | Fold merged-out endpoints' anomalies and issues onto their canonical
 -- endpoint, then delete the merged-out rows.
 --

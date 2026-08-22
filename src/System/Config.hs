@@ -116,6 +116,9 @@ data EnvConfig = EnvConfig
   , lsWebhookSigEnforce :: Bool
   , openaiApiKey :: Text
   , openaiModel :: Text
+  , -- Kill switch for the LLM review of endpoint groups the classifier could
+    -- not decide. Report-only regardless; this turns off the spend.
+    enableEndpointGroupReview :: Bool
   , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
   , hostUrl :: Text
@@ -253,7 +256,11 @@ instance DefConfig EnvConfig where
       , showDemoProject = False -- Default to hidden
       , postmarkFromEmail = "hello@monoscope.tech"
       , openaiModel = "gpt-5.6-luna#high"
-      , openaiSmallModel = "gpt-5.6-luna#minimal"
+      , -- "minimal" is not a reasoning effort gpt-5.6-luna accepts; the API 400s
+        -- on it, which silently killed every judge call (log- and error-pattern
+        -- merge) with "LLM judge failed". "low" is the cheapest one it takes.
+        enableEndpointGroupReview = True
+      , openaiSmallModel = "gpt-5.6-luna#low"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True

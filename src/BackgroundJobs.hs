@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -3549,6 +3549,101 @@ endpointTemplateDiscovery pid = do
   -- which of them collapse, the survivors are genuinely new routes and can be
   -- announced.
   notifyDiscoveredEndpoints pid
+  reviewResidualEndpointGroups pid
+
+
+-- | Every trie node whose children the deterministic gate declined to collapse.
+--
+-- This is the population no rule can decide: a set of values at one position
+-- that varies. Walking the trie rather than grouping on "all but the last
+-- segment" is what makes mid-path families visible —
+-- @\/v1\/shipments\/{id}\/capture_waybill_download@ has a distinct prefix per id,
+-- so a suffix-blind grouping never sees them as siblings at all.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> import Data.Text qualified as T
+-- >>> BJ.residualGroups 3 $ map (T.splitOn "/") ["/a/x1", "/a/x2", "/a/x3"]
+-- [("/a",2,["x1","x2","x3"])]
+--
+-- Mid-path families are visible because every position is a node, not just the
+-- last one — the whole reason this is a trie walk and not a GROUP BY:
+--
+-- >>> BJ.residualGroups 3 $ map (T.splitOn "/") ["/s/a1/log", "/s/b2/log", "/s/c3/log"]
+-- [("/s",2,["a1","b2","c3"])]
+residualGroups :: Int -> [[Text]] -> [(Text, Int, [Text])]
+residualGroups minMembers paths =
+  [ (prefix, pos, kids)
+  | (prefix, pos, kids) <- HM.toList byNode <&> \((pre, pos), ks) -> (pre, pos, S.toList ks)
+  , length kids >= minMembers
+  , any (/= "{param}") kids
+  ]
+  where
+    byNode =
+      HM.fromListWith
+        (<>)
+        [ ((T.intercalate "/" (take i segs), i), S.singleton seg)
+        | segs <- paths
+        , (i, seg) <- zip [0 ..] segs
+        ]
+
+
+-- | Ask the small model about the groups the classifier could not decide, and
+-- record what it said.
+--
+-- __Report-only.__ Nothing here writes to @apis.endpoints@. A verdict of
+-- "param" is a claim that N endpoints are one route, and no mechanical check
+-- can confirm it — a template built from eight route words passes every
+-- structural test a template built from eight ids does. So the verdicts are
+-- persisted, read, and only then trusted with rows.
+--
+-- The @shape@ each verdict carries is the part worth reading: recurring answers
+-- ("stripe customer id", "prefixed order reference") are the deterministic
+-- rules nobody has written yet, surfaced without anyone reading production by
+-- hand.
+--
+-- Groups are re-asked only when their membership changes, so a stable project
+-- costs one query and no tokens.
+reviewResidualEndpointGroups :: Projects.ProjectId -> ATBackgroundCtx ()
+reviewResidualEndpointGroups pid = do
+  ctx <- ask @Config.AuthContext
+  when (ctx.config.enableEndpointGroupReview && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointGroupReview" do
+    endpoints <- Endpoints.getUnmergedEndpoints pid
+    let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPath path)]) | (_, m, _, path) <- endpoints]
+        groups =
+          [ (method <> " " <> prefix <> " @" <> show pos, prefix, sort kids)
+          | (method, paths) <- byMethod
+          , (prefix, pos, kids) <- residualGroups 3 paths
+          ]
+        keyed = [(gkey, toXXHash (T.intercalate "," kids), length kids, prefix, kids) | (gkey, prefix, kids) <- groups]
+    seen <- Endpoints.getReviewedGroupHashes pid
+    let fresh = take endpointGroupReviewBatch [g | g@(gkey, mhash, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
+    unless (null fresh) do
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, c) <- fresh]) ctx.config.openaiApiKey
+      case reply of
+        Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
+        Right txt -> do
+          let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
+              rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
+          Endpoints.recordGroupReviews pid rows
+          Log.logInfo
+            "Endpoint group review complete (report-only)"
+            ( "project_id"
+            , pid.toText
+            , "asked"
+            , length fresh
+            , "answered"
+            , length rows
+            , "would_merge"
+            , length [() | (_, _, _, v, _) <- rows, v == "param"]
+            , "shapes"
+            , ordNub [sh | (_, _, _, v, sh) <- rows, v == "param", not (T.null sh)]
+            )
+
+
+-- | Groups sent to the model per run. One call; the residual converges over a
+-- few passes rather than spending a project's whole backlog of tokens at once.
+endpointGroupReviewBatch :: Int
+endpointGroupReviewBatch = 30
 
 
 -- | Migrate anomalies/issues onto canonical endpoints and delete the merged-out
