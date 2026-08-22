@@ -33,6 +33,7 @@ module Pkg.EmailTemplates (
 
   -- * Helpers
   stripSummaryBadges,
+  traceExplorerUrl,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -47,13 +48,14 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (formatTime)
+import Data.Time (UTCTime, addUTCTime, formatTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
+import Network.HTTP.Types (urlEncode)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Utils (formatWithCommas)
@@ -389,7 +391,7 @@ runtimeErrorsEmail
   , escalatingErrorsEmail
   , regressedErrorsEmail
   , errorSpikesEmail
-    :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+    :: Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
 runtimeErrorsEmail = runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " "We've detected a new runtime error in your "
 escalatingErrorsEmail = runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " "We've detected escalating runtime errors in your "
 regressedErrorsEmail = runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " "We've detected regressed runtime errors in your "
@@ -484,8 +486,8 @@ digestEmail projectName inboxUrl summary total = emailBody do
 -- | @ongoingForM@ surfaces the "Still firing · 3 hours" banner and rewrites the
 -- subject line when we re-notify on an issue we've already alerted about — the
 -- signal that matters is *how long* this has been burning, not "new error".
-runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
-runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl errors chartUrlM occTextM ongoingForM =
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl errorsUrl errors chartUrlM occTextM ongoingForM =
   ( subject
   , emailBody do
       h1_ $ toHtml $ maybe heading ("Still firing: " <>) ongoingForM
@@ -498,7 +500,7 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
       whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
       emailDivider
       forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
-        errorCard errorsUrl (if i == 0 then chartUrlM else Nothing) err
+        errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
@@ -516,8 +518,29 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
       _ -> subjectPrefix <> projectName
 
 
-errorCard :: Text -> Maybe Text -> ErrorPatterns.ATError -> Html ()
-errorCard errorsUrl chartUrlM e =
+-- | Explorer URL pinned to a trace id, over a 1h window centred on when the trace happened.
+-- Log Explorer falls back to "last 1H" when since/from/to are absent (TimePicker.defaultSince),
+-- so a bare query= link silently returns zero rows for anything older — escalating/regressed
+-- alerts routinely carry an occurrence from well before that window.
+--
+-- >>> import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
+-- >>> traceExplorerUrl "https://app" "abc" (UTCTime (fromGregorian 2026 8 22) (secondsToDiffTime 43200))
+-- "https://app/log_explorer?query=trace_id%20%3D%3D%20%22abc%22&from=2026-08-22T11:30:00Z&to=2026-08-22T12:30:00Z"
+traceExplorerUrl :: Text -> Text -> UTCTime -> Text
+traceExplorerUrl projectUrl tid when' =
+  projectUrl
+    <> "/log_explorer?query="
+    <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
+    <> "&from="
+    <> isoT (addUTCTime (-1800) when')
+    <> "&to="
+    <> isoT (addUTCTime 1800 when')
+  where
+    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
+
+
+errorCard :: Text -> Text -> Maybe Text -> ErrorPatterns.ATError -> Html ()
+errorCard projectUrl errorsUrl chartUrlM e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ $ td_ [style_ "padding: 16px 0 8px 0;"] do
       p_ [class_ "error-card-header"] $ toHtml $ truncateText 120 e.errorType
@@ -542,14 +565,22 @@ errorCard errorsUrl chartUrlM e =
       div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" $ drop (length traceLines - 2) traceLines
       when (length traceLines > 2)
         $ p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
-        $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
-        $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
+        $ a_ [href_ (projectUrl <> "/issues/by_hash/" <> e.hash), style_ linkStyle]
+        $ toHtml @Text ("View full stack trace (" <> show (length traceLines) <> " lines) \8594")
+    -- Mirrors Slack's "View trace" button: jumps to Log Explorer scoped to this trace id.
+    whenJust (e.traceId >>= guarded (not . T.null)) \tid ->
+      tr_
+        $ td_ [style_ "padding: 0 0 12px 0;"]
+        $ p_ [style_ "margin: 0; font-size: 12px;"]
+        $ a_ [href_ (traceExplorerUrl projectUrl tid e.when), style_ linkStyle]
+        $ toHtml @Text "Open trace in Log Explorer \8594"
     whenJust chartUrlM $ \url ->
       tr_
         $ td_ [style_ "padding: 8px 0 16px 0;"]
         $ img_ [src_ url, alt_ "Error trend", width_ "560", style_ "max-width: 100%; height: auto; display: block; border-radius: 4px;"]
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
+    linkStyle = "color: #377cfb; text-decoration: none;"
 
 
 truncateText :: Int -> Text -> Text
@@ -860,7 +891,7 @@ sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
 
 
 sampleRuntimeErrors :: Maybe Text -> (Text, Html ())
-sampleRuntimeErrors chartUrlM = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] chartUrlM (Just "42 occurrences in last hour") (Just "3 hours")
+sampleRuntimeErrors chartUrlM = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] chartUrlM (Just "42 occurrences in last hour") (Just "3 hours")
   where
     sampleError1 =
       def

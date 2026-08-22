@@ -23,7 +23,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges)
+import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -352,27 +352,6 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
       groups -> groups <&> \((hostM, ctxM), labels) -> section (maybe "" (<> "\n") (groupHeader hostM ctxM) <> bulletList labels)
 
 
--- | Explorer URL pinned to a trace id, over a 1h window centred on when the trace happened.
--- Log Explorer falls back to "last 1H" when since/from/to are absent (TimePicker.defaultSince),
--- so a bare query= link silently returns zero rows for anything older — escalating/regressed
--- alerts routinely carry an occurrence from well before that window.
---
--- >>> import Data.Time (UTCTime(..), fromGregorian, secondsToDiffTime)
--- >>> traceExplorerUrl "https://app" "abc" (UTCTime (fromGregorian 2026 8 22) (secondsToDiffTime 43200))
--- "https://app/log_explorer?query=trace_id%20%3D%3D%20%22abc%22&from=2026-08-22T11:30:00Z&to=2026-08-22T12:30:00Z"
-traceExplorerUrl :: Text -> Text -> UTCTime -> Text
-traceExplorerUrl projectUrl tid when' =
-  projectUrl
-    <> "/log_explorer?query="
-    <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
-    <> "&from="
-    <> isoT (addUTCTime (-1800) when')
-    <> "&to="
-    <> isoT (addUTCTime 1800 when')
-  where
-    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
-
-
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
 -- Matches on both @attributes.http.route@ and @attributes.url.path@ because endpoint
 -- discovery (see @Models.Apis.Endpoints@) keys off @COALESCE(http.route, url.path)@ —
@@ -534,7 +513,10 @@ discordErrorAlert alertType err project projectUrl chartUrlM occTextM firstSeenM
         , occTextM >>= field "Rate"
         , Just $ AE.object ["name" AE..= ("First Seen" :: Text), "value" AE..= firstSeen, "inline" AE..= True]
         , field "Runtime" (fromMaybe "" err.runtime)
-        , field "Trace" (T.take 16 $ fromMaybe "" err.traceId)
+        , -- Masked link (renders in embed *field values*): same Log Explorer jump as Slack's
+          -- "View trace" button, since Discord embeds have no button affordance.
+          err.traceId >>= guarded (not . T.null) >>= \tid ->
+            field "Trace" ("[" <> T.take 16 tid <> "](" <> traceExplorerUrl projectUrl tid err.when <> ")")
         ]
 
 

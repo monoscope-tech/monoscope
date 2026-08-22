@@ -1826,9 +1826,9 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
               let alert = RuntimeErrorAlert{issueId = sub.issueId.toText, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
                   ~(subj, html) = case alertType of
-                    EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
-                    RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
-                    _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
+                    EscalatingErrors -> ET.escalatingErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
+                    RegressedErrors -> ET.regressedErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
+                    _ -> ET.runtimeErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
               -- Rate-limit gate. Overflow lands in apis.notification_digest_queue
               -- and is flushed by NotificationDigestJob. On rate-limit we must
               -- revert the claim so the next tick re-evaluates the row.
@@ -2000,7 +2000,7 @@ processProjectErrors pid errors now = do
             let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
                 firstSeenTextM = Just $ firstSeenLine now atErr.when
                 alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
-                (subj, html) = ET.runtimeErrorsEmail project.title issueUrl [atErr] chartUrlM Nothing Nothing
+                (subj, html) = ET.runtimeErrorsEmail project.title (projectUrl authCtx pid) issueUrl [atErr] chartUrlM Nothing Nothing
             (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
             -- Persist thread IDs + stamp error_patterns.last_notified_at so later
             -- escalation/regression sweeps thread under this alert instead of
@@ -4497,7 +4497,7 @@ createAndNotifyErrorIssue
   -> Issues.Issue
   -> RuntimeAlertType
   -> ErrorPatterns.ATError
-  -> (Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
+  -> (Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
   -> ErrorPatterns.ErrorPatternId
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx ()
@@ -4514,7 +4514,7 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     let firstSeenTextM = Just $ firstSeenLine now errorData.when
         alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
         errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-        (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing Nothing
+        (subj, html) = emailFn project.title (projectUrl authCtx pid) errorsUrl [errorData] chartUrlM Nothing Nothing
     (finalSlackTs, finalDiscordMsgId, dispatched) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
     when dispatched
