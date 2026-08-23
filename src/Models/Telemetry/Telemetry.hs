@@ -985,7 +985,13 @@ getTotalMetricsCount useTimefusion pid lastReported =
 -- juggling four separate queries.
 getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
 getUsageTotals useTimefusion pid lastReported = do
-  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
+  -- Both halves follow the read flag. The events query used to be hardcoded to
+  -- Postgres while only metrics was routed, which was survivable until
+  -- telemetry moved to TimeFusion and left `otel_logs_and_spans` empty here.
+  -- After that it counted zero events for every project on every run — and
+  -- events are what the plans charge for, so usage reported as nothing while
+  -- `usage_last_reported` advanced regardless.
+  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
   (mC, mB) <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
   pure (eC, eB, mC, mB)
 
