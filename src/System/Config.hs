@@ -119,6 +119,9 @@ data EnvConfig = EnvConfig
   , -- Kill switch for the LLM review of endpoint groups the classifier could
     -- not decide. Report-only regardless; this turns off the spend.
     enableEndpointGroupReview :: Bool
+  , -- Whether a verdict that has cleared 'mergeEvidenceMet' may merge rows, as
+    -- opposed to only being recorded. Off turns the whole thing into a report.
+    enableEndpointGroupAutoApply :: Bool
   , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
   , hostUrl :: Text
@@ -260,6 +263,7 @@ instance DefConfig EnvConfig where
         -- on it, which silently killed every judge call (log- and error-pattern
         -- merge) with "LLM judge failed". "low" is the cheapest one it takes.
         enableEndpointGroupReview = True
+      , enableEndpointGroupAutoApply = True
       , openaiSmallModel = "gpt-5.6-luna#low"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True

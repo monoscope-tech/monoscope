@@ -20,6 +20,18 @@ module Models.Apis.Endpoints (
   getCanonicalTemplateKeys,
   getReviewedGroupHashes,
   recordGroupReviews,
+  GroupReview (..),
+  getGroupReviews,
+  markGroupApplied,
+  revertGroupApply,
+  quarantinedCanonicalHashes,
+  getQuarantinedMerges,
+  appliedCanonicalHashes,
+  fleetShapeReport,
+  knownStaticSegments,
+  learnedIdRulePrefixes,
+  insertLearnedIdRule,
+  learnedIdRulesFor,
   unmergedScanLimit,
   setEndpointCanonical,
   insertCanonicalEndpoints,
@@ -34,6 +46,7 @@ import Data.Default (Default)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
@@ -510,11 +523,19 @@ insertCanonicalEndpoints rows =
     (pids, tpls, methods, hosts, hashes) = L.unzip5 rows
 
 
+-- | Merged-out rows ready for deletion.
+--
+-- Merges this codebase inferred deterministically are always ready. Merges an
+-- LLM verdict caused are held back for a day: deletion is the step that makes a
+-- wrong merge permanent, and the quarantine is the window in which the
+-- re-check can still take it back.
 getMergedEndpointPairs :: DB es => Projects.ProjectId -> Eff es [(Text, Text)]
-getMergedEndpointPairs pid =
+getMergedEndpointPairs pid = do
+  quarantined <- quarantinedCanonicalHashes pid
   Hasql.interp
     [HI.sql| SELECT hash, canonical_hash FROM apis.endpoints
           WHERE project_id = #{pid} AND canonical_hash IS NOT NULL AND hash != canonical_hash
+            AND NOT (canonical_hash = ANY(#{quarantined}))
           LIMIT 10000 |]
 
 
@@ -522,6 +543,138 @@ getMergedEndpointPairs pid =
 -- Legacy apis.shapes/fields/formats migration steps removed (tables dropped in 0090);
 -- the schema-learning catalog (apis.schema_catalog) re-derives structure on the fly per
 -- canonical key, so no explicit row migration is needed for the new model.
+-- | A stored verdict plus the evidence accumulated for it.
+data GroupReview = GroupReview
+  { groupKey :: Text
+  , membersHash :: Text
+  , memberCount :: Int64
+  , firstMemberCount :: Int64
+  , verdict :: Text
+  , confirmations :: Int64
+  , appliedAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+getGroupReviews :: DB es => Projects.ProjectId -> Eff es [GroupReview]
+getGroupReviews pid =
+  Hasql.interp
+    [HI.sql| SELECT group_key, members_hash, member_count::int8, first_member_count::int8,
+                    verdict, confirmations::int8, applied_at
+             FROM apis.endpoint_group_reviews
+             WHERE project_id = #{pid} AND reverted_at IS NULL |]
+
+
+-- | Record that a group's merge was applied, and under which canonical hash.
+markGroupApplied :: (DB es, Time :> es) => Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
+markGroupApplied pid gkey chashes = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.endpoint_group_reviews SET applied_at = #{now}, applied_canonical_hashes = #{chashes}
+             WHERE project_id = #{pid} AND group_key = #{gkey} |]
+
+
+-- | Undo an applied merge that the quarantine re-check refuted.
+--
+-- Only reachable while the merge is still quarantined, so the concrete rows are
+-- still there to un-assign. @merge_override@ keeps them out of every future
+-- pass — a group the model has both merged and then disowned is not one to
+-- keep re-litigating.
+revertGroupApply :: (DB es, Time :> es) => Projects.ProjectId -> Text -> V.Vector Text -> Eff es Int64
+revertGroupApply pid gkey chashes = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.endpoint_group_reviews SET reverted_at = #{now}
+             WHERE project_id = #{pid} AND group_key = #{gkey} |]
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.endpoints SET canonical_hash = NULL, canonical_path = NULL, merge_override = TRUE
+             WHERE project_id = #{pid} AND canonical_hash = ANY(#{chashes}) AND hash <> canonical_hash |]
+
+
+-- | Canonical hashes from LLM-applied merges still inside their quarantine.
+-- Cleanup must not delete their sources yet: deletion is what makes a wrong
+-- merge permanent.
+quarantinedCanonicalHashes :: DB es => Projects.ProjectId -> Eff es (V.Vector Text)
+quarantinedCanonicalHashes pid =
+  V.fromList
+    <$> Hasql.interp
+      [HI.sql| SELECT unnest(applied_canonical_hashes) FROM apis.endpoint_group_reviews
+               WHERE project_id = #{pid} AND applied_at IS NOT NULL
+                 AND reverted_at IS NULL AND applied_at > NOW() - INTERVAL '24 hours' |]
+
+
+-- | Applied merges still inside their quarantine, with the values each one
+-- collapsed, so they can be challenged before deletion makes them permanent.
+getQuarantinedMerges :: DB es => Projects.ProjectId -> Eff es [(Text, Text, V.Vector Text)]
+getQuarantinedMerges pid =
+  Hasql.interp
+    [HI.sql| SELECT r.group_key, coalesce(min(e.canonical_path), ''), array_agg(DISTINCT e.url_path)
+             FROM apis.endpoint_group_reviews r
+             JOIN apis.endpoints e ON e.project_id = r.project_id AND e.canonical_hash = ANY(r.applied_canonical_hashes)
+             WHERE r.project_id = #{pid} AND r.applied_at IS NOT NULL AND r.reverted_at IS NULL
+               AND r.applied_at > NOW() - INTERVAL '24 hours'
+               AND e.hash <> e.canonical_hash
+             GROUP BY r.group_key
+             LIMIT 20 |]
+
+
+-- | The canonical hashes one applied verdict produced.
+appliedCanonicalHashes :: DB es => Projects.ProjectId -> Text -> Eff es (V.Vector Text)
+appliedCanonicalHashes pid gkey =
+  fromMaybe V.empty
+    <$> Hasql.interpOne
+      [HI.sql| SELECT applied_canonical_hashes FROM apis.endpoint_group_reviews
+               WHERE project_id = #{pid} AND group_key = #{gkey} |]
+
+
+-- | Every literal path segment this project is known to route on.
+--
+-- Taken from canonical templates rather than raw paths: a template's literal
+-- segments are the ones the system has already concluded are part of the route,
+-- which is exactly the set a new id rule must never collide with.
+knownStaticSegments :: DB es => Projects.ProjectId -> Eff es [Text]
+knownStaticSegments pid =
+  Hasql.interp
+    [HI.sql| SELECT DISTINCT s FROM apis.endpoints e, unnest(string_to_array(e.canonical_path, '/')) AS s
+             WHERE e.project_id = #{pid} AND e.canonical_path IS NOT NULL
+               AND s <> '' AND s NOT LIKE '{%' |]
+
+
+learnedIdRulePrefixes :: DB es => Projects.ProjectId -> Eff es (HS.HashSet Text)
+learnedIdRulePrefixes pid =
+  HS.fromList
+    <$> Hasql.interp
+      [HI.sql| SELECT prefix FROM apis.learned_id_rules WHERE project_id = #{pid} AND disabled_at IS NULL |]
+
+
+insertLearnedIdRule :: DB es => Projects.ProjectId -> Text -> Int -> Text -> Int -> Eff es ()
+insertLearnedIdRule pid prefix minLen gkey checked =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.learned_id_rules (project_id, host, prefix, min_length, source_group_key, collisions_checked)
+             VALUES (#{pid}, '', #{prefix}, #{fromIntegral minLen :: Int64}, #{gkey}, #{fromIntegral checked :: Int64})
+             ON CONFLICT (project_id, host, prefix) DO NOTHING |]
+
+
+-- | Live rules for a project, as (prefix, min length), for the ingest cache.
+learnedIdRulesFor :: DB es => Projects.ProjectId -> Eff es [(Text, Int64)]
+learnedIdRulesFor pid =
+  Hasql.interp
+    [HI.sql| SELECT prefix, min_length::int8 FROM apis.learned_id_rules
+             WHERE project_id = #{pid} AND disabled_at IS NULL |]
+
+
+-- | Value shapes the model has named, fleet-wide, ranked by how many endpoints
+-- they account for. The standing list of deterministic rules nobody has written.
+fleetShapeReport :: DB es => Eff es [(Text, Int64, Int64)]
+fleetShapeReport =
+  Hasql.interp
+    [HI.sql| SELECT shape, count(*)::int8, sum(member_count)::int8
+             FROM apis.endpoint_group_reviews
+             WHERE verdict = 'param' AND shape <> '' AND reverted_at IS NULL
+             GROUP BY shape ORDER BY 3 DESC LIMIT 40 |]
+
+
 -- | Membership hash of every group already reviewed, so a group is re-asked
 -- exactly when its members change and never merely because time passed.
 getReviewedGroupHashes :: DB es => Projects.ProjectId -> Eff es (HM.HashMap Text Text)
@@ -537,12 +690,25 @@ recordGroupReviews :: DB es => Projects.ProjectId -> [(Text, Text, Int, Text, Te
 recordGroupReviews _ [] = pass
 recordGroupReviews pid rows =
   Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.endpoint_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape)
-           SELECT #{pid}, k, h, n, v, s
+    [HI.sql| INSERT INTO apis.endpoint_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape, confirmations, first_member_count)
+           SELECT #{pid}, k, h, n, v, s, 1, n
            FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
            ON CONFLICT (project_id, group_key)
            DO UPDATE SET members_hash = EXCLUDED.members_hash, member_count = EXCLUDED.member_count,
-                         verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW() |]
+                         verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW(),
+                         -- A pass only counts as confirmation when it agrees with the
+                         -- last one. Any disagreement resets the evidence to zero, and
+                         -- first_member_count restarts so growth is measured from the
+                         -- verdict currently being argued for, not an abandoned one.
+                         confirmations = CASE
+                           WHEN apis.endpoint_group_reviews.verdict = EXCLUDED.verdict
+                             THEN apis.endpoint_group_reviews.confirmations + 1
+                           ELSE 1 END,
+                         first_member_count = CASE
+                           WHEN apis.endpoint_group_reviews.verdict = EXCLUDED.verdict
+                             THEN apis.endpoint_group_reviews.first_member_count
+                           ELSE EXCLUDED.member_count END
+           WHERE apis.endpoint_group_reviews.applied_at IS NULL |]
   where
     keys = V.fromList [k | (k, _, _, _, _) <- rows]
     hashes = V.fromList [h | (_, h, _, _, _) <- rows]

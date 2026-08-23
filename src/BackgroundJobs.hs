@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -1306,6 +1306,7 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
+  tryStep "endpoint-shape-report" reportUnwrittenIdRules
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
     Hasql.interp
@@ -3550,6 +3551,7 @@ endpointTemplateDiscovery pid = do
   -- announced.
   notifyDiscoveredEndpoints pid
   reviewResidualEndpointGroups pid
+  recheckQuarantinedMerges pid
 
 
 -- | Every trie node whose children the deterministic gate declined to collapse.
@@ -3633,7 +3635,7 @@ reviewResidualEndpointGroups pid = do
               rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
           Endpoints.recordGroupReviews pid rows
           Log.logInfo
-            "Endpoint group review complete (report-only)"
+            "Endpoint group review complete"
             ( "project_id"
             , pid.toText
             , "asked"
@@ -3645,6 +3647,261 @@ reviewResidualEndpointGroups pid = do
             , "shapes"
             , ordNub [sh | (_, _, _, v, sh) <- rows, v == "param", not (T.null sh)]
             )
+    when ctx.config.enableEndpointGroupAutoApply do
+      applyConfirmedGroups pid keyed
+      tryStep "promoteIdRules" $ promoteConfirmedIdRules pid keyed
+
+
+-- | Merge the groups whose evidence has accumulated past 'mergeEvidenceMet'.
+--
+-- The merge itself goes through the same two statements deterministic discovery
+-- uses, so an LLM-sourced template is indistinguishable downstream from one the
+-- classifier derived — except for the row in @endpoint_group_reviews@ that
+-- records which verdict caused it, which is what lets cleanup quarantine it and
+-- 'recheckQuarantinedMerges' take it back.
+applyConfirmedGroups :: Projects.ProjectId -> [(Text, Text, Int, Text, [Text])] -> ATBackgroundCtx ()
+applyConfirmedGroups pid keyed = do
+  reviews <- Endpoints.getGroupReviews pid
+  let byKey = HM.fromList [(r.groupKey, r) | r <- reviews]
+      ready =
+        [ (gkey, prefix, kids)
+        | (gkey, _, n, prefix, kids) <- keyed
+        , Just r <- [HM.lookup gkey byKey]
+        , isNothing r.appliedAt
+        , r.verdict == "param"
+        , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
+        ]
+  forM_ (take endpointGroupApplyBatch ready) \(gkey, prefix, kids) -> do
+    endpoints <- Endpoints.getUnmergedEndpoints pid
+    let pos = length (T.splitOn "/" prefix) - 1
+        -- Only the position the verdict is about becomes a wildcard. Everything
+        -- deeper keeps whatever the classifier already made of it, so one
+        -- verdict cannot quietly flatten a subtree it was never shown.
+        wildcardAt segs = take pos segs <> ["{param}"] <> drop (pos + 1) segs
+        touched =
+          [ (h, m, host, T.intercalate "/" (wildcardAt segs))
+          | (h, m, host, path) <- endpoints
+          , let segs = T.splitOn "/" (classifyUrlPath path)
+          , length segs > pos
+          , T.intercalate "/" (take pos segs) == prefix
+          , (segs !!? pos) `elem` map Just kids
+          ]
+    unless (null touched) do
+      let byTemplate = HM.toList $ HM.fromListWith (<>) [((m, host, tp), [h]) | (h, m, host, tp) <- touched]
+          canonOf method host tp = toXXHash $ pid.toText <> host <> method <> tp
+          canonicals = [canonOf m host tp | ((m, host, tp), _) <- byTemplate]
+          updates = [(h, canonOf m host tp, tp) | ((m, host, tp), hs) <- byTemplate, h <- hs]
+          inserts = [(pid, tp, m, host, canonOf m host tp) | ((m, host, tp), _) <- byTemplate]
+      void $ Endpoints.setEndpointCanonical updates
+      Endpoints.insertCanonicalEndpoints inserts
+      -- Every canonical this verdict produced, so the quarantine covers all of
+      -- them and a revert can find them all again.
+      Endpoints.markGroupApplied pid gkey (V.fromList canonicals)
+      Log.logInfo
+        "Applied an LLM-confirmed endpoint merge"
+        ("project_id", pid.toText, "group", gkey, "endpoints", length touched, "templates", length byTemplate)
+
+
+-- | Groups merged per run. Small on purpose: a bad rule should cost one group's
+-- worth of rows before the next pass can notice it, not a project's.
+endpointGroupApplyBatch :: Int
+endpointGroupApplyBatch = 3
+
+
+-- | The longest literal prefix every value in a family shares, if it is worth
+-- having as a rule.
+--
+-- Requires two or more characters and that the remainder still carries some
+-- length, so a family of @order-1@ … @order-9@ does not yield the rule
+-- "anything starting with \"order\"".
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> BJ.sharedIdPrefix ["cus_QpeOrF3HMRjazD", "cus_RksfSwLNiBqrvu", "cus_SODBZTkilypSqo"]
+-- Just "cus_"
+--
+-- >>> BJ.sharedIdPrefix ["SB-91673E0634FB", "SB-5A3469F964B1"]
+-- Just "SB-"
+--
+-- Nothing shared, or nothing left after the prefix, is no rule:
+--
+-- >>> BJ.sharedIdPrefix ["00Zj", "011b", "01ZW"]
+-- Nothing
+--
+-- >>> BJ.sharedIdPrefix ["orderA", "orderB"]
+-- Nothing
+sharedIdPrefix :: [Text] -> Maybe Text
+sharedIdPrefix vals = do
+  first' <- viaNonEmpty head vals
+  let common = foldl' sharedPrefix first' vals
+      remainder = T.length first' - T.length common
+  guard $ T.length common >= 2 && remainder >= 4 && length vals >= 2
+  pure common
+  where
+    sharedPrefix a b = T.pack $ map fst $ takeWhile (uncurry (==)) $ T.zip a b
+
+
+-- | Promote confirmed families to deterministic rules, but only where the rule
+-- provably cannot fire on something this project already treats as a route.
+--
+-- The merge decision is not mechanically checkable — that is why a model is
+-- asked at all. Rule /safety/ is: a prefix either matches one of the literal
+-- segments this project is known to route on, or it does not, and that question
+-- has an answer. A rule admitted on that basis is worth more than the verdict
+-- it came from, because from then on the format is recognised by code, on paths
+-- nobody has seen, without a call.
+promoteConfirmedIdRules :: Projects.ProjectId -> [(Text, Text, Int, Text, [Text])] -> ATBackgroundCtx ()
+promoteConfirmedIdRules pid keyed = do
+  reviews <- Endpoints.getGroupReviews pid
+  staticSegments <- Endpoints.knownStaticSegments pid
+  existing <- Endpoints.learnedIdRulePrefixes pid
+  let byKey = HM.fromList [(r.groupKey, r) | r <- reviews]
+      candidates =
+        [ (gkey, prefix', foldl' min maxBound (map T.length kids), kids)
+        | (gkey, _, n, _, kids) <- keyed
+        , Just r <- [HM.lookup gkey byKey]
+        , r.verdict == "param"
+        , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
+        , Just prefix' <- [sharedIdPrefix kids]
+        , not (HashSet.member prefix' existing)
+        ]
+      -- The safety test. A prefix that matches even one segment this project
+      -- routes on is rejected outright rather than qualified further.
+      safe = [(gkey, p, minLen) | (gkey, p, minLen, _) <- candidates, not (any (T.isPrefixOf p) staticSegments)]
+      rejected = [(gkey, p) | (gkey, p, _, _) <- candidates, any (T.isPrefixOf p) staticSegments]
+  unless (null rejected)
+    $ Log.logInfo "Declined to promote id rules that collide with known routes" ("project_id", pid.toText, "rejected", rejected)
+  forM_ safe \(gkey, p, minLen) -> do
+    Endpoints.insertLearnedIdRule pid p minLen gkey (length staticSegments)
+    Log.logInfo
+      "Promoted an id format to a deterministic rule"
+      ("project_id", pid.toText, "prefix", p, "min_length", minLen, "checked_against", length staticSegments, "group", gkey)
+
+
+-- | The value shapes the model keeps naming, ranked by how many endpoints they
+-- account for.
+--
+-- This is a backlog, not a statistic. Every line is an id format the
+-- deterministic classifier does not recognise, which means every line is a
+-- family that had to wait for a population to build up and a model to be paid
+-- before it collapsed. Promoting the recurring ones into rules is what stops
+-- the model being asked the same question forever — and the two formats that
+-- cost the most to find by hand this week, a customer's @SHO…@ references and a
+-- comma-joined courier selection, are exactly what this would have surfaced on
+-- its own.
+reportUnwrittenIdRules :: ATBackgroundCtx ()
+reportUnwrittenIdRules = do
+  shapes <- Endpoints.fleetShapeReport
+  unless (null shapes)
+    $ Log.logInfo
+      "Id shapes with no deterministic rule"
+      ("shapes", [AE.object ["shape" AE..= sh, "groups" AE..= g, "endpoints" AE..= n] | (sh, g, n) <- shapes])
+
+
+-- | Challenge each merge still in quarantine, and undo the ones the model now
+-- says were wrong.
+--
+-- This is what stands in for a person reading the report. The quarantine is
+-- only useful if something looks during it, and nobody was going to. The
+-- challenge prompt asserts the merge and asks for the fault rather than
+-- re-asking the original question, so a second agreement means a little more
+-- than the model being consistent with itself.
+--
+-- Reverting restores the concrete rows and sets @merge_override@, so a group
+-- the model has both merged and disowned stops being re-litigated every pass.
+recheckQuarantinedMerges :: Projects.ProjectId -> ATBackgroundCtx ()
+recheckQuarantinedMerges pid = do
+  ctx <- ask @Config.AuthContext
+  when (ctx.config.enableEndpointGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointMergeRecheck" do
+    pending <- Endpoints.getQuarantinedMerges pid
+    unless (null pending) do
+      let asked = [(gkey, tmpl, ordNub (V.toList paths)) | (gkey, tmpl, paths) <- pending]
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
+      case reply of
+        Left err -> Log.logAttention "Quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
+        Right txt -> do
+          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= "param"]
+          forM_ refuted \gkey -> do
+            hashes <- Endpoints.appliedCanonicalHashes pid gkey
+            restored <- Endpoints.revertGroupApply pid gkey hashes
+            Log.logAttention
+              "Reverted an LLM merge the quarantine re-check refuted"
+              ("project_id", pid.toText, "group", gkey, "endpoints_restored", restored)
+          Log.logInfo
+            "Quarantine re-check complete"
+            ("project_id", pid.toText, "challenged", length asked, "reverted", length refuted)
+
+
+-- | Is there enough evidence to let a verdict merge endpoints?
+--
+-- A "param" verdict deletes issues if it is wrong and cannot be undone once
+-- cleanup runs, and nothing downstream can check it — a template over eight
+-- route words is structurally identical to one over eight ids. So the
+-- confidence has to be built from signals that are individually weak:
+--
+-- * __Agreement.__ Two independent passes, each seeing the group among
+--   different neighbours, both said "param". One pass is a sample of one.
+-- * __Open set.__ The group gained members between those passes. This is the
+--   only signal that separates the two populations by their behaviour rather
+--   than their appearance: ids keep arriving forever, whereas a family of verbs
+--   (@verify_phone@, @deactivate_user@, @update_email@) is complete the day it
+--   ships and never grows again. It is what the shape gate lacked.
+-- * __Population.__ At least eight members, so a coincidence of three is not
+--   enough.
+-- * __No word among them.__ A mechanical veto. It cannot prove a value is an
+--   id, which is why it is useless as an approval — but it is sound in the
+--   refusing direction, and it is exactly the case that has burned us.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> BJ.mergeEvidenceMet 2 8 20 ["a1b2c3d4", "e5f6g7h8", "i9j0k1l2"]
+-- True
+--
+-- One pass is not agreement, however large the group:
+--
+-- >>> BJ.mergeEvidenceMet 1 8 400 ["a1b2c3d4"]
+-- False
+--
+-- A closed set is refused however often the model repeats itself:
+--
+-- >>> BJ.mergeEvidenceMet 5 20 20 ["a1b2c3d4"]
+-- False
+--
+-- >>> BJ.mergeEvidenceMet 3 8 40 ["a1b2c3d4", "deactivate_user"]
+-- False
+mergeEvidenceMet :: Int64 -> Int64 -> Int64 -> [Text] -> Bool
+mergeEvidenceMet confirmations firstCount nowCount members =
+  confirmations
+    >= 2
+    && nowCount
+    > firstCount
+    && nowCount
+    >= 8
+    && not (any looksLikeRouteWord members)
+
+
+-- | A value a developer plausibly named a route after: letters and separators,
+-- no digits, and pronounceable enough to have vowels in it.
+--
+-- Only ever used to refuse a merge. As an approval it would be worthless —
+-- plenty of ids are pure letters — but as a veto it is sound, and it is the
+-- guard the shape gate was missing when it proposed folding eight verbs into
+-- one parameter.
+--
+-- >>> map looksLikeRouteWord ["deactivate_user", "activity-logs", "settings", "login"]
+-- [True,True,True,True]
+--
+-- >>> map looksLikeRouteWord ["a1b2c3d4", "SHO3KOOWWN", "cus_QpeOrF3HMRjazD", "00Zj", "xzkvfh"]
+-- [False,False,False,False,False]
+looksLikeRouteWord :: Text -> Bool
+looksLikeRouteWord t =
+  T.length t
+    >= 4
+    && T.all (\c -> isAsciiLower c || c == '-' || c == '_') t
+    && T.any (`T.elem` "aeiou") t
+    && vowels
+    * 5
+    >= T.length t
+  where
+    vowels = T.length $ T.filter (`T.elem` "aeiou") t
 
 
 -- | Groups sent to the model per run. One call; the residual converges over a

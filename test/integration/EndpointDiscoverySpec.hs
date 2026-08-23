@@ -233,6 +233,27 @@ spec = around withTestResources do
         paths <- V.toList . V.map fst <$> queryAllEndpoints tr
         paths `shouldBe` ["/v1/track/{param}"]
 
+    -- The evidence bar exists because a "param" verdict deletes issues if it is
+    -- wrong and nothing downstream can check it. These pin the two conditions
+    -- that carry the weight: agreement across passes, and a population that is
+    -- still growing.
+    describe "Evidence required before an LLM verdict may merge" do
+      it "refuses a single verdict, a closed set, and a group containing a route word" \_ -> do
+        -- one pass is not agreement, however large
+        BackgroundJobs.mergeEvidenceMet 1 8 500 ["a1b2c3d4"] `shouldBe` False
+        -- confirmed repeatedly, but the family never grew: a closed set of verbs
+        BackgroundJobs.mergeEvidenceMet 9 20 20 ["a1b2c3d4"] `shouldBe` False
+        -- grew and was confirmed, but one member reads as a route
+        BackgroundJobs.mergeEvidenceMet 3 8 40 ["a1b2c3d4", "deactivate_user"] `shouldBe` False
+        -- too small to be a population
+        BackgroundJobs.mergeEvidenceMet 3 2 5 ["a1b2c3d4"] `shouldBe` False
+        -- confirmed twice, grew, big enough, nothing word-like
+        BackgroundJobs.mergeEvidenceMet 2 8 40 ["a1b2c3d4", "SHO3KOOWWN", "00Zj"] `shouldBe` True
+
+      it "will not veto ids that merely look like words to a naive test" \_ ->
+        map BackgroundJobs.looksLikeRouteWord ["cus_QpeOrF3HMRjazD", "SHO3KOOWWN", "a-df0u-05mwux", "00Zj"]
+          `shouldBe` [False, False, False, False]
+
     describe "Merge cleanup consolidates rather than colliding" do
       it "folds many endpoints' open issues onto one canonical issue per type" \tr -> do
         clearTestEndpoints tr
