@@ -473,11 +473,28 @@ activeNonOnboardingProjectIds =
   V.fromList <$> EHasql.interp [HI.sql|SELECT DISTINCT p.id FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING'|]
 
 
+-- | Projects with telemetry in the last day — the set every per-project
+-- background job is seeded for.
+--
+-- Activity is read from the derived tables, not from @otel_logs_and_spans@.
+-- Telemetry moved to TimeFusion and the Postgres table is empty by design, so
+-- the join this used to do matched nothing and returned no projects at all —
+-- which silently stopped every per-project job from being scheduled: endpoint
+-- discovery, log-pattern processing, pattern merge, the span-derivation safety
+-- net and usage reporting. Nothing failed; they were simply never created.
+--
+-- @schema_catalog@ is the primary signal because the observation flush touches
+-- it for any span at all. Anomalies are a second source for a project whose
+-- catalog rows are all settled.
 recentlyActiveProjectIds :: DB es => UTCTime -> Eff es [ProjectId]
 recentlyActiveProjectIds since =
   EHasql.interp
-    [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
-           WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > #{since}::timestamptz - interval '24 hours'|]
+    [HI.sql|SELECT p.id FROM projects.projects p
+           WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING'
+             AND (EXISTS (SELECT 1 FROM apis.schema_catalog c
+                           WHERE c.project_id = p.id AND c.updated_at > #{since}::timestamptz - interval '24 hours')
+               OR EXISTS (SELECT 1 FROM apis.anomalies a
+                           WHERE a.project_id = p.id AND a.created_at > #{since}::timestamptz - interval '24 hours'))|]
 
 
 newProjectsSince :: DB es => UTCTime -> Eff es [Project]

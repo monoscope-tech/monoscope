@@ -3883,6 +3883,11 @@ recheckQuarantinedMerges pid = do
 -- >>> BJ.mergeEvidenceMet 2 8 20 ["a1b2c3d4", "e5f6g7h8", "i9j0k1l2"]
 -- True
 --
+-- An unrecorded starting size is not evidence of growth:
+--
+-- >>> BJ.mergeEvidenceMet 3 0 40 ["a1b2c3d4"]
+-- False
+--
 -- One pass is not agreement, however large the group:
 --
 -- >>> BJ.mergeEvidenceMet 1 8 400 ["a1b2c3d4"]
@@ -3899,6 +3904,11 @@ mergeEvidenceMet :: Int64 -> Int64 -> Int64 -> [Text] -> Bool
 mergeEvidenceMet confirmations firstCount nowCount members =
   confirmations
     >= 2
+    -- A zero starting size means nobody recorded one, not that the group grew
+    -- from nothing. Reading it as growth hands the strongest of these
+    -- conditions away for free to every row written before it was tracked.
+    && firstCount
+    > 0
     && nowCount
     > firstCount
     && nowCount
