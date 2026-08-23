@@ -404,3 +404,40 @@ describe('LogList — the repositioning guard always releases', () => {
     expect(reported).toHaveBeenCalledWith('[log-list] scroll restore failed', expect.any(Error));
   });
 });
+
+// Reported: "scrolling down quickly triggers Show earlier events, and that works, but
+// sometimes it instead triggers the load-newer row at the TOP of the list and the reader
+// loses their place." The top sentinel firing is correct behaviour — it fires because the
+// reader IS at the top. What put them there is a load-more eviction whose anchor restore
+// gave up: the remount clamps scrollTop to 0, and nothing moves them back.
+describe('LogList — a load-more eviction never abandons the reader at the top', () => {
+  test('restores position when the anchor row is itself evicted', async () => {
+    // The eviction cuts the newest 400 rows; the captured anchor is one of them. During a
+    // fast scroll the capture runs after the network await against a lagging rendered range,
+    // so the id it returns can be a row the merge is about to drop.
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue({ id: 'r00001', offset: 0 });
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames();
+
+    expect(sim.atTop).toBe(false);
+  });
+
+  test('restores position when no anchor could be captured at all', async () => {
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    sim.emitVisibility(); // the rendered range is the only record of where they were
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue(null);
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames();
+
+    expect(sim.atTop).toBe(false);
+  });
+});

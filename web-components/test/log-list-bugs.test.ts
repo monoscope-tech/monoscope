@@ -312,7 +312,9 @@ describe('LogList — MED correctness', () => {
     (el as any).virtualListItems = [{ type: 'fetchRecent' }, row('visible'), { type: 'loadMore' }];
     (el as any).lastVisibilityRange = { first: 1, last: 2 };
 
-    expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0 });
+    // index is carried too: it is what puts the reader back when the retention window
+    // cuts the anchor row itself out of the list.
+    expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0, index: 1 });
   });
 
   test('anchor restoration adjusts a rendered row in place without first snapping it to the top', async () => {

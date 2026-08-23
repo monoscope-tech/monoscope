@@ -89,7 +89,9 @@ const noopRef: RefOrCallback = () => {};
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
-type ScrollAnchor = { id: string; offset: number };
+// `index` is the row's position in virtualListItems, so a reader whose anchor row is cut
+// by the retention window can still be put back near where they were.
+type ScrollAnchor = { id: string; offset: number; index: number };
 
 /**
  * Identity of a virtual row. Without it the virtualizer keys rows by index, so a live-tail
@@ -211,9 +213,11 @@ export class LogList extends LitElement {
    * landed. Explicit clicks are never suspended: the reader asked.
    */
   private scrollSettling = 0;
-  // Which end the retention window last cut, so a reader whose anchor row went with it can
-  // be put back on that end. null when the last merge retained everything.
+  // Which end the retention window last cut, and how many rows went with it, so a reader
+  // whose anchor row was among them can still be put back. null/0 when the last merge
+  // retained everything.
   private evictedEdge: 'start' | 'end' | null = null;
+  private evictedCount = 0;
   private get isRepositioning() {
     return this.scrollSettling > 0;
   }
@@ -1744,6 +1748,11 @@ export class LogList extends LitElement {
         const insertedBeforeVisibleRows = this.flipDirection;
         const remountedAfterEviction = this.virtualizerEpoch !== epochBeforeMerge;
         if (anchor && (insertedBeforeVisibleRows || remountedAfterEviction)) void this.restoreScrollAnchor(anchor);
+        // No anchor and the retention window remounted the virtualizer: the reader is sitting
+        // on the top the remount clamped them to, with nothing else on the way to move them
+        // off it. The last rendered range is where they were — restore through the same
+        // anchor-lost path, which shifts it by what the cut dropped.
+        else if (remountedAfterEviction) void this.restoreScrollAnchor({ id: '', offset: 0, index: this.lastVisibilityRange?.first ?? 0 });
       }
       // Count what's actually visible. queryResultCount over-counts because the
       // dedup-dropped boundary row is re-reported on every paginated page.
@@ -1984,6 +1993,7 @@ export class LogList extends LitElement {
     const merged = this.orderMerge(this.spanListTree, fresh, isRecentFetch);
     if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) {
       this.evictedEdge = null;
+      this.evictedCount = 0;
       return merged;
     }
 
@@ -2003,6 +2013,7 @@ export class LogList extends LitElement {
     if (cut === 0 || cut === merged.length) cut = boundedCut;
     const kept = dropStart ? merged.slice(cut) : merged.slice(0, cut);
     const dropped = dropStart ? merged.slice(0, cut) : merged.slice(cut);
+    this.evictedCount = dropped.length;
     dropped.forEach((r) => this.seenIds.delete(r.id));
 
     const retainedIds = new Set(kept.map((r) => r.id));
@@ -2022,11 +2033,16 @@ export class LogList extends LitElement {
     if (!container || this.mode !== 'logs') return null;
     const top = container.getBoundingClientRect().top;
     const row = [...container.querySelectorAll<HTMLElement>('[data-row-id]')].find((el) => el.getBoundingClientRect().bottom > top);
-    if (row) return { id: row.dataset.rowId!, offset: row.getBoundingClientRect().top - top };
+    if (row) {
+      const id = row.dataset.rowId!;
+      return { id, offset: row.getBoundingClientRect().top - top, index: this.virtualListItems.findIndex((i) => 'id' in i && i.id === id) };
+    }
 
     const range = this.lastVisibilityRange;
-    const item = range && this.virtualListItems.slice(range.first, range.last + 1).find((entry) => 'id' in entry);
-    return item ? { id: item.id, offset: 0 } : null;
+    const index = range ? this.virtualListItems.slice(range.first, range.last + 1).findIndex((entry) => 'id' in entry) : -1;
+    if (index < 0) return null;
+    const item = this.virtualListItems[range!.first + index] as EventLine;
+    return { id: item.id, offset: 0, index: range!.first + index };
   }
 
   // Holds the auto-fetch suspension for its whole duration: until the anchor row is back
@@ -2037,17 +2053,25 @@ export class LogList extends LitElement {
       await this.updateComplete;
       const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
       const virtualizer = this.querySelector('lit-virtualizer');
-      // The anchor row is gone, which for an eviction means the reader was parked on the
-      // very edge the retention window cut — live tail trimming history out from under a
-      // reader who had paged deep into it. Leave them at that edge, next to the nearest
-      // surviving rows, rather than at the top the remount clamped them to.
+      // The anchor row is gone, which means the retention cut took it. Which end the reader
+      // belongs on is decided by which end was cut — and neither answer is the top the
+      // remount clamped them to. Leaving them there is what threw a reader paging history
+      // back to the newest edge, where the (now armed) load-newer sentinel fired on arrival.
       if (index < 0) {
-        if (this.evictedEdge !== 'end') return;
         // Wait for the remounted virtualizer to lay out: until it does, its scroll range
-        // is zero and "the end of the list" is still the top.
+        // is zero and every index still maps to the top.
         await this.afterLayout(virtualizer);
+        // 'end': live tail trimmed history out from under a reader deep in it — leave them
+        // on the oldest retained row. 'start': a load-more dropped the newest rows, so the
+        // reader's place is their pre-merge index less what was dropped. Rows, not virtual
+        // items, so an expanded trace inside the cut lands them a few rows off — close, and
+        // still their place, where the top is neither.
         const container = this.logsContainer;
-        if (container) container.scrollTop = container.scrollHeight;
+        if (this.evictedEdge === 'end') {
+          if (container) container.scrollTop = container.scrollHeight;
+        } else if (this.evictedEdge === 'start') {
+          virtualizer?.scrollToIndex(Math.max(0, anchor.index - this.evictedCount), 'start');
+        }
         return;
       }
       if (!virtualizer) return;
