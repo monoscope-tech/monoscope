@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -3614,11 +3614,14 @@ reviewResidualEndpointGroups pid = do
     learned <- map fst <$> Endpoints.learnedIdRulesFor pid
     let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPathWith learned path)]) | (_, m, _, path) <- endpoints]
         groups =
-          [ (method <> " " <> prefix <> " @" <> show pos, prefix, sort kids)
+          [ (method <> " " <> prefix <> " @" <> show pos, prefix, pos, sort kids)
           | (method, paths) <- byMethod
           , (prefix, pos, kids) <- residualGroups 3 paths
           ]
-        keyed = [(gkey, toXXHash (T.intercalate "," kids), length kids, prefix, kids) | (gkey, prefix, kids) <- groups]
+        -- The position travels with the group. Recovering it from the prefix
+        -- looks easy and is off by one for every path, which turns the apply
+        -- into a silent no-op rather than a visible failure.
+        keyed = [(gkey, toXXHash (T.intercalate "," kids), length kids, prefix, pos, kids) | (gkey, prefix, pos, kids) <- groups]
     seen <- Endpoints.getReviewedGroupHashes pid
     -- Biggest first. The budget is a handful of groups per run against a backlog
     -- of hundreds, and the distribution is wildly skewed — one customer's
@@ -3627,14 +3630,14 @@ reviewResidualEndpointGroups pid = do
     -- reaches the answer worth having.
     let fresh =
           take endpointGroupReviewBatch
-            $ sortOn (\(_, _, n, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
+            $ sortOn (\(_, _, n, _, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
     unless (null fresh) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, c) <- fresh]) ctx.config.openaiApiKey
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh]) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
         Right txt -> do
           let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
-              rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
+              rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
           Endpoints.recordGroupReviews pid rows
           Log.logInfo
             "Endpoint group review complete"
@@ -3650,8 +3653,27 @@ reviewResidualEndpointGroups pid = do
             , ordNub [sh | (_, _, _, v, sh) <- rows, v == "param", not (T.null sh)]
             )
     when ctx.config.enableEndpointGroupAutoApply do
-      applyConfirmedGroups pid keyed
-      tryStep "promoteIdRules" $ promoteConfirmedIdRules pid keyed
+      confirmed <- flip confirmedGroups keyed <$> Endpoints.getGroupReviews pid
+      applyConfirmedGroups pid confirmed
+      tryStep "promoteIdRules" $ promoteConfirmedIdRules pid confirmed
+
+
+-- | The groups whose evidence has accumulated past 'mergeEvidenceMet' — both
+-- the merge and the rule promotion act on exactly this set, so it is derived
+-- once from one read of the reviews.
+confirmedGroups
+  :: [Endpoints.GroupReview]
+  -> [(Text, Text, Int, Text, Int, [Text])]
+  -> [(Endpoints.GroupReview, Text, Text, Int, [Text])]
+confirmedGroups reviews keyed =
+  [ (r, gkey, prefix, pos, kids)
+  | (gkey, _, n, prefix, pos, kids) <- keyed
+  , Just r <- [HM.lookup gkey byKey]
+  , r.verdict == "param"
+  , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
+  ]
+  where
+    byKey = HM.fromList [(r.groupKey, r) | r <- reviews]
 
 
 -- | Merge the groups whose evidence has accumulated past 'mergeEvidenceMet'.
@@ -3661,47 +3683,53 @@ reviewResidualEndpointGroups pid = do
 -- classifier derived — except for the row in @endpoint_group_reviews@ that
 -- records which verdict caused it, which is what lets cleanup quarantine it and
 -- 'recheckQuarantinedMerges' take it back.
-applyConfirmedGroups :: Projects.ProjectId -> [(Text, Text, Int, Text, [Text])] -> ATBackgroundCtx ()
-applyConfirmedGroups pid keyed = do
-  reviews <- Endpoints.getGroupReviews pid
-  let byKey = HM.fromList [(r.groupKey, r) | r <- reviews]
-      ready =
-        [ (gkey, prefix, kids)
-        | (gkey, _, n, prefix, kids) <- keyed
-        , Just r <- [HM.lookup gkey byKey]
-        , isNothing r.appliedAt
-        , r.verdict == "param"
-        , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
-        ]
-  forM_ (take endpointGroupApplyBatch ready) \(gkey, prefix, kids) -> do
-    endpoints <- Endpoints.getUnmergedEndpoints pid
-    let pos = length (T.splitOn "/" prefix) - 1
-        -- Only the position the verdict is about becomes a wildcard. Everything
-        -- deeper keeps whatever the classifier already made of it, so one
-        -- verdict cannot quietly flatten a subtree it was never shown.
-        wildcardAt segs = take pos segs <> ["{param}"] <> drop (pos + 1) segs
-        touched =
-          [ (h, m, host, T.intercalate "/" (wildcardAt segs))
-          | (h, m, host, path) <- endpoints
-          , let segs = T.splitOn "/" (classifyUrlPath path)
-          , length segs > pos
-          , T.intercalate "/" (take pos segs) == prefix
-          , (segs !!? pos) `elem` map Just kids
-          ]
-    unless (null touched) do
-      let byTemplate = HM.toList $ HM.fromListWith (<>) [((m, host, tp), [h]) | (h, m, host, tp) <- touched]
-          canonOf method host tp = toXXHash $ pid.toText <> host <> method <> tp
-          canonicals = [canonOf m host tp | ((m, host, tp), _) <- byTemplate]
-          updates = [(h, canonOf m host tp, tp) | ((m, host, tp), hs) <- byTemplate, h <- hs]
-          inserts = [(pid, tp, m, host, canonOf m host tp) | ((m, host, tp), _) <- byTemplate]
-      void $ Endpoints.setEndpointCanonical updates
-      Endpoints.insertCanonicalEndpoints inserts
-      -- Every canonical this verdict produced, so the quarantine covers all of
-      -- them and a revert can find them all again.
-      Endpoints.markGroupApplied pid gkey (V.fromList canonicals)
-      Log.logInfo
-        "Applied an LLM-confirmed endpoint merge"
-        ("project_id", pid.toText, "group", gkey, "endpoints", length touched, "templates", length byTemplate)
+applyConfirmedGroups :: Projects.ProjectId -> [(Endpoints.GroupReview, Text, Text, Int, [Text])] -> ATBackgroundCtx ()
+applyConfirmedGroups pid confirmed = do
+  (applied, reverted) <- Endpoints.autoApplyAccuracy pid
+  if not (autoApplyTrusted applied reverted)
+    then
+      Log.logAttention
+        "Auto-apply suspended: too many merges were reverted by the re-check"
+        ("project_id", pid.toText, "applied_7d", applied, "reverted_7d", reverted)
+    else do
+      endpoints <- Endpoints.getUnmergedEndpoints pid
+      forM_ (take endpointGroupApplyBatch [g | g@(r, _, _, _, _) <- confirmed, isNothing r.appliedAt]) \(_, gkey, prefix, pos, kids) -> do
+        let prefixSegs = T.splitOn "/" prefix
+            kidSet = S.fromList kids
+            -- Only the position the verdict is about becomes a wildcard.
+            -- Everything deeper keeps whatever the classifier already made of
+            -- it, so one verdict cannot quietly flatten a subtree it was never
+            -- shown.
+            wildcardAt segs = take pos segs <> ["{param}"] <> drop (pos + 1) segs
+            touched =
+              [ (h, m, host, T.intercalate "/" (wildcardAt segs))
+              | (h, m, host, path) <- endpoints
+              , let segs = T.splitOn "/" (classifyUrlPath path)
+              , take pos segs == prefixSegs
+              , maybe False (`S.member` kidSet) (segs !!? pos)
+              ]
+        unless (null touched) do
+          -- Last gate, and the only one about behaviour rather than spelling:
+          -- do these endpoints actually return the same shape? Route words do
+          -- not, whatever their paths look like.
+          (observed, distinctShapes) <- Endpoints.endpointShapeAgreement pid (V.fromList [h | (h, _, _, _) <- touched])
+          if not (shapeAgreementOk observed distinctShapes)
+            then
+              Log.logInfo
+                "Declined a confirmed merge: members do not agree on response shape"
+                ("project_id", pid.toText, "group", gkey, "observed", observed, "distinct_shapes", distinctShapes)
+            else do
+              let byTemplate = HM.toList $ HM.fromListWith (<>) [((m, host, tp), [h]) | (h, m, host, tp) <- touched]
+                  canonOf method hst tp = toXXHash $ pid.toText <> hst <> method <> tp
+                  canonicals = [canonOf m hst tp | ((m, hst, tp), _) <- byTemplate]
+              void $ Endpoints.setEndpointCanonical [(h, canonOf m hst tp, tp) | ((m, hst, tp), hs) <- byTemplate, h <- hs]
+              Endpoints.insertCanonicalEndpoints [(pid, tp, m, hst, canonOf m hst tp) | ((m, hst, tp), _) <- byTemplate]
+              -- Every canonical this verdict produced, so the quarantine covers
+              -- all of them and a revert can find them all again.
+              Endpoints.markGroupApplied pid gkey (V.fromList canonicals)
+              Log.logInfo
+                "Applied an LLM-confirmed endpoint merge"
+                ("project_id", pid.toText, "group", gkey, "endpoints", length touched, "templates", length byTemplate)
 
 
 -- | Groups merged per run. Small on purpose: a bad rule should cost one group's
@@ -3751,27 +3779,25 @@ sharedIdPrefix vals = do
 -- has an answer. A rule admitted on that basis is worth more than the verdict
 -- it came from, because from then on the format is recognised by code, on paths
 -- nobody has seen, without a call.
-promoteConfirmedIdRules :: Projects.ProjectId -> [(Text, Text, Int, Text, [Text])] -> ATBackgroundCtx ()
-promoteConfirmedIdRules pid keyed = do
-  reviews <- Endpoints.getGroupReviews pid
+promoteConfirmedIdRules :: Projects.ProjectId -> [(Endpoints.GroupReview, Text, Text, Int, [Text])] -> ATBackgroundCtx ()
+promoteConfirmedIdRules pid confirmed = do
   staticSegments <- Endpoints.knownStaticSegments pid
   existing <- Endpoints.learnedIdRulePrefixes pid
-  let byKey = HM.fromList [(r.groupKey, r) | r <- reviews]
-      candidates =
-        [ (gkey, prefix', foldl' min maxBound (map T.length kids), kids)
-        | (gkey, _, n, _, kids) <- keyed
-        , Just r <- [HM.lookup gkey byKey]
-        , r.verdict == "param"
-        , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
+  let candidates =
+        [ (gkey, prefix', minLen)
+        | (_, gkey, _, _, kids) <- confirmed
         , Just prefix' <- [sharedIdPrefix kids]
         , not (HashSet.member prefix' existing)
+        , Just minLen <- [viaNonEmpty minimum1 (map T.length kids)]
         ]
       -- The safety test. A prefix that matches even one segment this project
       -- routes on is rejected outright rather than qualified further.
-      safe = [(gkey, p, minLen) | (gkey, p, minLen, _) <- candidates, not (any (T.isPrefixOf p) staticSegments)]
-      rejected = [(gkey, p) | (gkey, p, _, _) <- candidates, any (T.isPrefixOf p) staticSegments]
+      collides p = any (T.isPrefixOf p) staticSegments
+      (rejected, safe) = L.partition (\(_, p, _) -> collides p) candidates
   unless (null rejected)
-    $ Log.logInfo "Declined to promote id rules that collide with known routes" ("project_id", pid.toText, "rejected", rejected)
+    $ Log.logInfo
+      "Declined to promote id rules that collide with known routes"
+      ("project_id", pid.toText, "rejected", [(g, p) | (g, p, _) <- rejected])
   forM_ safe \(gkey, p, minLen) -> do
     Endpoints.insertLearnedIdRule pid p minLen gkey (length staticSegments)
     Log.logInfo
@@ -3878,6 +3904,50 @@ mergeEvidenceMet confirmations firstCount nowCount members =
     && nowCount
     >= 8
     && not (any looksLikeRouteWord members)
+
+
+-- | Do the endpoints in a group behave like one route?
+--
+-- Takes @(how many have an observed shape, how many distinct shapes)@ and asks
+-- whether the shapes agree closely enough. Measured on real groups: a family of
+-- ids returned 5 distinct shapes across 532 observed endpoints (0.009), while a
+-- set of sibling route names returned 177 across 311 (0.569). Two orders of
+-- magnitude apart, so the threshold does not need to be delicate.
+--
+-- This is the check I wrongly said could not exist. Every mechanical test I
+-- tried on the /paths/ was tautological — a template over eight route words is
+-- structurally identical to one over eight ids. Shapes are not derived from the
+-- path at all, so they are free to disagree, and for route words they do.
+--
+-- Needs a few observed members: an unobserved group trivially has zero distinct
+-- shapes and would otherwise sail through.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> BJ.shapeAgreementOk 532 5
+-- True
+--
+-- >>> BJ.shapeAgreementOk 311 177
+-- False
+--
+-- >>> BJ.shapeAgreementOk 0 0
+-- False
+shapeAgreementOk :: Int64 -> Int64 -> Bool
+shapeAgreementOk observed distinctShapes =
+  observed >= 4 && fromIntegral distinctShapes <= (0.1 :: Double) * fromIntegral observed
+
+
+-- | Has auto-apply earned the right to keep running for this project?
+--
+-- The quarantine re-check produces an error rate for free, and this is what it
+-- is for. A model that starts merging things it later disowns should stop being
+-- allowed to merge, without anyone noticing first and turning it off.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> map (uncurry BJ.autoApplyTrusted) [(0, 0), (4, 4), (20, 1), (20, 5)]
+-- [True,True,True,False]
+autoApplyTrusted :: Int64 -> Int64 -> Bool
+autoApplyTrusted applied reverted =
+  applied < 5 || fromIntegral reverted <= (0.2 :: Double) * fromIntegral applied
 
 
 -- | A value a developer plausibly named a route after: letters and separators,

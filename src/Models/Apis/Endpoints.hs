@@ -28,6 +28,8 @@ module Models.Apis.Endpoints (
   getQuarantinedMerges,
   appliedCanonicalHashes,
   fleetShapeReport,
+  endpointShapeAgreement,
+  autoApplyAccuracy,
   knownStaticSegments,
   learnedIdRulePrefixes,
   insertLearnedIdRule,
@@ -626,6 +628,37 @@ appliedCanonicalHashes pid gkey =
     <$> Hasql.interpOne
       [HI.sql| SELECT applied_canonical_hashes FROM apis.endpoint_group_reviews
                WHERE project_id = #{pid} AND group_key = #{gkey} |]
+
+
+-- | How much the endpoints in a candidate group agree on their observed shape:
+-- @(how many have been observed at all, how many distinct shapes between them)@.
+--
+-- The schema catalog fingerprints what an endpoint actually returned. Two ids of
+-- one route produce the same fingerprint; two different routes do not. That
+-- makes this the one check available that is about behaviour rather than
+-- spelling — and unlike anything computed from the path strings, a group of
+-- route words genuinely fails it.
+endpointShapeAgreement :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es (Int64, Int64)
+endpointShapeAgreement pid hashes =
+  fromMaybe (0, 0)
+    <$> Hasql.interpOne
+      [HI.sql| SELECT count(c.key_hash)::int8, count(DISTINCT c.template_hash)::int8
+               FROM unnest(#{hashes}::text[]) AS h(hash)
+               JOIN apis.schema_catalog c ON c.project_id = #{pid} AND c.key_hash = h.hash |]
+
+
+-- | @(merges applied, merges the re-check later took back)@ over the last week.
+--
+-- The revert rate is the system's own error rate, measured without anybody
+-- reading anything, and it is what auto-apply is allowed to keep running on.
+autoApplyAccuracy :: DB es => Projects.ProjectId -> Eff es (Int64, Int64)
+autoApplyAccuracy pid =
+  fromMaybe (0, 0)
+    <$> Hasql.interpOne
+      [HI.sql| SELECT count(*) FILTER (WHERE applied_at IS NOT NULL)::int8,
+                      count(*) FILTER (WHERE reverted_at IS NOT NULL)::int8
+               FROM apis.endpoint_group_reviews
+               WHERE project_id = #{pid} AND applied_at > NOW() - INTERVAL '7 days' |]
 
 
 -- | Every literal path segment this project is known to route on.
