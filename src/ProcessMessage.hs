@@ -17,6 +17,12 @@ module ProcessMessage (
   valueToFields,
   redactJSON,
   ensureUrlParams,
+  ensureUrlParamsWith,
+  isUrlIdLikeWith,
+  classifyUrlPathWith,
+  PathClassifier (..),
+  mkPathClassifier,
+  emptyPathClassifier,
   dedupFields,
   isUrlIdLike,
   tokenIsGenerated,
@@ -151,7 +157,7 @@ data HttpKey = HttpKey
   }
 
 
-httpKeyOf :: CanonicalPathIndex -> Telemetry.OtelLogsAndSpans -> HttpKey
+httpKeyOf :: PathClassifier -> Telemetry.OtelLogsAndSpans -> HttpKey
 httpKeyOf canonicalTemplates otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
@@ -184,7 +190,7 @@ httpKeyOf canonicalTemplates otelSpan =
           <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
       !sdkType = fromMaybe LogQueries.SDKUnknown $ readMaybe $ toString sdkTypeStr
       !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
-      !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
+      !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParamsWith canonicalTemplates.idPrefixes urlPath'
       -- A path with its own captured params still has to be matched against the
       -- project's templates. It labels them by type (@/users/{uuid}/posts@) while
       -- discovery writes @{param}@, so without this the two spell the same route
@@ -194,7 +200,7 @@ httpKeyOf canonicalTemplates otelSpan =
       -- 'pathMatchesTemplate' treats either spelling as a wildcard, so once a
       -- template exists ingest settles on it.
       !candidate = bool urlPath' urlPathDyn hasDyn
-      !urlPath = fromMaybe candidate $ matchCanonicalPath canonicalTemplates method host candidate
+      !urlPath = fromMaybe candidate $ matchCanonicalPath canonicalTemplates.templates method host candidate
    in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
 
 
@@ -209,7 +215,7 @@ httpKeyOf canonicalTemplates otelSpan =
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
-processSpanToEntities :: CanonicalPathIndex -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities :: PathClassifier -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       HttpKey{method, host, urlPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
@@ -262,12 +268,11 @@ stampHashesAtIngest :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.
 stampHashesAtIngest caches = V.map \r -> fromMaybe r do
   pid <- Projects.projectIdFromText r.project_id
   pjc <- HM.lookup pid caches
-  let templates = HM.lookupDefault HM.empty pid templatesByPid
-      (_, spanHashes, _) = processSpanToEntities templates pjc pid r
+  let (_, spanHashes, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
       errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
   pure r{hashes = Just $ spanHashes <> errHashes}
   where
-    templatesByPid = HM.map (parseCanonicalPaths . (.canonicalPaths)) caches
+    templatesByPid = HM.map mkPathClassifier caches
 
 
 -- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.
@@ -275,7 +280,7 @@ stampHashesAtIngest caches = V.map \r -> fromMaybe r do
 -- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
 -- applied so PII never enters the catalog.
 extractObservation
-  :: CanonicalPathIndex
+  :: PathClassifier
   -> OtelLogsAndSpans
   -> SchemaHot.ObservationInput
 extractObservation canonicalTemplates otelSpan =
@@ -867,13 +872,18 @@ valueToFormatStr val = snd <$> find (\(regex, _) -> matched (val ?=~ regex)) com
 -- >>> let (url, _, _) = ensureUrlParams "/users/12345/orders/67890" in ensureUrlParams url
 -- ("/users/{number}/orders/{number_1}",Object (fromList []),True)
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
-ensureUrlParams "" = ("", AE.object [], False)
-ensureUrlParams url = (T.intercalate "/" segs, pathParams, any isBracedPlaceholder segs)
+ensureUrlParams = ensureUrlParamsWith []
+
+
+-- | 'ensureUrlParams' with the project's learned id prefixes in scope.
+ensureUrlParamsWith :: [Text] -> Text -> (Text, AE.Value, Bool)
+ensureUrlParamsWith _ "" = ("", AE.object [], False)
+ensureUrlParamsWith learned url = (T.intercalate "/" segs, pathParams, any isBracedPlaceholder segs)
   where
     (segsR, prsR) = foldl' step ([], []) (T.splitOn "/" url)
     step (sAcc, pAcc) x
       | isBracedPlaceholder x = (x : sAcc, pAcc)
-      | otherwise = case dynSegmentLabel x of
+      | otherwise = case dynSegmentLabelWith learned x of
           Nothing -> (x : sAcc, pAcc)
           Just lbl -> let s = newSegment sAcc lbl in (s : sAcc, (s, x) : pAcc)
     segs = reverse segsR
@@ -938,10 +948,15 @@ percentDecodeLenient t
 -- >>> map dynSegmentLabel ["auth0%7Cabc123def456", "%7Bid%7D", ":orderId", "users"]
 -- [Just "param",Just "param",Just "param",Nothing]
 dynSegmentLabel :: Text -> Maybe Text
-dynSegmentLabel x0
+dynSegmentLabel = dynSegmentLabelWith []
+
+
+-- | 'dynSegmentLabel' with the project's learned id prefixes in scope.
+dynSegmentLabelWith :: [Text] -> Text -> Maybe Text
+dynSegmentLabelWith learned x0
   | isRoutePlaceholder x = Just "param"
   | otherwise = case valueToFormatStr x of
-      Nothing -> if isUrlIdLike x then Just "param" else Nothing
+      Nothing -> if isUrlIdLikeWith learned x then Just "param" else Nothing
       Just "{uuid}" -> Just "uuid"
       Just v
         | v
@@ -1032,8 +1047,34 @@ newSegment segs seg =
 -- >>> map isUrlIdLike ["aramex,chowdeck,dhl-nigeria", "gigl", "STD-DELIVERY"]
 -- [True,False,False]
 isUrlIdLike :: Text -> Bool
-isUrlIdLike seg
+isUrlIdLike = isUrlIdLikeWith []
+
+
+-- | 'isUrlIdLike', plus the id prefixes this particular project has been proven
+-- to use.
+--
+-- A learned prefix is only admitted after it has been checked against every
+-- segment the project routes on, so matching one is strong evidence on its own —
+-- stronger than any of the shape heuristics, which have to generalise across
+-- every customer at once. The length guard stops a prefix from swallowing a
+-- segment that is only barely longer than the prefix itself.
+--
+-- >>> isUrlIdLikeWith ["cus_"] "cus_QpeOrF3HMRjazD"
+-- True
+--
+-- >>> isUrlIdLikeWith ["cus_"] "customers"
+-- False
+--
+-- And the reason a learned rule is worth having at all: without it the generic
+-- heuristics miss this one. It has vowels, barely alternates, is not hex, and is
+-- not shouty — every shape rule declines it.
+--
+-- >>> isUrlIdLikeWith [] "cus_QpeOrF3HMRjazD"
+-- False
+isUrlIdLikeWith :: [Text] -> Text -> Bool
+isUrlIdLikeWith learned seg
   | T.null seg = False
+  | any matchesLearned learned = True
   | T.elem '|' seg = True -- compound IDs: auth0|abc, google-oauth2|123
   | not (T.isPrefixOf ":" seg) && T.elem ':' seg = True -- namespaced: type:value
   -- A comma-joined segment is a multi-value parameter, not a route: every
@@ -1041,6 +1082,8 @@ isUrlIdLike seg
   -- One courier-selection route accounted for 128 of a customer's 551 paths.
   | length (filter (not . T.null) (T.splitOn "," seg)) >= 2 = True
   | otherwise = any tokenIsGenerated $ T.split (not . isAlphaNum) seg
+  where
+    matchesLearned p = T.isPrefixOf p seg && T.length seg >= T.length p + 4
 
 
 -- | Is one alphanumeric token machine-generated rather than a word a human typed?
@@ -1105,6 +1148,30 @@ pathMatchesTemplate ps ts = length ps == length ts && and (zipWith (\p t -> isBr
 
 -- | Canonical templates for matching at ingest, keyed by (method, host, segment count).
 type CanonicalPathIndex = HM.HashMap (Text, Text, Int) [([Text], Text)]
+
+
+-- | Everything a project contributes to classifying one of its paths: the
+-- templates it has already settled on, and the id prefixes it has been observed
+-- to use. Threaded together because every site that needs one needs the other.
+data PathClassifier = PathClassifier
+  { templates :: CanonicalPathIndex
+  , idPrefixes :: [Text]
+  }
+
+
+-- | A classifier that knows nothing about any project: no templates, no learned
+-- prefixes, so only the generic rules apply.
+emptyPathClassifier :: PathClassifier
+emptyPathClassifier = PathClassifier{templates = HM.empty, idPrefixes = []}
+
+
+-- | Build the per-project classification context. Once per batch, not per span.
+mkPathClassifier :: Projects.ProjectCache -> PathClassifier
+mkPathClassifier pjc =
+  PathClassifier
+    { templates = parseCanonicalPaths pjc.canonicalPaths
+    , idPrefixes = V.toList pjc.idRulePrefixes
+    }
 
 
 -- | Number of literal (non-wildcard) segments — a template's specificity.
@@ -1179,9 +1246,14 @@ parseCanonicalPaths = HM.map (sortOn (\(segs, p) -> (negate $ templateLiterals s
 -- >>> map classifyUrlPath ["/users/{uuid}/posts", "/users/{param}/posts", "/orders/:id"]
 -- ["/users/{param}/posts","/users/{param}/posts","/orders/{param}"]
 classifyUrlPath :: Text -> Text
-classifyUrlPath = T.intercalate "/" . map seg . T.splitOn "/"
+classifyUrlPath = classifyUrlPathWith []
+
+
+-- | 'classifyUrlPath' with the project's learned id prefixes in scope.
+classifyUrlPathWith :: [Text] -> Text -> Text
+classifyUrlPathWith learned = T.intercalate "/" . map seg . T.splitOn "/"
   where
-    seg s = if isBracedPlaceholder s || isJust (dynSegmentLabel s) then "{param}" else s
+    seg s = if isBracedPlaceholder s || isJust (dynSegmentLabelWith learned s) then "{param}" else s
 
 
 -- | Tokenize URL path for Drain: split by "/" and pre-normalize with valueToFormatStr/isUrlIdLike.

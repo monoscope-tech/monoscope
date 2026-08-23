@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import ProcessMessage (processMessages, processSpanToEntities)
+import ProcessMessage (emptyPathClassifier, processMessages, processSpanToEntities)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
@@ -61,7 +61,7 @@ spec = around withTestResources do
               , errors = Nothing
               , message_size_bytes = 0
               }
-          (mkEndpoint, _hashes, _) = processSpanToEntities HashMap.empty Projects.defaultProjectCache pid badSpan
+          (mkEndpoint, _hashes, _) = processSpanToEntities emptyPathClassifier Projects.defaultProjectCache pid badSpan
       fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just pid
 
   describe "process request to db" do

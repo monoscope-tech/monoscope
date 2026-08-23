@@ -114,7 +114,7 @@ mkWideSpan ix fieldCount =
 -- | Light wrapper that runs N spans through the real walker and one flush.
 observe :: V.Vector Telemetry.OtelLogsAndSpans -> IORef Hot.SchemaShardState -> IO ()
 observe spans ref = do
-  let obs = V.map (ProcessMessage.extractObservation HM.empty) spans
+  let obs = V.map (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier) spans
   Hot.observeSpans ref Hot.defaultPolicy pid obs
 
 
@@ -137,7 +137,7 @@ spec = sequential $ aroundAll withTestResources $
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
       let widePolicy = Hot.defaultPolicy{Hot.maxFieldsPerEntry = 100}
-          obs = V.singleton (ProcessMessage.extractObservation HM.empty (mkWideSpan 0 5_000))
+          obs = V.singleton (ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier (mkWideSpan 0 5_000))
       -- Direct call so we can pass a tight policy without rebuilding config.
       Hot.observeSpans ref widePolicy pid obs
       st <- readIORef ref

@@ -125,7 +125,7 @@ mkSpan p attrs resMap (name, kind, statusCode, level) sev =
 -- the real 'extractObservation' walker.
 richObs :: Projects.ProjectId -> Text -> Hot.ObservationInput
 richObs p method =
-  ProcessMessage.extractObservation HM.empty
+  ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier
     $ mkSpan
       p
       ( Map.fromList
@@ -145,7 +145,7 @@ richObs p method =
 -- summary pipeline.
 richObsWithTopLevel :: Projects.ProjectId -> Text -> Hot.ObservationInput
 richObsWithTopLevel p method =
-  ProcessMessage.extractObservation HM.empty
+  ProcessMessage.extractObservation ProcessMessage.emptyPathClassifier
     $ mkSpan
       p
       ( Map.fromList

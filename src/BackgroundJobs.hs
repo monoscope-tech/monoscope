@@ -112,7 +112,7 @@ import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (classifyUrlPath, extractObservation, parseCanonicalPaths, processSpanToEntities)
+import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -2243,7 +2243,7 @@ processEagerBatch batch shard
 
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
-        let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
+        let !canonicalTemplates = mkPathClassifier projectCache
             !results = V.zipWith (\sp eid -> let (mkEp, hs, np) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
             !observations = V.map (extractObservation canonicalTemplates) spans
@@ -3518,9 +3518,10 @@ endpointTemplateDiscovery :: Projects.ProjectId -> ATBackgroundCtx ()
 endpointTemplateDiscovery pid = do
   endpoints <- Endpoints.getUnmergedEndpoints pid
   existing <- Endpoints.getCanonicalTemplateKeys pid
+  learned <- map fst <$> Endpoints.learnedIdRulesFor pid
   unless (null endpoints) do
     let known = S.fromList $ V.toList existing
-        grouped = HM.toList $ HM.fromListWith (<>) [((m, host, classifyUrlPath path), [h]) | (h, m, host, path) <- endpoints]
+        grouped = HM.toList $ HM.fromListWith (<>) [((m, host, classifyUrlPathWith learned path), [h]) | (h, m, host, path) <- endpoints]
         -- An existing template vouches for its group; a new one has to be
         -- witnessed twice and must actually be a template.
         isEligible ((m, host, tp), hs) = S.member (m, host, tp) known || (length hs >= 2 && T.isInfixOf "{param}" tp)
@@ -3610,7 +3611,8 @@ reviewResidualEndpointGroups pid = do
   ctx <- ask @Config.AuthContext
   when (ctx.config.enableEndpointGroupReview && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointGroupReview" do
     endpoints <- Endpoints.getUnmergedEndpoints pid
-    let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPath path)]) | (_, m, _, path) <- endpoints]
+    learned <- map fst <$> Endpoints.learnedIdRulesFor pid
+    let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPathWith learned path)]) | (_, m, _, path) <- endpoints]
         groups =
           [ (method <> " " <> prefix <> " @" <> show pos, prefix, sort kids)
           | (method, paths) <- byMethod
@@ -3737,7 +3739,7 @@ sharedIdPrefix vals = do
   guard $ T.length common >= 2 && remainder >= 4 && length vals >= 2
   pure common
   where
-    sharedPrefix a b = T.pack $ map fst $ takeWhile (uncurry (==)) $ T.zip a b
+    sharedPrefix a b = toText $ map fst $ takeWhile (uncurry (==)) $ T.zip a b
 
 
 -- | Promote confirmed families to deterministic rules, but only where the rule

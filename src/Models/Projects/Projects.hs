@@ -333,6 +333,11 @@ data ProjectCache = ProjectCache
   , paymentPlan :: Text
   , -- Canonical URL path templates for matching at ingestion: "method|host|template_path"
     canonicalPaths :: V.Vector Text
+  , -- Literal prefixes this project's ids are known to start with, promoted
+    -- from confirmed LLM verdicts once proven not to collide with any segment
+    -- the project routes on. Lets ingest recognise the format on a path the
+    -- learner has never seen, with no population to wait for.
+    idRulePrefixes :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
@@ -380,7 +385,10 @@ projectCacheById pid = do
             (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = #{pid}),'Free')) payment_plan,
             (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')
              FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
-            ) canonical_paths
+            ) canonical_paths,
+            (SELECT COALESCE(ARRAY_AGG(prefix), '{}')
+             FROM apis.learned_id_rules WHERE project_id = #{pid} AND disabled_at IS NULL
+            ) id_rule_prefixes
     from
       (select e.host hosts, e.hash endpoint_hashes
          from apis.endpoints e
