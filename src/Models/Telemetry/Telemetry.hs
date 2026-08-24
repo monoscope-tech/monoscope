@@ -8,6 +8,7 @@ module Models.Telemetry.Telemetry (
   convertOtelLogsAndSpansToSpanRecord,
   getTotalEventsToReport,
   getUsageTotals,
+  dayWindows,
   SpanRecord (..),
   getAllATErrors,
   isErrorRecord,
@@ -111,7 +112,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
-import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, diffUTCTime, picosecondsToDiffTime)
+import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -148,6 +149,10 @@ import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
 import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+
+
+-- $setup
+-- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -980,19 +985,62 @@ getTotalMetricsCount useTimefusion pid lastReported =
   fromMaybe 0 <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
 
 
--- | (eventCount, eventBytes, metricCount, metricBytes) for a project since
--- `lastReported`. Single helper so ReportUsage stays a 1-call site instead of
+-- | Split @(start, end]@ into contiguous slices of at most one day.
+--
+-- A whole billing cycle in one aggregate exceeds TimeFusion's 60s statement
+-- timeout for high-volume projects (DSI-APP writes ~33M metric rows a day), and
+-- a timeout there fails the entire usage report. Per-day slices sum to exactly
+-- the same total because the bounds are half-open and contiguous.
+--
+-- >>> let t d h = UTCTime (fromGregorian 2026 8 d) (secondsToDiffTime (h * 3600))
+-- >>> dayWindows (t 1 0) (t 1 0)
+-- []
+-- >>> dayWindows (t 2 0) (t 1 0)
+-- []
+-- >>> dayWindows (t 1 0) (t 2 6) == [(t 1 0, t 2 0), (t 2 0, t 2 6)]
+-- True
+--
+-- The slices tile the window with no gap and no overlap, so nothing is counted
+-- twice and nothing is skipped:
+--
+-- >>> let ws = dayWindows (t 1 0) (t 4 7)
+-- >>> (fmap fst (viaNonEmpty head ws), fmap snd (viaNonEmpty last ws)) == (Just (t 1 0), Just (t 4 7))
+-- True
+-- >>> and (zipWith (\(_, e) (s, _) -> e == s) ws (drop 1 ws))
+-- True
+dayWindows :: UTCTime -> UTCTime -> [(UTCTime, UTCTime)]
+dayWindows start end
+  | start >= end = []
+  | otherwise = (start, next) : dayWindows next end
+  where
+    next = min end (addUTCTime nominalDay start)
+
+
+-- | (eventCount, eventBytes, metricCount, metricBytes) for a project over
+-- @(wStart, wEnd]@. Single helper so ReportUsage stays a 1-call site instead of
 -- juggling four separate queries.
-getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
-getUsageTotals useTimefusion pid lastReported = do
+getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (Int, Int64, Int, Int64)
+getUsageTotals useTimefusion pid wStart wEnd = do
   -- Both halves follow the read flag. The events query used to be hardcoded to
   -- Postgres while only metrics was routed, which was survivable until
   -- telemetry moved to TimeFusion and left `otel_logs_and_spans` empty here.
   -- After that it counted zero events for every project on every run — and
   -- events are what the plans charge for, so usage reported as nothing while
   -- `usage_last_reported` advanced regardless.
-  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
-  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
+  --
+  -- `wEnd` is the same instant the caller records as the window end. Without it
+  -- the count ran to query time, so rows landing between the two were billed in
+  -- this window and again in the next one, which starts at `wEnd`.
+  let tally q =
+        foldlM
+          ( \(!c, !b) (s, e) -> do
+              (c', b') <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (q s e)
+              pure (c + c', b + b')
+          )
+          (0, 0)
+          (dayWindows wStart wEnd)
+  (eC, eB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
+  (mC, mB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
   pure (eC, eB, mC, mB)
 
 

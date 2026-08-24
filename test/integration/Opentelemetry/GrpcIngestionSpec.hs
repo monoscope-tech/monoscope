@@ -180,7 +180,7 @@ spec = sequential $ aroundAll withTestResources do
       dataPointsHtml `shouldNotContain` "cursor-pointerhover"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
-      (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)
+      (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime) (addUTCTime 1 frozenTime)
       events `shouldSatisfy` (>= 0)
       metrics `shouldSatisfy` (>= 4)
 

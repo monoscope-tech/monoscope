@@ -498,7 +498,7 @@ processBackgroundJob authCtx bgJob =
               wStart =
                 max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
-            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart
+            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
             let totalUsage = totalToReport + totalMetricsCount
                 totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
                 chunks = case provider of
