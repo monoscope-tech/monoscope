@@ -80,7 +80,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
-import Pages.Telemetry (DetailLoading (KeepCurrent), spanDetailAttrs_, tracePage)
+import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), FilterMenu (..), FilterOption (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -198,12 +198,6 @@ anomalyBulkActionsPostH pid action durationM items = do
       addRespHeaders Bulk
 
 
--- | What the Investigation pane has to work with. 'TraceUnavailable' is a real
--- third state — the fetch blew its budget or errored — kept distinct from
--- 'NoTrace' so the empty state can't claim the issue simply has no trace.
-data TracePane = NoTrace | TraceUnavailable | TraceLoaded Telemetry.Trace (V.Vector Telemetry.SpanRecord)
-
-
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById issueId
 
@@ -263,25 +257,21 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
         Issues.QueryAlert -> pure Nothing
         Issues.LogPattern -> pure Nothing
         Issues.LogPatternRateChange -> pure Nothing
-      -- The trace is supporting evidence, not the page: a cold read of a
-      -- multi-thousand-span trace has taken >56s and 504'd the whole issue behind
-      -- the gateway. Budget it and degrade this one pane, so the stack trace,
-      -- error details, chart and logs still render.
-      budgetSecs <- (.env.traceViewTimeoutSecs) <$> ask @AuthContext
-      pane <- case mTraceRef of
-        Nothing -> pure NoTrace
-        Just (tId, tTs) -> do
-          let logFail evt extra = TraceUnavailable <$ Log.logAttention evt (AE.object $ ["issue_id" AE..= issue.id, "trace_id" AE..= tId] <> extra)
-          -- 'try' wraps 'timeout', not the reverse: timeout signals by throwing into
-          -- this thread, so an inner catch-all would swallow it and every real
-          -- timeout would report itself as a read failure. trySync also lets an
-          -- async kill (Warp dropping the handler) through instead of rendering on.
-          res <- trySync $ timeout (budgetSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid tId (Just tTs) now
-          case res of
-            Left e -> logFail "ISSUE_TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
-            Right Nothing -> logFail "ISSUE_TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= budgetSecs]
-            Right (Just Nothing) -> pure NoTrace
-            Right (Just (Just (traceItem, spanRecs))) -> pure $ TraceLoaded traceItem spanRecs
+      -- The trace is supporting evidence, not the page. It used to be fetched here
+      -- and a cold read of a multi-thousand-span trace took >56s, so the gateway
+      -- 504'd the whole issue. The Investigation panel now pulls it as its own
+      -- HTMX fragment, and the only thing this page still needs from the trace is
+      -- the session id for the replay section — one scalar, not 1300 rows.
+      replaySession <- flip foldMapM mTraceRef \(tId, tTs) ->
+        Hasql.withHasqlTimefusion useTf
+          $ listToMaybe @Text
+          <$> Hasql.interp
+            [HI.sql| SELECT attributes___session___id FROM otel_logs_and_spans
+                      WHERE project_id = #{pid.toText}
+                        AND timestamp BETWEEN #{addUTCTime (-300) tTs} AND #{addUTCTime 300 tTs}
+                        AND context___trace_id = #{tId}
+                        AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
+                      LIMIT 1 |]
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
           then do
@@ -298,7 +288,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
           else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue pane errorM now isFirst tp sampleOverride
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp sampleOverride
 
 
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
@@ -494,19 +484,19 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
       $ traverse_ (uncurry renderCrumb) (zip [0 :: Int ..] crumbList)
 
 
-activityPanel_ :: Projects.ProjectId -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
-activityPanel_ pid issueId extraClass spans = do
-  let activityUrl = "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
+-- | The user-journey half needs the issue's trace, which is the slow read on this
+-- page — so the whole panel arrives through the one fragment it already used for
+-- issue events, with the trace reference passed along rather than pre-fetched.
+activityPanel_ :: Projects.ProjectId -> Text -> Text -> Maybe (Text, UTCTime) -> Html ()
+activityPanel_ pid issueId extraClass traceRef = do
+  let activityUrl =
+        "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
+          <> foldMap (\(tId, tTs) -> "?trace_id=" <> toUriStr tId <> "&trace_ts=" <> toUriStr (formatUTC tTs)) traceRef
   details_ [class_ $ "surface-raised rounded-2xl group/activity overflow-hidden " <> extraClass, term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
       faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
       span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
       faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/activity:rotate-180 transition-transform"
-    userJourneySection_ spans
-    div_ [class_ "border-t border-strokeWeak"] do
-      div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
-        faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
-        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
     div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
       $ div_ [class_ "p-4 flex justify-center"]
       $ loadingIndicator_ LdSM LdDots
@@ -548,13 +538,13 @@ issueStatusStrip_ now issue = whenJust banner \(icon, cls, msg) ->
       | otherwise = Nothing
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> TracePane -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
-anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
-  let (tr, spanRecs) = case pane of
-        TraceLoaded t rs -> (Just t, rs)
-        NoTrace -> (Nothing, V.empty)
-        TraceUnavailable -> (Nothing, V.empty)
-      (_, _, currentRange) = TimePicker.parseTimeRange now tp
+-- | @traceRef@ is the (trace id, when-it-happened) the Investigation panel loads
+-- its waterfall from — the panel fetches it itself, so a slow trace can't hold up
+-- this page. @replaySession@ is the one value the page still needs out of that
+-- trace, resolved by a scalar lookup rather than by reading every span.
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
+anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOverride = do
+  let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
       severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
@@ -638,7 +628,7 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
               div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
                 volumeChart_ "Pattern Volume"
                 logPatternCards sf lp sm
-              activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+              activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
       case issue.issueType of
         Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
           patternLayout d.sourceField d.logPattern d.sampleMessage
@@ -691,7 +681,7 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
                     else div_ [class_ "px-4 py-4 flex items-start gap-2 text-textWeak"] do
                       faSprite_ "circle-info" "regular" "w-4 h-4 shrink-0 mt-0.5"
                       span_ [class_ "text-xs"] "No stack trace captured — common for browser console errors. Check the User Journey for the events that led up to it."
-            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+            activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
         Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
@@ -747,8 +737,8 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
                   span_
                     [class_ "text-xs text-textWeak max-w-sm"]
                     "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
-            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
-      let isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
+            activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
+      let isLogPatternIssue = issue.issueType `elem` ([Issues.LogPattern, Issues.LogPatternRateChange] :: [Issues.IssueType])
       -- Escape closes the open span panel before it exits fullscreen — the panel's close
       -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
       div_
@@ -783,9 +773,9 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
               let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                   navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
                   tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
-              forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
+              forM_ ([(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured", "First"), (aUrl, not isFirst, "Show recent trace the error occured", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
               span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-              forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
+              forM_ ([("#span-content", "Trace", not isLogPatternIssue), ("#log-content", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
               span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
               -- Icon state is CSS-driven off the container's fullscreen class; the click only
               -- sends the event. tippy, not daisyUI: the card is `overflow-hidden`, which clips
@@ -797,35 +787,26 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
             -- The trace ships its own details panel (#trace_details_container), so this tab renders
             -- no second one — clicking a span replaces the open panel instead of stacking another.
             div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
-              div_ [id_ "trace_container", class_ "w-full h-full min-w-0"] $ case pane of
-                TraceLoaded t rs -> tracePage pid t rs
-                NoTrace ->
-                  div_ [class_ "flex items-center justify-center h-48"]
-                    $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
-                TraceUnavailable ->
-                  div_ [class_ "flex items-center justify-center h-48"]
-                    $ emptyState_
-                      def
-                        { icon = Just "triangle-exclamation"
-                        , size = ESCompact
-                        , action = ESLink ("/p/" <> pid.toText <> "/issues/" <> issueId <> bool "" "?first_occurrence=true" isFirst) "Retry"
-                        }
-                      "Trace took too long to load"
-                      "Everything else on this page is up to date. The Logs tab still works."
-              whenJust (spanRecs V.!? 0) \sr ->
-                -- Desktop only: on mobile the trace panel is a full-screen overlay, so
-                -- auto-opening it would bury the page behind span details on load.
-                -- `load`, not `intersect`: this marker sits below the full-height trace pane, so it
-                -- never enters the viewport and an intersect trigger would leave the panel empty.
-                -- KeepCurrent: the panel opens when content lands rather than flashing a skeleton,
-                -- so a re-fired preload can't wipe rendered details back to a loader.
-                div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
+              -- The waterfall arrives on its own: a cold read of a multi-thousand-span
+              -- trace took >56s and used to 504 this entire page. `load`, not
+              -- `intersect` — the pane is full-height and its trigger never scrolls
+              -- into view, which would leave it stuck on the spinner.
+              div_ [id_ "trace_container", class_ "w-full h-full min-w-0"] case traceRef of
+                Nothing -> div_ [class_ "flex items-center justify-center h-48"] $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
+                Just (tId, tTs) ->
+                  div_
+                    [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True
+                    , hxTrigger_ "load"
+                    , hxSwap_ "outerHTML"
+                    , class_ "h-48 flex items-center justify-center"
+                    ]
+                    $ loadingIndicator_ LdMD LdSpinner
 
           div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
             let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
                 isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
                 lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
-                (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]) of
+                (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, asum ([errM >>= (.base.recentTraceId), fst <$> traceRef] :: [Maybe Text])) of
                   (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", pickerParams)
                   (_, Just tId) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", pickerParams)
                   -- ~24% of error patterns never captured a trace id (log records carry no trace
@@ -859,7 +840,7 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
               ]
               $ htmxOverlayIndicator_ "details_indicator"
 
-      whenJust (V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs V.!? 0) \sessionId ->
+      whenJust replaySession \sessionId ->
         div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
           div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
             faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
@@ -867,7 +848,7 @@ anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
           termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
 
       -- Every other issue type already renders an Activity panel beside its own content.
-      when (issue.issueType == Issues.QueryAlert) $ activityPanel_ pid issueId "" V.empty
+      when (issue.issueType == Issues.QueryAlert) $ activityPanel_ pid issueId "" traceRef
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_
@@ -1948,18 +1929,35 @@ issueTypeMeta issueType critical = case issueType of
   Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
 
 
-issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
-issueActivityGetH pid issueId = do
+issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders (Html ()))
+issueActivityGetH pid issueId traceIdM traceTsM = do
   (_sess, _project) <- Projects.sessionAndProject pid
   activities <- Issues.selectIssueActivity pid issueId
   now <- Time.currentTime
+  env <- (.env) <$> ask @AuthContext
+  -- The journey comes out of the issue's trace, the one read on this page big
+  -- enough to time out; it is bounded here so a slow trace costs the journey, not
+  -- the issue-events timeline beside it.
+  journeySpans <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) -> do
+    res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now
+    case res of
+      Right (Just (Just (_, spans))) -> pure spans
+      Right (Just Nothing) -> pure V.empty
+      Right Nothing -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_TIMEOUT" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId])
+      Left e -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_FAILED" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId, "error" AE..= show @Text e])
   let userIds = ordNub $ mapMaybe (.createdBy) activities
   users :: [Projects.User] <-
     if null userIds
       then pure []
       else Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{userIds}::uuid[]) |]
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
-  addRespHeaders $ issueActivityTimeline_ userMap now activities
+  addRespHeaders do
+    userJourneySection_ journeySpans
+    div_ [class_ "border-t border-strokeWeak"] do
+      div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
+        faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
+        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
+    issueActivityTimeline_ userMap now activities
 
 
 issueActivityTimeline_ :: Map.Map Projects.UserId Projects.User -> UTCTime -> [Issues.IssueActivity] -> Html ()

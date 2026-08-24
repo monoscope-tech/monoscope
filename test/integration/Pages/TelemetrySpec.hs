@@ -64,7 +64,7 @@ spec = do
       V.length (V.filter (\s -> s.status == Just Telemetry.SSError) spans) `shouldBe` 1
 
       -- The page still renders end-to-end with the widened projection.
-      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing
+      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml page) `shouldSatisfy` T.isInfixOf "Waterfall"
 
   -- 'getMetricChartListData' dominates the /metrics page (640ms of ~850ms before the

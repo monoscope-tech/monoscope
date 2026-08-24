@@ -22,6 +22,7 @@ import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -29,7 +30,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
@@ -279,7 +280,7 @@ spec = sequential $ aroundAll withTestResources do
     -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
     -- issue page 504'd behind the gateway. The trace is supporting evidence — past
     -- 'traceViewTimeoutSecs' the page must still render everything else.
-    it "issue detail renders without the trace when the trace fetch exceeds its budget" \tr -> do
+    it "issue detail defers the trace to its own fragment and survives a starved trace fetch" \tr -> do
       errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
       spanIdText <- T.take 16 . T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
@@ -313,20 +314,28 @@ spec = sequential $ aroundAll withTestResources do
                   VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
             (testPid, errHash, frozenTime, frozenTime)
 
-      -- Baseline: with the default budget the pane loads and carries the trace id.
-      (_, okPage) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
-      renderPage okPage `shouldSatisfy` T.isInfixOf traceIdText
-
-      -- A zero budget stands in for the cold multi-thousand-span read.
-      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
-      (_, page) <- testServant starved $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
+      -- The page ships a shell that fetches the waterfall itself — no span read
+      -- inline, so a slow trace can no longer delay (or 504) the issue.
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
       let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf "Trace took too long to load"
-      -- The rest of the page is intact, and the degraded state doesn't masquerade
-      -- as "this issue never had a trace".
+      html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
+      -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
+      html `shouldSatisfy` T.isInfixOf "timestamp="
       html `shouldSatisfy` T.isInfixOf "slow-trace issue"
-      html `shouldSatisfy` T.isInfixOf "Investigation"
+      html `shouldSatisfy` not . T.isInfixOf "Waterfall"
       html `shouldSatisfy` not . T.isInfixOf "No trace data available"
+
+      -- And the fragment itself is budgeted: starved, it answers with a retryable
+      -- state rather than hanging past the gateway timeout.
+      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true")
+      case frag of
+        Trace.TraceDetails{} -> pass
+        _ -> expectationFailure "expected the trace fragment to render with the default budget"
+      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
+      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true")
+      case starvedFrag of
+        Trace.TraceDetailsNotFound _ retryUrl _ -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
+        _ -> expectationFailure "expected a starved trace fetch to yield the retryable not-found state"
 
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.

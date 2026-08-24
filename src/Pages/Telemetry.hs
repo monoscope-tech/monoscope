@@ -10,6 +10,7 @@ module Pages.Telemetry (
   metricExpandUrl,
   -- Trace
   traceH,
+  traceFragmentUrl,
   TraceDetailsGet (..),
   tracePage,
   spanDetailAttrs_,
@@ -28,8 +29,10 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Exception (trySync)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
+import Effectful.Timeout (timeout)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -54,9 +57,10 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
@@ -73,9 +77,17 @@ instance ToHtml MetricsOverViewGet where
 
 
 data TraceDetailsGet
-  = TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord)
+  = -- | The 'Bool' is @embedded@: this fragment was pulled into another page
+    -- (the issue detail's Investigation panel) rather than the log explorer's
+    -- full-height overlay. Embedded means open the first span's detail panel on
+    -- load — the explorer already has a selected row — and, on failure, render a
+    -- fallback sized for a panel instead of the overlay's full-screen one.
+    TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord) Bool
   | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
-  | TraceDetailsNotFound Projects.ProjectId
+  | -- | Carries the URL that produced it, so Retry re-issues the same request from
+    -- whatever container it landed in — the overlay's @loadTrace@ event only exists
+    -- in the log explorer, and reached nothing anywhere else.
+    TraceDetailsNotFound Projects.ProjectId Text Bool
 
 
 data SpanMin = SpanMin
@@ -200,28 +212,35 @@ flattenMetricTree dataMap trees lvl conts = foldMap flatten trees
 
 
 instance ToHtml TraceDetailsGet where
-  toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
+  toHtml (TraceDetails pid tr spanRecs openFirst) = do
+    toHtml $ tracePage pid tr spanRecs
+    when openFirst $ whenJust (spanRecs V.!? 0) \sr ->
+      -- Desktop only: on mobile the trace panel is a full-screen overlay, so
+      -- auto-opening it would bury the page behind span details on load.
+      -- KeepCurrent: the panel opens when content lands rather than flashing a
+      -- skeleton, so a re-fired preload can't wipe rendered details back to a loader.
+      div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
-  toHtml (TraceDetailsNotFound pid) =
-    div_ [class_ "min-h-screen flex items-center justify-center bg-bgBase p-6"]
-      $ div_ [class_ "max-w-lg space-y-6 text-center"] do
+  toHtml (TraceDetailsNotFound pid selfUrl embedded) =
+    div_ [class_ $ bool "min-h-screen" "h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
+      $ div_ [class_ "max-w-lg space-y-4 text-center"] do
         div_ [class_ "flex flex-col items-center gap-3"] do
           faSprite_ "circle-exclamation" "solid" "w-6 h-6 text-textWeak"
           div_ [class_ "space-y-1.5"] do
             h1_ [class_ "text-lg font-semibold text-textStrong"] "Couldn't load this trace"
-            p_ [class_ "max-w-md text-sm leading-6 text-textWeak"] "Try again. If it still fails, return to your results and search for the trace again."
+            p_ [class_ "max-w-md text-sm leading-6 text-textWeak"] "A slow or unavailable read timed out. Retrying often works — the second read is warm."
         div_ [class_ "flex flex-wrap justify-center gap-2"] do
-          button_
-            [ class_ "btn btn-sm btn-primary"
-            , [__|on click send loadTrace(url: #trace_expanded_view's @data-trace-url) to #trace_expanded_view|]
-            ]
-            "Retry loading trace"
-          button_
-            [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
-            , [__|on click send closeTraceView to #trace_expanded_view|]
-            ]
-            "Back to search results"
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
+          -- Re-issue the very request that produced this fallback, replacing it in
+          -- place. Works identically in the overlay and in an embedded panel.
+          button_ [class_ "btn btn-sm btn-primary", hxGet_ selfUrl, hxTarget_ "closest div", hxSwap_ "outerHTML"] "Retry loading trace"
+          unless embedded
+            $ button_
+              [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
+              , [__|on click send closeTraceView to #trace_expanded_view|]
+              ]
+              "Back to search results"
+        unless embedded
+          $ a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
   toHtmlRaw = toHtml
 
 
@@ -313,10 +332,22 @@ metricBreakdownGetH pid metricName labelM = do
     metricDetailChart pid metric "all" (mfilter (`elem` metric.metricLabels) labelM) ("details_" <> T.replace "." "_" metric.metricName)
 
 
+-- | The URL 'traceH' answers. Shared so an embedder's @hx-get@ and the failure
+-- state's Retry are the same request by construction. @timestamp@ is not
+-- optional in practice: without it the fetch widens from a +/-5min window to a
+-- 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21.
+traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Text
+traceFragmentUrl pid trId tsM embedded =
+  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded])
+
+
 -- Trace handler
-traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId timestamp spanIdM nav = do
-  useTf <- (.env.enableTimefusionReads) <$> Reader.ask @AuthContext
+traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceH pid trId timestamp spanIdM nav embedM = do
+  env <- (.env) <$> Reader.ask @AuthContext
+  let useTf = env.enableTimefusionReads
+      embedded = isJust embedM
+      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded) embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
@@ -324,7 +355,7 @@ traceH pid trId timestamp spanIdM nav = do
         spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
         let bySpanId i = V.find (\x -> (x.context >>= (.span_id)) == Just i) spanRecords'
         case (spanIdM >>= bySpanId) <|> spanRecords' V.!? 0 of
-          Nothing -> addRespHeaders $ TraceDetailsNotFound pid
+          Nothing -> addRespHeaders notFound
           Just clicked -> do
             let sdkNear =
                   V.find
@@ -333,8 +364,18 @@ traceH pid trId timestamp spanIdM nav = do
                 (targetSpan, atpSpan) = runIdentity $ LogItem.anchorSdkSpan (pure . bySpanId) (pure sdkNear) clicked
             addRespHeaders $ SpanDetails pid targetSpan atpSpan
       else do
-        traceItemM <- Telemetry.getTraceDetailsForView useTf pid trId timestamp now
-        addRespHeaders $ maybe (TraceDetailsNotFound pid) (\(traceItem, spans) -> TraceDetails pid traceItem spans) traceItemM
+        -- A cold read of a multi-thousand-span trace has taken >56s, past the
+        -- gateway's own timeout. Bound it so this returns a retryable state
+        -- instead of a 504 — 'try' outside 'timeout', since timeout signals by
+        -- throwing into this thread and an inner catch-all would swallow it.
+        res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid trId timestamp now
+        let unavailable evt extra = notFound <$ Log.logAttention evt (AE.object $ ["project_id" AE..= pid, "trace_id" AE..= trId] <> extra)
+        addRespHeaders
+          =<< case res of
+            Left e -> unavailable "TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
+            Right Nothing -> unavailable "TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= env.traceViewTimeoutSecs]
+            Right (Just Nothing) -> pure notFound
+            Right (Just (Just (traceItem, spans))) -> pure $ TraceDetails pid traceItem spans embedded
 
 
 -- Metrics UI components

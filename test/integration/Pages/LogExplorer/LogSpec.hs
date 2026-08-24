@@ -837,11 +837,11 @@ spec = around withTestResources do
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
       (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
       expectFound item
-      (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing
+      (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing Nothing
       case traceDetails of
-        TelemetryPage.TraceDetails _ _ _ -> pass
+        TelemetryPage.TraceDetails _ _ _ _ -> pass
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
-        TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
+        TelemetryPage.TraceDetailsNotFound _ _ _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
       -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
       -- The placeholder div still carries the panel id — `hx-swap: outerHTML` has to have
@@ -965,7 +965,7 @@ spec = around withTestResources do
       assertAnchored sdkItem
 
       -- Waterfall keyboard-nav onto the SDK span also anchors on the parent request.
-      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next")
+      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing
       case navDetails of
         TelemetryPage.SpanDetails _ target sdkM -> do
           target.name `shouldBe` Just "GET /api/orders"
@@ -973,7 +973,7 @@ spec = around withTestResources do
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
 
       -- The waterfall collapses the redundant SDK row into its parent.
-      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing
+      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing
       case traceDetails of
         TelemetryPage.TraceDetails{} -> do
           let traceHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml traceDetails

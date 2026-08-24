@@ -365,7 +365,7 @@ spec = around withTestResources do
       span' coSid (Just gwClientSid) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout") []
       span' dbSid (Just coSid) "pg.query" PT.Span'SPAN_KIND_CLIENT (svc "checkout") [mkAttr "db.system.name" "postgresql", mkAttr "db.namespace" "orders"]
 
-      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing
+      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
 
       -- The tab sits beside the existing three and drives the same navigatable() mechanism
