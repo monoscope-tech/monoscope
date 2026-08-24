@@ -28,6 +28,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldSatisfy)
 
 
@@ -274,6 +275,58 @@ spec = sequential $ aroundAll withTestResources do
       -- ends of the window: an unbounded fallback would carry neither.
       html `shouldSatisfy` T.isInfixOf "&amp;from="
       html `shouldSatisfy` T.isInfixOf "&amp;to="
+
+    -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
+    -- issue page 504'd behind the gateway. The trace is supporting evidence — past
+    -- 'traceViewTimeoutSecs' the page must still render everything else.
+    it "issue detail renders without the trace when the trace fetch exceeds its budget" \tr -> do
+      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+      spanIdText <- T.take 16 . T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.error_patterns
+                  (project_id, error_type, message, stacktrace, hash, first_trace_id, recent_trace_id, error_data, created_at, updated_at)
+                VALUES (?, 'SyntaxError', 'JSON parse failed', 'at parse (a.js:1)', ?, ?, ?, ?::jsonb, ?, ?) |]
+          ( testPid
+          , errHash
+          , traceIdText
+          , traceIdText
+          , AE.encode
+              [aesonQQ|{ "when": #{frozenTime}, "error_type": "SyntaxError", "root_error_type": "SyntaxError"
+                       , "message": "JSON parse failed", "root_error_message": "JSON parse failed"
+                       , "stack_trace": "at parse (a.js:1)", "hash": #{errHash}, "is_framework": false }|]
+          , frozenTime
+          , frozenTime
+          )
+        void $ PGS.execute conn
+          [sql| INSERT INTO otel_logs_and_spans
+                  (id, project_id, timestamp, start_time, name, context___trace_id, context___span_id,
+                   context, kind, status_code, summary)
+                VALUES (gen_random_uuid(), ?, ?, ?, 'GET /checkout', ?, ?,
+                        jsonb_build_object('trace_id', ?::text, 'span_id', ?::text), 'SERVER', '200', '{}') |]
+          (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
+            (testPid, errHash, frozenTime, frozenTime)
+
+      -- Baseline: with the default budget the pane loads and carries the trace id.
+      (_, okPage) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
+      renderPage okPage `shouldSatisfy` T.isInfixOf traceIdText
+
+      -- A zero budget stands in for the cold multi-thousand-span read.
+      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
+      (_, page) <- testServant starved $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
+      let html = renderPage page
+      html `shouldSatisfy` T.isInfixOf "Trace took too long to load"
+      -- The rest of the page is intact, and the degraded state doesn't masquerade
+      -- as "this issue never had a trace".
+      html `shouldSatisfy` T.isInfixOf "slow-trace issue"
+      html `shouldSatisfy` T.isInfixOf "Investigation"
+      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
 
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.

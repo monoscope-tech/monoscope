@@ -45,6 +45,7 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runTime)
+import Effectful.Timeout (Timeout, runTimeout)
 import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
@@ -90,6 +91,7 @@ type CommonWebEffects =
    , Tracing
    , Concurrent
    , Ki.StructuredConcurrency
+   , Timeout
    , Error ServerError
    , Effectful.IOE
    ]
@@ -145,6 +147,7 @@ effToServantHandler env logger tp app =
     & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
+    & runTimeout
     & effToHandler
 
 
@@ -174,6 +177,7 @@ effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
     & Tracing.runTracing tp
     & runConcurrent
     & Ki.runStructuredConcurrency
+    & runTimeout
     & effToHandler
 
 

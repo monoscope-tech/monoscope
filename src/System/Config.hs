@@ -203,6 +203,11 @@ data EnvConfig = EnvConfig
   , drainRehydrateIntervalSecs :: Int
   , maxBufferedSpans :: Int
   , maxDrainTrees :: Int
+  , traceViewTimeoutSecs :: Int
+  -- ^ Budget for the trace fetch behind a page that only *embeds* a trace (the
+  -- issue detail page). A pathological trace — thousands of spans, cold TF
+  -- read — has blown past the 60s gateway timeout and 504'd the whole page;
+  -- past this budget the page renders without the trace pane instead.
   , enableHashUpdates :: Bool
   -- ^ Kill switch for UPDATE-1 (eager hash merge) and UPDATE-2 (drain `pat:*`
   -- tag append) against `otel_logs_and_spans`. Set False to pause both writes
@@ -276,6 +281,7 @@ instance DefConfig EnvConfig where
       , drainRehydrateIntervalSecs = 300
       , maxBufferedSpans = 100000
       , maxDrainTrees = 200
+      , traceViewTimeoutSecs = 20
       , enableHashUpdates = True
       , hashUpdateMaxAgeSecs = 7200
       , enableSchemaLearning = True

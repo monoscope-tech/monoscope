@@ -51,8 +51,10 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
+import Effectful.Exception (trySync)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import Effectful.Timeout (timeout)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -89,6 +91,7 @@ import PyF (fmt)
 import Relude hiding (ask)
 import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
@@ -195,6 +198,12 @@ anomalyBulkActionsPostH pid action durationM items = do
       addRespHeaders Bulk
 
 
+-- | What the Investigation pane has to work with. 'TraceUnavailable' is a real
+-- third state — the fetch blew its budget or errored — kept distinct from
+-- 'NoTrace' so the empty state can't claim the issue simply has no trace.
+data TracePane = NoTrace | TraceUnavailable | TraceLoaded Telemetry.Trace (V.Vector Telemetry.SpanRecord)
+
+
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById issueId
 
@@ -254,11 +263,25 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
         Issues.QueryAlert -> pure Nothing
         Issues.LogPattern -> pure Nothing
         Issues.LogPatternRateChange -> pure Nothing
-      (trItem, spanRecs) <-
-        fromMaybe (Nothing, V.empty) <$> runMaybeT do
-          (tId, tTs) <- hoistMaybe mTraceRef
-          (traceItem, spanRecs) <- MaybeT $ Telemetry.getTraceDetailsForView useTf pid tId (Just tTs) now
-          pure (Just traceItem, spanRecs)
+      -- The trace is supporting evidence, not the page: a cold read of a
+      -- multi-thousand-span trace has taken >56s and 504'd the whole issue behind
+      -- the gateway. Budget it and degrade this one pane, so the stack trace,
+      -- error details, chart and logs still render.
+      budgetSecs <- (.env.traceViewTimeoutSecs) <$> ask @AuthContext
+      pane <- case mTraceRef of
+        Nothing -> pure NoTrace
+        Just (tId, tTs) -> do
+          let logFail evt extra = TraceUnavailable <$ Log.logAttention evt (AE.object $ ["issue_id" AE..= issue.id, "trace_id" AE..= tId] <> extra)
+          -- 'try' wraps 'timeout', not the reverse: timeout signals by throwing into
+          -- this thread, so an inner catch-all would swallow it and every real
+          -- timeout would report itself as a read failure. trySync also lets an
+          -- async kill (Warp dropping the handler) through instead of rendering on.
+          res <- trySync $ timeout (budgetSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid tId (Just tTs) now
+          case res of
+            Left e -> logFail "ISSUE_TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
+            Right Nothing -> logFail "ISSUE_TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= budgetSecs]
+            Right (Just Nothing) -> pure NoTrace
+            Right (Just (Just (traceItem, spanRecs))) -> pure $ TraceLoaded traceItem spanRecs
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
           then do
@@ -275,7 +298,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
           else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now isFirst tp sampleOverride
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue pane errorM now isFirst tp sampleOverride
 
 
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
@@ -525,9 +548,13 @@ issueStatusStrip_ now issue = whenJust banner \(icon, cls, msg) ->
       | otherwise = Nothing
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
-anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
-  let (_, _, currentRange) = TimePicker.parseTimeRange now tp
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> TracePane -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
+anomalyDetailPage pid issue pane errM now isFirst tp sampleOverride = do
+  let (tr, spanRecs) = case pane of
+        TraceLoaded t rs -> (Just t, rs)
+        NoTrace -> (Nothing, V.empty)
+        TraceUnavailable -> (Nothing, V.empty)
+      (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
       severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
@@ -770,13 +797,21 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
             -- The trace ships its own details panel (#trace_details_container), so this tab renders
             -- no second one — clicking a span replaces the open panel instead of stacking another.
             div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
-              div_ [id_ "trace_container", class_ "w-full h-full min-w-0"]
-                $ maybe
-                  ( div_ [class_ "flex items-center justify-center h-48"]
-                      $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
-                  )
-                  (\t -> tracePage pid t spanRecs)
-                  tr
+              div_ [id_ "trace_container", class_ "w-full h-full min-w-0"] $ case pane of
+                TraceLoaded t rs -> tracePage pid t rs
+                NoTrace ->
+                  div_ [class_ "flex items-center justify-center h-48"]
+                    $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
+                TraceUnavailable ->
+                  div_ [class_ "flex items-center justify-center h-48"]
+                    $ emptyState_
+                      def
+                        { icon = Just "triangle-exclamation"
+                        , size = ESCompact
+                        , action = ESLink ("/p/" <> pid.toText <> "/issues/" <> issueId <> bool "" "?first_occurrence=true" isFirst) "Retry"
+                        }
+                      "Trace took too long to load"
+                      "Everything else on this page is up to date. The Logs tab still works."
               whenJust (spanRecs V.!? 0) \sr ->
                 -- Desktop only: on mobile the trace panel is a full-screen overlay, so
                 -- auto-opening it would bury the page behind span details on load.
