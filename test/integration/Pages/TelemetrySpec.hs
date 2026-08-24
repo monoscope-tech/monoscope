@@ -108,6 +108,21 @@ spec = do
         _ -> expectationFailure "expected the full trace on the larger page"
       LT.toStrict (Lucid.renderText $ Lucid.toHtml fullPage) `shouldSatisfy` not . T.isInfixOf "Load more spans"
 
+      -- A span past the first page is still findable: nav looks a span up by id,
+      -- so capping it at the render page would anchor the panel on the root.
+      (_, navToLate) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) (Just "000000000000003b") (Just "next") Nothing (Just 50)
+      case navToLate of
+        Trace.SpanDetails _ target _ -> target.name `shouldBe` Just "span-59"
+        _ -> expectationFailure "expected the 59th span, not a fallback to the root"
+
+      -- ...and a Load more pull doesn't re-arm the auto-open marker, which would
+      -- drag the detail panel back to the first span on every click.
+      let embeddedHtml p' = LT.toStrict $ Lucid.renderText $ Lucid.toHtml p'
+      (_, firstEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") Nothing
+      embeddedHtml firstEmbedded `shouldSatisfy` T.isInfixOf "load[window.innerWidth"
+      (_, moreEmbedded) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing (Just "true") (Just 100)
+      embeddedHtml moreEmbedded `shouldSatisfy` not . T.isInfixOf "load[window.innerWidth"
+
   -- 'getMetricChartListData' dominates the /metrics page (640ms of ~850ms before the
   -- de-duplicate-then-aggregate rewrite). The rewrite splices the source/prefix filters into
   -- two CTEs instead of one query, so this pins both the shape of the result and that the

@@ -351,12 +351,17 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
   let useTf = env.enableTimefusionReads
       embedded = isJust embedM
       loaded = fromMaybe Telemetry.defaultTraceSpanPage spansM
+      -- Span lookup is not span rendering: nav has to FIND one span by id, so
+      -- capping it at the render page would anchor the panel on the root
+      -- whenever the clicked span sits past it. Take the clamp maximum instead —
+      -- still bounded, and the trace is warm by the time anyone navigates it.
+      lookupLimit = Just 5000
       notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded spansM) embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
       then do
-        spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now (Just loaded)
+        spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now lookupLimit
         let bySpanId i = V.find (\x -> (x.context >>= (.span_id)) == Just i) spanRecords'
         case (spanIdM >>= bySpanId) <|> spanRecords' V.!? 0 of
           Nothing -> addRespHeaders notFound
@@ -382,7 +387,10 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
             -- Doubling rather than +page: each pull is one request, and a viewer
             -- who needs more than the first page usually needs a lot more.
             Right (Just (Just (traceItem, spans, hasMore))) ->
-              pure $ TraceDetails pid traceItem spans embedded (guard hasMore $> traceFragmentUrl pid trId timestamp embedded (Just $ loaded * 2))
+              -- Auto-open only on the first load: a Load more swap brings the whole
+              -- fragment with it, so re-emitting the marker would drag the detail
+              -- panel back to the first span on every pull.
+              pure $ TraceDetails pid traceItem spans (embedded && isNothing spansM) (guard hasMore $> traceFragmentUrl pid trId timestamp embedded (Just $ loaded * 2))
 
 
 -- Metrics UI components

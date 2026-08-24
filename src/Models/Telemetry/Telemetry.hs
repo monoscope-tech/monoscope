@@ -918,9 +918,10 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 -- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
 -- logged so SREs can correlate with ingestion incidents.
 -- | Full-record spans for a trace, paged like 'getTraceDetailsForView'. Callers
--- here are looking up one span (detail panel, waterfall keyboard nav) rather
--- than drawing the whole trace, so the page boundary is invisible to them —
--- but it still keeps a pathological trace from being pulled in whole.
+-- here look up one span (detail panel, waterfall keyboard nav) rather than
+-- drawing the whole trace, so they should pass a limit generous enough to
+-- contain the span they are searching for — a render-sized page would silently
+-- anchor them on the first span instead.
 getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId useTf pid trId tme now limitM =
   fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
