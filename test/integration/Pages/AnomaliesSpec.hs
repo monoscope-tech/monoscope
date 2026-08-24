@@ -310,9 +310,17 @@ spec = sequential $ aroundAll withTestResources do
         maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
           . listToMaybe
           =<< PGS.query conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
-            (testPid, errHash, frozenTime, frozenTime)
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
+            ( testPid
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "error_type": "SyntaxError", "error_message": "JSON parse failed"
+                         , "stack_trace": "at parse (a.js:1)", "occurrence_count": 1
+                         , "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
+            , frozenTime
+            , frozenTime
+            )
 
       -- The page ships a shell that fetches the waterfall itself — no span read
       -- inline, so a slow trace can no longer delay (or 504) the issue.
@@ -323,6 +331,10 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "timestamp="
       html `shouldSatisfy` T.isInfixOf "slow-trace issue"
       html `shouldSatisfy` not . T.isInfixOf "Waterfall"
+      -- The user journey rides along in the activity fragment; drop these params
+      -- and it disappears with every other assertion still passing.
+      html `shouldSatisfy` T.isInfixOf "/activity?trace_id="
+      html `shouldSatisfy` T.isInfixOf "trace_ts="
       html `shouldSatisfy` not . T.isInfixOf "No trace data available"
 
       -- And the fragment itself is budgeted: starved, it answers with a retryable
