@@ -598,7 +598,7 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
-  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
+  { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))

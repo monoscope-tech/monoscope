@@ -167,6 +167,21 @@ spec = around withTestResources do
       r.count `shouldSatisfy` (> 0)
       V.length r.logsData `shouldSatisfy` (> 0)
 
+    it "opens a trace-id deep link on the matching explorer events" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "trace-link-key"
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+      (linkedTraceId, linkedSpanId, otherTraceId, otherSpanId) <- (,,,) <$> hexId <*> hexId <*> hexId <*> hexId
+      ingestSpanReq tr $ mkSpanRequest linkedTraceId linkedSpanId Nothing "GET /linked-checkout" [] Nothing [] (mkResource apiKey []) frozenTime
+      ingestSpanReq tr $ mkSpanRequest otherTraceId otherSpanId Nothing "GET /unrelated" [] Nothing [] (mkResource apiKey []) frozenTime
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+          query = "trace_id == \"" <> linkedTraceId <> "\""
+      r <- fetchData tr (Just query) (Just "id,timestamp,name,context___trace_id") Nothing Nothing fromTime toTime
+
+      r.count `shouldBe` 1
+      V.length r.logsData `shouldBe` 1
+
     it "should return the requested extra columns" \tr -> do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -837,9 +852,9 @@ spec = around withTestResources do
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
       (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
       expectFound item
-      (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing Nothing
+      (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing Nothing Nothing
       case traceDetails of
-        TelemetryPage.TraceDetails _ _ _ _ -> pass
+        TelemetryPage.TraceDetails{} -> pass
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
         TelemetryPage.TraceDetailsNotFound _ _ _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
@@ -965,7 +980,7 @@ spec = around withTestResources do
       assertAnchored sdkItem
 
       -- Waterfall keyboard-nav onto the SDK span also anchors on the parent request.
-      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing
+      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next") Nothing Nothing
       case navDetails of
         TelemetryPage.SpanDetails _ target sdkM -> do
           target.name `shouldBe` Just "GET /api/orders"
@@ -973,7 +988,7 @@ spec = around withTestResources do
         _ -> expectationFailure "expected SpanDetails anchored on the request span"
 
       -- The waterfall collapses the redundant SDK row into its parent.
-      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing
+      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing Nothing Nothing
       case traceDetails of
         TelemetryPage.TraceDetails{} -> do
           let traceHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml traceDetails

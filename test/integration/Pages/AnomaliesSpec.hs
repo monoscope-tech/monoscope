@@ -339,12 +339,12 @@ spec = sequential $ aroundAll withTestResources do
 
       -- And the fragment itself is budgeted: starved, it answers with a retryable
       -- state rather than hanging past the gateway timeout.
-      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true")
+      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
       case frag of
         Trace.TraceDetails{} -> pass
         _ -> expectationFailure "expected the trace fragment to render with the default budget"
       let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
-      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true")
+      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
       case starvedFrag of
         Trace.TraceDetailsNotFound _ retryUrl _ -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
         _ -> expectationFailure "expected a starved trace fetch to yield the retryable not-found state"

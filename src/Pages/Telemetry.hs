@@ -82,7 +82,9 @@ data TraceDetailsGet
     -- full-height overlay. Embedded means open the first span's detail panel on
     -- load — the explorer already has a selected row — and, on failure, render a
     -- fallback sized for a panel instead of the overlay's full-screen one.
-    TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord) Bool
+    -- The trailing 'Maybe Text' is the URL for the next, larger page when the
+    -- trace continues past what was loaded — absent means this is all of it.
+    TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord) Bool (Maybe Text)
   | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
   | -- | Carries the URL that produced it, so Retry re-issues the same request from
     -- whatever container it landed in — the overlay's @loadTrace@ event only exists
@@ -155,7 +157,7 @@ resizeDivider_ cssVar minPct maxPct resizeEvt extraCls =
         ]
         $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none relative"] do
           div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-0 group-hover:opacity-100 transition-opacity"] do
-            forM_ [1 :: Int .. 3] \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
+            forM_ ([1 .. 3] :: [Int]) \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
 
 
 data SpanTree = SpanTree
@@ -212,8 +214,8 @@ flattenMetricTree dataMap trees lvl conts = foldMap flatten trees
 
 
 instance ToHtml TraceDetailsGet where
-  toHtml (TraceDetails pid tr spanRecs openFirst) = do
-    toHtml $ tracePage pid tr spanRecs
+  toHtml (TraceDetails pid tr spanRecs openFirst moreUrl) = do
+    toHtml $ tracePage pid tr spanRecs moreUrl
     when openFirst $ whenJust (spanRecs V.!? 0) \sr ->
       -- Desktop only: on mobile the trace panel is a full-screen overlay, so
       -- auto-opening it would bury the page behind span details on load.
@@ -337,23 +339,24 @@ metricBreakdownGetH pid metricName labelM = do
 -- state's Retry are the same request by construction. @timestamp@ is not
 -- optional in practice: without it the fetch widens from a +/-5min window to a
 -- 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21.
-traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Text
-traceFragmentUrl pid trId tsM embedded =
-  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded])
+traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Maybe Int -> Text
+traceFragmentUrl pid trId tsM embedded spansM =
+  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded] <> foldMap (\n -> ["spans=" <> show n]) spansM)
 
 
 -- Trace handler
-traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId timestamp spanIdM nav embedM = do
+traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders TraceDetailsGet)
+traceH pid trId timestamp spanIdM nav embedM spansM = do
   env <- (.env) <$> Reader.ask @AuthContext
   let useTf = env.enableTimefusionReads
       embedded = isJust embedM
-      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded) embedded
+      loaded = fromMaybe Telemetry.defaultTraceSpanPage spansM
+      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded spansM) embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
       then do
-        spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
+        spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now (Just loaded)
         let bySpanId i = V.find (\x -> (x.context >>= (.span_id)) == Just i) spanRecords'
         case (spanIdM >>= bySpanId) <|> spanRecords' V.!? 0 of
           Nothing -> addRespHeaders notFound
@@ -369,14 +372,17 @@ traceH pid trId timestamp spanIdM nav embedM = do
         -- gateway's own timeout. Bound it so this returns a retryable state
         -- instead of a 504 — 'try' outside 'timeout', since timeout signals by
         -- throwing into this thread and an inner catch-all would swallow it.
-        res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid trId timestamp now
+        res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid trId timestamp now (Just loaded)
         let unavailable evt extra = notFound <$ Log.logAttention evt (AE.object $ ["project_id" AE..= pid, "trace_id" AE..= trId] <> extra)
         addRespHeaders
           =<< case res of
             Left e -> unavailable "TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
             Right Nothing -> unavailable "TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= env.traceViewTimeoutSecs]
             Right (Just Nothing) -> pure notFound
-            Right (Just (Just (traceItem, spans))) -> pure $ TraceDetails pid traceItem spans embedded
+            -- Doubling rather than +page: each pull is one request, and a viewer
+            -- who needs more than the first page usually needs a lot more.
+            Right (Just (Just (traceItem, spans, hasMore))) ->
+              pure $ TraceDetails pid traceItem spans embedded (guard hasMore $> traceFragmentUrl pid trId timestamp embedded (Just $ loaded * 2))
 
 
 -- Metrics UI components
@@ -899,7 +905,7 @@ countWidgetsWithMetric metricName dashboard =
 
 
 monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
-monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) ["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName]
+monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) (["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName] :: [Text])
 
 
 widgetRefsMetric :: Text -> Widget.Widget -> Bool
@@ -923,8 +929,11 @@ traceDetailsLoading_ =
       div_ [class_ "h-4 w-full rounded skeleton-shimmer"] ""
 
 
-tracePage :: Projects.ProjectId -> Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Html ()
-tracePage pid traceItem rawSpanRecords = do
+-- | @moreUrl@ is present when the trace continues past the spans given here;
+-- following it re-renders this whole view with a larger page, so the tree stays
+-- correct rather than being appended to piecemeal.
+tracePage :: Projects.ProjectId -> Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe Text -> Html ()
+tracePage pid traceItem rawSpanRecords moreUrl = do
   -- Collapse once so every tab (waterfall, timeline, services list) hides the SDK row.
   let spanRecords = collapseSdkSpans rawSpanRecords
       serviceDurations = Map.fromListWith (+) [(getServiceName sp.resource, sp.spanDurationNs) | sp <- V.toList spanRecords]
@@ -979,9 +988,22 @@ tracePage pid traceItem rawSpanRecords = do
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#service_map', '#trace-tabs', 't-tab-active')"] "Map"
               div_ [class_ "flex items-center gap-2 shrink-0"] do
-                stBox "Spans" (show $ length spanRecords) Nothing
+                -- The stats describe what is drawn, so "Spans" reads e.g. "300+"
+                -- while more remain rather than claiming to be the whole trace.
+                stBox "Spans" (show (length spanRecords) <> maybe "" (const "+") moreUrl) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
+            whenJust moreUrl \url ->
+              div_ [id_ "trace-load-more", class_ "flex items-center justify-between gap-2 rounded-lg border border-strokeWeak bg-fillWeaker px-3 py-1.5"] do
+                span_ [class_ "text-xs text-textWeak"] "This trace is larger than one page. Search and the waterfall only cover what's loaded."
+                button_
+                  [ class_ "btn btn-xs btn-primary shrink-0"
+                  , hxGet_ url
+                  , hxTarget_ "#trace_span_container"
+                  , hxSwap_ "outerHTML"
+                  , hxIndicator_ "#trace-load-more"
+                  ]
+                  "Load more spans"
             div_ [class_ "flex gap-2 w-full items-center"] do
               div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
                 faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-iconNeutral"

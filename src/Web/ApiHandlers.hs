@@ -438,7 +438,7 @@ apiDashboardGet pid did = toFull <$> (ownedOr "Dashboard not found" pid =<< Dash
 apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx DashboardData
 apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
   vm <- ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did
-  (_, dash) <- DashPage.getDashAndVM did Nothing
+  (_, dash) <- DashPage.getDashAndVM pid did Nothing
   now <- Time.currentTime
   let timeParams = (sinceM, fromM, toM)
       allTabs = fold dash.tabs
@@ -938,7 +938,7 @@ enrichIssue pid issue
               Just (trId, ts) -> do
                 useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
                 now <- Time.currentTime
-                synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now
+                synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
                 pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
       _ -> pure issue
 

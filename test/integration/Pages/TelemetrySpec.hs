@@ -52,8 +52,8 @@ spec = do
         $ withSpanKind PT.Span'SPAN_KIND_CLIENT
         $ mkSpanRequest trId childSid (Just rootSid) "pg.query" [] Nothing [] (mkResource apiKey []) frozenTime
 
-      traceM' <- runTestBg frozenTime tr $ Telemetry.getTraceDetailsForView False testPid trId (Just frozenTime) frozenTime
-      spans <- maybe (fail "expected the ingested trace to be found") (pure . snd) traceM'
+      traceM' <- runTestBg frozenTime tr $ Telemetry.getTraceDetailsForView False testPid trId (Just frozenTime) frozenTime Nothing
+      spans <- maybe (fail "expected the ingested trace to be found") (\(_, sps, _) -> pure sps) traceM'
       let spanNamed n = V.find (\s -> s.spanName == n) spans
       (show . (.kind) <$> spanNamed "GET /checkout") `shouldBe` Just ("Just SKServer" :: Text)
       (show . (.kind) <$> spanNamed "pg.query") `shouldBe` Just ("Just SKClient" :: Text)
@@ -64,8 +64,49 @@ spec = do
       V.length (V.filter (\s -> s.status == Just Telemetry.SSError) spans) `shouldBe` 1
 
       -- The page still renders end-to-end with the widened projection.
-      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml page) `shouldSatisfy` T.isInfixOf "Waterfall"
+      (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      for_ ["Waterfall", "GET /checkout", "pg.query", ">Errors</", ">1<"] \text ->
+        html `shouldSatisfy` T.isInfixOf text
+
+    -- A 1300-span trace was 4.4MB of HTML and ~8s of browser parse, on top of a
+    -- 56s cold read. The view now takes a page at a time and offers the next one.
+    it "traceView_pagesSpans_andOffersTheNextPage" \tr -> do
+      trId <- T.replace "-" "" . UUID.toText <$> nextRandom
+      -- 60 spans under one root: enough to overflow the smallest page the handler
+      -- honours (the limit clamps up to 50), cheap enough to insert directly.
+      void $ withPool tr.trPool $ DBT.execute
+        [sql| INSERT INTO otel_logs_and_spans
+                (id, project_id, timestamp, start_time, name, context___trace_id, context___span_id, parent_id,
+                 context, kind, status_code, summary)
+              SELECT gen_random_uuid(), ?, ?, ?::timestamptz + (i || ' milliseconds')::interval, 'span-' || i, ?,
+                     lpad(to_hex(i), 16, '0'), CASE WHEN i = 0 THEN NULL ELSE lpad(to_hex(0), 16, '0') END,
+                     jsonb_build_object('trace_id', ?::text, 'span_id', lpad(to_hex(i), 16, '0')),
+                     'SERVER', '200', '{}'
+              FROM generate_series(0, 59) i |]
+        (testPid, frozenTime, frozenTime, trId, trId)
+
+      (_, firstPage) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 50)
+      case firstPage of
+        Trace.TraceDetails _ _ spans _ moreUrl -> do
+          V.length spans `shouldBe` 50
+          -- The next page is offered, and it asks for a bigger one — not the same one again.
+          moreUrl `shouldSatisfy` maybe False (T.isInfixOf "spans=100")
+        _ -> expectationFailure "expected a paged trace view"
+
+      -- The count on screen advertises itself as partial, and the control is there to act on.
+      let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
+      firstHtml `shouldSatisfy` T.isInfixOf ">50+<"
+      firstHtml `shouldSatisfy` T.isInfixOf "Load more spans"
+
+      -- Following it yields the whole trace, and the offer goes away.
+      (_, fullPage) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 100)
+      case fullPage of
+        Trace.TraceDetails _ _ spans _ moreUrl -> do
+          V.length spans `shouldBe` 60
+          moreUrl `shouldBe` Nothing
+        _ -> expectationFailure "expected the full trace on the larger page"
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml fullPage) `shouldSatisfy` not . T.isInfixOf "Load more spans"
 
   -- 'getMetricChartListData' dominates the /metrics page (640ms of ~850ms before the
   -- de-duplicate-then-aggregate rewrite). The rewrite splices the source/prefix filters into

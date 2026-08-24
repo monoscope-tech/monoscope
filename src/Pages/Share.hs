@@ -43,6 +43,7 @@ data ShareView
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
+  _ <- Telemetry.otelRecordByProjectAndId pid createdAt eventId `whenNothingM` throwIO err404
   shareId <- liftIO UUIDV4.nextRandom
   ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
@@ -125,7 +126,7 @@ resolveBody sid now row =
           breakdownM <- runMaybeT do
             tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
             (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
-            pure $ PTelemetry.tracePage row.pid traceItem $ V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)
+            pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
           let replayInfo =
                 Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes)
                   >>= UUID.fromText

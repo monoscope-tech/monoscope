@@ -199,7 +199,7 @@ anomalyBulkActionsPostH pid action durationM items = do
 
 
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById issueId
+anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueByIdScoped pid issueId
 
 
 anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -795,7 +795,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 Nothing -> div_ [class_ "flex items-center justify-center h-48"] $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
                 Just (tId, tTs) ->
                   div_
-                    [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True
+                    [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True Nothing
                     , hxTrigger_ "load"
                     , hxSwap_ "outerHTML"
                     , class_ "h-48 flex items-center justify-center"
@@ -1091,7 +1091,7 @@ aiChatPostH pid issueId form
       now <- Time.currentTime
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
       void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
-      issueM <- Issues.selectIssueById issueId
+      issueM <- Issues.selectIssueByIdScoped pid issueId
       maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
   where
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
@@ -1124,7 +1124,7 @@ aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHead
 aiChatHistoryGetH pid issueId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  Issues.selectIssueById issueId >>= \case
+  Issues.selectIssueByIdScoped pid issueId >>= \case
     Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
     Just issue -> do
       systemPrompt <- buildSystemPromptForIssue pid issue now
@@ -1939,9 +1939,9 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
   -- enough to time out; it is bounded here so a slow trace costs the journey, not
   -- the issue-events timeline beside it.
   journeySpans <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) -> do
-    res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now
+    res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now Nothing
     case res of
-      Right (Just (Just (_, spans))) -> pure spans
+      Right (Just (Just (_, spans, _))) -> pure spans
       Right (Just Nothing) -> pure V.empty
       Right Nothing -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_TIMEOUT" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId])
       Left e -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_FAILED" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId, "error" AE..= show @Text e])

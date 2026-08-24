@@ -44,6 +44,7 @@ module Models.Telemetry.Telemetry (
   spanRecordInTrace,
   getTraceDetails,
   getTraceDetailsForView,
+  defaultTraceSpanPage,
   getEndpointTraceId,
   getTotalMetricsCount,
   getMetricData,
@@ -678,7 +679,7 @@ mkTrace trId startOf endOf svcOf ne =
 -- spans, so callers rendering the waterfall don't re-query the same trace.
 getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
-  spans <- getSpanRecordsByTraceId useTf pid trId tme now
+  spans <- getSpanRecordsByTraceId useTf pid trId tme now Nothing
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.start_time) (.end_time) spanServiceName ne, toList ne)) spans
 
 
@@ -686,10 +687,15 @@ getTraceDetails useTf pid trId tme now = do
 -- fields. Span details still use full-record lookups when explicitly opened.
 -- The aggregate covers ALL rows (nameless rows still bound the trace time range
 -- and services); only the waterfall conversion filters rows missing required ids.
-getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, V.Vector SpanRecord))
-getTraceDetailsForView useTf pid trId tme now = do
-  rows <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now
-  pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)))) rows
+--
+-- @limitM@ pages the fetch; the returned 'Bool' says whether the trace continues
+-- past this page, so the caller can offer the next one. The 'Trace' aggregate
+-- (span count, duration, services) describes the page, not the whole trace —
+-- it is what the header reports, and the header reports what is on screen.
+getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
+getTraceDetailsForView useTf pid trId tme now limitM = do
+  (rows, hasMore) <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now limitM
+  pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)), hasMore)) rows
 
 
 -- | Random-access lookup of a single row by exact (timestamp, id). The caller always
@@ -798,21 +804,42 @@ selectTraceSpanRows =
             COALESCE(start_time, timestamp), end_time, kind, status_code, status_message, attributes, events, resource, duration|]
 
 
--- | Shared trace fetch: spans in a tight window around the reference time (3d
--- lookback when none is given), then missing parents chased via
--- 'resolveTraceOrphans' against a ±24h window. Parameterized by SELECT builder
--- and id accessors so the full-record and overlay-projection row types share
--- one implementation.
-getTraceRowsWith :: (DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [a]
-getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
+-- | How many spans a trace view loads per request when the caller doesn't say.
+-- A 1300-span trace is 4.4MB of JSON and ~8s of browser parse; a page of this
+-- size renders in a fraction of that, and the viewer asks for more if the answer
+-- isn't in it.
+defaultTraceSpanPage :: Int
+defaultTraceSpanPage = 300
+
+
+-- | Shared trace fetch: the first @limit@ spans by start time, in a tight window
+-- around the reference time (3d lookback when none is given). Returns the page
+-- plus whether the trace has more beyond it — one extra row is requested to tell
+-- those apart without a second count.
+--
+-- Missing parents are chased via 'resolveTraceOrphans' against a ±24h window
+-- only when the page IS the whole trace: on a truncated page most "missing"
+-- parents are simply spans this page didn't reach, and chasing them would fetch
+-- exactly the rows the limit exists to avoid. The waterfall already renders
+-- unreachable parents as synthetic roots.
+--
+-- Parameterized by SELECT builder and id accessors so the full-record and
+-- overlay-projection row types share one implementation.
+getTraceRowsWith :: (DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
+getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
         Nothing -> (addUTCTime (-(3 * 24 * 3600)) now, now)
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
       (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
+      limit = min 5000 $ max 50 $ fromMaybe defaultTraceSpanPage limitM
       resolveHop ids = Hasql.interp $ select pid.toText wideStart wideEnd [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
-  initial <- Hasql.interp $ select pid.toText start end [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
-  resolveTraceOrphans pid trId resolveHop spanIdOf parentIdOf initial
+  probe <- Hasql.interp $ select pid.toText start end [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC LIMIT #{limit + 1}|]
+  let hasMore = length probe > limit
+      initial = take limit probe
+  if hasMore
+    then pure (initial, True)
+    else (,False) <$> resolveTraceOrphans pid trId resolveHop spanIdOf parentIdOf initial
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
@@ -890,8 +917,13 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 -- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
 -- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
 -- logged so SREs can correlate with ingestion incidents.
-getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceId = getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id)
+-- | Full-record spans for a trace, paged like 'getTraceDetailsForView'. Callers
+-- here are looking up one span (detail panel, waterfall keyboard nav) rather
+-- than drawing the whole trace, so the page boundary is invisible to them —
+-- but it still keeps a pathological trace from being pulled in whole.
+getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId useTf pid trId tme now limitM =
+  fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
 
 
 getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
