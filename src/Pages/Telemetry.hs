@@ -222,7 +222,8 @@ instance ToHtml TraceDetailsGet where
       div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
   toHtml (TraceDetailsNotFound pid selfUrl embedded) =
-    div_ [class_ $ bool "min-h-screen" "h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
+    -- The id is what Retry swaps: `closest div` would only replace the button row.
+    div_ [id_ "trace-fallback", class_ $ bool "min-h-screen" "h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
       $ div_ [class_ "max-w-lg space-y-4 text-center"] do
         div_ [class_ "flex flex-col items-center gap-3"] do
           faSprite_ "circle-exclamation" "solid" "w-6 h-6 text-textWeak"
@@ -232,7 +233,7 @@ instance ToHtml TraceDetailsGet where
         div_ [class_ "flex flex-wrap justify-center gap-2"] do
           -- Re-issue the very request that produced this fallback, replacing it in
           -- place. Works identically in the overlay and in an embedded panel.
-          button_ [class_ "btn btn-sm btn-primary", hxGet_ selfUrl, hxTarget_ "closest div", hxSwap_ "outerHTML"] "Retry loading trace"
+          button_ [class_ "btn btn-sm btn-primary", hxGet_ selfUrl, hxTarget_ "#trace-fallback", hxSwap_ "outerHTML"] "Retry loading trace"
           unless embedded
             $ button_
               [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
