@@ -6,7 +6,7 @@ Baseline commit: `c71ec614f`. Master is 7 commits ahead of origin — **not push
 
 | Stream | Branch | Location | Migration no. | Status |
 |---|---|---|---|---|
-| Dashboards fix + e2e | `master` | main checkout | none | in progress |
+| Dashboards fix + e2e | `master` | main checkout | none | **done** — see below |
 | Billing / new pricing | `ws-billing` | `.claude/worktrees/ws-billing` | 0136 | in progress |
 | Container monitoring | `ws-containers` | `.claude/worktrees/ws-containers` | 0137 | in progress |
 | Metric exemplars | `ws-exemplars` | `.claude/worktrees/ws-exemplars` | 0138 | in progress |
@@ -24,6 +24,28 @@ Baseline commit: `c71ec614f`. Master is 7 commits ahead of origin — **not push
    watcher, so they verify with `cabal build lib:monoscope --ghc-options="-O0 -j8"` in the
    worktree — never in the main checkout.
 6. `e2e/` is owned exclusively by the dashboards stream.
+
+## Dashboards stream outcome
+
+Fixed, each guarded by a new test in `e2e/tests/dashboard-add-widget.spec.ts`:
+
+- **"Add to dashboard" from the log explorer did nothing.** The dashboards list only became
+  a destination picker when the request carried both `copy_widget_id` *and*
+  `source_dashboard_id`; the explorer's chart has no source dashboard, so the modal opened
+  as an ordinary list and clicking a row navigated away. The source is now optional — with
+  one a row copies by id, without one it PUTs the chart's own JSON to the widget upsert.
+- **The widget editor led with Logs.** Charts now lead; Logs stays available, at the end.
+  The log explorer is unchanged.
+- **The logs preview overflowed its frame** by ~260px and painted over the form below it.
+
+Suite went 31 → 35 tests, all green. Drag, resize, duplicate and delete were already
+covered by `dashboard-grid.spec.ts`; the drawer's save path and cross-dashboard copy were
+not, and now are.
+
+Found and written up rather than fixed: `plans/dashboard-variable-defaults.md`.
+
+Pre-existing and unrelated: `make lint` fails to read `.hlint.yaml` (key/version mismatch);
+CI runs hlint in its own container.
 
 ## Pricing target (billing stream)
 
