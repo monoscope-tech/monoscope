@@ -1138,10 +1138,10 @@ meterIsDormant = \case
 data ProjectMeterConfig = ProjectMeterConfig
   { provider :: BillingProvider
   , stripeCustomerId :: Maybe Text
-  , -- | The @Events@ subscription item, from @projects.first_sub_item_id@.
-    eventsSubItemId :: Maybe Text
-  , -- | Per-meter subscription items from @projects.billing_meter_items@.
-    subItemIds :: Map MeterKind Text
+  , eventsSubItemId :: Maybe Text
+  -- ^ The @Events@ subscription item, from @projects.first_sub_item_id@.
+  , subItemIds :: Map MeterKind Text
+  -- ^ Per-meter subscription items from @projects.billing_meter_items@.
   }
   deriving stock (Generic, Show)
 
