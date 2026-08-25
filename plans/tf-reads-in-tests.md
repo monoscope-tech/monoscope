@@ -52,9 +52,27 @@ That took CI from 23 failures to 1.
 ## What is still open
 
 One example: `Pages.LogExplorer.Log / Time Range Selection / should respect exact time
-boundaries`, failing `predicate failed on: 0` — the deflated shape, an assertion reading back
-what it just wrote. The fix is to poll until visible rather than assert immediately; an
-absolute count taken straight after a write is never safe against TimeFusion.
+boundaries`, failing `predicate failed on: 0`.
+
+It looks like the deflated read-your-writes shape, and it is **not** — that was tested and
+disproved on PR #502. Raising the poll budget from 10s to 30s changed nothing: the run spent
+the extra time (shard 0 went 100s → 128s) and still read back 0 rows.
+
+What is ruled out, by elimination:
+
+- *not* write visibility — 30s of polling makes no difference;
+- *not* fresh-project writes failing — every other `createTestProject` example in the spec passes;
+- *not* explicit `from`/`to` bounds — many passing examples pass them.
+
+What is left: this is the only example whose window is **narrow and offset into the past**. Its
+rows take `timestamp` and `date` from the message (`ProcessMessage.hs:420,448`), so they land in
+the `date=2024-12-31` partition while `frozenTime` is `2025-01-01`. TimeFusion partitions on
+`date`. So the first thing to check is whether anything in the query path derives a `date`
+predicate from "now" rather than from the requested window — that would prune away the very
+partition the rows are in, on TimeFusion only, and would be invisible on Postgres.
+
+If that is it, it is a **product** bug and not a test bug: any user querying a narrow window in
+the past would lose rows the same way.
 
 ## Verifying any change here
 
