@@ -90,10 +90,22 @@ spec = around withTestResources do
             def
               { Monitors.id = monitorId
               , Monitors.projectId = pid
-              , Monitors.logQuery = ""
-              , Monitors.logQueryAsSql = "SELECT 2::float8"
-              , Monitors.alertThreshold = 1
+              , -- A real KQL query, not a canned logQueryAsSql: evaluateQueryMonitor
+                -- re-parses logQuery on every run so parser fixes reach existing
+                -- monitors, so the stored SQL is never what actually executes. An empty
+                -- logQuery parses to no alert SQL and the evaluation throws before it can
+                -- notify — which is silent, because the throw is caught and logged.
+                Monitors.logQuery = "summarize count()"
+              , Monitors.logQueryAsSql = ""
+              , -- One log is ingested before the project is deleted, so a threshold of 0
+                -- is what makes the monitor fire on the way in.
+                Monitors.alertThreshold = 0
               , Monitors.checkIntervalMins = 1
+              , -- Not from `def`: that is 0, and migration 0135 added
+                -- query_monitors_positive_time_window, so a def-constructed monitor no
+                -- longer inserts. Every production path sets this explicitly and rejects
+                -- a non-positive value at the API boundary (Web.ApiHandlers).
+                Monitors.timeWindowMins = 60
               , Monitors.alertConfig = def{Monitors.title = "Deleted project guard"}
               }
 

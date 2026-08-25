@@ -8,7 +8,7 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.Monitors qualified as Monitors

@@ -98,7 +98,7 @@ spec :: Spec
 spec = around withTestResources do
   describe "service map" do
     it "serviceMapLegend_iconsExistInRegularSprite" \_ -> do
-      sprite <- readFileText "static/public/assets/svgs/fa-sprites/regular.svg"
+      sprite <- decodeUtf8 <$> readFileBS "static/public/assets/svgs/fa-sprites/regular.svg"
       sprite `shouldContainAll` ["id=\"diagram-project\"", "id=\"arrow-right-to-bracket\""]
 
     -- The bug this guards: a project whose one instrumented service fans out to hundreds of

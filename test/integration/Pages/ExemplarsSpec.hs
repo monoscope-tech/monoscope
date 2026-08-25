@@ -155,7 +155,7 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
 
   it "reports no exemplars for a metric that carries none, rather than failing" \tr -> do
     apiKey <- createTestAPIKey tr testPid "exemplar-empty-key"
-    ingestMetric tr apiKey "test.no.exemplars" 1.0 frozenTime
+    ingestMetric tr apiKey [] "test.no.exemplars" 1.0 frozenTime
     (_, exemplars) <- testServant tr $ TelemetryPage.metricExemplarsGetH testPid "test.no.exemplars" (Just $ isoAt (-3600)) (Just $ isoAt 3600) Nothing
     case exemplars of
       TelemetryPage.MetricExemplarsGet _ _ [] -> pass
