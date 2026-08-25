@@ -48,6 +48,11 @@ module Models.Telemetry.Telemetry (
   getEndpointTraceId,
   getTotalMetricsCount,
   getMetricData,
+  MetricExemplar (..),
+  ExemplarPoint (..),
+  ExemplarScope (..),
+  exemplarPoints,
+  metricExemplars,
   bulkInsertOtelMetrics,
   mintMetricIds,
   bulkInsertOtelLogsAndSpansTF,
@@ -1006,6 +1011,88 @@ getMetricData pid metricName = do
     WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
   pure $ (\(name, typ, unit, desc, services, labels) -> MetricDataPoint name typ unit desc 0 services labels) <$> meta
+
+
+-- | One OTLP exemplar as ingestion stores it: the trace/span it was recorded in,
+-- its own timestamp, and the measured value. Trace and span ids are lowercase hex
+-- (OtlpServer hex-encodes them), so they compare directly against
+-- @context___trace_id@ / @context___span_id@ on the spans table.
+data ExemplarPoint = ExemplarPoint
+  { traceId :: Text
+  , spanId :: Text
+  , timestamp :: UTCTime
+  , value :: Double
+  }
+  deriving (Eq, Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ExemplarPoint
+
+
+-- | An exemplar plus the metric series it came from.
+data MetricExemplar = MetricExemplar
+  { metricName :: Text
+  , serviceName :: Text
+  , metricUnit :: Text
+  , point :: ExemplarPoint
+  }
+  deriving (Eq, Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricExemplar
+
+
+-- | Decode a row's @exemplars@ column, dropping entries that name no trace — they
+-- link to nothing, so they are not exemplars as far as the product is concerned.
+--
+-- >>> let j t = fromMaybe AE.Null (AE.decodeStrict (encodeUtf8 (t :: Text)))
+-- >>> exemplarPoints (j "[{\"trace_id\":\"ab\",\"span_id\":\"cd\",\"timestamp\":\"2026-08-25T11:39:45.5Z\",\"value\":2.5}]")
+-- [ExemplarPoint {traceId = "ab", spanId = "cd", timestamp = 2026-08-25 11:39:45.5 UTC, value = 2.5}]
+-- >>> exemplarPoints (j "[{\"trace_id\":\"\",\"span_id\":\"\",\"timestamp\":\"2026-08-25T11:39:45Z\",\"value\":1}]")
+-- []
+-- >>> exemplarPoints (j "[]") <> exemplarPoints AE.Null <> exemplarPoints (j "\"nonsense\"")
+-- []
+exemplarPoints :: AE.Value -> [ExemplarPoint]
+exemplarPoints v = filter (not . T.null . (.traceId)) $ case AE.fromJSON v of
+  AE.Success ps -> ps
+  AE.Error _ -> []
+
+
+-- | Which exemplars 'metricExemplars' looks for: the ones recorded inside a given
+-- trace, or the ones a given metric carries.
+data ExemplarScope = ExemplarsOfTrace Text | ExemplarsOfMetric Text
+
+
+-- | Exemplars in @(lo, hi)@, bounded and capped on both sides of the parse.
+--
+-- Two things the shape has to respect. @exemplars@ reports as jsonb over
+-- TimeFusion's pgwire even under a @::text@ cast, so it is selected bare and
+-- decoded as a JSON value; the @::text@ casts stay in the predicate, where both
+-- stores agree. And an exemplar's own timestamp is not its row's — a cumulative
+-- histogram re-exports a weeks-old exemplar for every bucket it has not hit since
+-- — so the window is applied again to the parsed points, not just to @timestamp@.
+metricExemplars :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> ExemplarScope -> (UTCTime, UTCTime) -> Int -> Eff es [MetricExemplar]
+metricExemplars useTimefusion pid scope (lo, hi) limit = do
+  rows :: V.Vector (Text, Maybe Text, Text, AE.Value) <-
+    Hasql.withHasqlTimefusion useTimefusion
+      $ Hasql.interp
+      $ [HI.sql| SELECT metric_name, resource___service___name, metric_unit, exemplars
+                 FROM otel_metrics
+                 WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} |]
+      <> ( case scope of
+             ExemplarsOfTrace trId -> [HI.sql| AND exemplars::text LIKE #{"%" <> trId <> "%"} |]
+             ExemplarsOfMetric name -> [HI.sql| AND metric_name = #{name} AND length(exemplars::text) > 2 |]
+         )
+      <> [HI.sql| ORDER BY timestamp DESC LIMIT #{limit} |]
+  pure
+    $ take limit
+    $ sortOn (Down . (.value) . (.point))
+    $ ordNubOn
+      ((.traceId) . (.point))
+      [ MetricExemplar{metricName, serviceName = fromMaybe "" serviceName, metricUnit, point}
+      | (metricName, serviceName, metricUnit, exemplars) <- V.toList rows
+      , point <- exemplarPoints exemplars
+      , point.timestamp >= lo && point.timestamp <= hi
+      , case scope of ExemplarsOfTrace trId -> point.traceId == trId; ExemplarsOfMetric _ -> True
+      ]
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int

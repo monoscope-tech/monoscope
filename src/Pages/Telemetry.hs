@@ -8,6 +8,10 @@ module Pages.Telemetry (
   metricCardGetH,
   metricDetailUrl,
   metricExpandUrl,
+  metricExemplarsGetH,
+  MetricExemplarsGet (..),
+  relatedMetricsGetH,
+  traceOverlayUrl,
   -- Trace
   traceH,
   traceFragmentUrl,
@@ -20,6 +24,7 @@ module Pages.Telemetry (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Default
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Set qualified as S
@@ -60,7 +65,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
@@ -326,6 +331,151 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
       (div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found")
       (\metric -> metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
       metricM
+
+
+-- | Deep link that opens a trace in the log explorer's trace overlay. @Log.hs@'s
+-- @traceOverlay@ reads @?showTrace=<traceId>/?timestamp=<ts>@ on load and fires
+-- @loadTrace@, so a plain anchor from anywhere in the product lands in the
+-- waterfall — no second overlay container to host, and no new page.
+--
+-- The timestamp is not decoration: 'traceH' without one widens from a +/-5min
+-- window to a 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21. For
+-- an exemplar it must be the exemplar's own timestamp, which a cumulative
+-- histogram can place weeks before the row that carried it.
+traceOverlayUrl :: Projects.ProjectId -> Text -> UTCTime -> Text
+traceOverlayUrl pid trId ts = "/p/" <> pid.toText <> "/log_explorer?showTrace=" <> toUriStr (trId <> "/?timestamp=" <> formatUTC ts)
+
+
+-- | Representative traces for one metric. Rendered as a list for the Exemplars tab
+-- and served as JSON to the chart overlay from the same handler — one query, two
+-- representations, so the diamonds on the chart and the rows under it can never
+-- disagree.
+data MetricExemplarsGet = MetricExemplarsGet Projects.ProjectId Text [Telemetry.MetricExemplar]
+
+
+instance ToHtml MetricExemplarsGet where
+  toHtml (MetricExemplarsGet pid metricName exemplars) = toHtml $ exemplarList_ pid metricName exemplars
+  toHtmlRaw = toHtml
+
+
+instance AE.ToJSON MetricExemplarsGet where
+  toJSON (MetricExemplarsGet pid _ exemplars) =
+    AE.toJSON
+      [ AE.object
+          [ "trace_id" AE..= x.point.traceId
+          , "span_id" AE..= x.point.spanId
+          , "timestamp" AE..= x.point.timestamp
+          , "value" AE..= x.point.value
+          , "metric_name" AE..= x.metricName
+          , "url" AE..= traceOverlayUrl pid x.point.traceId x.point.timestamp
+          ]
+      | x <- exemplars
+      ]
+
+
+-- | An exemplar is one measurement the SDK kept per histogram bucket per collection
+-- cycle — "a trace that landed in this bucket", not "the worst request". The copy
+-- says representative for that reason, and the ordering is value-descending because
+-- during an incident the slow end is the end anyone reads.
+exemplarList_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> Html ()
+exemplarList_ pid metricName = \case
+  [] ->
+    div_ [class_ "px-5 py-8 text-sm text-textWeak"]
+      $ "No exemplars for "
+      <> toHtml metricName
+      <> " in this time range. Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
+  exemplars -> do
+    div_ [class_ "px-5 pb-3 pt-5"] do
+      span_ [class_ "block text-sm font-semibold text-textStrong"] "Representative traces"
+      span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Traces this metric recorded a datapoint in, slowest first."
+    div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ exemplars \x ->
+      a_
+        [ class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-3 transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
+        , href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp
+        ]
+        do
+          div_ [class_ "min-w-0"] do
+            span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
+            div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+              Components.dateTime x.point.timestamp Nothing
+              whenNotNull (words x.serviceName) \_ -> do
+                span_ [class_ "text-textDisabled"] "•"
+                span_ $ toHtml x.serviceName
+          div_ [class_ "flex shrink-0 items-center gap-3"] do
+            span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (show @Text x.point.value) <> toHtml (if x.metricUnit == "" then "" else " " <> x.metricUnit)
+            faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
+
+
+metricExemplarsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricExemplarsGet)
+metricExemplarsGetH pid metricName fromM toM sinceM = do
+  void $ Projects.sessionAndProject pid
+  env <- (.env) <$> Reader.ask @AuthContext
+  now <- Time.currentTime
+  let (fromD, toD, _) = parseTime fromM toM sinceM now
+  exemplars <- Telemetry.metricExemplars env.enableTimefusionReads pid (Telemetry.ExemplarsOfMetric metricName) (fromMaybe (addUTCTime (-3600) now) fromD, fromMaybe now toD) exemplarPageSize
+  addRespHeaders $ MetricExemplarsGet pid metricName exemplars
+
+
+-- | Cap on exemplars fetched and rendered. Bounded on purpose: the scan is a text
+-- LIKE over raw metric rows, and TimeFusion is OOM-killed by unbounded reads.
+exemplarPageSize :: Int
+exemplarPageSize = 100
+
+
+-- | The span/log detail panel's Metrics tab. Two tiers, in the order an on-call
+-- reads them: metrics this exact trace produced a datapoint in, then the emitting
+-- service's metrics as charts.
+--
+-- The tiers exist because the exact one is often empty — an SDK keeps one exemplar
+-- per bucket per cycle, and log records carry no trace context at all — while the
+-- service tier answers for every row. This is Datadog's split (exact @trace_id@ join
+-- where it exists, unified-service-tag join otherwise), with the difference that our
+-- exact tier reaches metrics, which Datadog's cannot.
+relatedMetricsGetH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders (Html ()))
+relatedMetricsGetH pid rdId timestamp = withSpan_ "log-explorer.related-metrics" [] do
+  void $ Projects.sessionAndProject pid
+  env <- (.env) <$> Reader.ask @AuthContext
+  Hasql.withHasqlTimefusion env.enableTimefusionReads (Telemetry.otelRecordByProjectAndId pid timestamp rdId) >>= \case
+    Nothing -> addRespHeaders $ div_ [class_ "px-5 py-8 text-sm text-textWeak"] "Record not found"
+    Just record -> do
+      let service = fromMaybe "" $ Telemetry.spanServiceName record
+          -- A span brackets its own window; a log is an instant, so it borrows
+          -- Datadog's +/-30min log-to-metrics window rather than pretending to one.
+          (lo, hi)
+            | record.kind == Just "log" = (addUTCTime (-1800) record.timestamp, addUTCTime 1800 record.timestamp)
+            | otherwise = (addUTCTime (-120) record.start_time, addUTCTime 120 (LogItem.spanEndOrCap record))
+      exemplars <- case record.context >>= (.trace_id) >>= guarded (not . T.null) of
+        Nothing -> pure []
+        Just trId -> Telemetry.metricExemplars env.enableTimefusionReads pid (Telemetry.ExemplarsOfTrace trId) (lo, hi) exemplarPageSize
+      serviceMetrics <- if T.null service then pure [] else take 6 . sortOn (Down . (.lastSeen)) <$> Telemetry.getMetricChartListData pid (Just service) Nothing
+      addRespHeaders $ relatedMetrics_ pid service exemplars serviceMetrics
+
+
+relatedMetrics_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> [Telemetry.MetricChartListData] -> Html ()
+relatedMetrics_ pid service exemplars serviceMetrics = div_ [class_ "flex flex-col gap-6 py-2"] do
+  section "Recorded in this trace" $ case exemplars of
+    [] -> hint "No metric reported a datapoint from this trace. Only metrics recorded inside a sampled span carry an exemplar."
+    xs -> div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ xs \x ->
+      a_
+        [ class_ "flex items-center justify-between gap-4 px-3 py-2 text-sm hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
+        , href_ $ metricDetailUrl pid x.metricName "all" Nothing
+        ]
+        do
+          span_ [class_ "truncate text-textStrong"] $ toHtml x.metricName
+          span_ [class_ "shrink-0 text-textWeak"] $ toHtml (show @Text x.point.value) <> toHtml (if x.metricUnit == "" then "" else " " <> x.metricUnit)
+  section (if T.null service then "Service metrics" else "Metrics from " <> service) $ case serviceMetrics of
+    [] -> hint $ if T.null service then "This record names no service, so there is nothing to scope metrics to." else "No metrics reported by " <> service <> "."
+    ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
+      div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
+        $ toHtml
+        $ metricWidget pid m.metricName m.metricType m.metricUnit Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing
+  where
+    hint :: Text -> Html ()
+    hint t = div_ [class_ "px-3 py-4 text-sm text-textWeak"] $ toHtml t
+    section :: Text -> Html () -> Html ()
+    section title body = div_ [class_ "flex flex-col gap-2"] do
+      span_ [class_ "px-3 text-xs font-medium text-textWeak"] $ toHtml title
+      body
 
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -768,6 +918,12 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
         div_ [class_ "flex", [__|on click halt|]] $ do
           button_ [class_ "cursor-pointer a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
           button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
+          -- `navigatable` reveals the panel by toggling display, and a display:none
+          -- container never intersects — the same reason Log.hs's alert panel fires
+          -- off its toggle rather than off `intersect`. Trigger the fetch from the
+          -- click too, so the panel loads whichever way the browser resolves it;
+          -- `once` on both means it still runs exactly one request.
+          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ex-content', '#metric-tabs-container', 't-tab-active');htmx.trigger('#ex-content', 'revealExemplars')"] "Exemplars"
           div_ [class_ "w-full border-b border-b-strokeWeak"] pass
 
         div_ [class_ "grid px-4 pb-4 mt-2 text-textWeak font-normal"] $ do
@@ -815,6 +971,21 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
                         span_ [class_ "truncate text-textStrong"] $ toHtml label
                         faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
           div_ [class_ "hidden a-tab-content", id_ "rl-content"] $ relatedMetrics pid source metric candidates
+          -- Fetched on first reveal rather than with the page: an exemplar lookup is a
+          -- text scan over raw metric rows, and most visits never open this tab.
+          div_
+            [ class_ "hidden a-tab-content"
+            , id_ "ex-content"
+            , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"
+            , hxTrigger_ "intersect once, revealExemplars once"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , term "hx-ext" "forward-page-params"
+            , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
+            , Aria.busy_ "true"
+            ]
+            $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading exemplars"]
+            $ loadingIndicator_ LdSM LdDots
 
 
 metricDimension :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text -> Html ()
@@ -884,7 +1055,10 @@ relatedMetricScore metric candidate =
 
 metricDetailChart :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Text -> Html ()
 metricDetailChart pid metric source selected chartId =
-  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container"]
+  -- The exemplar overlay is opt-in per chart and declared here, next to the chart it
+  -- decorates: widgets.ts looks for this attribute on an ancestor and, finding it,
+  -- draws a diamond per representative trace over the series.
+  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"]
     $ toHtml
     $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit selected Nothing (Just chartId) Nothing)
       { Widget.groupByOptions = V.toList metric.metricLabels <$ guard (not $ V.null metric.metricLabels)

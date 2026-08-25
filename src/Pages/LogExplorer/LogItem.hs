@@ -411,6 +411,27 @@ detailTabs pid item aptSp =
         "group-has-[.tab-logs:checked]/dtab:block"
         "logs-content"
         (jsonValueToHtmlTree events Nothing)
+    , -- The panel is a shell, not content: "which metrics relate to this row" is a
+      -- DB question and 'detailTabs' is pure. HTMX fetches the answer when the tab
+      -- is first revealed, so opening a span never pays for metrics nobody asked for.
+      tab
+        (not isAlert)
+        "tab-metrics"
+        ""
+        "Metrics"
+        "group-has-[.tab-metrics:checked]/dtab:block"
+        "metrics-content"
+        ( div_
+            [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/related_metrics"
+            , hxTrigger_ "intersect once"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
+            , Aria.busy_ "true"
+            ]
+            $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading related metrics"]
+            $ loadingIndicator_ LdSM LdDots
+        )
     , tab True "tab-raw" "whitespace-nowrap" "Raw data" "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" (jsonValueToHtmlTree (AE.toJSON item) Nothing)
     ]
   where
