@@ -2897,7 +2897,7 @@ export class LogList extends LitElement {
                 }}
               >
                 <span
-                  class="flex items-center justify-center w-5 h-5 rounded border border-strokeStrong bg-bgBase text-iconNeutral group-hover/btn:border-strokeBrand-strong group-hover/btn:text-textBrand group-hover/btn:bg-fillBrand-weak transition-colors"
+                  class="flex items-center justify-center w-5 h-5 rounded border border-strokeStrong bg-bgBase text-iconNeutral group-hover/btn:border-strokeBrand-strong group-hover/btn:text-textBrand group-hover/btn:bg-bgRaised transition-colors"
                 >
                   ${faSprite('up-right-and-down-left-from-center', 'regular', 'w-2.5 h-2.5')}
                 </span>
