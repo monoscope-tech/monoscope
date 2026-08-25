@@ -105,7 +105,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM = do
           }
       table =
         Table
-          { config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True}
+          { -- bulkActionsInHeader is what puts the header action group — and with it the whole
+            -- filter dropdown — into a column header. Leaving it unset renders no facet menus
+            -- at all, however many are configured.
+            config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = containerColumns
           , rows = V.fromList $ map (ContainerVM pid) rows
           , features =
@@ -321,8 +324,9 @@ showFFloat' places x = toText $ showFFloat (Just places) x ""
 formatBytes :: Double -> Text
 formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
   where
-    go (u : us) v | abs v >= 1024 && not (null us) = go us (v / 1024)
-                  | otherwise = trim v <> " " <> u
+    go (u : us) v
+      | abs v >= 1024 && not (null us) = go us (v / 1024)
+      | otherwise = trim v <> " " <> u
     go [] v = showFFloat' 1 v
     trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 

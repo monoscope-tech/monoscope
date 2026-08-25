@@ -55,33 +55,39 @@ ingestFixture tr key = do
   -- 0.5 cores against a 2-core limit and 512 MiB against 1 GiB: both percentages land on
   -- round numbers so a unit slip anywhere in the pipeline is obvious rather than plausible.
   forM_
-    ([ ("container.cpu.usage", 0.5)
-    , ("container.memory.working_set", 536870912)
-    , ("k8s.container.cpu_limit", 2)
-    , ("k8s.container.cpu_request", 1)
-    , ("k8s.container.memory_limit", 1073741824)
-    , ("k8s.container.memory_request", 268435456)
-    , ("k8s.container.restarts", 3)
-    , ("k8s.container.ready", 1)
-    ] :: [(Text, Double)])
+    ( [ ("container.cpu.usage", 0.5)
+      , ("container.memory.working_set", 536870912)
+      , ("k8s.container.cpu_limit", 2)
+      , ("k8s.container.cpu_request", 1)
+      , ("k8s.container.memory_limit", 1073741824)
+      , ("k8s.container.memory_request", 268435456)
+      , ("k8s.container.restarts", 3)
+      , ("k8s.container.ready", 1)
+      ]
+        :: [(Text, Double)]
+    )
     (emit k8sChecked)
 
   -- A second namespace, and deliberately no CPU limit — the case Datadog documents as
   -- "cannot infer the usage percentage", which must stay blank rather than become 0%.
   forM_
-    ([ ("container.cpu.usage", 0.25)
-    , ("container.memory.working_set", 33554432)
-    , ("k8s.container.ready", 0)
-    ] :: [(Text, Double)])
+    ( [ ("container.cpu.usage", 0.25)
+      , ("container.memory.working_set", 33554432)
+      , ("k8s.container.ready", 0)
+      ]
+        :: [(Text, Double)]
+    )
     (emit k8sOther)
 
   -- Docker: 80 means 0.8 cores under Docker's own formula, and the memory limit arrives on a
   -- different metric name from the Kubernetes one.
   forM_
-    ([ ("container.cpu.utilization", 80)
-    , ("container.memory.usage.total", 3221225472)
-    , ("container.memory.usage.limit", 4294967296)
-    ] :: [(Text, Double)])
+    ( [ ("container.cpu.utilization", 80)
+      , ("container.memory.usage.total", 3221225472)
+      , ("container.memory.usage.limit", 4294967296)
+      ]
+        :: [(Text, Double)]
+    )
     (emit $ dockerResource "srv-captain--redpanda-0.1.tt13bkp5")
 
   -- Noise the inventory must ignore: a metric with no container identity at all.
