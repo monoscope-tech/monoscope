@@ -606,8 +606,9 @@ setAckState pid iids ackM
   -- UPDATE therefore 500'd. Keep the newest selected recurrence actionable and
   -- archive competing selected or already-open rows before reopening it.
   | Nothing <- ackM = do
-      void $ Hasql.interpExecute
-        [HI.sql|
+      void
+        $ Hasql.interpExecute
+          [HI.sql|
           WITH selected AS (
             SELECT id, project_id, target_hash, issue_type, updated_at
             FROM apis.issues
@@ -661,8 +662,9 @@ expireAcks :: DB es => UTCTime -> Eff es [IssueId]
 expireAcks now = do
   -- Expired recurrences can share a signal key. Archive all but the newest before
   -- reopening it, or the open-issue partial index rejects the whole expiry sweep.
-  void $ Hasql.interpExecute
-    [HI.sql|
+  void
+    $ Hasql.interpExecute
+      [HI.sql|
       WITH expired AS (
         SELECT id, project_id, target_hash, issue_type, updated_at
         FROM apis.issues

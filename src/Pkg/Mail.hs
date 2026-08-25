@@ -224,12 +224,14 @@ sendWhatsAppAlert alert pid pTitle tos = do
         Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]
-      Just template -> sendAlert (Config.twilioContentSidText template) $ AE.object
-          [ "1" AE..= ("*" <> pTitle <> "*")
-          , "2" AE..= ("*" <> title <> "*")
-          , "3" AE..= status
-          , "4" AE..= url
-          ]
+      Just template ->
+        sendAlert (Config.twilioContentSidText template)
+          $ AE.object
+            [ "1" AE..= ("*" <> pTitle <> "*")
+            , "2" AE..= ("*" <> title <> "*")
+            , "3" AE..= status
+            , "4" AE..= url
+            ]
 
 
 slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value

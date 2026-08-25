@@ -46,8 +46,8 @@ where
 import BackgroundJobs qualified
 import Control.Lens ((^.))
 import Data.Aeson qualified as AE
-import Data.CaseInsensitive qualified as CI
 import Data.Cache qualified as Cache
+import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID

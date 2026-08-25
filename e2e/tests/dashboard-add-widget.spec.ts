@@ -86,24 +86,27 @@ test.describe("adding widgets to a dashboard", () => {
     await expect(frame).toBeVisible();
     await page.waitForTimeout(3000); // the preview is an HTMX round-trip
 
+    // Measure the frame's own scroll extent, not a child's box: the preview div is
+    // `h-full`, so its *box* always matches the frame no matter how far its contents
+    // spill. scrollHeight is what actually reveals the overflow.
+    const fit = await frame.evaluate((e) => ({
+      overflowBy: e.scrollHeight - e.clientHeight,
+      clipped: getComputedStyle(e).overflowY !== "visible",
+    }));
+
+    // A few pixels are sub-pixel layout rounding; the bug was ~260px of table hanging out
+    // of the box and painting over the numbered steps underneath.
+    expect(fit.overflowBy, "the logs preview does not fit the widget preview frame").toBeLessThanOrEqual(4);
+    // Belt and braces: even if a future log table grows again, the frame must clip rather
+    // than paint over the rest of the form.
+    expect(fit.clipped, "the preview frame lets its contents escape").toBe(true);
+
+    // And the frame really did get taller for logs than it is for a chart.
     const frameBox = (await frame.boundingBox())!;
-    const inner = frame.locator("> div").first();
-    const innerBox = (await inner.boundingBox())!;
-
-    // The preview content fits its frame rather than overflowing it. 2px of slack absorbs
-    // sub-pixel layout rounding; a genuine overflow is tens of pixels or more.
-    expect(
-      innerBox.y + innerBox.height,
-      "the logs preview overflows the bottom of the widget preview frame",
-    ).toBeLessThanOrEqual(frameBox.y + frameBox.height + 2);
-
-    // And it does not cover the step below it.
-    const step = page.getByText("Configure Query").first();
-    const stepBox = (await step.boundingBox())!;
-    expect(
-      innerBox.y + innerBox.height,
-      "the logs preview overlaps the Configure Query step",
-    ).toBeLessThanOrEqual(stepBox.y + 2);
+    await page.locator('#visualizationTabs label[data-value="timeseries"]').click();
+    await page.waitForTimeout(1500);
+    const chartBox = (await frame.boundingBox())!;
+    expect(frameBox.height, "logs and charts get the same preview height").toBeGreaterThan(chartBox.height);
   });
 
   test("a log explorer chart can be added to a dashboard", async ({ page }) => {

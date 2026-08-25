@@ -490,7 +490,11 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
 activityPanel_ :: Projects.ProjectId -> Text -> Text -> Maybe (Text, UTCTime) -> Html ()
 activityPanel_ pid issueId extraClass traceRef = do
   let activityUrl =
-        "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
+        "/p/"
+          <> pid.toText
+          <> "/issues/"
+          <> issueId
+          <> "/activity"
           <> foldMap (\(tId, tTs) -> "?trace_id=" <> toUriStr tId <> "&trace_ts=" <> toUriStr (formatUTC tTs)) traceRef
   details_ [class_ $ "surface-raised rounded-2xl group/activity overflow-hidden " <> extraClass, term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do

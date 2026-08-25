@@ -1283,7 +1283,12 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
           button_ [class_ $ "btn btn-primary btn-sm shadow-sm" <> memptyIfFalse (not isNewWidget) " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
           label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
-      div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
+      -- 4:1 is a chart's shape. A log table is a header plus rows and wants roughly twice
+      -- that height, so it gets its own aspect off the checked viz radio (both live under
+      -- group/wgtexp). overflow-hidden is the guarantee rather than the styling: without
+      -- it the preview is free to paint over the numbered steps below, which is what the
+      -- logs preview did — it renders about 540px of table into a 280px box.
+      div_ [class_ "w-full aspect-4/1 group-has-[#viz-logs:checked]/wgtexp:aspect-[2/1] overflow-hidden p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
         script_ [text| var widgetJSON = ${widgetJSON}; |]
         div_
           [ id_ widgetPreviewId
