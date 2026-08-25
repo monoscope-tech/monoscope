@@ -75,8 +75,8 @@ path. Scope is honest about what it skips and why.
 
 ## Merge outcome (all four streams on master)
 
-Verified green on the merged tree: integration 745/0, doctests 1251/0, unit 274/0, CLI 16/0,
-e2e 35/0. `Pages.GitSync / GitHub Sync E2E (Real API)` is gated on `GH_TEST_PAT` and either
+Verified green on the merged tree: integration 745/0 (also 745/0 against a real, freshly
+wiped TimeFusion), doctests 1251/0, unit 274/0, CLI 16/0, e2e 35/0. `Pages.GitSync / GitHub Sync E2E (Real API)` is gated on `GH_TEST_PAT` and either
 skips or fails against live GitHub depending on the environment; it is unrelated to this work.
 
 Five defects the merge itself produced or exposed, each fixed:
@@ -94,14 +94,19 @@ Five defects the merge itself produced or exposed, each fixed:
    throw is caught and logged.
 4. **Two container doctests were ambiguous on `namespace`**, which names a field of both
    `ContainerFilters` and `ContainerRow`.
-5. **`ReportUsageSpec` billed the shared demo project** and so counted every event other specs
-   had ingested. This passed locally and failed all 8 examples in CI, because Postgres is cloned
-   per example while **TimeFusion is one instance for the whole run**, keyed only by project id —
-   and `getUsageTotals` reads events and metrics from TimeFusion whenever
-   `TIMEFUSION_PG_TEST_URL` is set, which CI does. Fixed structurally: `Pkg.TestUtils.createTestProject`
-   mints a project per example under a genuinely random UUID (not the deterministic test UUID
-   stream, which restarts identically every example and would collide in a shared store). No
-   assertion was weakened — the count is 38 before and after.
+5. **CI reads flipped from Postgres to a shared TimeFusion**, breaking 23 examples across seven
+   specs — not the 8 first reported here. `bac2a9a5d` pinned `enableTimefusionReads = tfEnabled`
+   in `Pkg.TestUtils`; `tfEnabled` is false locally and **true in CI**, so every telemetry read
+   moved from per-example Postgres to one shared, asynchronous store. Two shapes, only one of
+   them fixable: counts inflated by other specs' rows (fixable by per-example project isolation,
+   which `createTestProject` now gives `ReportUsageSpec`), and counts *deflated* by write→read
+   visibility (`expected 500, got 65`) — which no isolation or SQL fix can make synchronous.
+   Reads are now pinned off; writes still go to a real TimeFusion. Reasoning and the red/green
+   repro are in `plans/tf-reads-in-tests.md`.
+
+   The pin was not wasted: it made CI briefly prod-like and surfaced a **real production bug** —
+   `fetchLogPatterns`' fallback used a SQL `mode() WITHIN GROUP`, which DataFusion cannot plan,
+   against the store production actually reads. Dormant since February, fixed in `13982e099`.
 
 **Note on pushing.** A concurrent session in this same checkout pushed master, carrying all four
 streams to origin. Nothing reached the servers: CI was red on (5) and the deploy job is gated on
