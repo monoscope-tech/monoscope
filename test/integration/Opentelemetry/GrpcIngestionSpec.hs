@@ -137,7 +137,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "Test 4.1: should ingest metrics and render related metrics" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3", "metric-key-4"]
-      forM_ (zip3 keys ["cpu.usage", "cpu.limit", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1, 10]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
+      forM_ (zip3 keys ["cpu.usage", "cpu.limit", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1, 10]) $ \(key, metricName, value) -> ingestMetric tr key [] metricName value frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Catalog writes are buffered and only flushed at threshold or by the hourly
       -- job (not by runAllBackgroundJobs), so flush explicitly before asserting it.
@@ -207,14 +207,14 @@ spec = sequential $ aroundAll withTestResources do
       key <- createTestAPIKey tr pid "metric-replay-key"
       let metricName = "replayed.metric"
       before :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
-      ingestMetric tr key metricName 42 frozenTime
-      ingestMetric tr key metricName 42 frozenTime
+      ingestMetric tr key [] metricName 42 frozenTime
+      ingestMetric tr key [] metricName 42 frozenTime
       after :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
       after `shouldBe` (\n -> n + 1) <$> before
 
     it "streams metric label paths into metadata" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-label-catalog-key"
-      ingestMetric tr key "catalog.labels" 1 frozenTime
+      ingestMetric tr key [] "catalog.labels" 1 frozenTime
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       labels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'catalog.labels' |] (Only $ unUUIDId pid)
       labels `shouldSatisfy` (any (\(Only value) -> "resource.service.name" `isInfixOf` toString value) . toList)
@@ -378,7 +378,7 @@ spec = sequential $ aroundAll withTestResources do
     it "Test 4.3: every write target durably persists once and replays idempotently" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-write-target-key"
       let metricsCeType = HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1"
-          payload name = ("wt-ack", encodeMessage (createGaugeMetricAtTime key name 7 frozenTime))
+          payload name = ("wt-ack", encodeMessage (createGaugeMetricAtTime key [] name 7 frozenTime))
           pgCount name = (\(Only n) -> n) . V.head <$> withPool tr.trPool (DBT.query [sql| SELECT count(*)::int FROM otel_metrics WHERE project_id = ? AND metric_name = ? |] (unUUIDId pid, name)) :: IO Int
           tfCount name = V.head <$> runTestBg frozenTime tr (Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{name} |]) :: IO Int
           maxCount name = max <$> pgCount name <*> tfCount name
@@ -392,8 +392,8 @@ spec = sequential $ aroundAll withTestResources do
 
     it "Test 4.4: TF metric read path returns series values matching the ingested points" $ \tr -> do
       key <- createTestAPIKey tr pid "tf-read-match-key"
-      ingestMetric tr key "tf.read.match" 10 frozenTime
-      ingestMetric tr key "tf.read.match" 32 (addUTCTime 1 frozenTime)
+      ingestMetric tr key [] "tf.read.match" 10 frozenTime
+      ingestMetric tr key [] "tf.read.match" 32 (addUTCTime 1 frozenTime)
       let (timeFrom, timeTo) = testTimeRange
       -- data_type omitted so the scalar summarize auto-decodes to a float (the
       -- CLI --assert path); the read goes through queryMetrics' otel_metrics SQL.
@@ -402,7 +402,7 @@ spec = sequential $ aroundAll withTestResources do
       scalar.dataFloat `shouldBe` Just 42
 
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
-      OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime)
+      OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" [] "rejected.metric" 99.9 frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 5.1: should query ingested logs via apiLogH handler" $ \tr -> do
@@ -427,7 +427,7 @@ spec = sequential $ aroundAll withTestResources do
       forM_ keys $ \key -> do
         ingestLog tr key "E2E test log" frozenTime
         ingestTrace tr key "GET /api/test" frozenTime
-        ingestMetric tr key "test.metric" 42.0 frozenTime
+        ingestMetric tr key [] "test.metric" 42.0 frozenTime
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Verify logs and traces
@@ -474,7 +474,7 @@ spec = sequential $ aroundAll withTestResources do
 
       it "Test 9.3: should authenticate metrics using gRPC Authorization header" $ \tr -> do
         key <- createTestAPIKey tr pid "header-metric-key"
-        ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
+        ingestMetricWithHeader tr key [] "header.metric" 123.45 frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
         result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []

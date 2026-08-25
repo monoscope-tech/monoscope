@@ -462,8 +462,12 @@ renderRows tbl
                 $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
               forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
                 let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
-                    -- one class_ attribute: Lucid concatenates duplicates with no separator
-                    thAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
+                    -- Lucid concatenates duplicate class_ attributes with NO separator, and a
+                    -- column built with `withAttrs [class_ …]` brings its own — so this value
+                    -- leads with a space. Without it the column's last class and thClasses'
+                    -- first class fuse into one nonsense token and both are lost, which is how
+                    -- header widths and `max-md:hidden` silently stopped applying.
+                    thAttrs = [class_ $ " " <> tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
                     sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
                 th_ (c.attrs <> thAttrs <> sortAttrs) do

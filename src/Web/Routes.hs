@@ -93,6 +93,7 @@ import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.CodeContext qualified as PageCodeContext
+import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
@@ -610,6 +611,8 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+  , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -1018,6 +1021,8 @@ telemetryServer pid =
     , metricCardGetH = Metrics.metricCardGetH pid
     , serviceMapGetH = ServiceMap.serviceMapGetH pid
     , metricServicesGetH = Metrics.metricServicesGetH pid
+    , containersGetH = Containers.containersGetH pid
+    , containerDetailGetH = Containers.containerDetailGetH pid
     }
 
 

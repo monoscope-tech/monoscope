@@ -202,6 +202,7 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.Containers
       Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
@@ -216,6 +217,7 @@ library
       Pages.CodeContext
       Pages.CommandPalette
       Pages.Components
+      Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
@@ -633,6 +635,7 @@ test-suite integration-tests
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
+      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec
@@ -795,6 +798,7 @@ test-suite test-dev
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.Containers
       Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
@@ -809,6 +813,7 @@ test-suite test-dev
       Pages.CodeContext
       Pages.CommandPalette
       Pages.Components
+      Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
@@ -907,6 +912,7 @@ test-suite test-dev
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
+      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec
