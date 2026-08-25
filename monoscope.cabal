@@ -164,6 +164,7 @@ extra-source-files:
     static/migrations/0133_learned_id_rules.sql
     static/migrations/0134_backfill_first_member_count.sql
     static/migrations/0135_monitor_positive_time_window.sql
+    static/migrations/0136_billing_meters.sql
 
 source-repository head
   type: git

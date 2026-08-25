@@ -25,7 +25,6 @@ module Models.Telemetry.Containers (
 
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.String (fromString)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Vector qualified as V

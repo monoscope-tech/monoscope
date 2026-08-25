@@ -18,6 +18,7 @@ module ProcessMessage (
   redactJSON,
   ensureUrlParams,
   ensureUrlParamsWith,
+  dynSegmentLabel,
   isUrlIdLikeWith,
   classifyUrlPathWith,
   PathClassifier (..),
