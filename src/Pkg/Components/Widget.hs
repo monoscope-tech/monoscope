@@ -621,23 +621,29 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         let dashId = maybeToMonoid widget._dashboardId
+            -- A widget on a dashboard is copied from it by id. One that is not — the log
+            -- explorer's chart — has no server-side row to copy, so its own JSON goes with
+            -- it and the picker PUTs that as a new widget.
+            onDashboard = isJust widget._dashboardId
         li_
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Copy this widget to another dashboard"
+            , data_ "tippy-content" $ bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard
             , id_ $ wId <> "_copy_link"
             , term
                 "_"
                 [text|
               on click
-              set #dashboards-modal-widget-id.value to "${wId}"
+              set widgetEl to the closest <[data-widget]/>
+              then set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
+              then set #dashboards-modal-widget-json.value to (widgetEl.dataset.widget or '')
               then set #dashboards-modal.checked to true
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()
             |]
             ]
-            "Copy to dashboard"
+            (bool "Add to dashboard" "Copy to dashboard" onDashboard)
         let copyItem tip label expr =
               li_
                 $ a_

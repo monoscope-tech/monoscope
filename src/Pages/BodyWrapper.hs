@@ -403,6 +403,9 @@ bodyWrapper bcfg child = do
                 Components.modal_ "dashboards-modal" "" do
                   input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
                   input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+                  -- Only set for a widget that lives on no dashboard, whose definition
+                  -- exists solely on the client; the picker rows PUT it as the new widget.
+                  input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widget_json"]
                   div_
                     [ id_ "dashboards-modal-content"
                     , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
@@ -410,7 +413,10 @@ bodyWrapper bcfg child = do
                     , hxTrigger_ "loadDashboards"
                     , hxSelect_ "#itemsListPage"
                     , hxSwap_ "innerHTML"
-                    , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
+                    , -- The source id is spread in only when set: a widget that lives on no
+                      -- dashboard would otherwise send `source_dashboard_id=`, which is not
+                      -- a UUID, and the whole request 400s.
+                      hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
                     ]
                     $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
 

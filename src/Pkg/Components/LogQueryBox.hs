@@ -298,7 +298,12 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
         -- views with no corresponding WidgetType, so a widget set to either could not be
         -- decoded on save: the tab was offered and simply did not work.
         hidden = bool [] ["sessions"] alert <> bool [] ["patterns", "sessions"] inWidgetEditor
-        visible = filter (\(_, _, t, _) -> t `notElem` hidden) visTypes
+        -- Same reason Logs is not the default here: on a dashboard the chart types are
+        -- what the reader wants, so they lead the strip and Logs moves to the end. The log
+        -- explorer keeps Logs first, where it is the view the page is named after.
+        visible =
+          bool Relude.id (sortOn (\(_, _, t, _) -> t == "logs")) inWidgetEditor
+            $ filter (\(_, _, t, _) -> t `notElem` hidden) visTypes
     forM_ visible \(_icon, label, vizType, emoji) ->
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
         input_

@@ -1523,7 +1523,10 @@ data DashboardsGetD = DashboardsGetD
   , teams :: V.Vector ManageMembers.Team
   , tableActions :: Maybe Table.TableHeaderActions
   , filters :: DashboardFilters
-  , copyMode :: Maybe (Text, Dashboards.DashboardId) -- (widgetId, sourceDashboardId) for copy-to-dashboard mode
+  , copyMode :: Maybe (Text, Maybe Dashboards.DashboardId)
+  -- ^ @(widgetId, sourceDashboardId)@ when the list is opened as a widget destination
+  -- picker. The source is 'Nothing' for a widget that lives on no dashboard — the log
+  -- explorer's chart — which is added from its client-side definition rather than copied.
   , dashTemplates :: [Dashboards.Dashboard]
   , showNew :: Bool
   }
@@ -1679,12 +1682,25 @@ dashboardsGet_ dg = do
                 def
                   { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
                   , Table.rowAttrs = Just $ \dash -> case dg.copyMode of
-                      Just (widgetId, sourceDashId) ->
+                      Just (widgetId, sourceDashIdM) ->
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
-                        , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText
                         , hxSwap_ "none"
                         , [__| on htmx:after:request set #dashboards-modal.checked to false |]
                         ]
+                          <> case sourceDashIdM of
+                            -- The widget already exists server-side; copy it across.
+                            Just sourceDashId -> [hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText]
+                            -- It does not: the only definition of it is the JSON the page
+                            -- is holding, so send that to the widget upsert instead. No
+                            -- widget_id — that is what makes the upsert append a widget
+                            -- under a fresh id rather than overwrite one. The explorer's
+                            -- chart is always called "visualization-widget", so passing it
+                            -- would make every add overwrite the previous one.
+                            Nothing ->
+                              [ term "hx-put" $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
+                              , hxExt_ "json-enc"
+                              , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
+                              ]
                       Nothing -> [class_ "group/row"]
                   , Table.bulkActions =
                       if noBulkActions
@@ -1703,7 +1719,9 @@ dashboardsGet_ dg = do
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
       when inCopyMode $ div_ [class_ "mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong"] do
         faSprite_ "circle-info" "regular" "w-4 h-4 inline mr-2"
-        "Select a dashboard to copy this widget to"
+        toHtml $ case dg.copyMode of
+          Just (_, Just _) -> "Select a dashboard to copy this widget to" :: Text
+          _ -> "Select a dashboard to add this widget to"
       toHtml table
 
 
@@ -1764,7 +1782,9 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = maybe False (`elem` ["true", "1", "yes"]) embeddedM
       isTeamView = isJust teamIdM
-      copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
+      -- Not an applicative over both: a missing source dashboard is a legitimate picker
+      -- (an ad-hoc widget being added), not a reason to fall back to the plain list.
+      copyMode = copyWidgetIdM <&> \wid -> (wid, UUIDId <$> sourceDashIdM)
 
   templates <- getDashboardTemplates bw.config.liveReloadDashboards
   if embedded || isTeamView
