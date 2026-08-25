@@ -634,26 +634,16 @@ spec = around withTestResources do
       let fromTime = Just $ at (-9000)
       let toTime = Just $ at (-5400)
 
-      -- QUARANTINED, not deleted. Against a real TimeFusion this reads back 0 rows and
-      -- blocks the pipeline; against Postgres it passes. What it is NOT, each ruled out
-      -- rather than assumed:
+      -- Regression guard for a real TimeFusion bug, fixed in timefusion bf3abc8: a mem
+      -- bucket advertised its ROUTING timestamp instead of the range of rows it held, so
+      -- a batch spanning 21:00-23:00 reported max=21:00 and any `timestamp >= 21:30`
+      -- pruned the whole bucket. The rows were in memory, matched the predicate, and were
+      -- invisible until flush. This example is the only one that catches it, because it
+      -- ingests several rows in one batch and then reads a window ABOVE the earliest.
       --
-      --   * write visibility — raising the poll budget 10s -> 30s spent the extra time
-      --     and still read 0 (PR #502);
-      --   * fresh-project writes failing — every other createTestProject example here passes;
-      --   * the explicit from/to bounds — many passing examples above pass them;
-      --   * a date-partition predicate derived from "now" — there is no such predicate in
-      --     the log-explorer query path.
-      --
-      -- And it is not a product bug. The same shape against production TimeFusion returns
-      -- rows: a 1-hour window 2-3h back gives 93,374; the same window across a date
-      -- boundary 25-26h back gives 95,414; a 5-minute window 8h back gives 6,709. A reader
-      -- narrowing to a past window is served correctly, so nothing customer-facing is
-      -- hidden by this pending.
-      --
-      -- See plans/tf-reads-in-tests.md, which also records why a hand-rolled local
-      -- TimeFusion is not a valid test bed for reproducing it.
-      pendingWith "reads 0 against a real TimeFusion; triaged in plans/tf-reads-in-tests.md, prod verified unaffected"
+      -- It was briefly quarantined as "not a product bug" on the strength of prod windows
+      -- 2-3h and 25-26h back returning rows — but those read FLUSHED parquet, which the
+      -- bug never touched. Only unflushed rows were hidden, i.e. the newest data.
 
       r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 1) . (.count))
       r.count `shouldSatisfy` (>= 1)
