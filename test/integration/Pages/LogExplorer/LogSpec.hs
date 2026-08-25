@@ -722,13 +722,18 @@ spec = around withTestResources do
         Nothing -> pass
 
     it "children map values reference valid span IDs" \tr -> do
+      -- Own project, and 10 distinct messages rather than 10 encodings of one:
+      -- an absent msg_id makes the span id a UUIDv5 of the whole payload, so
+      -- identical copies collapse to a single row on TimeFusion. On the shared
+      -- project the trace entries also came from other examples' rows, whose
+      -- span ids are not on this page.
+      pid <- createTestProject tr "log-explorer-children"
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-          reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-          msgs = map (\i -> ("cv" <> show i, toStrict $ AE.encode reqMsg)) ([1 .. 10] :: [Int])
+      msgs <- forM ([1 .. 10] :: [Int]) \i -> ("cv" <> show i,) <$> freshMsg pid (testRequestMsgs.reqMsg1 nowTxt)
       void $ runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      r <- fetchData tr Nothing Nothing Nothing Nothing fromTime toTime
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 1) . V.length . (.logsData))
       case (HashMap.lookup "latency_breakdown" r.colIdxMap, HashMap.lookup "id" r.colIdxMap) of
         (Just lbi, Just idi) -> do
           let allSpanIds = V.toList $ V.mapMaybe (\v -> case v V.!? lbi of Just (AE.String t) -> Just t; _ -> case v V.!? idi of Just (AE.String t) -> Just t; _ -> Nothing) r.logsData
