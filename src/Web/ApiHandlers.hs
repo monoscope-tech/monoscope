@@ -721,7 +721,7 @@ data ShareLinkCreated = ShareLinkCreated
 apiShareLinkCreate :: Projects.ProjectId -> ShareLinkCreate -> ATBaseCtx ShareLinkCreated
 apiShareLinkCreate pid req = do
   authCtx <- ask @AuthContext
-  _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId pid req.eventCreatedAt req.eventId
+  _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
   ShareEvents.createShareLink shareId pid req.eventId (fromMaybe "request" req.eventType) req.eventCreatedAt
   let url = authCtx.config.hostUrl <> "/share/r/" <> UUID.toText shareId
@@ -1273,4 +1273,6 @@ apiFacets pid sinceM fromM toM fieldM = do
 -- row via @timestamp = ts AND id = ?@ (the caller holds the exact stored
 -- timestamp). Returns 404 when the event is not found.
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
-apiEventGet pid eid ts = AE.toJSON <$> (notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId pid ts eid)
+apiEventGet pid eid ts = do
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  AE.toJSON <$> (notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId useTf pid ts eid)

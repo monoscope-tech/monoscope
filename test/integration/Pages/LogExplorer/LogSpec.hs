@@ -1,7 +1,9 @@
 module Pages.LogExplorer.LogSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -17,6 +19,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -30,15 +33,16 @@ import Pages.LogExplorer.QueryLibrary qualified as QueryLibrary
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Components.LogQueryBox qualified as LogQueryBox
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser qualified as Parser
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
+import ProcessMessage qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
-import Pkg.Parser qualified as Parser
 import Utils qualified
 import "base64" Data.Base64.Types qualified as B64T
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -56,13 +60,51 @@ nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
 -- log-list web component actually fetches, and return the raw LogResult so the
 -- assertions inspect the payload structurally, as before.
 fetchData :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchData tr q cols cur since from to = fetchDataDir tr q cols cur Nothing since from to
+fetchData tr = fetchDataIn tr testPid
 
 
 -- As above, with the pagination direction the live-tail path uses. Defaulting to
 -- PageOlder is what every existing caller relied on.
 fetchDataDir :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Parser.PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchDataDir tr q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur dir since from to Nothing Nothing)
+fetchDataDir tr = fetchDataDirIn tr testPid
+
+
+-- Examples that assert absolute counts read a project of their own (see
+-- 'createTestProject'): the shared 'testPid' accumulates rows from every other
+-- example, shard and prior CI run in the real-TimeFusion topology.
+fetchDataIn :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
+fetchDataIn tr pid q cols cur since from to = fetchDataDirIn tr pid q cols cur Nothing since from to
+
+
+fetchDataDirIn :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Parser.PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
+fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid q cols cur dir since from to Nothing Nothing)
+
+
+-- | Re-run @act@ until @ok@ holds, then return the last result (which the caller
+-- asserts on, so a persistent failure still reports the real value). TimeFusion is
+-- an asynchronous store: a row is durable when the write returns but not
+-- necessarily readable in the same instant, so a single read is a race.
+eventually :: IO a -> (a -> Bool) -> IO a
+eventually act ok = go (40 :: Int)
+  where
+    go n = do
+      a <- act
+      if ok a || n <= 0 then pure a else threadDelay 250_000 >> go (n - 1)
+
+
+-- | A legacy SDK message re-pointed at @pid@ and given its own @msg_id@.
+--
+-- Both matter under TimeFusion. The project id keeps the rows out of the shared
+-- 'testPid'; the msg id makes the event distinct — 'ProcessMessage.requestEventIds'
+-- derives the span/trace id from the whole message when @msg_id@ is absent, so N
+-- byte-identical copies are ONE event. Postgres stores each copy as a row anyway
+-- and TimeFusion deduplicates by id, which is why "ingest 100 copies, expect 100
+-- rows" only ever held on Postgres.
+freshMsg :: Projects.ProjectId -> AE.Value -> IO ByteString
+freshMsg pid v = do
+  mid <- nextRandom
+  let UUIDId pidU = pid
+  pure $ toStrict $ AE.encode (Unsafe.fromJust (convert v)){ProcessMessage.projectId = pidU, ProcessMessage.msgId = Just mid}
 
 
 seedFacetSummary :: TestResources -> IO ()
@@ -89,22 +131,20 @@ spec :: Spec
 spec = around withTestResources do
   describe "Log data endpoint (logExplorerDataH)" do
     it "should return an empty list" \tr -> do
-      r <- fetchData tr Nothing Nothing Nothing Nothing Nothing Nothing
+      pid <- createTestProject tr "log-explorer-empty"
+      r <- fetchDataIn tr pid Nothing Nothing Nothing Nothing Nothing Nothing
       V.length r.logsData `shouldBe` 0
       r.count `shouldBe` 0
       r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
 
     it "should return log items" \tr -> do
+      pid <- createTestProject tr "log-explorer-items"
       let yesterdayTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-86400) frozenTime
       let twoDaysAgoTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-172800) frozenTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-      -- new requests otherwise cursor for load more will be the same
-      let reqMsg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 yesterdayTxt
-      let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 twoDaysAgoTxt
-
-      let msgs = concat (replicate 100 [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]) ++ [("m3", toStrict $ AE.encode reqMsg3), ("m4", toStrict $ AE.encode reqMsg4)]
+      msgs <-
+        forM (concat (replicate 100 [testRequestMsgs.reqMsg1 nowTxt, testRequestMsgs.reqMsg2 nowTxt]) ++ [testRequestMsgs.reqMsg1 yesterdayTxt, testRequestMsgs.reqMsg2 twoDaysAgoTxt])
+          $ \v -> ("m",) <$> freshMsg pid v
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       bimap (show @Text) (length . fst) res `shouldBe` Right 202
 
@@ -113,7 +153,7 @@ spec = around withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeDaysAgo
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
 
-      r <- fetchData tr Nothing Nothing Nothing Nothing fromTime toTime
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 202) . V.length . (.logsData))
       V.length r.logsData `shouldBe` 202
       r.count `shouldSatisfy` (>= 202)
       r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
@@ -128,7 +168,8 @@ spec = around withTestResources do
     -- the app-wide selector can scope every query by it. The selection rides on the session
     -- (read from the `env` cookie at auth time), so this drives it the way the picker does.
     it "scopes results to the selected deployment environment, and to all of them by default" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "env-scope-key"
+      pid <- createTestProject tr "log-explorer-env-scope"
+      apiKey <- createTestAPIKey tr pid "env-scope-key"
       let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
           ingestIn env name = do
             (trId, sid) <- (,) <$> hexId <*> hexId
@@ -138,12 +179,12 @@ spec = around withTestResources do
 
       let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
           namesFor envM = do
-            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing envM
+            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads pid [] "" Nothing range [] (Just SSpans) Nothing envM
             (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
             let idx = fromMaybe (error "span_name not projected") $ V.elemIndex "span_name" (V.fromList cols)
             pure $ sort [n | r <- V.toList rows, Just (AE.String n) <- [r V.!? idx], "GET /env/" `T.isPrefixOf` n]
 
-      namesFor Nothing `shouldReturn` ["GET /env/prod", "GET /env/staging"]
+      eventually (namesFor Nothing) ((== 2) . length) `shouldReturn` ["GET /env/prod", "GET /env/staging"]
       namesFor (Just "prod") `shouldReturn` ["GET /env/prod"]
       namesFor (Just "staging") `shouldReturn` ["GET /env/staging"]
       -- An environment nothing reports is empty, not unfiltered — the difference between
@@ -432,9 +473,10 @@ spec = around withTestResources do
 
       let idxOf :: V.Vector (V.Vector AE.Value) -> HashMap.HashMap Text Int -> IO [Int]
           idxOf rows colIdxMap = do
-            let spanIdAt r = HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
-                  AE.String t -> Just t
-                  _ -> Nothing
+            let spanIdAt r =
+                  HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
+                    AE.String t -> Just t
+                    _ -> Nothing
                 spanIds = V.toList $ V.mapMaybe spanIdAt rows
             -- Preserve the response's own row order: the display contract is what is
             -- under test, so re-sorting here would hide exactly the bug we are after.
@@ -556,18 +598,22 @@ spec = around withTestResources do
       pageCount `shouldSatisfy` (> 1)
 
     it "caps a page at 500 rows and reports hasMore" \tr -> do
-      void
-        $ withPool tr.trPool
-        $ DBT.execute
-          [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name, summary)
-              SELECT ?, ?::timestamptz - g * interval '50 milliseconds', 'seed.row', '{}'
-              FROM generate_series(1, 520) AS g |]
-          (testPid, frozenTime)
+      -- Seeded through the ingest path, not a raw INSERT on tr.trPool: that writes
+      -- Postgres only, so against a TimeFusion-backed read the page had nothing of
+      -- this test's to cap. One merged export keeps it a single dual-write.
+      pid <- createTestProject tr "log-explorer-page-cap"
+      apiKey <- createTestAPIKey tr pid "page-cap-key"
+      let resource = mkResource apiKey []
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+      reqs <- forM [1 .. 520 :: Int] \i -> do
+        (tid, sid) <- (,) <$> hexId <*> hexId
+        pure $ mkSpanRequest tid sid Nothing "seed.row" [] Nothing [] resource (addUTCTime (fromIntegral i * (-0.05)) frozenTime)
+      ingestSpanReq tr $ mergeSpanRequests reqs
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
 
-      r <- fetchData tr Nothing Nothing Nothing Nothing fromTime toTime
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 500) . V.length . (.logsData))
       V.length r.logsData `shouldBe` 500
       r.hasMore `shouldBe` True
       let lastItemM = r.logsData V.!? (V.length r.logsData - 1)
@@ -579,18 +625,15 @@ spec = around withTestResources do
 
   describe "Time Range Selection" do
     it "should respect exact time boundaries" \tr -> do
-      let oneHourAgo = addUTCTime (-3600) frozenTime
-      let twoHoursAgo = addUTCTime (-7200) frozenTime
-      let threeHoursAgo = addUTCTime (-10800) frozenTime
-      let msg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 (toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneHourAgo)
-      let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 (toText $ formatTime defaultTimeLocale "%FT%T%QZ" twoHoursAgo)
-      let msg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 (toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeHoursAgo)
-      let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2), ("m3", toStrict $ AE.encode msg3)]
-      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
+      pid <- createTestProject tr "log-explorer-boundaries"
+      let at t = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime t frozenTime
+      msgs <- forM [-3600, -7200, -10800] \t -> ("m",) <$> freshMsg pid (testRequestMsgs.reqMsg1 (at t))
+      res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
+      bimap (show @Text) (length . fst) res `shouldBe` Right 3
 
-      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-9000) frozenTime
-      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime
-      r <- fetchData tr Nothing Nothing Nothing Nothing fromTime toTime
+      let fromTime = Just $ at (-9000)
+      let toTime = Just $ at (-5400)
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 1) . (.count))
       r.count `shouldSatisfy` (>= 1)
       V.length r.logsData `shouldSatisfy` (>= 1)
 
@@ -661,14 +704,17 @@ spec = around withTestResources do
         entry.duration `shouldSatisfy` (>= 0)
 
     it "traces should match request vecs trace IDs" \tr -> do
+      -- Own project: the trace-tree entries are built from this page of rows, but
+      -- their child spans are looked up per trace id, so any foreign trace sharing
+      -- the window (the shared testPid collects them from every other example)
+      -- shows up as an entry with no row of its own.
+      pid <- createTestProject tr "log-explorer-trace-ids"
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-          reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-          reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-          msgs = [("tt1", toStrict $ AE.encode reqMsg1), ("tt2", toStrict $ AE.encode reqMsg2)]
+      msgs <- forM [testRequestMsgs.reqMsg1 nowTxt, testRequestMsgs.reqMsg2 nowTxt] $ \v -> ("tt",) <$> freshMsg pid v
       void $ runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      r <- fetchData tr Nothing Nothing Nothing Nothing fromTime toTime
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing fromTime toTime) ((>= 2) . V.length . (.logsData))
       case HashMap.lookup "trace_id" r.colIdxMap of
         Just idx -> do
           let vecTraceIds = V.toList $ V.mapMaybe (\v -> case v V.!? idx of Just (AE.String t) -> Just t; _ -> Nothing) r.logsData
@@ -745,7 +791,7 @@ spec = around withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       (_, pv) <- testServant tr $ Log.logPatternsH testPid Nothing fromTime Nothing toTime (Just "spans") Nothing Nothing
-      case pv of Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0)
+      case pv of { Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0) }
       -- The JSON envelope carries the shared aggregate columns + the pattern total.
       let j = decodeUtf8 (toStrict (AE.encode pv)) :: Text
       j `shouldSatisfy` T.isInfixOf "totalPatterns"
@@ -755,7 +801,7 @@ spec = around withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
-      case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
+      case sv of { Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0) }
 
   describe "Log Explorer page shell" do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do
@@ -808,17 +854,28 @@ spec = around withTestResources do
     it "matches example events by pat:<hash> tag, not by summary ILIKE" \tr -> do
       let spanName = "GET /api/pattern-expand" :: Text
           patHash = "abcd1234" :: Text
-      apiKey <- createTestAPIKey tr testPid "pattern-expand-key"
+      pid <- createTestProject tr "log-explorer-pattern-expand"
+      apiKey <- createTestAPIKey tr pid "pattern-expand-key"
       ingestTrace tr apiKey spanName frozenTime
-      void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = ? WHERE project_id = ? AND name = ? |] (PGArray ["pat:" <> patHash], testPid, spanName)
+      -- The tag has to be stamped on whichever store the expand reads. tr.trPool is
+      -- Postgres only; the TimeFusion copy is reached through the labelled pool, the
+      -- same route the drain-flush uses in production.
+      -- Bound outside the quoter: hasql-interpolate's TH cannot parse a type
+      -- annotation inside #{}, and the list needs one to resolve OverloadedLists.
+      let patTags = ["pat:" <> patHash] :: [Text]
+      void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = ? WHERE project_id = ? AND name = ? |] (PGArray patTags, pid, spanName)
+      when tr.trATCtx.env.enableTimefusionReads
+        $ runQueryEffect tr
+        $ Hasql.withHasqlTimefusion True
+        $ Hasql.interpExecute_ [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{patTags} WHERE project_id = #{pid.toText} AND name = #{spanName} |]
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
           rowCount v = case v of AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n; _ -> -1
-          expand key = rowCount . snd <$> testServant tr (Log.apiLogExpandH testPid (Just "pattern") (Just key) Nothing Nothing fromTime Nothing toTime)
+          expand key = rowCount . snd <$> testServant tr (Log.apiLogExpandH pid (Just "pattern") (Just key) Nothing Nothing fromTime Nothing toTime)
 
       -- The real hash tag finds the tagged row.
-      expand patHash >>= (`shouldBe` 1)
+      eventually (expand patHash) (== 1) >>= (`shouldBe` (1 :: Int))
       -- A hash-shaped key with no matching tag finds nothing (no accidental match).
       expand "00000000" >>= (`shouldBe` 0)
       -- The summary-template fallback (non-hash key) must not tag-match this row.
@@ -998,14 +1055,16 @@ spec = around withTestResources do
         _ -> expectationFailure "expected trace details"
 
     it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "err-log-badge-key"
+      pid <- createTestProject tr "log-explorer-error-flag"
+      apiKey <- createTestAPIKey tr pid "err-log-badge-key"
       ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
       ingestLog tr apiKey "ordinary info line" frozenTime
       let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
-      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing Nothing
-      (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
-      let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
-          logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]
-          isErr r = (r V.!? colIx "errors") == Just (AE.Bool True)
+          logRowsNow = do
+            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads pid [] "" Nothing range [] (Just SSpans) Nothing Nothing
+            (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+            let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
+            pure [(r V.!? colIx "errors") == Just (AE.Bool True) | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]
+      logRows <- eventually logRowsNow ((== 2) . length)
       length logRows `shouldBe` 2
-      length (filter isErr logRows) `shouldBe` 1
+      length (filter id logRows) `shouldBe` 1

@@ -240,24 +240,29 @@ spec = sequential $ aroundAll withTestResources do
           prefix = "casc-legacy-001" :: Text
       iid <- UUIDId <$> UUID.nextRandom
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.issues
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
                   (id, project_id, issue_type, target_hash, endpoint_hash, title,
                    severity, critical, affected_requests, affected_clients,
                    issue_data, created_at, updated_at)
                 VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
-          (iid, testPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.anomalies (project_id, target_hash)
+            (iid, testPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.anomalies (project_id, target_hash)
                 VALUES (?, ?) ON CONFLICT DO NOTHING |]
-          (testPid, prefix <> ":anom")
+            (testPid, prefix <> ":anom")
 
       void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id Issues.indefiniteUntil (V.singleton prefix)
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
         >>= (`shouldBe` 1)
-      countQ tr
+      countQ
+        tr
         [sql| SELECT COUNT(*)::INT FROM apis.anomalies
               WHERE project_id=? AND target_hash=? AND acknowledged_at IS NOT NULL |]
         (testPid, prefix <> ":anom")
@@ -276,9 +281,12 @@ spec = sequential $ aroundAll withTestResources do
         runAnomalyJobs tr \case
           BackgroundJobs.NewAnomaly{} -> True
           _ -> False
-      ras <- withResource tr.trPool \conn -> PGS.query conn
-        [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
-        (Only testPid) :: IO [Only Text]
+      ras <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
+          (Only testPid)
+          :: IO [Only Text]
       map fromOnly ras `shouldBe` [Issues.defaultRecommendedAction]
 
     -- Regression: the ApiChange detail page used to render an empty Investigation
@@ -293,8 +301,11 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues SET archived_at=NULL WHERE id=? |] (Only issueId)
       traceIdText <- DataUUID.toText <$> UUID.nextRandom
       spanIdText <- DataUUID.toText <$> UUID.nextRandom
-      withResource tr.trPool \conn -> void $ PGS.execute conn
-        [sql| INSERT INTO otel_logs_and_spans
+      withResource tr.trPool \conn ->
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO otel_logs_and_spans
                 (id, project_id, timestamp, start_time,
                  attributes___http___request___method, attributes___url___path,
                  context___trace_id, context___span_id,
@@ -302,7 +313,7 @@ spec = sequential $ aroundAll withTestResources do
               VALUES (gen_random_uuid(), ?, ?, ?, 'GET', '/', ?, ?,
                       jsonb_build_object('trace_id', ?::text, 'span_id', ?::text),
                       'SERVER', '200', '{}') |]
-        (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
+            (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
       (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
       -- The trace id should be embedded somewhere in the rendered investigation panel.
@@ -345,32 +356,32 @@ spec = sequential $ aroundAll withTestResources do
       errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
       spanIdText <- T.take 16 . T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+      -- Ingested, not INSERTed: the fragment reads whichever store the env points
+      -- at (TimeFusion in CI), and a raw INSERT only ever lands in Postgres.
+      apiKey <- createTestAPIKey tr testPid "slow-trace-key"
+      ingestSpanLinked tr apiKey traceIdText spanIdText Nothing "GET /checkout" [] frozenTime
       issueId <- withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.error_patterns
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns
                   (project_id, error_type, message, stacktrace, hash, first_trace_id, recent_trace_id, error_data, created_at, updated_at)
                 VALUES (?, 'SyntaxError', 'JSON parse failed', 'at parse (a.js:1)', ?, ?, ?, ?::jsonb, ?, ?) |]
-          ( testPid
-          , errHash
-          , traceIdText
-          , traceIdText
-          , AE.encode
-              [aesonQQ|{ "when": #{frozenTime}, "error_type": "SyntaxError", "root_error_type": "SyntaxError"
+            ( testPid
+            , errHash
+            , traceIdText
+            , traceIdText
+            , AE.encode
+                [aesonQQ|{ "when": #{frozenTime}, "error_type": "SyntaxError", "root_error_type": "SyntaxError"
                        , "message": "JSON parse failed", "root_error_message": "JSON parse failed"
                        , "stack_trace": "at parse (a.js:1)", "hash": #{errHash}, "is_framework": false }|]
-          , frozenTime
-          , frozenTime
-          )
-        void $ PGS.execute conn
-          [sql| INSERT INTO otel_logs_and_spans
-                  (id, project_id, timestamp, start_time, name, context___trace_id, context___span_id,
-                   context, kind, status_code, summary)
-                VALUES (gen_random_uuid(), ?, ?, ?, 'GET /checkout', ?, ?,
-                        jsonb_build_object('trace_id', ?::text, 'span_id', ?::text), 'SERVER', '200', '{}') |]
-          (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
+            , frozenTime
+            , frozenTime
+            )
         maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
           . listToMaybe
-          =<< PGS.query conn
+          =<< PGS.query
+            conn
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
                   VALUES (?, 'runtime_exception', 'slow-trace issue', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
             ( testPid
@@ -417,37 +428,46 @@ spec = sequential $ aroundAll withTestResources do
       let errHash = "test-095-auto-resolve-hash" :: Text
           issueId = UUIDId $ Unsafe.fromJust $ DataUUID.fromText "00000000-0000-0000-0000-000000000095"
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.error_patterns
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns
                   (project_id, error_type, message, stacktrace, hash, state, created_at, updated_at)
                 VALUES (?, 'TestError', 'm', 's', ?, 'new', ?, ?)
                 ON CONFLICT (project_id, hash) DO UPDATE SET state='new' |]
-          (testPid, errHash, frozenTime, frozenTime)
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.issues
+            (testPid, errHash, frozenTime, frozenTime)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
                   (id, project_id, issue_type, target_hash, title, created_at, updated_at)
                 VALUES (?, ?, 'runtime_exception', ?, 'test issue 095', ?, ?)
                 ON CONFLICT (id) DO NOTHING |]
-          (issueId, testPid, errHash, frozenTime, frozenTime)
-        void $ PGS.execute conn
-          [sql| DELETE FROM apis.issue_activity_log
+            (issueId, testPid, errHash, frozenTime, frozenTime)
+        void
+          $ PGS.execute
+            conn
+            [sql| DELETE FROM apis.issue_activity_log
                 WHERE issue_id = ? AND event = 'auto_resolved' |]
-          (Only issueId)
+            (Only issueId)
 
       advanceDays tr 5
       expectedTime <- getTestTime tr.trTestClock
 
       -- runHasqlEffect now syncs app.current_time on every Session via
       -- runHasqlPoolSynced, so the trigger reads app_now() = expectedTime.
-      runHasqlEffect tr $ EHasql.interpExecute_
-        [HI.sql| UPDATE apis.error_patterns SET state = 'resolved'
+      runHasqlEffect tr
+        $ EHasql.interpExecute_
+          [HI.sql| UPDATE apis.error_patterns SET state = 'resolved'
                   WHERE project_id = #{testPid} AND hash = #{errHash} |]
 
       rows <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT created_at FROM apis.issue_activity_log
                 WHERE issue_id = ? AND event = 'auto_resolved' |]
-          (Only issueId) :: IO [Only UTCTime]
+          (Only issueId)
+          :: IO [Only UTCTime]
       rows `shouldBe` [Only expectedTime]
 
     -- selectIssues' 24h period uses Time.currentTime for the bucket window —
@@ -457,25 +477,29 @@ spec = sequential $ aroundAll withTestResources do
       iid <- UUIDId <$> UUID.nextRandom
       let tgt = "selectIssues-24h-target" :: Text
       withResource tr.trPool \conn ->
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.issues
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
                   (id, project_id, issue_type, target_hash, endpoint_hash, title,
                    severity, critical, affected_requests, affected_clients,
                    issue_data, created_at, updated_at)
                 VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
-          (iid, testPid, tgt, tgt, frozenTime, frozenTime)
+            (iid, testPid, tgt, tgt, frozenTime, frozenTime)
 
       -- 23h in: still within the 24h window
       advanceHours tr 23
-      (within, _) <- runHasqlEffect tr
-        $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+      (within, _) <-
+        runHasqlEffect tr
+          $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
       map (.base.id) within `shouldSatisfy` elem iid
 
       -- 25h in: outside window — query still returns row, but activityBuckets all zero
       advanceHours tr 2
-      (after, _) <- runHasqlEffect tr
-        $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+      (after, _) <-
+        runHasqlEffect tr
+          $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
       whenJust (find (\r -> r.base.id == iid) after) \row ->
         V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
 
@@ -527,8 +551,10 @@ countQ tr q args = withResource tr.trPool \conn ->
 -- (un-acknowledged, un-archived) — both cascade halves in one round trip.
 cascadePending :: TestResources -> Issues.IssueId -> IO (Int, Int)
 cascadePending tr issueId = withResource tr.trPool \conn ->
-  maybe (fail "cascade count returned no row") pure . listToMaybe
-    =<< PGS.query conn
+  maybe (fail "cascade count returned no row") pure
+    . listToMaybe
+    =<< PGS.query
+      conn
       [sql| WITH related AS (
               SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
               FROM apis.issues WHERE id=?
@@ -541,9 +567,12 @@ cascadePending tr issueId = withResource tr.trPool \conn ->
 
 
 apiChangeIssueIds :: TestResources -> IO [Issues.IssueId]
-apiChangeIssueIds tr = map fromOnly <$> withResource tr.trPool \conn -> PGS.query conn
-  [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at |]
-  (Only testPid)
+apiChangeIssueIds tr =
+  map fromOnly <$> withResource tr.trPool \conn ->
+    PGS.query
+      conn
+      [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at |]
+      (Only testPid)
 
 
 -- | Pull the first ApiChange issue id created by earlier tests. Fails the test

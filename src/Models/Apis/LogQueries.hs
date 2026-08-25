@@ -343,11 +343,16 @@ retryLogExplorerRead = go (1 :: Int)
 -- partitioned table; a CTE would issue one indexed probe per tree level,
 -- whereas the bounded scan here is a single pass and the result set is
 -- already capped at 2000 rows so the in-memory walk is negligible.
-selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
+--
+-- The store is chosen here rather than by the caller, for the same reason as
+-- 'Telemetry.otelRecordByProjectAndId': telemetry lives in TimeFusion, and an
+-- unrouted read silently resolves against a Postgres table that is empty in
+-- production — the trace tree would just render no children.
+selectChildSpansAndLogs :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Text] -> V.Vector Text -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
 -- Skipping the SQL round-trip on an empty seed set matters: 'keepDescendantsOf'
 -- would also return [] but we'd pay for the query first.
-selectChildSpansAndLogs _ _ _ seedSpanIds _ _ | V.null seedSpanIds = pure []
-selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange excludedSpanIds = do
+selectChildSpansAndLogs _ _ _ _ seedSpanIds _ _ | V.null seedSpanIds = pure []
+selectChildSpansAndLogs useTf pid projectedColsByUser traceIds seedSpanIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
       (r, colNames) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
@@ -358,7 +363,8 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
         (Just a, Just b) -> let a' = addUTCTime (-30) a; b' = addUTCTime 30 b in [HI.sql| AND timestamp BETWEEN #{a'} AND #{b'} |]
         _ -> mempty
   rawRows :: [AE.Value] <-
-    Hasql.interp
+    Hasql.withHasqlTimefusion useTf
+      $ Hasql.interp
       $ rawSql ("SELECT jsonb_build_array(" <> r <> ") FROM otel_logs_and_spans WHERE project_id=")
       <> [HI.sql|#{pid.toText}::text|]
       <> dateRangeSql
@@ -592,9 +598,9 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
           bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::BIGINT"
       rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- Hasql.withHasqlTimefusion enableTfReads case resolveFieldExpr target of
         Just (Left colExpr) ->
-          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, level as lvl, resource___service___name as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000")
+          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000")
         Just (Right pathParts) ->
-          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, level as lvl, resource___service___name as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000|]
+          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000|]
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       -- Level and service arrive per (pattern, bucket, level, service) group rather than
@@ -603,7 +609,8 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
       -- value exact, and unlike the previous `<|>` it stays exact once drain merges several
       -- patterns into one template.
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, HM.unionWith (+) l1 l2, HM.unionWith (+) s1 s2, b1 ++ b2)
-          tally n = maybe HM.empty (\v -> one (v, n))
+          -- concat() maps NULL to '', so an absent level must not be tallied as one.
+          tally n = foldMap (\v -> one (v, n)) . mfilter (not . T.null)
           -- Ties break on the value so a pattern's level doesn't flicker between renders.
           modal = fmap fst . listToMaybe . sortOn (\(v, c) -> (Down c, v)) . HM.toList
           grouped =

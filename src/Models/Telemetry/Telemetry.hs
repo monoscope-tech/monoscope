@@ -708,9 +708,14 @@ getTraceDetailsForView useTf pid trId tme now limitM = do
 -- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
 -- round-trips losslessly through the UTCTime↔Hasql encoder. Exact equality also lets the
 -- planner hit the (timestamp, id) ordering instead of scanning a ±window range.
-otelRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-otelRecordByProjectAndId pid createdAt rdId =
-  Hasql.interpOne
+-- The store is chosen here rather than by each caller: telemetry lives in
+-- TimeFusion, and a caller that forgot to wrap this read looked the row up in a
+-- Postgres table that is empty in production (share links and the events API
+-- both 404'd on rows that exist).
+otelRecordByProjectAndId :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
+otelRecordByProjectAndId useTf pid createdAt rdId =
+  Hasql.withHasqlTimefusion useTf
+    $ Hasql.interpOne
     $ [HI.sql|SELECT |]
     <> otelSpanColsSql
     <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt} and project_id=#{pid.toText} and id=#{rdId} LIMIT 1|]

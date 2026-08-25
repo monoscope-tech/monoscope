@@ -2,9 +2,10 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -17,7 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (testPid)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
@@ -27,8 +28,8 @@ import Utils (toUriStr, toXXHash)
 -- These helper functions are now in Pkg.TestUtils
 
 -- Helper function to get endpoint stats
-getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
-getEndpointStats tr filterParam hostM = do
+getEndpointStats :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
+getEndpointStats tr testPid filterParam hostM = do
   (_, resp) <-
     testServant tr
       $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
@@ -38,8 +39,8 @@ getEndpointStats tr filterParam hostM = do
 
 
 -- | Fetch a specific page from the endpoints handler and return rows + total.
-getEndpointsPage :: TestResources -> Text -> Int -> Int -> IO (V.Vector ApiCatalog.EnpReqStatsVM, Int)
-getEndpointsPage tr host page perPage = do
+getEndpointsPage :: TestResources -> Projects.ProjectId -> Text -> Int -> Int -> IO (V.Vector ApiCatalog.EnpReqStatsVM, Int)
+getEndpointsPage tr testPid host page perPage = do
   (_, resp) <-
     testServant tr
       $ ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
@@ -50,8 +51,8 @@ getEndpointsPage tr host page perPage = do
 
 
 -- | The endpoints table as a user sees it, for asserting on rendered links.
-getEndpointsHtml :: TestResources -> Maybe Text -> IO Text
-getEndpointsHtml tr filterParam = do
+getEndpointsHtml :: TestResources -> Projects.ProjectId -> Maybe Text -> IO Text
+getEndpointsHtml tr testPid filterParam = do
   (_, resp) <-
     testServant tr
       $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
@@ -61,8 +62,8 @@ getEndpointsHtml tr filterParam = do
 
 
 -- Helper function to verify endpoint creation
-verifyEndpointsCreated :: TestResources -> IO ()
-verifyEndpointsCreated tr = do
+verifyEndpointsCreated :: TestResources -> Projects.ProjectId -> IO ()
+verifyEndpointsCreated tr testPid = do
   endpoints <-
     withPool tr.trPool
       $ DBT.query
@@ -91,26 +92,30 @@ verifyEndpointsCreated tr = do
   hash2 `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
 
 
--- Helper function to prepare test messages
-prepareTestMessages :: IO [(Text, ByteString)]
-prepareTestMessages = do
+-- | 100 deliveries per host. Every replica carries its own timestamp on purpose: a
+-- span's id is a UUIDv5 over the canonical request (ProcessMessage.requestEventIds),
+-- so byte-identical replicas share (project_id, timestamp, id) and TimeFusion
+-- collapses them on read — the per-host counts below would then be a dedup artefact.
+prepareTestMessages :: Projects.ProjectId -> IO [(Text, ByteString)]
+prepareTestMessages testPid = do
   currentTime <- getCurrentTime
-  let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-  let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-  let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
+  let stamp i = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (negate $ fromIntegral i) currentTime
+      -- The fixtures embed the demo project id; this spec owns its own project.
+      withPid = \case
+        AE.Object o -> AE.Object $ KM.insert "project_id" (AE.String testPid.toText) o
+        other -> other
+      encodeMsg mk i = toStrict $ AE.encode $ Unsafe.fromJust $ convert $ withPid $ mk (stamp i)
   pure
     $ concat
-    $ replicate
-      100
-      [ ("m1", toStrict $ AE.encode reqMsg1)
-      , ("m2", toStrict $ AE.encode reqMsg2)
+      [ [("m1", encodeMsg testRequestMsgs.reqMsg1 i), ("m2", encodeMsg testRequestMsgs.reqMsg2 i)]
+      | i <- [1 .. 100 :: Int]
       ]
 
 
 spec :: Spec
-spec = sequential $ aroundAll withTestResources do
+spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject tr "api-catalog" >>= \testPid -> f (tr, testPid)) do
   describe "API Catalog and Endpoints" do
-    it "returns empty list when no data exists" \tr -> do
+    it "returns empty list when no data exists" \(tr, testPid) -> do
       (_, catalogList) <-
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
@@ -119,7 +124,7 @@ spec = sequential $ aroundAll withTestResources do
           length tbl.rows `shouldBe` 0
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "creates endpoints from processed spans" \tr -> do
+    it "creates endpoints from processed spans" \(tr, testPid) -> do
       -- First verify the demo project exists
       projectExists <-
         withPool tr.trPool
@@ -136,7 +141,7 @@ spec = sequential $ aroundAll withTestResources do
         [Only 0] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
         _ -> pass
 
-      msgs <- prepareTestMessages
+      msgs <- prepareTestMessages testPid
       processMessagesAndBackgroundJobs tr msgs
 
       -- Debug: Check if any spans were inserted at all
@@ -176,9 +181,9 @@ spec = sequential $ aroundAll withTestResources do
             else pass
         _ -> error "Unexpected span count result"
 
-      verifyEndpointsCreated tr
+      verifyEndpointsCreated tr testPid
 
-    it "returns hosts list after processing messages" \tr -> do
+    it "returns hosts list after processing messages" \(tr, testPid) -> do
       (_, catalogList) <-
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
@@ -187,7 +192,7 @@ spec = sequential $ aroundAll withTestResources do
           length tbl.rows `shouldBe` 2
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "attributes events to the correct host (no cross-host inflation)" \tr -> do
+    it "attributes events to the correct host (no cross-host inflation)" \(tr, testPid) -> do
       -- Each host got 100 spans in prepareTestMessages. A regression where the
       -- query joined spans to endpoints by (url_path, method) only — the bug
       -- that produced "every host shows the same total" — is caught here.
@@ -206,7 +211,7 @@ spec = sequential $ aroundAll withTestResources do
     -- the host list from Postgres with empty stats, and advertises the stats=true URL
     -- that HTMX fetches afterwards. If someone makes the first load compute stats again,
     -- eventCount becomes non-zero here and the page goes back to being unusably slow.
-    it "apiCatalog_defaultLoad_rendersShellWithoutTelemetryStats" \tr -> do
+    it "apiCatalog_defaultLoad_rendersShellWithoutTelemetryStats" \(tr, testPid) -> do
       (_, shell) <-
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
@@ -226,7 +231,7 @@ spec = sequential $ aroundAll withTestResources do
           statsTbl.config.deferredUrl `shouldBe` Nothing
         _ -> expectationFailure "Expected CatalogListPage"
 
-    it "creates anomalies automatically via database triggers" \tr -> do
+    it "creates anomalies automatically via database triggers" \(tr, testPid) -> do
       -- Verify anomalies were created by triggers
       anomaliesCount <-
         withPool tr.trPool
@@ -243,7 +248,7 @@ spec = sequential $ aroundAll withTestResources do
         [Only count] -> count `shouldSatisfy` (> 0)
         _ -> error "Unexpected anomalies count result"
 
-    it "processes anomaly background jobs to create issues" \tr -> do
+    it "processes anomaly background jobs to create issues" \(tr, testPid) -> do
       -- Get pending jobs and log them
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
@@ -269,29 +274,29 @@ spec = sequential $ aroundAll withTestResources do
         [Only count] -> count `shouldBe` 2
         _ -> error "Unexpected issues count result"
 
-    it "returns endpoints in inbox filter after creating issues" \tr -> do
+    it "returns endpoints in inbox filter after creating issues" \(tr, testPid) -> do
       -- Create test spans to populate materialized view
       createTestSpans tr testPid 10
       -- _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
 
       -- Test inbox filter without host
-      inboxEndpoints <- getEndpointStats tr (Just "Endpoints") Nothing
+      inboxEndpoints <- getEndpointStats tr testPid (Just "Endpoints") Nothing
       V.length inboxEndpoints `shouldBe` 2
 
       -- Test inbox filter with specific host
-      host1Endpoints <- getEndpointStats tr (Just "Endpoints") (Just "172.31.29.11")
+      host1Endpoints <- getEndpointStats tr testPid (Just "Endpoints") (Just "172.31.29.11")
       V.length host1Endpoints `shouldBe` 1
 
-      host2Endpoints <- getEndpointStats tr (Just "Endpoints") (Just "api.test.com")
+      host2Endpoints <- getEndpointStats tr testPid (Just "Endpoints") (Just "api.test.com")
       V.length host2Endpoints `shouldBe` 1
 
-    it "handles empty host filter correctly" \tr -> do
+    it "handles empty host filter correctly" \(tr, testPid) -> do
       -- Test that empty host string is handled same as no host filter
-      emptyHostEndpoints <- getEndpointStats tr (Just "Endpoints") (Just "")
-      noHostEndpoints <- getEndpointStats tr (Just "Endpoints") Nothing
+      emptyHostEndpoints <- getEndpointStats tr testPid (Just "Endpoints") (Just "")
+      noHostEndpoints <- getEndpointStats tr testPid (Just "Endpoints") Nothing
       V.length emptyHostEndpoints `shouldBe` V.length noHostEndpoints
 
-    it "returns active endpoints after acknowledging issues" \tr -> do
+    it "returns active endpoints after acknowledging issues" \(tr, testPid) -> do
       -- Acknowledge all endpoint issues
       _ <-
         withPool tr.trPool
@@ -304,7 +309,7 @@ spec = sequential $ aroundAll withTestResources do
             (frozenTime, Projects.UserId UUID.nil, testPid)
 
       -- Test active filter
-      activeEndpoints <- getEndpointStats tr (Just "Endpoints") Nothing
+      activeEndpoints <- getEndpointStats tr testPid (Just "Endpoints") Nothing
       V.length activeEndpoints `shouldBe` 2
 
       -- Verify endpoint details
@@ -323,14 +328,14 @@ spec = sequential $ aroundAll withTestResources do
     -- Regression: the incoming tab filtered host with the deprecated attributes.net.host.name
     -- while ingest normalises every host onto server.address (the column apis.endpoints.host is
     -- resolved from), so "View logs" landed on an empty explorer for OTLP-sourced endpoints.
-    it "endpoint View logs link filters host on server.address, not deprecated net.host.name" \tr -> do
-      html <- getEndpointsHtml tr (Just "Endpoints")
+    it "endpoint View logs link filters host on server.address, not deprecated net.host.name" \(tr, testPid) -> do
+      html <- getEndpointsHtml tr testPid (Just "Endpoints")
       html `shouldSatisfy` T.isInfixOf (toUriStr "attributes.server.address==\"api.test.com\"")
       html `shouldSatisfy` (not . T.isInfixOf "net.host.name")
 
-    -- it "handles anomaly bulk actions correctly" \tr -> do
+    -- it "handles anomaly bulk actions correctly" \(tr, testPid) -> do
     --   -- First ensure endpoints are created and all background jobs are processed
-    --   msgs <- prepareTestMessages
+    --   msgs <- prepareTestMessages testPid
     --   processMessagesAndBackgroundJobs tr msgs
     --   createTestSpans tr testPid 10
     --
@@ -370,9 +375,9 @@ spec = sequential $ aroundAll withTestResources do
     --     -- Skip test if no non-endpoint issues were created
     --     pendingWith "No non-endpoint issues were created in this test run"
 
-    it "creates shape and field anomalies alongside endpoint anomalies" \tr -> do
+    it "creates shape and field anomalies alongside endpoint anomalies" \(tr, testPid) -> do
       -- First ensure endpoints are created and anomalies are generated
-      msgs <- prepareTestMessages
+      msgs <- prepareTestMessages testPid
       processMessagesAndBackgroundJobs tr msgs
 
       -- Check that we have anomalies for shapes and fields too
@@ -400,34 +405,34 @@ spec = sequential $ aroundAll withTestResources do
       hasType "format" `shouldBe` True
 
     describe "host archiving" do
-      let listHosts tr reqType filt = do
+      let listHosts tr testPid reqType filt = do
             (_, cat) <- testServant tr $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt Nothing
             case cat of
               ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
                 pure $ V.toList $ V.map (.events.host) tbl.rows
               _ -> expectationFailure "Expected CatalogListPage" $> []
-          bulk tr action reqType hosts =
+          bulk tr testPid action reqType hosts =
             testServant tr
               $ ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})
-          bulkAny tr action hosts =
+          bulkAny tr testPid action hosts =
             testServant tr
               $ ApiCatalog.apiCatalogBulkActionH testPid action Nothing (ApiCatalog.HostBulk{itemId = hosts})
 
-      it "archives an incoming host and surfaces it under the Archived tab" \tr -> do
-        _ <- bulk tr "archive" "Incoming" ["172.31.29.11"]
-        active <- listHosts tr "Incoming" Nothing
-        archived <- listHosts tr "Incoming" (Just "Archived")
+      it "archives an incoming host and surfaces it under the Archived tab" \(tr, testPid) -> do
+        _ <- bulk tr testPid "archive" "Incoming" ["172.31.29.11"]
+        active <- listHosts tr testPid "Incoming" Nothing
+        archived <- listHosts tr testPid "Incoming" (Just "Archived")
         active `shouldBe` ["api.test.com"]
         archived `shouldBe` ["172.31.29.11"]
 
-      it "unarchive restores the host to the Active list" \tr -> do
-        _ <- bulk tr "unarchive" "Incoming" ["172.31.29.11"]
-        active <- listHosts tr "Incoming" Nothing
-        archived <- listHosts tr "Incoming" (Just "Archived")
+      it "unarchive restores the host to the Active list" \(tr, testPid) -> do
+        _ <- bulk tr testPid "unarchive" "Incoming" ["172.31.29.11"]
+        active <- listHosts tr testPid "Incoming" Nothing
+        archived <- listHosts tr testPid "Incoming" (Just "Archived")
         sort active `shouldBe` ["172.31.29.11", "api.test.com"]
         archived `shouldBe` []
 
-      it "archives an outgoing host independently of incoming" \tr -> do
+      it "archives an outgoing host independently of incoming" \(tr, testPid) -> do
         -- Seed an outgoing host directly (no endpoint, so we don't perturb
         -- endpoint-count assertions in surrounding tests).
         let outEp =
@@ -437,37 +442,37 @@ spec = sequential $ aroundAll withTestResources do
                 , Endpoints.outgoing = True
                 }
         runQueryEffect tr $ Endpoints.bulkInsertHosts (V.singleton outEp)
-        _ <- bulk tr "archive" "Outgoing" ["api.upstream.example"]
-        outActive <- listHosts tr "Outgoing" Nothing
-        outArchived <- listHosts tr "Outgoing" (Just "Archived")
+        _ <- bulk tr testPid "archive" "Outgoing" ["api.upstream.example"]
+        outActive <- listHosts tr testPid "Outgoing" Nothing
+        outArchived <- listHosts tr testPid "Outgoing" (Just "Archived")
         outActive `shouldBe` []
         outArchived `shouldBe` ["api.upstream.example"]
         -- Direction isolation: incoming list still has both hosts.
-        inActive <- listHosts tr "Incoming" Nothing
+        inActive <- listHosts tr testPid "Incoming" Nothing
         sort inActive `shouldBe` ["172.31.29.11", "api.test.com"]
 
-      it "unarchive from the Archived tab works without a request_type filter" \tr -> do
+      it "unarchive from the Archived tab works without a request_type filter" \(tr, testPid) -> do
         -- Production path: user clicks Unarchive while on the Archived tab,
         -- where the form posts no request_type. The handler must apply across
         -- both directions (mirror of archiveHosts pid Nothing in the model).
-        _ <- bulk tr "archive" "Incoming" ["172.31.29.11"]
-        _ <- bulk tr "archive" "Outgoing" ["api.upstream.example"]
-        archivedAny <- listHosts tr "Incoming" (Just "Archived")
+        _ <- bulk tr testPid "archive" "Incoming" ["172.31.29.11"]
+        _ <- bulk tr testPid "archive" "Outgoing" ["api.upstream.example"]
+        archivedAny <- listHosts tr testPid "Incoming" (Just "Archived")
         archivedAny `shouldSatisfy` (not . null)
-        _ <- bulkAny tr "unarchive" ["172.31.29.11", "api.upstream.example"]
-        inActive <- listHosts tr "Incoming" Nothing
-        outActive <- listHosts tr "Outgoing" Nothing
+        _ <- bulkAny tr testPid "unarchive" ["172.31.29.11", "api.upstream.example"]
+        inActive <- listHosts tr testPid "Incoming" Nothing
+        outActive <- listHosts tr testPid "Outgoing" Nothing
         sort inActive `shouldBe` ["172.31.29.11", "api.test.com"]
         outActive `shouldBe` ["api.upstream.example"]
 
-      it "ignores empty host selections without error" \tr -> do
-        (_, resp) <- bulk tr "archive" "Incoming" []
+      it "ignores empty host selections without error" \(tr, testPid) -> do
+        (_, resp) <- bulk tr testPid "archive" "Incoming" []
         case resp of
           ApiCatalog.CatalogBulkDone -> pass
-        active <- listHosts tr "Incoming" Nothing
+        active <- listHosts tr testPid "Incoming" Nothing
         sort active `shouldBe` ["172.31.29.11", "api.test.com"]
 
-    it "filters endpoints by request type (incoming/outgoing)" \tr -> do
+    it "filters endpoints by request type (incoming/outgoing)" \(tr, testPid) -> do
       -- All our test endpoints are incoming (outgoing = false)
       endpoints <-
         withPool tr.trPool
@@ -486,7 +491,7 @@ spec = sequential $ aroundAll withTestResources do
         [(False, count)] -> count `shouldBe` 2
         _ -> error "Expected all endpoints to be incoming"
 
-    it "paginates the endpoints list with disjoint pages and accurate totalCount" \tr -> do
+    it "paginates the endpoints list with disjoint pages and accurate totalCount" \(tr, testPid) -> do
       -- Seeds extra endpoints under a synthetic host. Runs last because it
       -- inflates the project's endpoint count and would break the prior
       -- "filters endpoints by request type" assertion.
@@ -503,9 +508,9 @@ spec = sequential $ aroundAll withTestResources do
               }
           eps = V.fromList $ map mk [1 .. 12]
       runQueryEffect tr $ Endpoints.bulkInsertEndpoints eps
-      (page0Rows, total0) <- getEndpointsPage tr hostName 0 5
-      (page1Rows, total1) <- getEndpointsPage tr hostName 1 5
-      (page2Rows, total2) <- getEndpointsPage tr hostName 2 5
+      (page0Rows, total0) <- getEndpointsPage tr testPid hostName 0 5
+      (page1Rows, total1) <- getEndpointsPage tr testPid hostName 1 5
+      (page2Rows, total2) <- getEndpointsPage tr testPid hostName 2 5
       total0 `shouldBe` 12
       total1 `shouldBe` 12
       total2 `shouldBe` 12
@@ -519,7 +524,7 @@ spec = sequential $ aroundAll withTestResources do
 
     -- Regression: the "last_seen" sort ordered by endpoint created_at (like
     -- first_seen, just reversed) instead of the row's actual lastSeen traffic time.
-    it "last_seen sort orders by span recency, not endpoint created_at" \tr -> do
+    it "last_seen sort orders by span recency, not endpoint created_at" \(tr, testPid) -> do
       let hostName = "lastseen.example"
           mkEp path =
             (def :: Endpoints.Endpoint)

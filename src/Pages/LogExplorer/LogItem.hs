@@ -86,7 +86,7 @@ expandAPIlogItemH pid rdId timestamp _ tabM subtabM partial = withSpan_ "log-exp
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let tf = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
       renderItem item aptSpan full = addRespHeaders $ if partial then DetailTabExpanded pid item aptSpan (fromMaybe "tab-raw" tabM) subtabM else full
-  tf (Telemetry.otelRecordByProjectAndId pid timestamp rdId) >>= \case
+  Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid timestamp rdId >>= \case
     Nothing -> addRespHeaders $ ItemDetailedNotFound "Record not found"
     Just record
       | record.kind == Just "log" -> renderItem record Nothing (LogItemExpanded pid record tabM)
