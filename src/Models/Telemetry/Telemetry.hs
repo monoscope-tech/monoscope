@@ -1043,7 +1043,7 @@ data MetricExemplar = MetricExemplar
 -- | Decode a row's @exemplars@ column, dropping entries that name no trace — they
 -- link to nothing, so they are not exemplars as far as the product is concerned.
 --
--- >>> let j s = either error id (AE.eitherDecodeStrict s) :: AE.Value
+-- >>> let j t = fromMaybe AE.Null (AE.decodeStrict (encodeUtf8 (t :: Text)))
 -- >>> exemplarPoints (j "[{\"trace_id\":\"ab\",\"span_id\":\"cd\",\"timestamp\":\"2026-08-25T11:39:45.5Z\",\"value\":2.5}]")
 -- [ExemplarPoint {traceId = "ab", spanId = "cd", timestamp = 2026-08-25 11:39:45.5 UTC, value = 2.5}]
 -- >>> exemplarPoints (j "[{\"trace_id\":\"\",\"span_id\":\"\",\"timestamp\":\"2026-08-25T11:39:45Z\",\"value\":1}]")
@@ -1078,14 +1078,15 @@ metricExemplars useTimefusion pid scope (lo, hi) limit = do
                  FROM otel_metrics
                  WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} |]
       <> ( case scope of
-            ExemplarsOfTrace trId -> [HI.sql| AND exemplars::text LIKE #{"%" <> trId <> "%"} |]
-            ExemplarsOfMetric name -> [HI.sql| AND metric_name = #{name} AND length(exemplars::text) > 2 |]
+             ExemplarsOfTrace trId -> [HI.sql| AND exemplars::text LIKE #{"%" <> trId <> "%"} |]
+             ExemplarsOfMetric name -> [HI.sql| AND metric_name = #{name} AND length(exemplars::text) > 2 |]
          )
       <> [HI.sql| ORDER BY timestamp DESC LIMIT #{limit} |]
   pure
     $ take limit
     $ sortOn (Down . (.value) . (.point))
-    $ ordNubOn ((.traceId) . (.point))
+    $ ordNubOn
+      ((.traceId) . (.point))
       [ MetricExemplar{metricName, serviceName = fromMaybe "" serviceName, metricUnit, point}
       | (metricName, serviceName, metricUnit, exemplars) <- V.toList rows
       , point <- exemplarPoints exemplars

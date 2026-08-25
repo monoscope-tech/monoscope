@@ -536,6 +536,45 @@ type WidGetData = {
   warningThreshold?: number | null;
 };
 
+type Exemplar = { trace_id: string; timestamp: string; value: number; metric_name: string; url: string };
+
+/**
+ * Grafana's exemplar diamonds: one marker per representative trace, drawn over the
+ * series at (the exemplar's own timestamp, its value). Clicking one opens the trace
+ * it was recorded in.
+ *
+ * The exemplar timestamp is deliberately not the metric row's — a cumulative
+ * histogram re-exports a weeks-old exemplar for every bucket it has not hit since —
+ * so a marker can legitimately land outside the fetched series. The server already
+ * filters to the requested window; anything left is real.
+ */
+const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => {
+  const page = new URLSearchParams(location.search);
+  const qs = new URLSearchParams();
+  for (const k of ['from', 'to', 'since']) if (page.get(k)) qs.set(k, page.get(k)!);
+  const res = await fetch(qs.size ? `${url}?${qs}` : url, { headers: { Accept: 'application/json' }, signal });
+  if (!res.ok) return;
+  const exemplars: Exemplar[] = await res.json();
+  if (!exemplars.length || chart.isDisposed()) return;
+
+  const series = (chart.getOption()?.series ?? []).slice();
+  series.push({
+    type: 'scatter',
+    name: 'Exemplars',
+    symbol: 'diamond',
+    symbolSize: 9,
+    z: 10,
+    itemStyle: { color: getChartStyles().brandColor, borderColor: '#fff', borderWidth: 1 },
+    data: exemplars.map((e) => [new Date(e.timestamp).getTime(), e.value, e]),
+    tooltip: {
+      formatter: (p: any) =>
+        `<b>${p.data[2].metric_name}</b><br/>${p.data[2].value}<br/><span style="font-family:monospace">${p.data[2].trace_id}</span><br/>Click to open the trace`,
+    },
+  });
+  chart.setOption({ series }, false);
+  chart.on('click', (p: any) => p.seriesName === 'Exemplars' && p.data?.[2]?.url && (window.location.href = p.data[2].url));
+};
+
 const chartDisposers = new Map<string, () => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 
@@ -642,6 +681,11 @@ const chartWidget = (widgetData: WidGetData) => {
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
+
+  // Opt-in per chart: the Lucid container declares data-exemplars-url next to the
+  // chart it decorates (see Pages.Telemetry.metricDetailChart).
+  const exemplarUrl = chartEl?.closest('[data-exemplars-url]')?.getAttribute('data-exemplars-url');
+  if (exemplarUrl) attachExemplars(chart, exemplarUrl, controller.signal).catch(() => {});
 
   // Use shared ResizeObserver instead of per-widget
   if (chartEl) sharedResizeObserver.observe(chartEl);

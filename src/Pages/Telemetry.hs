@@ -362,13 +362,13 @@ instance AE.ToJSON MetricExemplarsGet where
   toJSON (MetricExemplarsGet pid _ exemplars) =
     AE.toJSON
       [ AE.object
-        [ "trace_id" AE..= x.point.traceId
-        , "span_id" AE..= x.point.spanId
-        , "timestamp" AE..= x.point.timestamp
-        , "value" AE..= x.point.value
-        , "metric_name" AE..= x.metricName
-        , "url" AE..= traceOverlayUrl pid x.point.traceId x.point.timestamp
-        ]
+          [ "trace_id" AE..= x.point.traceId
+          , "span_id" AE..= x.point.spanId
+          , "timestamp" AE..= x.point.timestamp
+          , "value" AE..= x.point.value
+          , "metric_name" AE..= x.metricName
+          , "url" AE..= traceOverlayUrl pid x.point.traceId x.point.timestamp
+          ]
       | x <- exemplars
       ]
 
@@ -1048,7 +1048,10 @@ relatedMetricScore metric candidate =
 
 metricDetailChart :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Text -> Html ()
 metricDetailChart pid metric source selected chartId =
-  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container"]
+  -- The exemplar overlay is opt-in per chart and declared here, next to the chart it
+  -- decorates: widgets.ts looks for this attribute on an ancestor and, finding it,
+  -- draws a diamond per representative trace over the series.
+  div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"]
     $ toHtml
     $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit selected Nothing (Just chartId) Nothing)
       { Widget.groupByOptions = V.toList metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
