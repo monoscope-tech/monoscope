@@ -198,6 +198,17 @@ data EnvConfig = EnvConfig
   , stripePriceIdGraduated :: Text
   , stripePriceIdGraduatedOverage :: Text
   , stripePriceIdByos :: Text
+  , enabledUsageMeters :: [Projects.MeterKind]
+  -- ^ Which billing dimensions may actually submit usage to a provider. Usage is
+  -- always counted and recorded in @apis.daily_usage@; this only gates
+  -- submission, so a meter stays dormant until it is confirmed to exist
+  -- provider-side. Env: @ENABLED_USAGE_METERS=events,metric_datapoints@.
+  --
+  -- A dormant meter creates no submission rows at all — buffering months of
+  -- chunks and draining them the day a meter goes live is exactly the backlog
+  -- leak we have hit before on a provider switch. Turning a meter on bills from
+  -- that day forward; the dormant period is reconciled by hand from
+  -- @apis.daily_usage@ if it is owed at all.
   , extractionWorkerShards :: Int
   , extractionQueueCapacity :: Int
   , drainFlushBatchSize :: Int
@@ -284,6 +295,10 @@ instance DefConfig EnvConfig where
       , maxBufferedSpans = 100000
       , maxDrainTrees = 200
       , traceViewTimeoutSecs = 20
+      , -- Only the events meter exists in Stripe/LS today. Metric datapoints and
+        -- session replays stay counted-but-dormant until their meters and prices
+        -- are created provider-side and the public pricing copy is updated.
+        enabledUsageMeters = [Projects.Events]
       , enableHashUpdates = True
       , hashUpdateMaxAgeSecs = 7200
       , enableSchemaLearning = True
@@ -308,6 +323,14 @@ instance DefConfig EnvConfig where
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
   toVar = toString . T.intercalate ","
+
+
+-- | @ENABLED_USAGE_METERS=events,session_replays@. An unparseable name fails the
+-- whole list rather than being silently dropped — quietly ignoring a typo here
+-- would switch off revenue for that dimension with no signal.
+instance Var [Projects.MeterKind] where
+  fromVar = traverse (fromVar . toString) . filter (not . T.null) . map T.strip . T.splitOn "," . toText
+  toVar = toString . T.intercalate "," . map (toText . toVar)
 
 
 -- | A validated Twilio Content Template SID: "HX" followed by 32 hexadecimal digits.

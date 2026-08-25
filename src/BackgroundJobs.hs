@@ -498,23 +498,27 @@ processBackgroundJob authCtx bgJob =
               wStart =
                 max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
-            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-            let totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
-                -- Only events go to the events meter. Metric datapoints used to be
-                -- added in here and billed 1:1 with requests, which made a metrics
-                -- bill out of a request-priced plan: one project emits ~33M metric
-                -- rows a day against ~40k requests. They are now priced separately
-                -- ($1 per 10M datapoints) and are not submitted until that meter
-                -- exists. `apis.daily_usage.total_metrics` keeps recording them, so
-                -- the un-submitted window stays billable once it does.
-                chunks = case provider of
-                  Projects.NoBillingProvider -> []
-                  -- Both paid providers chunk identically. LS's 1M POST cap forces
-                  -- splitting; Stripe has no documented cap but N meter-events with
-                  -- the same meter+customer aggregate identically to one big event,
-                  -- so we share the same code path for a single invariant surface.
-                  _ -> Projects.splitUsageIntoChunks totalToReport
-            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "event_bytes", eventBytes, "metrics_unbilled", totalMetricsCount, "metric_bytes", metricBytes, "chunks", length chunks)
+            totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
+            subItems <- Projects.meterSubItemIds pid
+            let meterCfg = Projects.projectMeterConfig project subItems
+                enabled = authCtx.config.enabledUsageMeters
+                resolved = [(k, Projects.resolveMeterTarget enabled meterCfg k) | k <- [minBound .. maxBound]]
+            -- A dormant meter records its total in apis.daily_usage but cuts NO
+            -- chunks: draining months of buffered backlog the day a meter goes
+            -- live is the backlog-leak failure we have already hit on a provider
+            -- switch. Enabling a meter bills from that day forward.
+            chunks <- fmap concat $ forM resolved \(kind, target) -> do
+              let qty = Projects.meterQuantity kind totals
+              case target of
+                Right _ -> pure $ Projects.splitUsageIntoChunks kind qty
+                Left reason -> do
+                  -- Events dormant on a paid project is a silent revenue-off
+                  -- switch — the exact shape of the 5-week zero-usage incident.
+                  let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
+                  when (qty > 0 || kind == Projects.Events)
+                    $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                  pure []
+            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
 
             -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
@@ -539,35 +543,37 @@ processBackgroundJob authCtx bgJob =
                     -- window_end + sub_id surface in logs so on-call can pivot to
                     -- the provider UI, which is not indexed by our chunk UUIDs.
                     logFields extra =
-                      ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                res <- tryAny $ case provider of
-                  Projects.StripeProvider ->
-                    -- Missing customerId/orderId is a misconfig, not a transient error.
-                    -- Throw so the chunk is marked 'failed' in the Left branch below,
-                    -- rather than no-oping into Right () and being marked 'submitted'.
-                    case mfilter (not . T.null) (project.customerId <|> project.orderId) of
-                      Just custId -> liftIO $ reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" qty
-                      Nothing -> throwIO $ CE.ErrorCall "Stripe: project has no customerId or orderId"
-                  Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId qty authCtx.config.lemonSqueezyApiKey
-                -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                -- and the status UPDATE would re-select this row next tick and
-                -- double-submit. Emit a loud manual-reconcile signal on that path.
-                either
-                  ( \e -> do
-                      let errText = toText (displayException e)
-                      Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                      markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
-                      whenLeft_ markRes \e2 ->
-                        Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                  )
-                  ( \() -> do
-                      markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                      case markRes of
-                        Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                        Left e2 ->
-                          Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                  )
-                  res
+                      ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+                -- A chunk is only ever cut while its meter is live, so a Left here
+                -- means the meter was turned off (or its LS item removed) between
+                -- record and drain. Leave the row pending rather than marking it
+                -- failed: the backlog is bounded and drains cleanly on re-enable,
+                -- whereas 'failed' would re-log the same row every tick forever.
+                case Projects.resolveMeterTarget authCtx.config.enabledUsageMeters meterCfg row.meter of
+                  Left reason -> Log.logInfo "Pending usage chunk's meter went dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
+                  Right target -> do
+                    res <- tryAny $ case target of
+                      Projects.StripeMeter custId eventName -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                      Projects.LemonSqueezyMeter subItemId -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                    -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                    -- and the status UPDATE would re-select this row next tick and
+                    -- double-submit. Emit a loud manual-reconcile signal on that path.
+                    either
+                      ( \e -> do
+                          let errText = toText (displayException e)
+                          Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                          markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
+                          whenLeft_ markRes \e2 ->
+                            Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                      )
+                      ( \() -> do
+                          markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                          case markRes of
+                            Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                            Left e2 ->
+                              Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                      )
+                      res
     TrialEndingReminder pid scheduledDaysLeft -> do
       projectM <- Projects.projectById pid
       case projectM of
@@ -2769,7 +2775,10 @@ stripeAuth :: Text -> Wreq.Options
 stripeAuth apiKey = defaults & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
 
 
-reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
+-- | On the 'W.HTTP' effect rather than raw IO so tests can drive the drain path
+-- against a fake interpreter. A raw wreq call here means any test that exercises
+-- usage reporting POSTs to api.stripe.com with whatever key the config carries.
+reportUsageToStripe :: W.HTTP :> es => Text -> Text -> Text -> Int -> Eff es ()
 reportUsageToStripe apiKey customerId eventName quantity = do
   let params :: [(ByteString, ByteString)]
       params =
@@ -2777,7 +2786,7 @@ reportUsageToStripe apiKey customerId eventName quantity = do
         , ("payload[value]", encodeUtf8 $ show quantity)
         , ("payload[stripe_customer_id]", encodeUtf8 customerId)
         ]
-  void $ postWith (stripeAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
+  void $ W.postWith (stripeAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
 
 
 -- | `trialEnd` is Nothing when the sub has no trial or the trial is over.
@@ -2831,7 +2840,8 @@ scheduleTrialReminders pid trialEndEpoch = do
       Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)
 
 
-reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
+-- | See 'reportUsageToStripe' for why this is on the 'W.HTTP' effect.
+reportUsageToLemonsqueezy :: W.HTTP :> es => Text -> Int -> Text -> Eff es ()
 reportUsageToLemonsqueezy subItemId quantity apiKey = do
   let formData =
         [aesonQQ|{
@@ -2843,7 +2853,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
           & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
           & (header "Content-Type" .~ ["application/vnd.api+json"])
           & (header "Accept" .~ ["application/vnd.api+json"])
-  void $ postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
+  void $ W.postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
 
 
 -- | Send notifications for a query monitor status change (inline, no separate job)
