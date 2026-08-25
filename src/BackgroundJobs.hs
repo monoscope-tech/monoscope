@@ -502,33 +502,27 @@ processBackgroundJob authCtx bgJob =
             subItems <- Projects.meterSubItemIds pid
             let meterCfg = Projects.projectMeterConfig project subItems
                 enabled = authCtx.config.enabledUsageMeters
-            -- Two different situations, deliberately not conflated:
-            --
-            --   * meter not in ENABLED_USAGE_METERS — a policy decision that this
-            --     dimension does not bill yet. Cut NO chunks: draining months of
-            --     buffered backlog the day a meter goes live is the backlog-leak
-            --     failure we have already hit on a provider switch. Enabling a
-            --     meter bills from that day forward.
-            --   * meter enabled but unaddressable (no Stripe customer, no LS
-            --     subscription item) — a misconfig on money we *are* owed. Cut the
-            --     chunks anyway so the drain marks them failed and they stay an
-            --     auditable, retriable backlog.
+            -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
+            -- all. A dormant meter records its total and nothing else: draining
+            -- months of buffered backlog the day a meter goes live is the
+            -- backlog-leak failure we have already hit on a provider switch. A
+            -- misconfigured one cuts chunks anyway, so the drain leaves an
+            -- auditable, retriable failed row for money we are actually owed.
             chunks <- fmap concat $ forM [minBound .. maxBound] \kind -> do
               let qty = Projects.meterQuantity kind totals
-              if kind `elem` enabled
-                then pure $ case provider of
-                  Projects.NoBillingProvider -> []
-                  -- Both paid providers chunk identically. LS's 1M POST cap forces
-                  -- splitting; Stripe has no documented cap but N meter-events with
-                  -- the same meter+customer aggregate identically to one big event.
-                  _ -> Projects.splitUsageIntoChunks kind qty
-                else do
-                  -- Events dormant on a paid project is a silent revenue-off
-                  -- switch — the exact shape of the 5-week zero-usage incident.
-                  let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
-                  when (qty > 0 || kind == Projects.Events)
-                    $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "quantity", qty, "provider", show provider :: Text)
-                  pure []
+              case Projects.resolveMeterTarget enabled meterCfg kind of
+                Left reason
+                  | Projects.meterIsDormant reason -> do
+                      -- Events dormant on a paid project is a silent revenue-off
+                      -- switch — the exact shape of the 5-week zero-usage incident.
+                      let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
+                      when (qty > 0 || kind == Projects.Events)
+                        $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                      pure []
+                -- Both paid providers chunk identically. LS's 1M POST cap forces
+                -- splitting; Stripe has no documented cap but N meter-events with
+                -- the same meter+customer aggregate identically to one big event.
+                _ -> pure $ Projects.splitUsageIntoChunks kind qty
             Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
 
@@ -555,15 +549,16 @@ processBackgroundJob authCtx bgJob =
                     -- the provider UI, which is not indexed by our chunk UUIDs.
                     logFields extra =
                       ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                -- A chunk is only ever cut while its meter is enabled, so
-                -- MeterNotEnabled here means it was switched off between record and
-                -- drain. Leave the row pending rather than failed: the backlog is
-                -- bounded and drains cleanly on re-enable, whereas 'failed' would
-                -- re-log the same row every tick forever. Every other reason is a
-                -- misconfig on money we are owed — fall through so the chunk is
-                -- marked failed and stays auditable.
+                -- A chunk is only ever cut while its meter is live, so a dormant
+                -- reason here means the meter was switched off (or its LS item
+                -- removed) between record and drain. Leave the row pending rather
+                -- than failed: the backlog is bounded and drains cleanly on
+                -- re-enable, whereas 'failed' would re-log it every tick forever.
+                -- A misconfig reason falls through and is marked failed as before.
                 case Projects.resolveMeterTarget authCtx.config.enabledUsageMeters meterCfg row.meter of
-                  Left Projects.MeterNotEnabled -> Log.logInfo "Pending usage chunk's meter is disabled — leaving pending" $ logFields []
+                  Left reason
+                    | Projects.meterIsDormant reason ->
+                        Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
                   target -> do
                     res <- tryAny $ case target of
                       Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty

@@ -175,14 +175,22 @@ POST to a meter that does not exist.
 
 **Disabled and unaddressable are different things, and must not be conflated:**
 
-| Situation | Chunks cut? | Why |
-|---|---|---|
-| Meter not in `ENABLED_USAGE_METERS` | **No** | Policy: this dimension does not bill yet. Buffering months of chunks and draining them the day the meter goes live is exactly the backlog-leak failure we have already hit on a provider switch. Enabling a meter bills from that day forward; the dormant period is reconciled by hand off `apis.daily_usage` if it is owed at all. |
-| Meter enabled but unaddressable (`NoStripeCustomer`, `NoSubscriptionItem`, `ProviderUnusable`) | **Yes** | A misconfig on money we *are* owed. The chunk is cut and the drain marks it `failed`, leaving an auditable, retriable backlog — the pre-existing invariant that a paid project with an unusable provider leaves a failed row rather than a quietly-submitted one. |
+`meterIsDormant :: DormantReason -> Bool` is the single predicate:
 
-At drain time the same distinction applies: a chunk whose meter has since been *disabled* is
+| Reason | Dormant? | Chunks cut? | Why |
+|---|---|---|---|
+| `MeterNotEnabled` | yes | **No** | Policy: this dimension does not bill yet. Buffering months of chunks and draining them the day the meter goes live is exactly the backlog-leak failure we have already hit on a provider switch. Enabling a meter bills from that day forward; the dormant period is reconciled by hand off `apis.daily_usage` if it is owed at all. |
+| `NoSubscriptionItem` | yes | **No** | A Lemon Squeezy customer whose subscription has no metered variant for this dimension never agreed to that price. Cutting chunks would accrue failed rows forever against a product that does not exist. This is what keeps LS metrics/replays dormant even with the config switch on. |
+| `NoStripeCustomer` | no | **Yes** | The project *is* on the plan; we simply cannot address it. Misconfig on money we are owed. |
+| `ProviderUnusable` | no | **Yes** | Same. |
+
+Cut chunks whose meter is unaddressable are marked `failed` by the drain, preserving the
+pre-existing invariant that a paid project with an unusable provider leaves an auditable
+failed row rather than a quietly-submitted one.
+
+At drain time the same predicate applies: a chunk whose meter has since gone *dormant* is
 left pending untouched (marking it `failed` would re-log the same row every tick forever),
-while any other resolution failure marks it `failed` as before.
+while a misconfig reason marks it `failed` as before.
 
 Totals for every dimension land in `apis.daily_usage` regardless, so a dormant window stays
 reconcilable. `DormantReason` is logged per meter per run, so "why is nothing being billed"

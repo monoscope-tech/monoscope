@@ -85,6 +85,7 @@ module Models.Projects.Projects (
   ProjectMeterConfig (..),
   projectMeterConfig,
   resolveMeterTarget,
+  meterIsDormant,
   meterSubItemIds,
   setMeterSubItemId,
   markUsageSubmissionSucceeded,
@@ -1107,6 +1108,29 @@ data DormantReason
     ProviderUnusable
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
+
+
+-- | Does this reason mean "this dimension does not bill for this project yet",
+-- or "we are owed this but cannot send it"?
+--
+-- The distinction decides whether a window cuts submission chunks at all. Only a
+-- misconfig cuts them (so the drain leaves an auditable, retriable @failed@ row);
+-- a dormant meter records its totals in @apis.daily_usage@ and nothing else.
+--
+-- 'NoSubscriptionItem' is dormancy, not misconfig: a Lemon Squeezy customer whose
+-- subscription has no metered variant for this dimension never agreed to that
+-- price. Cutting chunks for them would accrue failed rows forever against a
+-- product that does not exist. 'NoStripeCustomer' is the opposite — the project
+-- is on the plan and we simply cannot address it.
+--
+-- >>> map meterIsDormant [MeterNotEnabled, NoSubscriptionItem, NoStripeCustomer, ProviderUnusable]
+-- [True,True,False,False]
+meterIsDormant :: DormantReason -> Bool
+meterIsDormant = \case
+  MeterNotEnabled -> True
+  NoSubscriptionItem -> True
+  NoStripeCustomer -> False
+  ProviderUnusable -> False
 
 
 -- | Everything 'resolveMeterTarget' needs about a project, lifted out of
