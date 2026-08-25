@@ -426,6 +426,7 @@ detailTabs pid item aptSp =
             , hxTrigger_ "intersect once"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
+            , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
             , Aria.busy_ "true"
             ]
             $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading related metrics"]

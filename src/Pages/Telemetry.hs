@@ -918,7 +918,12 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
         div_ [class_ "flex", [__|on click halt|]] $ do
           button_ [class_ "cursor-pointer a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
           button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
-          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ex-content', '#metric-tabs-container', 't-tab-active')"] "Exemplars"
+          -- `navigatable` reveals the panel by toggling display, and a display:none
+          -- container never intersects — the same reason Log.hs's alert panel fires
+          -- off its toggle rather than off `intersect`. Trigger the fetch from the
+          -- click too, so the panel loads whichever way the browser resolves it;
+          -- `once` on both means it still runs exactly one request.
+          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ex-content', '#metric-tabs-container', 't-tab-active');htmx.trigger('#ex-content', 'revealExemplars')"] "Exemplars"
           div_ [class_ "w-full border-b border-b-strokeWeak"] pass
 
         div_ [class_ "grid px-4 pb-4 mt-2 text-textWeak font-normal"] $ do
@@ -972,10 +977,12 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
             [ class_ "hidden a-tab-content"
             , id_ "ex-content"
             , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"
-            , hxTrigger_ "intersect once"
+            , hxTrigger_ "intersect once, revealExemplars once"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
             , term "hx-ext" "forward-page-params"
+            , term "hx-on::after-request" "this.removeAttribute('aria-busy')"
+            , Aria.busy_ "true"
             ]
             $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading exemplars"]
             $ loadingIndicator_ LdSM LdDots
