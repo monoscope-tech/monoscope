@@ -7,9 +7,9 @@ Baseline commit: `c71ec614f`. Master is 7 commits ahead of origin — **not push
 | Stream | Branch | Location | Migration no. | Status |
 |---|---|---|---|---|
 | Dashboards fix + e2e | `master` | main checkout | none | **done** — see below |
-| Billing / new pricing | `ws-billing` | `.claude/worktrees/ws-billing` | 0136 | in progress |
-| Container monitoring | `ws-containers` | `.claude/worktrees/ws-containers` | 0137 | in progress |
-| Metric exemplars | `ws-exemplars` | `.claude/worktrees/ws-exemplars` | 0138 | in progress |
+| Billing / new pricing | `ws-billing` | `.claude/worktrees/ws-billing` | 0136 | merged |
+| Container monitoring | `ws-containers` | `.claude/worktrees/ws-containers` | 0137 (unused) | merged |
+| Metric exemplars | `ws-exemplars` | `.claude/worktrees/ws-exemplars` | 0138 (unused) | merged |
 
 ## Rules every stream follows
 
@@ -72,3 +72,38 @@ path. Scope is honest about what it skips and why.
 - $1 per 1,000,000 events (spans + logs) — existing `events_usage` meter.
 - $1 per 10,000,000 metric datapoints — new meter, currently recorded but unsubmitted.
 - $1 per 1,000 session replays (RUM) — new meter, no counting source yet.
+
+## Merge outcome (all four streams on master)
+
+Verified green on the merged tree: integration 745/0, doctests 1251/0, unit 274/0, CLI 16/0,
+e2e 35/0. `Pages.GitSync / GitHub Sync E2E (Real API)` is gated on `GH_TEST_PAT` and either
+skips or fails against live GitHub depending on the environment; it is unrelated to this work.
+
+Five defects the merge itself produced or exposed, each fixed:
+
+1. **`ingestMetric` gained a parameter in two streams at once.** Containers added a
+   resource-attribute list so a test could emit a `k8s.pod.name` row at all; billing and
+   exemplars still called the old arity. Git merged the definition cleanly and left the call
+   sites stale — a semantic conflict no textual merge can see.
+2. **Two warnings that ghcid suppresses but the real build treats as errors**
+   (`-Wno-error=unused-imports`, `-Wno-error=unused-top-binds` are passed only to the watcher).
+3. **Migration 0135 made every `def`-constructed monitor un-insertable**, because the
+   generic `Default` gives `timeWindowMins = 0` and the new CHECK forbids it. Fixing that
+   exposed a second staleness in the same fixture: `evaluateQueryMonitor` re-parses `logQuery`
+   and ignores the stored SQL, so an empty query threw before notifying — silently, since the
+   throw is caught and logged.
+4. **Two container doctests were ambiguous on `namespace`**, which names a field of both
+   `ContainerFilters` and `ContainerRow`.
+5. **`ReportUsageSpec` billed the shared demo project** and so counted every event other specs
+   had ingested. This passed locally and failed all 8 examples in CI, because Postgres is cloned
+   per example while **TimeFusion is one instance for the whole run**, keyed only by project id —
+   and `getUsageTotals` reads events and metrics from TimeFusion whenever
+   `TIMEFUSION_PG_TEST_URL` is set, which CI does. Fixed structurally: `Pkg.TestUtils.createTestProject`
+   mints a project per example under a genuinely random UUID (not the deterministic test UUID
+   stream, which restarts identically every example and would collide in a shared store). No
+   assertion was weakened — the count is 38 before and after.
+
+**Note on pushing.** A concurrent session in this same checkout pushed master, carrying all four
+streams to origin. Nothing reached the servers: CI was red on (5) and the deploy job is gated on
+tests. Migration 0136 did reach production, applied by the local ghcid server restarting after the
+merge — it is additive only and applied cleanly.
