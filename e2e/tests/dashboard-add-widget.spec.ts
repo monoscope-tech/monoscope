@@ -39,6 +39,51 @@ async function openFixture(page: Page): Promise<string> {
   return page.url().match(/\/dashboards\/([0-9a-f-]{36})/i)![1];
 }
 
+type Dash = { id: string; title: string };
+
+/**
+ * A blank dashboard of this run's own, deleted at the end of the test.
+ *
+ * Tests that count widgets cannot share one: a run that fails midway leaves widgets it
+ * never cleaned up behind, after which "one more than before" measures the last failure
+ * rather than anything the test did. Titles carry a timestamp so a leftover from a failed
+ * run never collides with a live one.
+ */
+async function makeDashboard(page: Page, title: string): Promise<Dash> {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.getByText("Blank dashboard").click();
+  await page.locator('input[name="title"]').first().fill(title);
+  await page.getByRole("button", { name: "Create" }).first().click();
+  await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
+  return { id: page.url().match(/\/dashboards\/([0-9a-f-]{36})/i)![1], title };
+}
+
+/** Delete a dashboard through the UI, which is also the delete path's only coverage. */
+async function deleteDashboard(page: Page, dash: Dash) {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+  page.once("dialog", (d) => d.accept());
+  await page.locator('[aria-label="Open context menu"]').first().click();
+  // Wait for the DELETE itself: the handler redirects to the list on its own, and
+  // navigating there in parallel aborts that redirect rather than following it.
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === "DELETE" && r.url().includes(dash.id) && r.status() < 400,
+      { timeout: 20000 },
+    ),
+    page.getByText("Delete dashboard").click(),
+  ]);
+  await expect
+    .poll(
+      async () => {
+        await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+        return page.getByText(dash.title).count();
+      },
+      { timeout: 20000 },
+    )
+    .toBe(0);
+}
+
 /** Open the "Add a new widget" drawer and wait for the editor to be interactive. */
 async function openWidgetDrawer(page: Page) {
   await page.locator('[aria-label="Add a new widget"]').first().click();
@@ -110,19 +155,8 @@ test.describe("adding widgets to a dashboard", () => {
   });
 
   test("a log explorer chart can be added to a dashboard", async ({ page }) => {
-    // Its own dashboard, not the shared fixture: this test's claim is "one more widget
-    // than before", and a run that fails midway leaves the shared one holding a widget it
-    // never cleaned up — after which the count is whatever the last failure happened to
-    // leave, not something the test controls.
-    const title = `E2E Add Target ${Date.now()}`;
-    await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-    await page.locator('label[for="newDashboardMdl"]').first().click();
-    await page.getByText("Blank dashboard").click();
-    await page.locator('input[name="title"]').first().fill(title);
-    await page.getByRole("button", { name: "Create" }).first().click();
-    await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
-    const dashId = page.url().match(/\/dashboards\/([0-9a-f-]{36})/i)![1];
-    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    const dash = await makeDashboard(page, `E2E Add Target ${Date.now()}`);
+    const dashId = dash.id;
 
     await page.goto(`/p/${DEMO_PROJECT}/log_explorer`);
     // The chart only renders for a non-logs viz; the explorer opens on Logs.
@@ -138,7 +172,7 @@ test.describe("adding widgets to a dashboard", () => {
     await addItem.click();
 
     // The modal must open as a *picker*, not as the ordinary dashboards list.
-    const row = page.locator("#dashboards-modal-content").getByText(title).first();
+    const row = page.locator("#dashboards-modal-content").getByText(dash.title).first();
     await expect(row).toBeVisible({ timeout: 20000 });
     await expect(
       page.locator("#dashboards-modal-content").getByText("Select a dashboard"),
@@ -196,27 +230,71 @@ test.describe("adding widgets to a dashboard", () => {
     expect(w.type).toBe("timeseries");
     expect(w._dashboard_id).toBe(dashId);
 
-    // Deleting the whole dashboard leaves nothing behind for the next run, and covers the
-    // delete path that the per-widget cleanup used to.
-    page.once("dialog", (d) => d.accept());
-    await page.locator('[aria-label="Open context menu"]').first().click();
-    // Wait for the DELETE itself: the handler redirects to the list on its own, and
-    // navigating there in parallel aborts that redirect rather than following it.
+    await deleteDashboard(page, dash);
+  });
+
+  test("a widget is saved from the drawer, then copied to another dashboard", async ({ page }) => {
+    // The other half of the picker: a widget that already lives on a dashboard is copied
+    // across by id rather than sent as JSON. Both branches render from the same rowAttrs,
+    // so this is what stops a change to one from silently breaking the other.
+    const source = await makeDashboard(page, `E2E Copy Source ${Date.now()}`);
+    const target = await makeDashboard(page, `E2E Copy Target ${Date.now()}`);
+
+    // Save a widget out of the "Add a new widget" drawer — the drawer's own write path,
+    // which nothing else covers.
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${source.id}`);
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    await openWidgetDrawer(page);
+    const widgetTitle = "Copied Widget";
+    await page.locator('input[placeholder="Throughput"]').fill(widgetTitle);
     await Promise.all([
       page.waitForResponse(
-        (r) => r.request().method() === "DELETE" && r.url().includes(dashId) && r.status() < 400,
+        (r) => r.request().method() === "PUT" && r.url().includes(source.id) && r.status() < 400,
         { timeout: 20000 },
       ),
-      page.getByText("Delete dashboard").click(),
+      page.getByRole("button", { name: "Save changes" }).first().click(),
     ]);
-    await expect
-      .poll(
-        async () => {
-          await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-          return page.getByText(title).count();
-        },
+
+    await page.reload();
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    const saved = page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle }).first();
+    await expect(saved, "the drawer's Save changes did not persist the widget").toBeVisible({
+      timeout: 20000,
+    });
+
+    // Now copy it across. This widget *is* on a dashboard, so the menu offers "Copy".
+    await saved.locator('button[aria-label="Widget menu"]').first().click();
+    const copyItem = saved.getByText("Copy to dashboard");
+    await expect(copyItem).toBeVisible();
+    await copyItem.click();
+
+    const row = page.locator("#dashboards-modal-content").getByText(target.title).first();
+    await expect(row).toBeVisible({ timeout: 20000 });
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes(`/dashboards/${target.id}/widgets/`) &&
+          r.url().includes("/duplicate") &&
+          r.url().includes(`source_dashboard_id=${source.id}`) &&
+          r.status() < 400,
         { timeout: 20000 },
-      )
-      .toBe(0);
+      ),
+      row.click(),
+    ]);
+
+    // It landed on the target and stayed on the source — a copy, not a move.
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${target.id}`);
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    await expect(page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle })).toHaveCount(1, {
+      timeout: 20000,
+    });
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${source.id}`);
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    await expect(page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle })).toHaveCount(1, {
+      timeout: 20000,
+    });
+
+    await deleteDashboard(page, source);
+    await deleteDashboard(page, target);
   });
 });
