@@ -11,7 +11,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List (isInfixOf)
 import Data.ProtoLens (defMessage, encodeMessage)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -74,15 +74,17 @@ queryLogs tr queryM = do
 
 
 -- | Helper to query the sessions viz endpoint (returns SessionsView).
-queryLogsViz :: TestResources -> Maybe Text -> Text -> IO Log.SessionsView
-queryLogsViz tr queryM vizType = queryLogsVizSorted tr queryM vizType Nothing
+queryLogsViz :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> IO Log.SessionsView
+queryLogsViz tr projectId queryM vizType = queryLogsVizSorted tr projectId queryM vizType Nothing
 
 
-queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.SessionsView
-queryLogsVizSorted tr queryM vizType sortByM = do
+-- | Takes the project explicitly: examples that assert on project-wide session
+-- totals must run against their own project, not the shared nil demo one.
+queryLogsVizSorted :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> Maybe Text -> IO Log.SessionsView
+queryLogsVizSorted tr projectId queryM vizType sortByM = do
   unless (vizType == "sessions") $ fail ("queryLogsVizSorted only supports the sessions viz, got: " <> toString vizType)
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logSessionsH pid queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
+  snd <$> toServantResponse tr (Log.logSessionsH projectId queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
 
 
 -- | Helper to extract the row dataset from a LogResult.
@@ -136,28 +138,32 @@ spec = sequential $ aroundAll withTestResources do
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 4.1: should ingest metrics and render related metrics" $ \tr -> do
-      keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3", "metric-key-4"]
+      -- TimeFusion is one shared store with no per-example reset, so an absolute
+      -- count(*) over the nil demo project also sees every other spec's metrics.
+      -- This example owns its own project id.
+      mpid <- createTestProject tr "grpc-metrics"
+      keys <- traverse (createTestAPIKey tr mpid) ["metric-key-1", "metric-key-2", "metric-key-3", "metric-key-4"]
       forM_ (zip3 keys ["cpu.usage", "cpu.limit", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1, 10]) $ \(key, metricName, value) -> ingestMetric tr key [] metricName value frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Catalog writes are buffered and only flushed at threshold or by the hourly
       -- job (not by runAllBackgroundJobs), so flush explicitly before asserting it.
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just mpid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       V.length result.dataset `shouldSatisfy` (> 0)
-      rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
+      rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{mpid.toText} |]
       rawRows `shouldBe` V.singleton 4
-      catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId pid)
+      catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId mpid)
       catalogRows `shouldBe` V.singleton (Only 4)
-      catalogLabels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'cpu.usage' |] (Only $ unUUIDId pid)
+      catalogLabels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'cpu.usage' |] (Only $ unUUIDId mpid)
       catalogLabels `shouldSatisfy` (any (\(Only labels) -> "resource.service.name" `isInfixOf` toString labels) . toList)
       -- Regression: metric cards must query the native scalar column in
       -- otel_metrics, not the removed telemetry.metrics JSON payload.
-      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
-      (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "resource.service.name")
+      (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH mpid "cpu.usage" (Just "resource.service.name")
       toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
-      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "cpu.usage" Nothing Nothing Nothing Nothing Nothing
+      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH mpid "cpu.usage" Nothing Nothing Nothing Nothing Nothing
       let detailHtml = toString $ Lucid.renderText details
       detailHtml `shouldContain` "id=\"metric-details-content\""
       detailHtml `shouldContain` "hx-target=\"#metric-details-content\""
@@ -169,7 +175,7 @@ spec = sequential $ aroundAll withTestResources do
       detailHtml `shouldContain` "Group chart by resource.service.name"
       detailHtml `shouldContain` "cpu.limit"
       detailHtml `shouldContain` "Same cpu namespace"
-      (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let dataPointsHtml = toString $ Lucid.renderText $ Lucid.toHtml dataPoints
       dataPointsHtml `shouldContain` "tab=datapoints&amp;expand=cpu.usage"
       dataPointsHtml `shouldContain` "on keydown[key==&#39;Enter&#39;] halt the event then trigger click end"
@@ -178,9 +184,9 @@ spec = sequential $ aroundAll withTestResources do
       dataPointsHtml `shouldContain` "tabindex=\"0\""
       dataPointsHtml `shouldContain` "w-10 shrink-0"
       dataPointsHtml `shouldNotContain` "cursor-pointerhover"
-      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
+      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True mpid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
-      totals <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime) (addUTCTime 1 frozenTime)
+      totals <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True mpid (addUTCTime (-1) frozenTime) (addUTCTime 1 frozenTime)
       totals.events `shouldSatisfy` (>= 0)
       totals.metrics `shouldSatisfy` (>= 4)
 
@@ -530,13 +536,18 @@ spec = sequential $ aroundAll withTestResources do
       let idList = V.toList (fmap (\(Only t) -> t) ids)
       length idList `shouldBe` length names
       idList `shouldSatisfy` all (\t -> t /= UUID.toText UUID.nil)
-      Set.size (Set.fromList idList) `shouldBe` length idList
+      S.size (S.fromList idList) `shouldBe` length idList
 
     -- Sessions aggregation: verify fetchSessions groups events by session.id,
     -- surfaces user identity, counts errors, and honors KQL pre-filters.
     describe "Sessions aggregation" do
       it "Test 11.1: aggregates events by session with user identity and error count" $ \tr -> do
-        key <- createTestAPIKey tr pid "sessions-key"
+        -- Sessions are derived from user identity, so every unfiltered project-wide
+        -- total here would also count any other spec's identity-carrying spans in the
+        -- shared TimeFusion store. The reconciliation this test exists to prove only
+        -- holds over a project the example owns.
+        spid <- createTestProject tr "grpc-sessions"
+        key <- createTestAPIKey tr spid "sessions-key"
         let aliceAttrs =
               [ ("session.id", "abc")
               , ("user.id", "u1")
@@ -555,7 +566,7 @@ spec = sequential $ aroundAll withTestResources do
           ingestSessionEvent tr key ("GET /bob/" <> show i) bobAttrs False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-        result <- queryLogsViz tr Nothing "sessions"
+        result <- queryLogsViz tr spid Nothing "sessions"
         case result of
           Log.SessionsView total sessionRows summaryM -> do
             total `shouldBe` 2
@@ -590,7 +601,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestSessionEvent tr key "GET /a" [("session.id", "s1-filter"), ("user.email", "alice-filter@example.com")] False frozenTime
         ingestSessionEvent tr key "GET /b" [("session.id", "s2-filter"), ("user.email", "bob-filter@example.com")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
+        result <- queryLogsViz tr pid (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
         case result of
           Log.SessionsView _ sessionRows _ -> do
             V.length sessionRows `shouldBe` 1
@@ -601,7 +612,7 @@ spec = sequential $ aroundAll withTestResources do
         forM_ ([1 .. 3] :: [Int]) $ \i ->
           ingestSessionEvent tr key ("GET /anon/" <> show i) [("session.id", "anon-sess")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr Nothing "sessions"
+        result <- queryLogsViz tr pid Nothing "sessions"
         case result of
           Log.SessionsView _ sessionRows _ -> do
             case V.find (\s -> s.sessionId == "anon-sess") sessionRows of
@@ -646,7 +657,7 @@ spec = sequential $ aroundAll withTestResources do
           $ withPool tr.trPool
           $ DBT.executeMany [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] [(recorded, pid), (shouty, pid)]
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        view <- queryLogsViz tr Nothing "sessions"
+        view <- queryLogsViz tr pid Nothing "sessions"
         case view of
           Log.SessionsView _ sessionRows _ -> do
             let replayOf sid = (.hasReplay) <$> V.find (\s -> T.toLower s.sessionId == UUID.toText sid) sessionRows
@@ -682,7 +693,7 @@ spec = sequential $ aroundAll withTestResources do
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
-        result <- queryLogsVizSorted tr Nothing "sessions" (Just "events")
+        result <- queryLogsVizSorted tr pid Nothing "sessions" (Just "events")
         case result of
           Log.SessionsView _ sessionRows _ -> do
             let counts = V.toList $ V.map (.eventCount) sessionRows
@@ -726,7 +737,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
         -- Filter by the external email: must return zero sessions from `pid`.
-        emailFilter <- queryLogsViz tr (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
+        emailFilter <- queryLogsViz tr pid (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
         case emailFilter of
           Log.SessionsView total rows _ -> do
             total `shouldBe` 0
@@ -764,7 +775,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestSessionEvent tr key "GET /login" attrs False frozenTime
         ingestSessionEvent tr key "POST /login" attrs True (addUTCTime 1 frozenTime)
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr (Just "attributes.session.id == \"ctx-sess\"") "sessions"
+        result <- queryLogsViz tr pid (Just "attributes.session.id == \"ctx-sess\"") "sessions"
         case result of
           Log.SessionsView _ rows _ -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
             Just s -> do
@@ -783,7 +794,7 @@ spec = sequential $ aroundAll withTestResources do
         forM_ ([1 .. 2] :: [Int]) $ \i -> ingestSessionEvent tr key ("GET /derived/" <> show i) attrs False frozenTime
         ingestSessionEvent tr key "GET /derived/boom" attrs True frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
-        result <- queryLogsViz tr (Just "attributes.user.email == \"derived@example.com\"") "sessions"
+        result <- queryLogsViz tr pid (Just "attributes.user.email == \"derived@example.com\"") "sessions"
         case result of
           Log.SessionsView total rows _ -> do
             total `shouldBe` 1

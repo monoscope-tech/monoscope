@@ -135,8 +135,10 @@ spec = around withTestResources do
       let fromT = iso8601Show (addUTCTime (-3600) frozenTime)
           toT = iso8601Show (addUTCTime 3600 frozenTime)
 
-      -- search --first --id-only → bare event id on stdout (skill: pipeline shortcut)
-      (ecS, idOut) <- runCLILifecycle tr ["--json", "traces", "search", "", "--from", fromT, "--to", toT, "--first", "--id-only"]
+      -- search --first --id-only → bare event id on stdout (skill: pipeline shortcut).
+      -- Scoped to the span just ingested: an empty query takes whatever row sorts
+      -- first in the store, which in CI is shared across specs and shards.
+      (ecS, idOut) <- runCLILifecycle tr ["--json", "traces", "search", "name==\"GET /api/lifecycle/share\"", "--from", fromT, "--to", toT, "--first", "--id-only"]
       ecS `shouldBe` ExitSuccess
       let eid = T.strip idOut
       eid `shouldSatisfy` (not . T.null)
@@ -237,7 +239,7 @@ spec = around withTestResources do
           tsOf = \case AE.Object o | Just (AE.String t) <- KM.lookup "timestamp" o -> t; _ -> ""
           tss = map tsOf evs1
       length (ordNub ids1) `shouldBe` 3
-      tss `shouldBe` sortBy (comparing Down) tss
+      tss `shouldBe` sortOn Down tss
 
       -- --limit budgets across slices and reports has_more for the rest
       (ec2, out2) <- runCLILifecycle tr ["--json", "events", "search", "chunkevt", "--since", "3h", "--limit", "2"]

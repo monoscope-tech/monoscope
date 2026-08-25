@@ -435,7 +435,7 @@ relatedMetricsGetH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (R
 relatedMetricsGetH pid rdId timestamp = withSpan_ "log-explorer.related-metrics" [] do
   void $ Projects.sessionAndProject pid
   env <- (.env) <$> Reader.ask @AuthContext
-  Hasql.withHasqlTimefusion env.enableTimefusionReads (Telemetry.otelRecordByProjectAndId pid timestamp rdId) >>= \case
+  Telemetry.otelRecordByProjectAndId env.enableTimefusionReads pid timestamp rdId >>= \case
     Nothing -> addRespHeaders $ div_ [class_ "px-5 py-8 text-sm text-textWeak"] "Record not found"
     Just record -> do
       let service = fromMaybe "" $ Telemetry.spanServiceName record

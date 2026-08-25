@@ -667,8 +667,8 @@ renderFacetTail field facetSummary =
 -- orphan headers (trace-tree concerns the UI wants but the API/CLI usually doesn't).
 -- The time window is re-derived from the returned page's own first/last timestamps,
 -- so only @sinceM@ (the relative-range token) is needed here.
-buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
-buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colNames, resultCount') = do
+buildLogResult :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
       colOf k v = lookupVecTextByKey v colIdxMap k
       reqLastCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? (V.length requestVecs - 1))
@@ -682,7 +682,7 @@ buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colN
         let traceIds = V.fromList $ take 50 $ nubOrd $ V.toList $ V.mapMaybe (mfilter (not . T.null) . colOf "trace_id") requestVecs
             -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
             seedSpanIds = V.mapMaybe (colOf "latency_breakdown") requestVecs
-        LogQueries.selectChildSpansAndLogs pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
+        LogQueries.selectChildSpansAndLogs useTf pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
@@ -738,7 +738,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM [] [] r
+    Right r -> buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [] r
 
 
 -- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
@@ -962,7 +962,7 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
-  lr <- buildLogResult True pid now sinceM addCols removeCols tableData
+  lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now sinceM addCols removeCols tableData
   let lastFM = lr.cursor >>= (iso8601ParseM . toString) <&> toText . iso8601Show . addUTCTime (-0.001)
   addRespHeaders
     (lr :: LogResult)
@@ -1903,7 +1903,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
       traceIds = V.fromList $ take 100 $ nubOrd $ mapMaybe (mfilter (not . T.null) . colOf "trace_id") $ V.toList shown
       seedSpanIds = V.mapMaybe (colOf "latency_breakdown") shown
   childSpansList <- case expandKind of
-    LogQueries.ExpandSession _ -> LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
+    LogQueries.ExpandSession _ -> LogQueries.selectChildSpansAndLogs authCtx.env.enableTimefusionReads pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
     LogQueries.ExpandPattern _ -> pure []
   let rawLogsData = shown <> V.fromList childSpansList
       (logsData, traces) = buildTraceTree colIdxMap (V.length shown) rawLogsData

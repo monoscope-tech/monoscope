@@ -43,7 +43,8 @@ data ShareView
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
-  _ <- Telemetry.otelRecordByProjectAndId pid createdAt eventId `whenNothingM` throwIO err404
+  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwIO err404
   shareId <- liftIO UUIDV4.nextRandom
   ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
@@ -114,15 +115,15 @@ shareLinkGetH sid = do
 
 
 resolveBody :: UUID.UUID -> UTCTime -> ShareRow -> ATBaseCtx ShareView
-resolveBody sid now row =
-  Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= \case
+resolveBody sid now row = do
+  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId >>= \case
     Nothing -> pure ShareMissing
     Just anchor -> do
       let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
       if row.eventType == "log"
         then pure $ ShareLive row.hoursLeft Nothing detail Nothing
         else do
-          useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
           breakdownM <- runMaybeT do
             tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
             (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
@@ -151,7 +152,8 @@ shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
   row <- resolveShare sid now `whenNothingM` throwIO err404
   when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
-  anchor <- Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
+  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
   when ((Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes) >>= UUID.fromText) /= Just sessionId) $ throwIO err404
   -- Unauthenticated surface: a share link must die with its project, so this
   -- asks for an ACTIVE one rather than any row bearing the id.

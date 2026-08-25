@@ -7,6 +7,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Time (addUTCTime, getCurrentTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -29,7 +30,6 @@ import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
-import Data.Text.Lazy qualified as TL
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified
@@ -538,20 +538,24 @@ s3ConfigTests :: SpecWith TestContext
 s3ConfigTests =
   it "connects real S3 storage, renders it, and removes it" \TestContext{tcResources = tr, tcProjectId = testPid} ->
     requireMinio tr pendingWith do
-      let s3Form =
+      -- The endpoint/credentials must be the ones `withTestResources` actually probed
+      -- (MINIO_ENDPOINT is http://minio:9000 in CI, 127.0.0.1:9000 locally); hardcoding
+      -- either makes the handler's bucketExists fail and render "Not connected".
+      let env = tr.trATCtx.env
+          s3Form =
             Projects.ProjectS3Bucket
-              { accessKey = "minioadmin"
-              , secretKey = "minioadmin"
-              , region = "us-east-1"
-              , bucket = "monoscope-test"
-              , endpointUrl = "http://127.0.0.1:9000"
+              { accessKey = env.s3AccessKey
+              , secretKey = env.s3SecretKey
+              , region = env.s3Region
+              , bucket = env.s3Bucket
+              , endpointUrl = env.s3Endpoint
               }
       (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
       TL.toStrict (renderText connected) `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
       let savedHtml = TL.toStrict $ renderText savedPage
-      savedHtml `shouldSatisfy` T.isInfixOf "monoscope-test"
+      savedHtml `shouldSatisfy` T.isInfixOf env.s3Bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, removed) <- testServant tr $ S3.brings3RemoveH testPid

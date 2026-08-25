@@ -74,6 +74,7 @@ module Pkg.TestUtils (
   createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
   mkSpanRequest,
+  mergeSpanRequests,
   mkResource,
   mkAttr,
   -- MinIO test helpers
@@ -1350,6 +1351,12 @@ createTestProject tr title = do
   pure pid
 
 
+-- | Fold single-span requests into one export so a test needing hundreds of rows
+-- pays for one ingest round-trip (and one dual-write) instead of hundreds.
+mergeSpanRequests :: [TS.ExportTraceServiceRequest] -> TS.ExportTraceServiceRequest
+mergeSpanRequests reqs = defMessage & TSF.resourceSpans .~ concatMap (^. TSF.resourceSpans) reqs
+
+
 -- | Helper to create an API key for testing using handler
 createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
 createTestAPIKey tr projectId keyName = do
@@ -1478,8 +1485,8 @@ ingestMetricWithHeader tr apiKey resAttrs metricName value timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" resAttrs metricName value timestamp)
 
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
+extractParams :: W.Options -> [(Text, Text)]
+extractParams opts = opts ^. W.params
 
 
 mockResponse :: LBS.ByteString -> Response LBS.ByteString
@@ -1496,8 +1503,8 @@ mockResponse body =
     }
 
 
-extractParams :: W.Options -> [(Text, Text)]
-extractParams opts = opts ^. W.params
+testPid :: Projects.ProjectId
+testPid = UUIDId UUID.nil
 
 
 -- | Test HTTP interpreter that routes CLI requests to server handlers.

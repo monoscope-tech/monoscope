@@ -12,6 +12,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Lucid qualified
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Numeric (showHex)
 import Pages.Telemetry (metricDetailUrl, metricExpandUrl)
 import Pages.Telemetry qualified as Trace
 import Pkg.TestUtils
@@ -74,17 +75,23 @@ spec = do
     it "traceView_pagesSpans_andOffersTheNextPage" \tr -> do
       trId <- T.replace "-" "" . UUID.toText <$> nextRandom
       -- 60 spans under one root: enough to overflow the smallest page the handler
-      -- honours (the limit clamps up to 50), cheap enough to insert directly.
-      void $ withPool tr.trPool $ DBT.execute
-        [sql| INSERT INTO otel_logs_and_spans
-                (id, project_id, timestamp, start_time, name, context___trace_id, context___span_id, parent_id,
-                 context, kind, status_code, summary)
-              SELECT gen_random_uuid(), ?, ?, ?::timestamptz + (i || ' milliseconds')::interval, 'span-' || i, ?,
-                     lpad(to_hex(i), 16, '0'), CASE WHEN i = 0 THEN NULL ELSE lpad(to_hex(0), 16, '0') END,
-                     jsonb_build_object('trace_id', ?::text, 'span_id', lpad(to_hex(i), 16, '0')),
-                     'SERVER', '200', '{}'
-              FROM generate_series(0, 59) i |]
-        (testPid, frozenTime, frozenTime, trId, trId)
+      -- honours (the limit clamps up to 50). Ingested rather than INSERTed — the
+      -- handler reads whichever store the env points at (TimeFusion in CI), and a
+      -- raw INSERT only ever lands in Postgres. The root takes an id outside the
+      -- 0..59 range so span n keeps the id `lpad(to_hex(n), 16, '0')`.
+      apiKey <- createTestAPIKey tr testPid "trace-paging-key"
+      let rootSid = "00000000000000f0"
+          spanSid i = T.takeEnd 16 $ "000000000000000" <> toText (showHex i "")
+      for_ ([0 .. 59] :: [Int]) \i ->
+        ingestSpanLinked
+          tr
+          apiKey
+          trId
+          (if i == 0 then rootSid else spanSid i)
+          (if i == 0 then Nothing else Just rootSid)
+          ("span-" <> show i)
+          []
+          (addUTCTime (fromIntegral i / 1000) frozenTime)
 
       (_, firstPage) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing (Just 50)
       case firstPage of
