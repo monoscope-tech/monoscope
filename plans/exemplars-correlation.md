@@ -56,64 +56,107 @@ chart point links to a representative trace.
 
 ## 2. Vendor survey
 
-### Datadog (the model we copy)
+### Datadog — the model we copy
 
-Datadog's correlation rests on **unified service tagging**: every telemetry type — metric,
-span, log, profile, RUM event — carries `env`, `service` and `version` as reserved tags. It is
-the join key. Trace-level `trace_id`/`span_id` injection into logs is a second, exact key on
-top of it. So Datadog has exactly the two tiers we build below: an *exact* id join where it
-exists, and a *tag + time-window* join that always works.
+Datadog has **no single universal correlation**. It has four join keys, applied at different
+granularities, and the UI never makes the user choose between them:
 
-Concretely, on a **span's detail (flame-graph) panel** Datadog shows a tab strip —
-`Info`, `Errors`, `Metrics`/`Infrastructure`, `Logs`, `Processes`, `Profiles`, `Code Hotspots`,
-`Network` — where:
+1. **Unified service tagging** — `env`, `service`, `version`, injected by every SDK into every
+   signal. The coarse join; it makes filter vocabulary identical across products.
+2. **Infrastructure identity** — `host.name`, `container.id`.
+3. **`runtime_id`** — the process that emitted the span, used to attach runtime metrics.
+4. **`trace_id` / `span_id`** — the only exact join, and it is logs↔traces only.
 
-- **Metrics / Infrastructure** shows host-, container- and runtime-level metrics for the
-  host and container that emitted the span, scoped to the span's own time window. It is not
-  a search: the tags are read off the span (`host`, `container_id`, `service`, `env`) and used
-  as the metric query's filter. Sparse or missing tags simply yield fewer rows.
-- **Logs** shows logs correlated by `trace_id` first, falling back to service + host + window.
-- The window is the span's own start/end, widened for readability — not the page's time
-  picker.
+On the **span detail panel** under the flame graph, the tab strip is the correlation surface:
+`Span Info`, **`Infrastructure`**, **`Metrics`**, `Logs`, `Processes`, `Network`, `Security`,
+`Profiles`/`Code Hotspots`, `Span Links`. Two of those are "related metrics", split by what the
+metric is *about*: **Infrastructure** = the machine (host/container CPU, memory, I/O, keyed on
+`host.name`/`container.id`); **Metrics** = the process runtime (heap, GC, threads, keyed on
+`runtime_id`). Neither is a metric explorer — both are **pre-scoped charts**.
 
-From a **metric graph**, Datadog's graph context menu ("View related …") carries the clicked
-point's timestamp *and* the graph's current tag scope into APM trace search, log search or the
-profiler. The user never types a query; the link is constructed from the point.
+**The single most important UI detail, shared by both: the trace's own time interval is drawn
+as an overlay on every chart.** Without it the chart is decoration; with it, it answers "was my
+request inside the spike?". The Logs tab has the mirror affordance — hovering a log draws a
+vertical line at its timestamp on the flame graph.
 
-The two takeaways we adopt verbatim: (a) the correlation is a *tab in the existing detail
-panel*, not a separate page; (b) the link out of a chart carries **point timestamp + tag
-scope**, not just "go to traces".
+The **log side panel** has a `Trace` tab (exact `trace_id`, with a *View Trace Details* button)
+and a `Metrics` tab showing infrastructure metrics in a **±30-minute window around the log** —
+a concrete number worth copying, since a log has no duration of its own.
+
+From a **metric chart**, "Context Links": clicking a data point opens a menu — *View related
+traces / logs / profiles / hosts / containers / processes / RUM*. The link is built from three
+ingredients merged: widget filters + dashboard template variables, the specific group clicked,
+and the point's tags. **Time window rule: for timeseries and heatmap widgets the range is the
+clicked bucket, not the dashboard range**; for every other widget type it is the full widget
+range. Traces and logs open **in a side panel with samples first** — you stay on the chart.
+
+Datadog is also explicit about the failure mode rather than hiding it: *"traces and logs are
+sampled independently"*, so a `trace_id` may name a trace that was never retained, and the
+panel renders a "trace unavailable" state instead of a broken link. The same applies to us:
+trace metrics are computed on 100% of traffic while the traces behind them are sampled.
+
+There is **no tab named "Related" or "Connections"** — the absence is itself the finding.
+Datadog puts correlation *on the chart and on the span*, not behind a tab named after the idea.
 
 ### Grafana / Prometheus / OpenTelemetry
 
-- Prometheus stores OpenMetrics exemplars — `{trace_id="…"} <value> <timestamp>` appended to a
-  sample — in a fixed-size circular buffer, at most **one exemplar per series per scrape**.
-  They are explicitly best-effort and not retained with the series.
-- Grafana renders them as **diamond markers on the time-series panel**, layered over the line.
-  The Prometheus datasource's `exemplarTraceIdDestinations` config maps an exemplar label
-  (`trace_id`) to a Tempo datasource, so the diamond's tooltip gets a "Query with Tempo" link.
-- The reverse direction is Tempo's **"Trace to metrics"** datasource setting: a query template
-  with `$__tags` interpolated from the span's own tags, so opening a span runs a metrics query
-  scoped to that span's service/instance. That is the same two-tier idea, spelled as config.
-- The OTel spec's exemplar fields are exactly what we already ingest: `trace_id`, `span_id`,
-  `time_unix_nano`, `value`, `filtered_attributes`. Default SDK reservoirs keep 1 exemplar per
-  bucket (histograms) or 1 per aggregation cycle (sums/gauges) — which is precisely the
-  staleness behaviour observed in our production data above.
+- Grafana renders exemplars as **diamond markers** layered on the time-series panel. The
+  tooltip lists the exemplar's labels and value; next to `traceID` sits a
+  **`Query with <datasource>`** button. **Clicking opens the trace in a split panel to the
+  right — the metric graph stays on screen.** The same "don't navigate away" instinct as
+  Datadog's side panel.
+- Config is `exemplarTraceIdDestinations` on the Prometheus datasource (label name → tracing
+  datasource). Exemplars come from a *separate* `/api/v1/query_exemplars` request, not from
+  `query_range`, and are unavailable for instant queries.
+- The reverse direction is Tempo's **"Trace to metrics"**: a query template where `$__tags`
+  interpolates the clicked span's own attributes (`requests_total{$__tags}` →
+  `requests_total{pod="nginx-554b9", cluster="us-east-1"}`), with **tags absent from the span
+  silently omitted**, plus `spanStartTimeShift`/`spanEndTimeShift` (default ±2m) widening the
+  window around the span. Exactly the tag+window tier, spelled as configuration.
+- **The exemplar wire model, and why ours look the way they do.** OTLP `Exemplar` carries
+  `trace_id`/`span_id` as raw bytes, `time_unix_nano`, `as_double`/`as_int`, and
+  `filtered_attributes` — precisely what we already ingest. The SDK default filter is
+  **`TraceBased`**: only measurements recorded inside a *sampled* span are eligible. The
+  default reservoir for an explicit-bucket histogram is
+  `AlignedHistogramBucketExemplarReservoir` — **at most one exemplar per bucket** — which is
+  exactly why our production `rpc.server.duration` rows carry ~14 exemplars spanning weeks.
+  Summaries have no exemplar field at all, and the OTel→Prometheus spec says exemplars on
+  gauges and summaries SHOULD be dropped.
+- Consequence to design for: exemplars are **"one kept per bucket", not "the worst one"**. A
+  p99 spike from 500 slow requests yields one uniformly-weighted trace id per bucket. We
+  therefore sort by value descending and label the list "representative", rather than implying
+  the exemplar *is* the worst request.
 
 ### Honeycomb / New Relic
 
-- **Honeycomb** has no metric-first model: everything is a wide event, so "related metrics"
-  is a `BubbleUp`/group-by over the same events. Nothing to copy directly, but it validates
-  ranking by *shared dimensions* — which our existing `relatedMetricScore` already does.
-- **New Relic** joins by entity GUID (its version of unified service tagging) and derives
-  span-metrics from spans, so a metric point can always be decomposed back into the spans that
-  produced it. We do not have span-metrics, so exemplars are our only exact metric→trace edge.
+- **Honeycomb** is events-native like us: a span *is* an event, so metric→trace is not a join,
+  it is reading a field off the row the aggregate was computed from. Its documented
+  representative-item rule is worth copying verbatim: **"the slowest trace with a child span
+  and with a value less than or equal to the value of your selected point"**, and the waterfall
+  opens **pre-positioned on the first span matching the query's filter**, not at the root.
+  Its trace sidebar carries a **minigraph** placing the selected span against its peers.
+  Honeycomb's own OTel-metrics position is that metric→trace drill-down is *not* possible —
+  its `Correlations > Metrics` panel runs a parallel metrics query over **the same time window
+  and any compatible filters** and shows it side by side. Side-by-side, not drill-down.
+- **New Relic** stamps `entity.guid`, `trace.id`, `span.id`, `hostname`, `entity.name` onto
+  every log record (even over plain text, via an `NR-LINKING|…|` wire format). Its span detail
+  pane leads with a **Performance** tab — average duration/throughput for that span's operation
+  versus baseline — which is the metric hop. NRQL's `FROM Span, Log WHERE trace.id = …` is a
+  **union filtered on a shared attribute, not a join**.
 
 ### Conclusion
 
-Everyone converges on: **exact id join where the data carries one, tag + time-window join
-otherwise, surfaced as a tab inside the thing you already have open.** Nobody makes the user
-navigate to a correlation page. We build exactly that.
+Everyone converges on the same shape: **an exact id join where the data carries one, a
+tag + time-window join otherwise, surfaced as a tab inside the thing you already have open,
+with the subject's own time interval overlaid on the correlated chart.** Nobody makes the user
+navigate to a correlation page.
+
+Note the structural point this survey makes about us: Monoscope is in Honeycomb's camp — our
+spans are rows, so span→metrics by service+window needs no new key. Exemplars matter for the
+case a projection over spans cannot cover: **SDK-emitted metrics whose underlying measurements
+were never rows** — which, per §1, is exactly the demo project's `rpc.server.*` family. We
+build the exemplar path because production already carries the data; we do not build
+Prometheus-style exemplar plumbing on top of it.
 
 ## 3. Where a correlation link belongs in our product
 
@@ -164,12 +207,24 @@ The service tier reuses `otel_metrics_meta` (PG catalog, already indexed on
 `group-has-[.tab-metrics:checked]/dtab:block` so Tailwind's scanner sees it
 (`tailwind_scanner_no_runtime_concat`). The handler renders, in order:
 
-1. **Exemplar matches** — metrics that recorded a datapoint *inside this very trace*, each a
-   row with metric name, value, and a link back to the metric detail page.
-2. **Service metrics** — every metric `service.name` emitted, from the catalog, linking to the
-   metric detail page pre-scoped to that service and the span's time window.
+1. **Recorded in this trace** — the exemplar-exact tier. Metrics that recorded a datapoint
+   inside this very trace, each with its value and a link to the metric detail page. This is
+   the tier Datadog does not have (it has no metric↔trace exact join at all), and it is the
+   strongest statement the UI can make: *this number came from this request.*
+2. **Metrics from `<service>`** — the tag tier, which is what Datadog's Infrastructure/Metrics
+   tabs are. Per the survey these must be **charts, not a list of names**, so the tab renders
+   real `metricWidget` timeseries for the service's metrics, reusing the same component the
+   metrics pages use. Names alone would be a directory, not a correlation.
 
-Empty state names which tier is empty and why, rather than a generic "nothing found".
+Empty state names which tier is empty and why, rather than a generic "nothing found" — Datadog
+renders an explicit "trace unavailable" instead of a dead link, and the same honesty applies to
+"this metric family carries no exemplars".
+
+**Known gap vs Datadog:** those charts inherit the explorer's time range rather than being
+scoped to the span's own interval with that interval shaded, because `Widget` has no
+`from`/`to` of its own (it reads page params via `forward-page-params`). The survey is clear
+that the overlay is the detail that makes the chart worth showing, so this is the first
+follow-up — it needs a `Widget` time-range field, which is a wider change than this stream.
 
 ### 4.3 Metric → trace (tab + chart overlay)
 
