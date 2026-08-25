@@ -11,6 +11,7 @@ module Pkg.TestUtils (
   convert,
   runTestBackground,
   runTestBackgroundWithNotifications,
+  runTestBgRecordingHTTP,
   runTestBg,
   runTestBgNoReset,
   captureNotifs,
@@ -519,7 +520,21 @@ runTestBackgroundWithNotifications t logger appCtx process = do
 -- 'TestClock' so callers can advance time across multiple runs in the same
 -- spec.
 runTestBackgroundWithClock :: TestClock -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
-runTestBackgroundWithClock clock logger appCtx process = do
+runTestBackgroundWithClock = runTestBackgroundWithHTTP (runHTTPGolden "./tests/golden/")
+
+
+-- | 'runTestBackgroundWithClock' with the outgoing-HTTP interpreter left to the
+-- caller. Jobs that POST to a billing provider must not be run under
+-- 'runHTTPGolden' — a cache miss there makes a real request to Stripe or Lemon
+-- Squeezy with whatever key the config carries.
+runTestBackgroundWithHTTP
+  :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x -> Eff hes x)
+  -> TestClock
+  -> Log.Logger
+  -> Config.AuthContext
+  -> ATBackgroundCtx a
+  -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithHTTP http clock logger appCtx process = do
   tp <- getGlobalTracerProvider
   notifRef <- newIORef []
   result <-
@@ -532,13 +547,27 @@ runTestBackgroundWithClock clock logger appCtx process = do
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
-      & runHTTPGolden "./tests/golden/"
+      & http
       & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
   notifications <- reverse <$> readIORef notifRef
   pure (notifications, result)
+
+
+-- | Run a background job with every outgoing HTTP request recorded rather than
+-- sent, returning them as (url, rendered body). The seam for asserting what a
+-- job actually submitted to a third party — and for letting a provider call
+-- "succeed" in a test without any network.
+runTestBgRecordingHTTP :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO ([(Text, LByteString)], a)
+runTestBgRecordingHTTP t TestResources{..} action = do
+  setTestTime trTestClock t
+  reqsRef <- newIORef []
+  (notifications, result) <- runTestBackgroundWithHTTP (runHTTPRecord reqsRef) trTestClock trLogger trATCtx action
+  logNotifications trATCtx trLogger notifications
+  reqs <- reverse <$> readIORef reqsRef
+  pure (reqs, result)
 
 
 runTestBackgroundWithLogger :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a

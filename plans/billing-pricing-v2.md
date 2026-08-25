@@ -173,15 +173,22 @@ resolveMeterTarget :: [MeterKind] -> BillingProvider -> ProjectMeterConfig -> Me
 additionally has to have a `billing_meter_items` row, so enabling the config alone cannot
 POST to a meter that does not exist.
 
-**A dormant meter produces no submission rows at all.** Totals still land in
-`apis.daily_usage` (audit + later reconciliation), but no chunks are created. This is
-deliberate: buffering months of dormant chunks and draining them the day a meter goes live
-is exactly the backlog-leak failure we have already hit once on a provider switch. Turning
-a meter on bills from that day forward; anything owed for the dormant period is a manual,
-deliberate reconciliation off `apis.daily_usage`.
+**Disabled and unaddressable are different things, and must not be conflated:**
 
-`DormantReason` is logged per meter per run, so "why is nothing being billed" is answerable
-from logs alone.
+| Situation | Chunks cut? | Why |
+|---|---|---|
+| Meter not in `ENABLED_USAGE_METERS` | **No** | Policy: this dimension does not bill yet. Buffering months of chunks and draining them the day the meter goes live is exactly the backlog-leak failure we have already hit on a provider switch. Enabling a meter bills from that day forward; the dormant period is reconciled by hand off `apis.daily_usage` if it is owed at all. |
+| Meter enabled but unaddressable (`NoStripeCustomer`, `NoSubscriptionItem`, `ProviderUnusable`) | **Yes** | A misconfig on money we *are* owed. The chunk is cut and the drain marks it `failed`, leaving an auditable, retriable backlog — the pre-existing invariant that a paid project with an unusable provider leaves a failed row rather than a quietly-submitted one. |
+
+At drain time the same distinction applies: a chunk whose meter has since been *disabled* is
+left pending untouched (marking it `failed` would re-log the same row every tick forever),
+while any other resolution failure marks it `failed` as before.
+
+Totals for every dimension land in `apis.daily_usage` regardless, so a dormant window stays
+reconcilable. `DormantReason` is logged per meter per run, so "why is nothing being billed"
+is answerable from logs alone. `Events` resolving dormant on a paid project logs at
+`logAttention` — an empty or typo'd `ENABLED_USAGE_METERS` is a silent revenue-off switch,
+which is the shape of the five-week zero-usage incident.
 
 ### 2.4 Schema — migration `0136_billing_meters.sql`
 
@@ -222,12 +229,24 @@ every site handles it.
 
 ## 3. Tests
 
-`test/integration/Billing/UsageReportingSpec.hs`, driving the real `ReportUsage` job:
+`test/integration/BackgroundJobs/ReportUsageSpec.hs` (the job already had a spec — extended,
+not forked), driving the real `ReportUsage` job:
 
-- three kinds recorded → chunked → drained → `submitted`
-- dormancy: metrics/replays off by default → totals in `daily_usage`, zero submission rows
-- LS with no `billing_meter_items` row → dormant even when config-enabled
-- provider failure → `failed` + retried next tick, and a succeeded chunk is never re-sent
+- three kinds recorded → chunked → drained → `submitted`, one Stripe meter each
+- dormancy: metrics/replays off by default → totals in `daily_usage`, zero submission rows,
+  and enabling them later does not bill the dormant window
+- enabled-but-unaddressable → chunk still cut and marked `failed`
+- LS with no `billing_meter_items` row → dormant even when config-enabled; billing resumes
+  once the item is recorded
+- a disabled meter's unsubmitted chunk is left untouched at drain, and drains on re-enable
+- a succeeded chunk is never re-sent
+- replay-only window (no events, no metrics) is recorded and billed
 - replay counting: window boundaries `(wStart, wEnd]`, no double-count across windows
 
-Plus doctests for `splitUsageIntoChunks`, `meterQuantity`, and `resolveMeterTarget`.
+Provider POSTs move onto the `W.HTTP` effect and the spec runs them under a recording
+interpreter (`runTestBgRecordingHTTP`). Under the default golden interpreter a cache miss
+makes a **real** request to Stripe/Lemon Squeezy with whatever key the config carries, so a
+billing test could not otherwise reach the `submitted` branch without hitting the network.
+
+Plus doctests for `splitUsageIntoChunks`, `meterQuantity`, `stripeMeterEventName` and
+`resolveMeterTarget`.

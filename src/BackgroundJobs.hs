@@ -502,21 +502,32 @@ processBackgroundJob authCtx bgJob =
             subItems <- Projects.meterSubItemIds pid
             let meterCfg = Projects.projectMeterConfig project subItems
                 enabled = authCtx.config.enabledUsageMeters
-                resolved = [(k, Projects.resolveMeterTarget enabled meterCfg k) | k <- [minBound .. maxBound]]
-            -- A dormant meter records its total in apis.daily_usage but cuts NO
-            -- chunks: draining months of buffered backlog the day a meter goes
-            -- live is the backlog-leak failure we have already hit on a provider
-            -- switch. Enabling a meter bills from that day forward.
-            chunks <- fmap concat $ forM resolved \(kind, target) -> do
+            -- Two different situations, deliberately not conflated:
+            --
+            --   * meter not in ENABLED_USAGE_METERS — a policy decision that this
+            --     dimension does not bill yet. Cut NO chunks: draining months of
+            --     buffered backlog the day a meter goes live is the backlog-leak
+            --     failure we have already hit on a provider switch. Enabling a
+            --     meter bills from that day forward.
+            --   * meter enabled but unaddressable (no Stripe customer, no LS
+            --     subscription item) — a misconfig on money we *are* owed. Cut the
+            --     chunks anyway so the drain marks them failed and they stay an
+            --     auditable, retriable backlog.
+            chunks <- fmap concat $ forM [minBound .. maxBound] \kind -> do
               let qty = Projects.meterQuantity kind totals
-              case target of
-                Right _ -> pure $ Projects.splitUsageIntoChunks kind qty
-                Left reason -> do
+              if kind `elem` enabled
+                then pure $ case provider of
+                  Projects.NoBillingProvider -> []
+                  -- Both paid providers chunk identically. LS's 1M POST cap forces
+                  -- splitting; Stripe has no documented cap but N meter-events with
+                  -- the same meter+customer aggregate identically to one big event.
+                  _ -> Projects.splitUsageIntoChunks kind qty
+                else do
                   -- Events dormant on a paid project is a silent revenue-off
                   -- switch — the exact shape of the 5-week zero-usage incident.
                   let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
                   when (qty > 0 || kind == Projects.Events)
-                    $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                    $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "quantity", qty, "provider", show provider :: Text)
                   pure []
             Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
@@ -544,17 +555,22 @@ processBackgroundJob authCtx bgJob =
                     -- the provider UI, which is not indexed by our chunk UUIDs.
                     logFields extra =
                       ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                -- A chunk is only ever cut while its meter is live, so a Left here
-                -- means the meter was turned off (or its LS item removed) between
-                -- record and drain. Leave the row pending rather than marking it
-                -- failed: the backlog is bounded and drains cleanly on re-enable,
-                -- whereas 'failed' would re-log the same row every tick forever.
+                -- A chunk is only ever cut while its meter is enabled, so
+                -- MeterNotEnabled here means it was switched off between record and
+                -- drain. Leave the row pending rather than failed: the backlog is
+                -- bounded and drains cleanly on re-enable, whereas 'failed' would
+                -- re-log the same row every tick forever. Every other reason is a
+                -- misconfig on money we are owed — fall through so the chunk is
+                -- marked failed and stays auditable.
                 case Projects.resolveMeterTarget authCtx.config.enabledUsageMeters meterCfg row.meter of
-                  Left reason -> Log.logInfo "Pending usage chunk's meter went dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                  Right target -> do
+                  Left Projects.MeterNotEnabled -> Log.logInfo "Pending usage chunk's meter is disabled — leaving pending" $ logFields []
+                  target -> do
                     res <- tryAny $ case target of
-                      Projects.StripeMeter custId eventName -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                      Projects.LemonSqueezyMeter subItemId -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                      Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      -- Not a transient error: throw so the Left branch below marks
+                      -- the chunk failed, rather than no-oping into a 'submitted'.
+                      Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
                     -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
                     -- and the status UPDATE would re-select this row next tick and
                     -- double-submit. Emit a loud manual-reconcile signal on that path.
