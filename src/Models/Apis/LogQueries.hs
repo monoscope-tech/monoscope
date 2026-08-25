@@ -31,7 +31,7 @@ import Control.Concurrent qualified as IO
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
-import Data.Char (isDigit)
+import Data.Char (isAlphaNum, isDigit)
 import Data.Default
 import Data.Effectful.Hasql (Hasql, SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
@@ -599,8 +599,18 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
       rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- Hasql.withHasqlTimefusion enableTfReads case resolveFieldExpr target of
         Just (Left colExpr) ->
           Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000")
-        Just (Right pathParts) ->
-          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000|]
+        -- TimeFusion does not implement #>> at all ("Operator #>> is not yet
+        -- supported") and stores attributes as a Variant, so it needs its own
+        -- accessor. variant_get returns the value JSON-encoded where #>> returns
+        -- bare text, hence the btrim: without it every value on TF would arrive
+        -- wrapped in quotes and pattern rows would not match their PG equivalents.
+        Just (Right pathParts)
+          | enableTfReads -> case variantAccessor pathParts of
+              Nothing -> pure []
+              Just accessor ->
+                Hasql.interp $ rawSql ("SELECT " <> accessor <> ", " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> accessor <> " IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000")
+          | otherwise ->
+              Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, concat(level,'') as lvl, concat(resource___service___name,'') as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000|]
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       -- Level and service arrive per (pattern, bucket, level, service) group rather than
@@ -634,6 +644,15 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, the inline root-column list). Right branch uses parameterized #>> operator.
     -- User input never reaches SQL as raw text — only as column lookups or parameterized values.
+    -- SAFETY: variant_get takes the path as one dotted literal, so unlike the
+    -- parameterised #>> form it has to be inlined. Segments are therefore
+    -- restricted to identifier characters; anything else resolves to Nothing and
+    -- the field is treated as unqueryable, exactly like an unknown field.
+    variantAccessor parts
+      | not (null parts)
+      , all (\p -> not (T.null p) && T.all (\c -> isAlphaNum c || c == '_' || c == '-') p) parts =
+          Just $ "btrim(variant_to_json(variant_get(attributes, '" <> T.intercalate "." parts <> "')), '\"')"
+      | otherwise = Nothing
     resolveFieldExpr f
       | f == "url_path" = Just $ Left "attributes___url___path"
       | f == "exception" = Just $ Left "attributes___exception___message"
