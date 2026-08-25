@@ -57,11 +57,11 @@ runtimeLabel = \case Kubernetes -> "kubernetes"; Docker -> "docker"
 --
 -- >>> let r n ns = (emptyRow n) {namespace = ns, podName = Just "p"}
 -- >>> let rows = V.fromList [r "a" (Just "default"), r "b" (Just "kube-system")]
--- >>> V.map (.containerName) $ applyFilters (noFilters {namespace = Just "default"}) rows
+-- >>> V.map (.containerName) $ applyFilters (nsFilter (Just "default")) rows
 -- ["a"]
 -- >>> V.map (.containerName) $ applyFilters noFilters rows
 -- ["a","b"]
--- >>> V.map (.containerName) $ applyFilters (noFilters {namespace = Just ""}) rows
+-- >>> V.map (.containerName) $ applyFilters (nsFilter (Just "")) rows
 -- ["a","b"]
 applyFilters :: ContainerFilters -> V.Vector ContainerRow -> V.Vector ContainerRow
 applyFilters f = V.filter \r ->
@@ -78,7 +78,7 @@ applyFilters f = V.filter \r ->
 -- | The distinct values a facet offers, sorted, drawn from the unfiltered result so selecting
 -- one facet never empties the menus of the others.
 --
--- >>> facetValues (.namespace) (V.fromList [(emptyRow "a") {namespace = Just "b"}, (emptyRow "c") {namespace = Just "a"}, emptyRow "d"])
+-- >>> facetValues (.namespace) (V.fromList [r "a" (Just "b"), r "c" (Just "a"), r "d" Nothing])
 -- ["a","b"]
 facetValues :: (ContainerRow -> Maybe Text) -> V.Vector ContainerRow -> [Text]
 facetValues f = Relude.sort . ordNub . filter (not . T.null) . mapMaybe f . V.toList
@@ -332,8 +332,12 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 
 
 -- $setup
+-- `namespace` names a field of both ContainerFilters and ContainerRow, so a record update
+-- mentioning only it is ambiguous in the doctest session. These build filters
+-- positionally rather than by update.
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
 -- >>> import Models.Telemetry.Containers (ContainerRow (..))
 -- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing
+-- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing
