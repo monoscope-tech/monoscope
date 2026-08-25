@@ -47,6 +47,26 @@ Found and written up rather than fixed: `plans/dashboard-variable-defaults.md`.
 Pre-existing and unrelated: `make lint` fails to read `.hlint.yaml` (key/version mismatch);
 CI runs hlint in its own container.
 
+## Plan review (orchestrator, before merge)
+
+**Billing** — `plans/billing-pricing-v2.md`. Accepted. Found the replay counting source
+(`projects.replay_sessions`, one row per session, `session_id` globally unique), established
+that Stripe needs no per-meter subscription item (meters are addressed by customer + event
+name) while LemonSqueezy does (new `projects.billing_meter_items`), and left
+`first_sub_item_id` untouched so no webhook changes. Dormant meters create **no** submission
+rows rather than buffering a backlog — the right call given the provider-switch backlog leak
+we have already hit. Pricing copy is inventoried but deliberately not edited; it must change
+in the same breath as the provider-side meters being created, which is a human step.
+
+**Exemplars** — `plans/exemplars-correlation.md`. Accepted. Verified against production
+TimeFusion that exemplars survive ingestion and carry real trace ids, so no migration is
+needed (0138 stays unclaimed). Caught a real correctness trap: a histogram keeps one exemplar
+per bucket, so an exemplar's timestamp can be weeks older than its row's — every link must use
+the exemplar's own timestamp or we deep-link into deleted traces and hit the known TF 504
+path. Scope is honest about what it skips and why.
+
+**Containers** — `plans/container-monitoring.md`. Under review.
+
 ## Pricing target (billing stream)
 
 - $1 per 1,000,000 events (spans + logs) — existing `events_usage` meter.
