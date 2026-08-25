@@ -64,15 +64,32 @@ What is ruled out, by elimination:
 - *not* fresh-project writes failing — every other `createTestProject` example in the spec passes;
 - *not* explicit `from`/`to` bounds — many passing examples pass them.
 
-What is left: this is the only example whose window is **narrow and offset into the past**. Its
-rows take `timestamp` and `date` from the message (`ProcessMessage.hs:420,448`), so they land in
-the `date=2024-12-31` partition while `frozenTime` is `2025-01-01`. TimeFusion partitions on
-`date`. So the first thing to check is whether anything in the query path derives a `date`
-predicate from "now" rather than from the requested window — that would prune away the very
-partition the rows are in, on TimeFusion only, and would be invisible on Postgres.
+What is left, as a *description* rather than a diagnosis: this is the only example whose window
+is **narrow and offset into the past**. Its rows take `timestamp` and `date` from the message
+(`ProcessMessage.hs:420,448`), so they land in the `date=2024-12-31` partition while `frozenTime`
+is `2025-01-01`, and TimeFusion partitions on `date`.
 
-If that is it, it is a **product** bug and not a test bug: any user querying a narrow window in
-the past would lose rows the same way.
+That suggested a `date` predicate derived from "now" rather than from the requested window. I
+looked: **there is no such predicate in the log-explorer query path**, so that explanation is out
+too. Do not spend time on it.
+
+### A warning about reproducing this locally
+
+Three separate attempts to reproduce it locally produced confident-looking results that were all
+environment artifacts, not the bug:
+
+1. a shared TimeFusion whose delta log referenced parquet I had deleted — every query 404s, and
+   the log-explorer path renders that as 0 rows, which looks exactly like the failure;
+2. the same store again after a wipe that could not be undone (see
+   [[local_tf_wipe_corrupts_delta_log]] in the memory directory);
+3. a private instance started from `target/release/timefusion` with its own bucket prefix, which
+   **accepted 1934 `INSERT INTO otel_logs_and_spans` and then served 0 rows** — almost certainly
+   because a standalone run does not flush its batch queue / WAL the way CI's container does.
+
+The lesson is that a hand-rolled local TimeFusion is not a valid test bed for this, and a "0 rows"
+result from one proves nothing. Reproduce it in an environment configured the way CI's is, or
+iterate through CI itself — a draft PR runs the real-TimeFusion suite without triggering a deploy,
+which is how the poll-budget theory above was disproved.
 
 ## Verifying any change here
 
