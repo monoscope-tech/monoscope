@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
@@ -159,6 +159,11 @@ extra-source-files:
     static/migrations/0127_live_tail_events.sql
     static/migrations/0129_live_tail_kind.sql
     static/migrations/0130_endpoint_hash_prefix_indexes.sql
+    static/migrations/0131_endpoint_group_reviews.sql
+    static/migrations/0132_endpoint_group_review_evidence.sql
+    static/migrations/0133_learned_id_rules.sql
+    static/migrations/0134_backfill_first_member_count.sql
+    static/migrations/0135_monitor_positive_time_window.sql
 
 source-repository head
   type: git
@@ -211,8 +216,8 @@ library
       Pages.Charts.Charts
       Pages.CodeContext
       Pages.CommandPalette
-      Pages.Containers
       Pages.Components
+      Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
@@ -630,6 +635,7 @@ test-suite integration-tests
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
+      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec
@@ -805,8 +811,8 @@ test-suite test-dev
       Pages.Charts.Charts
       Pages.CodeContext
       Pages.CommandPalette
-      Pages.Containers
       Pages.Components
+      Pages.Containers
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
@@ -905,6 +911,7 @@ test-suite test-dev
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.CodeContextSpec
+      Pages.ContainersSpec
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec

@@ -133,6 +133,10 @@ spec:
 
 ## Monitoring Your Kubernetes Cluster
 
+> For the per-container inventory behind **Explorer → Containers** — including the exact
+> receivers and resource attributes it needs, and the Docker/Swarm equivalent — see
+> [containers.md](containers.md).
+
 ### Deploy OpenTelemetry Collector
 
 The OpenTelemetry Collector will gather telemetry from your cluster and send it to Monoscope:

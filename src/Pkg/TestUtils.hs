@@ -764,7 +764,11 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       -- developer .env (where it is False for TF-only prod) makes both flags False, which
       -- writeTargetFor maps to WriteBoth — and with no real TF the "timefusion" pool is the
       -- same Postgres, so every row is inserted twice.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enablePostgresTelemetryWrites = True}
+      -- Reads are pinned for the same reason, and it is not only a routing choice: without a
+      -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
+      -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
+      -- `variant_get` resource accessor) against Postgres, which errors outright.
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -819,6 +823,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , enableDailyJobScheduling = False
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , enableTimefusionWrites = tfEnabled
+              , enableTimefusionReads = tfEnabled
               , enablePostgresTelemetryWrites = True
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
@@ -1398,11 +1403,14 @@ withSpanStatus :: PT.Status'StatusCode -> TS.ExportTraceServiceRequest -> TS.Exp
 withSpanStatus c = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.status .~ (defMessage & PTF.code .~ c)
 
 
-ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
-ingestMetric tr apiKey metricName value timestamp =
-  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey metricName value timestamp)
-ingestMetricWithHeader tr apiKey metricName value timestamp =
-  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" metricName value timestamp)
+-- | @resAttrs@ are extra resource attributes on the emitted metric — the only way to produce
+-- rows carrying @k8s.pod.name@, @container.name@ and friends, which the container inventory
+-- keys on. Pass @[]@ for a plain @service.name@-only metric.
+ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> [PC.KeyValue] -> Text -> Double -> UTCTime -> IO ()
+ingestMetric tr apiKey resAttrs metricName value timestamp =
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey resAttrs metricName value timestamp)
+ingestMetricWithHeader tr apiKey resAttrs metricName value timestamp =
+  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" resAttrs metricName value timestamp)
 
 
 testPid :: Projects.ProjectId
@@ -1710,13 +1718,13 @@ createOtelTraceAtTime apiKey spanName timestamp = do
   pure $ createOtelSpanAtTime apiKey trIdText spanIdText Nothing spanName timestamp
 
 
-createGaugeMetricAtTime :: Text -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
-createGaugeMetricAtTime apiKey metricName value timestamp =
+createGaugeMetricAtTime :: Text -> [PC.KeyValue] -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
+createGaugeMetricAtTime apiKey resAttrs metricName value timestamp =
   let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value
       gauge = defMessage & PMF.dataPoints .~ [dataPoint]
       metric = defMessage & PMF.name .~ metricName & PMF.description .~ ("Test gauge metric: " <> metricName) & PMF.unit .~ "1" & PMF.gauge .~ gauge
       scopeMetric = defMessage & PMF.metrics .~ [metric]
-   in defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [scopeMetric]]
+   in defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey resAttrs & PMF.scopeMetrics .~ [scopeMetric]]
 
 
 createOtelTraceWithExceptionAtTime :: Text -> Text -> Text -> Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
