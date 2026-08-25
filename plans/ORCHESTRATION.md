@@ -1,6 +1,8 @@
 # Parallel workstream orchestration (started 2026-08-25)
 
-Baseline commit: `c71ec614f`. Master is 7 commits ahead of origin — **not pushed = not deployed**.
+Baseline commit: `c71ec614f`. The intent was to keep master local until a coherent state was
+ready — but a concurrent session working in this same checkout pushes master periodically, so
+all four streams reached origin before that decision was made. See "Note on pushing" below.
 
 ## Streams
 
