@@ -335,9 +335,12 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
-const chartDataUrl = ({ query, querySQL, pid }: WidGetData): string => {
+const chartDataUrl = ({ query, querySQL, pid, chartType }: WidGetData): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
+  // Lets the server size bin_auto buckets for how this widget renders: a line
+  // chart carries twice the points a bar chart can show legibly.
+  if (chartType) params.set('chart_type', chartType);
 
   // Add dashboard constants (from data-constants attribute)
   const constants = (window as any).getDashboardConstants?.() || {};

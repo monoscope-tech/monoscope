@@ -120,7 +120,12 @@ getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Te
 getProjectIdByApiKey projectKey = do
   appCtx <- Effectful.ask @Config.AuthContext
   liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \key ->
-    OHasql.use appCtx.hasqlPool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |]))
+    OHasql.use appCtx.hasqlPool (Session.statement () (HI.interp True [HI.sql|
+      SELECT k.project_id FROM projects.project_api_keys k
+      JOIN projects.projects p ON p.id = k.project_id
+      WHERE k.key_prefix = #{key} AND k.active = TRUE AND k.deleted_at IS NULL
+        AND p.active = TRUE AND p.deleted_at IS NULL
+    |]))
       >>= either (throwIO . Hasql.HasqlException) pure
 
 

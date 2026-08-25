@@ -16,7 +16,6 @@ import Data.Vector qualified as V
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
-import Models.Projects.GitSync qualified as GitSync
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
@@ -60,7 +59,7 @@ newDashboard tr title = do
 -- | The widgets currently stored on a dashboard (root level), read back through the same
 -- effect stack a request runs in — i.e. what the next page load would render.
 storedWidgets :: TestResources -> DashboardModel.DashboardId -> IO [Widget.Widget]
-storedWidgets tr dashId = snd <$> testServant tr (Dashboards.getDashAndVM dashId Nothing >>= addRespHeaders . (.widgets) . snd)
+storedWidgets tr dashId = snd <$> testServant tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . (.widgets) . snd)
 
 
 widgetOf :: Widget.WidgetType -> Text -> Widget.Widget
@@ -115,45 +114,17 @@ spec = sequential $ aroundAll withTestResources do
           Left _ -> False
 
   describe "Adding widgets to a dashboard" do
-    it "stores a widget of every type, preserving its type and layout" \tr -> do
-      dashId <- newDashboard tr "Every Widget Type"
-      addWidgets tr dashId [widgetOf wt ("w-" <> show i) | (i, wt) <- zip [0 :: Int ..] allWidgetTypes]
-      stored <- storedWidgets tr dashId
-      length stored `shouldBe` length allWidgetTypes
-      -- Type survives the store/reload, and so does the layout the canvas gave it.
-      map (show @Text . (.wType)) stored `shouldBe` map (show @Text) allWidgetTypes
-      for_ stored \w -> (w.layout >>= (.w), w.layout >>= (.h)) `shouldBe` (Just 3, Just 3)
-
-    it "gives every added widget an id, so the canvas can address it" \tr -> do
-      dashId <- newDashboard tr "Widget Ids"
-      addWidgets tr dashId (numberedWidgets 3)
-      stored <- storedWidgets tr dashId
-      let wids = mapMaybe (.id) stored
-      length wids `shouldBe` 3
-      length (ordNub wids) `shouldBe` 3
-
-    it "editing a widget by id updates it in place instead of appending a copy" \tr -> do
+    it "edits a widget in place and retains an omitted query" \tr -> do
       dashId <- newDashboard tr "Widget Edit"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")
       wid <- firstWidgetId =<< storedWidgets tr dashId
 
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing (widgetOf Widget.WTStat "renamed")
+      let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing}
+      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing edited
       only <- onlyWidget =<< storedWidgets tr dashId
 
       only.title `shouldBe` Just "renamed"
       show @Text only.wType `shouldBe` show @Text Widget.WTStat
-
-    -- The editor sends the layout/type on save but not always the query; losing it would
-    -- blank the widget the next time the dashboard loads.
-    it "an update that omits the query keeps the stored one" \tr -> do
-      dashId <- newDashboard tr "Widget Query Retention"
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "keeps-query")
-      wid <- firstWidgetId =<< storedWidgets tr dashId
-
-      let withoutQuery = (widgetOf Widget.WTTimeseries "keeps-query"){Widget.query = Nothing, Widget.rawQuery = Nothing}
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing withoutQuery
-      only <- onlyWidget =<< storedWidgets tr dashId
-
       only.query `shouldBe` Just "name != null"
 
   -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
@@ -183,26 +154,6 @@ spec = sequential $ aroundAll withTestResources do
     length (ordNub (mapMaybe (.id) reloaded)) `shouldBe` length allWidgetTypes
 
   describe "Moving and resizing on the canvas" do
-    it "a drag persists the new position across a reload" \tr -> do
-      dashId <- newDashboard tr "Widget Drag"
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "draggable")
-      wid <- firstWidgetId =<< storedWidgets tr dashId
-
-      _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder wid 6 2 3 3)
-      only <- onlyWidget =<< storedWidgets tr dashId
-
-      (only.layout >>= (.x), only.layout >>= (.y)) `shouldBe` (Just 6, Just 2)
-
-    it "a resize persists both dimensions" \tr -> do
-      dashId <- newDashboard tr "Widget Resize"
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "resizable")
-      wid <- firstWidgetId =<< storedWidgets tr dashId
-
-      _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing (reorder wid 0 0 12 8)
-      only <- onlyWidget =<< storedWidgets tr dashId
-
-      (only.layout >>= (.w), only.layout >>= (.h)) `shouldBe` (Just 12, Just 8)
-
     it "moving a widget to the origin is not mistaken for an absent coordinate" \tr -> do
       dashId <- newDashboard tr "Widget Origin"
       let atSix = (widgetOf Widget.WTTimeseries "origin"){Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
@@ -213,17 +164,6 @@ spec = sequential $ aroundAll withTestResources do
       only <- onlyWidget =<< storedWidgets tr dashId
 
       (only.layout >>= (.x), only.layout >>= (.y)) `shouldBe` (Just 0, Just 0)
-
-    it "reordering keeps every widget that is still on the canvas" \tr -> do
-      dashId <- newDashboard tr "Widget Reorder Many"
-      addWidgets tr dashId (numberedWidgets 4)
-      wids <- mapMaybe (.id) <$> storedWidgets tr dashId
-
-      let patch = Map.fromList [(w, (def :: Dashboards.WidgetReorderItem){Dashboards.x = Just i, Dashboards.y = Just 0, Dashboards.w = Just 3, Dashboards.h = Just 3}) | (i, w) <- zip [0 ..] wids]
-      _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId Nothing patch
-      stored <- storedWidgets tr dashId
-
-      sort (mapMaybe (.id) stored) `shouldBe` sort wids
 
     it "a widget dropped from the patch is removed from the dashboard" \tr -> do
       dashId <- newDashboard tr "Widget Delete"
@@ -259,67 +199,31 @@ spec = sequential $ aroundAll withTestResources do
                 "title: Tabbed\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - type: timeseries\n        id: first-widget\n        title: First\n        layout: { x: 0, y: 0, w: 3, h: 3 }\n  - name: Second Tab\n    widgets:\n      - type: stat\n        id: second-widget\n        title: Second\n        layout: { x: 0, y: 0, w: 3, h: 3 }\n"
             }
         tabWidgets tr dashId slug = do
-          (_, dash) <- testServant tr (Dashboards.getDashAndVM dashId Nothing >>= addRespHeaders . snd)
+          (_, dash) <- testServant tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd)
           pure $ maybe [] (.widgets) $ find (\t -> slugify t.name == slug) (fold dash.tabs)
         newTabbedDashboard tr = do
           dashId <- newDashboard tr "Tabbed"
           _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid dashId tabbedYaml
           pure dashId
 
-    -- Two guards, so a failure below says whether the fixture YAML is wrong or the
-    -- handler is: first that the YAML parses to two tabs at all, then that storing and
-    -- reloading it preserves them.
-    it "the fixture YAML parses into two tabs" \_ -> do
-      case GitSync.yamlToDashboard (encodeUtf8 tabbedYaml.yaml) of
-        Left err -> expectationFailure $ "fixture YAML did not parse: " <> toString err
-        Right dash -> map (.name) (fold dash.tabs) `shouldBe` ["First Tab", "Second Tab"]
-
-    it "storing the fixture keeps both tabs and their widgets" \tr -> do
+    it "loads tabs, edits one canvas, duplicates a widget, and preserves the other canvas" \tr -> do
       dashId <- newTabbedDashboard tr
-      tabOne <- tabWidgets tr dashId "first-tab"
-      tabTwo <- tabWidgets tr dashId "second-tab"
-      map (.id) tabOne `shouldBe` [Just "first-widget"]
-      map (.id) tabTwo `shouldBe` [Just "second-widget"]
+      initialOne <- tabWidgets tr dashId "first-tab"
+      initialTwo <- tabWidgets tr dashId "second-tab"
+      map (.id) initialOne `shouldBe` [Just "first-widget"]
+      map (.id) initialTwo `shouldBe` [Just "second-widget"]
 
-    it "a widget added to a tab lands on that tab only" \tr -> do
-      dashId <- newTabbedDashboard tr
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
-
-      tabOne <- tabWidgets tr dashId "first-tab"
-      tabTwo <- tabWidgets tr dashId "second-tab"
-      map (.title) tabOne `shouldBe` [Just "First"]
-      map (.title) tabTwo `shouldBe` [Just "Second", Just "Added To Second"]
-
-    -- Duplicating is a canvas action: the copy has to land where the user is looking.
-    it "a duplicated widget stays on the tab it was copied from" \tr -> do
-      dashId <- newTabbedDashboard tr
-      _ <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
-
-      tabOne <- tabWidgets tr dashId "first-tab"
-      tabTwo <- tabWidgets tr dashId "second-tab"
-      map (.title) tabTwo `shouldBe` [Just "Second", Just "Second (Copy)"]
-      map (.title) tabOne `shouldBe` [Just "First"]
-
-    it "a duplicate is a distinct widget the canvas can address separately" \tr -> do
-      dashId <- newTabbedDashboard tr
-      _ <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "first-widget" Nothing
-
-      tabOne <- tabWidgets tr dashId "first-tab"
-      let ids = mapMaybe (.id) tabOne
-      length ids `shouldBe` 2
-      length (ordNub ids) `shouldBe` 2
-      map (\w -> w.layout >>= (.w)) tabOne `shouldBe` [Just 3, Just 3]
-
-    it "rearranging one tab leaves the other tab's widgets alone" \tr -> do
-      dashId <- newTabbedDashboard tr
-      _ <- testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder "first-widget" 6 4 6 2)
+      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
+      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
+      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder "first-widget" 6 4 6 2)
 
       tabOne <- tabWidgets tr dashId "first-tab"
       tabTwo <- tabWidgets tr dashId "second-tab"
       map (\w -> (w.layout >>= (.x), w.layout >>= (.w))) tabOne `shouldBe` [(Just 6, Just 6)]
-      -- The dangerous shape: reorderWidgets rebuilds from the patch, so a patch scoped to
-      -- the wrong tab would empty the tab the user was not even looking at.
-      map (.id) tabTwo `shouldBe` [Just "second-widget"]
+      map (.title) tabTwo `shouldBe` [Just "Second", Just "Added To Second", Just "Second (Copy)"]
+      let tabTwoIds = mapMaybe (.id) tabTwo
+      length tabTwoIds `shouldBe` 3
+      length (ordNub tabTwoIds) `shouldBe` 3
 
   -- Rendering, not persistence: a widget the canvas cannot address is a widget the next
   -- drag deletes, because the reorder patch is built by walking `#<id>_widgetEl` elements

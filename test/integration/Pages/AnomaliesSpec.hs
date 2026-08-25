@@ -6,8 +6,9 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Text.Lazy qualified as TL
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -134,6 +135,58 @@ spec = sequential $ aroundAll withTestResources do
       length (V.filter isApiChange rows) `shouldSatisfy` (>= 1)
       length rows `shouldSatisfy` (> 0)
 
+    it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
+      -- Put the issues created above back in one customer-visible list. The bulk handler
+      -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
+      acknowledged <- listAnomalies tr (Just "Acknowledged")
+      let acknowledgedIds = [issue.base.id.toText | AnomalyList.IssueVM _ _ _ issue <- V.toList acknowledged]
+      unless (null acknowledgedIds) do
+        void $ testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "unacknowledge" Nothing AnomalyList.AnomalyBulk{itemId = acknowledgedIds}
+
+      let load page perPage services types = do
+            (_, response) <- testServant tr $ AnomalyList.anomalyListGetH testPid Nothing (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing Nothing (Just "24h") services types Nothing Nothing
+            case response of
+              AnomalyList.ALPage (PageCtx _ table) -> pure (response, table)
+              _ -> fail "expected a full anomaly-list page"
+
+      (_, allIssues) <- load 0 100 [] []
+      V.length allIssues.rows `shouldSatisfy` (>= 2)
+      sample <- maybe (fail "expected an issue with a service") pure $ V.find (isJust . (.base.service) . issueOf) allIssues.rows
+      service <- maybe (fail "expected an issue service") pure $ (issueOf sample).base.service
+      let issueType = display (issueOf sample).base.issueType
+
+      (_, filtered) <- load 0 100 [service] [issueType]
+      filtered.rows `shouldSatisfy` (not . V.null)
+      for_ filtered.rows \row -> do
+        (issueOf row).base.service `shouldBe` Just service
+        display (issueOf row).base.issueType `shouldBe` issueType
+
+      (_, firstPage) <- load 0 1 [] []
+      (_, secondPage) <- load 1 1 [] []
+      V.length firstPage.rows `shouldBe` 1
+      V.length secondPage.rows `shouldBe` 1
+      firstIssue <- onlyIssue firstPage.rows
+      secondIssue <- onlyIssue secondPage.rows
+      issueIdOf firstIssue `shouldSatisfy` (/= issueIdOf secondIssue)
+
+      (emptyResponse, emptyTable) <- load 0 25 ["service-that-does-not-exist"] []
+      emptyTable.rows `shouldSatisfy` V.null
+      renderPage emptyResponse `shouldSatisfy` T.isInfixOf "Nothing to triage"
+
+      -- Timed acknowledgement expiry uses the same uniqueness invariant as manual
+      -- unacknowledge. Recreate two acknowledged recurrences and prove the sweep
+      -- leaves one actionable issue instead of failing the whole background job.
+      let uid = (Servant.getResponse tr.trSessAndHeader).user.id
+          selectedIds = mapMaybe (fmap UUIDId . DataUUID.fromText) acknowledgedIds
+      void $ runTestBg frozenTime tr $ Issues.setAckState testPid selectedIds $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = Issues.AckFor 1}
+      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid selectedIds Nothing
+      expired <- runTestBg frozenTime tr $ Issues.expireAcks (addUTCTime 120 frozenTime)
+      length (filter (`elem` selectedIds) expired) `shouldBe` 1
+      inboxAfterExpiry <- listAnomalies tr Nothing
+      archivedAfterExpiry <- listAnomalies tr (Just "Archived")
+      length (filter (`elem` selectedIds) $ map issueIdOf $ V.toList inboxAfterExpiry) `shouldBe` 1
+      length (filter (`elem` selectedIds) $ map issueIdOf $ V.toList archivedAfterExpiry) `shouldBe` length selectedIds - 1
+
     -- Regression: posting via the bulk handler used the wrong form field name
     -- (`anomalyId` instead of `itemId`) so selected ids were silently dropped and
     -- the handler reported "No items selected". Subsequent attempt to read
@@ -160,13 +213,21 @@ spec = sequential $ aroundAll withTestResources do
     -- issue_data.anomaly_hashes; this test asserts both halves fire.
     it "bulk archive cascades to anomalies referenced by issue_data.anomaly_hashes" \tr -> do
       issueId <- pickApiChangeIssue tr
+      let containsIssue = V.any \(AnomalyList.IssueVM _ _ _ issue) -> issue.base.id == issueId
 
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL WHERE id=? |] (Only issueId)
-        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL WHERE project_id=? |] (Only testPid)
+        void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
+        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
+
+      inboxBefore <- listAnomalies tr Nothing
+      containsIssue inboxBefore `shouldBe` True
 
       _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
+      inboxAfter <- listAnomalies tr Nothing
+      containsIssue inboxAfter `shouldBe` False
+      archived <- listAnomalies tr (Just "Archived")
+      containsIssue archived `shouldBe` True
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
       snd <$> cascadePending tr issueId >>= (`shouldBe` 0)
@@ -421,6 +482,20 @@ spec = sequential $ aroundAll withTestResources do
 
 isApiChange :: AnomalyList.IssueVM -> Bool
 isApiChange (AnomalyList.IssueVM _ _ _ c) = c.base.issueType == Issues.ApiChange
+
+
+issueOf :: AnomalyList.IssueVM -> Issues.IssueL
+issueOf (AnomalyList.IssueVM _ _ _ issue) = issue
+
+
+issueIdOf :: AnomalyList.IssueVM -> Issues.IssueId
+issueIdOf = (.base.id) . issueOf
+
+
+onlyIssue :: V.Vector AnomalyList.IssueVM -> IO AnomalyList.IssueVM
+onlyIssue rows = case V.toList rows of
+  [row] -> pure row
+  _ -> fail $ "expected exactly one paginated issue, got " <> show (V.length rows)
 
 
 nowText :: IO Text

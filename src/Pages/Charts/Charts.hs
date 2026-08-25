@@ -27,7 +27,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Stats (QueryError (..), Section (..), Sources (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
 import Relude
@@ -121,16 +121,17 @@ usesTimefusionBackend enableTimefusionReads = \case
   _ -> enableTimefusionReads
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) allParams = do
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   -- project_id is required for every query path; a missing one is a malformed request,
   -- not a 500 (this used to be `Unsafe.fromJust pidM`, which crashed the handler).
   pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  let mappngSQL = variablePresets pid.toText fromD toD allParams now
-      mappngKQL = variablePresetsKQL pid.toText fromD toD allParams now
+  let density = fromMaybe def binDensityM
+  let mappngSQL = variablePresets density pid.toText fromD toD allParams now
+      mappngKQL = variablePresetsKQL density pid.toText fromD toD allParams now
   let source = parseMaybe pSource =<< sourceM
   -- A KQL parse/unknown-field failure is user input, not a server fault: carry it
   -- in the payload so the widget renders its error overlay. A 400 body isn't JSON,
@@ -140,16 +141,17 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
   case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM mappngSQL now fromD toD = do
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source binDensity queryAST queryM querySQLM mappngSQL now fromD toD = do
   let sqlQueryCfg =
         (defSqlQueryCfg pid now source Nothing)
           { dateRange = (fromD, toD)
+          , binDensity
           , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
           }
 
@@ -269,8 +271,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
           let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
           deltaData <- executeQueryWith deltaSqlCfg deltaAST
           let merged = QC.mergeTimeseriesData entry.cachedData deltaData
-          let windowSecs = fromIntegral $ QC.slidingWindowSeconds cacheKey.binInterval
-          let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
+          let slidingWindowStart = QC.cacheWindowStart cacheKey.binInterval (reqFrom, reqTo)
           let trimmed = QC.trimOldData slidingWindowStart merged
           -- Only advance the watermark when the delta actually succeeded. A failed
           -- fetch (timeout, TF planning error, dropped conn) is swallowed into an

@@ -62,7 +62,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), Search
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents, presetRollup)
+import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
@@ -115,12 +115,12 @@ data AlertUpsertForm = AlertUpsertForm
 
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
-  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
       checkInterval = maybe 5 (max 1 . fromMaybe 5 . readMaybe . toString . T.dropEnd 1) alertForm.frequency
-      timeWindowMins = maybe 60 parseIntervalToMins alertForm.timeWindow
+      timeWindowMins = maybe 60 (max 1 . parseIntervalToMins) alertForm.timeWindow
 
       isThresholdAlert = alertForm.conditionType == Just "threshold_exceeded"
 

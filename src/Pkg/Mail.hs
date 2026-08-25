@@ -13,7 +13,7 @@ import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time
 import Data.Vector qualified as V
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -182,7 +182,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
     _ -> Nothing <$ Log.logAttention "Slack alert skipped: missing channel or slack data" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_slack" AE..= isJust slackData])
 
 
-sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
+sendWhatsAppAlert :: (IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
 sendWhatsAppAlert alert pid pTitle tos = do
   appCtx <- ask @Config.AuthContext
   case alert of
@@ -213,8 +213,8 @@ sendWhatsAppAlert alert pid pTitle tos = do
       sendAlert template (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalEvents <> "*"), "6" AE..= cUrl])
       sendAlert templateErr (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalErrors <> "*"), "6" AE..= eUrl])
     ShapeAlert -> pass
-    MonitorsAlert{} -> pass
-    MonitorsRecoveryAlert{} -> pass
+    MonitorsAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Alerting" monitorTitle monitorUrl
+    MonitorsRecoveryAlert{..} -> sendMonitor appCtx.config.whatsappMonitorTemplate "Recovered" monitorTitle monitorUrl
     LogPatternAlert{} -> pass
     LogPatternRateChangeAlert{} -> pass
   where
@@ -222,6 +222,14 @@ sendWhatsAppAlert alert pid pTitle tos = do
     sendAlert template vars =
       forM_ tos $ \to ->
         Notify.sendNotification $ Notify.whatsappNotification template to vars
+    sendMonitor templateM status title url = case templateM of
+      Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]
+      Just template -> sendAlert (Config.twilioContentSidText template) $ AE.object
+          [ "1" AE..= ("*" <> pTitle <> "*")
+          , "2" AE..= ("*" <> title <> "*")
+          , "3" AE..= status
+          , "4" AE..= url
+          ]
 
 
 slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value

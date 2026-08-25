@@ -12,6 +12,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Lucid (renderText, toHtml)
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -23,6 +24,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
+import Data.Text.Lazy qualified as TL
 import Servant qualified
 import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
@@ -124,10 +126,26 @@ spec = sequential $ aroundAll withTestResources do
       fePatM `shouldSatisfy` isJust
       forM_ fePatM \p -> p.stacktrace `shouldSatisfy` T.isInfixOf "handleClick"
 
-    it "2. processOneMinuteErrors creates RuntimeException issues for new errors" \tr -> do
+    it "2. processOneMinuteErrors creates a project-scoped RuntimeException issue page" \tr -> do
       -- processOneMinuteErrors in test 1 already created issues synchronously
       issueCount <- countIssues tr Issues.RuntimeException
       issueCount `shouldSatisfy` (> 0)
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssuesByFilters pid Nothing Nothing (Just "runtime_exception") Nothing 10 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
+      traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
+      issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
+      (_, page) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH pid issue.id Nothing Nothing
+      let html = TL.toStrict $ renderText $ toHtml page
+      html `shouldSatisfy` T.isInfixOf issue.title
+      html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
+      html `shouldSatisfy` T.isInfixOf "timestamp="
+
+      let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+      (_, otherPage) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH otherPid issue.id Nothing Nothing
+      let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
+      otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
+      otherHtml `shouldSatisfy` not . T.isInfixOf issue.title
 
     it "2a. Repeat upsert on a non-resolved pattern does NOT rewrite toastable fields (TOAST bloat guard)" \tr -> do
       -- Regression: ON CONFLICT DO UPDATE used to set message/error_data unconditionally,
@@ -451,6 +469,11 @@ spec = sequential $ aroundAll withTestResources do
           void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
+          issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash)
+          (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid Nothing (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing (Just "24h") [] [] Nothing Nothing
+          let listHtml = TL.toStrict $ renderText $ toHtml issueList
+          listHtml `shouldSatisfy` T.isInfixOf issue.title
+          listHtml `shouldSatisfy` T.isInfixOf "RESOLVED"
 
           -- Test subscribe
           void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30))

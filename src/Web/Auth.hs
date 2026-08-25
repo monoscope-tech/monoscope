@@ -477,13 +477,19 @@ clientMetadataH (Just authTextB64) = do
       case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
         Nothing -> throwError err401
         Just apiKeyUUID -> do
-          (pApiKey, project) <- do
+          -- The project lookup is the SECOND half of authenticating this key, not
+          -- a decoration: an API key outlives the project it belongs to, so
+          -- without this a deleted or deactivated project's key still collects
+          -- pubsub credentials and keeps ingesting. It was previously fetched
+          -- and discarded, which validated nothing.
+          pApiKey <- do
             pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
             case pApiKeyM of
               Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
-              Just pApiKey -> do
-                project <- Projects.projectById pApiKey.projectId
-                pure (pApiKey, project)
+              Just pApiKey ->
+                Projects.activeProjectById pApiKey.projectId >>= \case
+                  Nothing -> Logging.logAttention "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
+                  Just _ -> pure pApiKey
           serviceAccountJson <- case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
             Just val -> pure val
             Nothing -> Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500

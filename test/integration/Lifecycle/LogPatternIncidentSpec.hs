@@ -1,6 +1,9 @@
 module Lifecycle.LogPatternIncidentSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Exception (try)
+import Data.Default (def)
+import Data.Effectful.Notify (Notification (..))
 import Data.Pool (withResource)
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
@@ -9,12 +12,14 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
+import Pages.Projects qualified as ProjectPages
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -78,12 +83,78 @@ spec = around withTestResources do
       countAfter25 <- countOpenIssues tr patHash
       countAfter25 `shouldSatisfy` (>= 1)
 
+  describe "Deleted Project Notification Lifecycle" do
+    it "stops ingest, reports, and alerts after the customer deletes the project" \tr -> do
+      let monitorId = Monitors.QueryMonitorId $ fromMaybe (error "invalid test UUID") $ UUID.fromText "de1e7ed0-0000-0000-0000-000000000001"
+          monitor =
+            def
+              { Monitors.id = monitorId
+              , Monitors.projectId = pid
+              , Monitors.logQuery = ""
+              , Monitors.logQueryAsSql = "SELECT 2::float8"
+              , Monitors.alertThreshold = 1
+              , Monitors.checkIntervalMins = 1
+              , Monitors.alertConfig = def{Monitors.title = "Deleted project guard"}
+              }
+
+      apiKey <- createTestAPIKey tr pid "deleted-project-ingest"
+      ingestLog tr apiKey "before project deletion" frozenTime
+      countLogs tr "before project deletion" `shouldReturn` 1
+
+      void $ runTestBg frozenTime tr $ Monitors.queryMonitorUpsert monitor
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn
+          [sql|
+            UPDATE projects.teams
+            SET pagerduty_services = ARRAY['deleted-project-test'],
+                disabled_channels = array_remove(disabled_channels, 'pagerduty')
+            WHERE project_id = ? AND handle = 'everyone'
+          |]
+          (Only pid)
+
+      before <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
+      before `shouldSatisfy` any (\case PagerdutyNotification{} -> True; _ -> False)
+
+      void $ testServant tr $ ProjectPages.deleteProjectGetH pid
+      void $ try @SomeException $ ingestLog tr apiKey "after project deletion" (addUTCTime 1 frozenTime)
+      countLogs tr "after project deletion" `shouldReturn` 0
+      isNothing <$> runTestBgNoReset tr (Projects.activeProjectById pid) `shouldReturn` True
+      reportsBefore <- countReports tr
+      reportNotifs <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports pid)
+      reportNotifs `shouldBe` []
+      countReports tr `shouldReturn` reportsBefore
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn
+          [sql|UPDATE monitors.query_monitors
+                SET current_status = 'normal', alert_last_triggered = NULL,
+                    notification_count = 0, last_evaluated = '2020-01-01'
+                WHERE id = ?|]
+          (Only monitorId)
+
+      after <- fst <$> captureNotifs tr BackgroundJobs.checkTriggeredQueryMonitors
+      after `shouldBe` []
+
 
 countOpenIssues :: TestResources -> Text -> IO Int
-countOpenIssues tr h = withResource tr.trPool \conn -> do
-  [Only n] <- PGS.query conn
+countOpenIssues tr h = countQuery tr
     [sql| SELECT COUNT(*)::INT FROM apis.issues
           WHERE project_id = ? AND target_hash = ? AND issue_type = 'log_pattern_rate_change'
             AND acknowledged_at IS NULL |]
-    (pid, h) :: IO [Only Int]
+    (pid, h)
+
+
+countLogs :: TestResources -> Text -> IO Int
+countLogs tr marker = countQuery tr
+    [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
+          WHERE project_id = ? AND body::text LIKE '%' || ? || '%' |]
+    (pid, marker)
+
+
+countReports :: TestResources -> IO Int
+countReports tr = countQuery tr [sql|SELECT COUNT(*)::INT FROM apis.reports WHERE project_id = ?|] (Only pid)
+
+
+countQuery :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO Int
+countQuery tr query params = withResource tr.trPool \conn -> do
+  [Only n] <- PGS.query conn query params
   pure n

@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -16,9 +16,10 @@ import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
+import Relude.Extra.Foldable1 (minimumOn1)
 import Text.Megaparsec (parse)
 import Utils (formatUTC)
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 data QueryComponents = QueryComponents
@@ -241,7 +242,7 @@ applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
     { finalSummarizeQuery =
         listToMaybe [b | ByBinFunc b <- items] <&> \case
           Bin _ interval -> kqlTimespanToTimeBucket interval
-          BinAuto _ -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
+          BinAuto _ -> autoBinWidth sqlCfg
     , groupByClause = qc.groupByClause <> [display item | item <- items, not (isBinFunc item)]
     }
   where
@@ -271,7 +272,7 @@ data PageCursor = PageCursor PageDirection UTCTime
 
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
-  , presetRollup :: Maybe Text
+  , binDensity :: BinDensity
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
   , cursorM :: Maybe PageCursor
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
@@ -470,14 +471,25 @@ sqlFromQueryComponents sqlCfg qc =
     -- has to be spliced here too — a monitor scoped to staging that silently alerts on prod
     -- is worse than one that never fires.
     alertEnvFilter = if T.null nq.nqEnvironment then "" else "AND " <> nq.nqEnvironment
-    -- With a bin function the alert reads only the most recent bucket's value.
-    alertTail = case qc.finalSummarizeQuery of
-      Just binInterval -> let e = timeBucketExpr binInterval in "GROUP BY " <> e <> " ORDER BY " <> e <> " DESC LIMIT 1"
-      Nothing -> buildGroupBy nq.nqExtendedColumns qc.groupByClause
+    -- One reading over the window the monitor was configured with ("include rows
+    -- from the last N minutes", already applied by 'alertTimeFilter'). The chart's
+    -- time bucket is deliberately dropped: it exists to draw a series, and taking
+    -- its newest bucket evaluated an epoch-aligned *fraction* of the window, so the
+    -- same monitor read a different amount of data depending on the wall clock.
+    --
+    -- A non-time grouping survives, ordered so the worst series is the row that
+    -- counts. The bound matters more than the order: without it a monitor grouped
+    -- by something high-cardinality would decode a row per group. Ordering by the
+    -- aggregate rather than by ordinal position keeps this legible to TimeFusion's
+    -- planner, which is what actually runs alert SQL over spans.
+    alertTail =
+      buildGroupBy nq.nqExtendedColumns qc.groupByClause
+        <> if null qc.groupByClause then "" else " ORDER BY " <> alertAggregate <> " DESC LIMIT 1"
     -- FIXME: render the selection from the aggregations, but without the aliases
+    alertAggregate = "GREATEST( count(*)::float8)" :: Text
     alertQuery =
       [fmt|
-          SELECT GREATEST( count(*)::float8) FROM {fromTable}
+          SELECT {alertAggregate} FROM {fromTable}
           WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} {alertEnvFilter} AND ({whereCondition})
           {alertTail}
         |]
@@ -564,32 +576,106 @@ fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
 
--- | Bin width for a date range: the shortest bucket that keeps the series readable.
-calculateAutoBinWidth :: (Maybe UTCTime, Maybe UTCTime) -> UTCTime -> Text
-calculateAutoBinWidth (startM, endM) currentTime
-  | minutes <= 2 = "1 second"
-  | minutes <= 5 = "5 seconds"
-  | minutes <= 15 = "10 seconds"
-  | hours <= 1 = "30 seconds"
-  | hours <= 6 = "1 minutes"
-  | hours <= 14 = "5 minutes"
-  | hours <= 48 = "10 minutes"
-  | days < 7 = "1 hour"
-  | days < 30 = "6 hours"
-  | otherwise = "1 day"
+-- | How many points a chart wants across its x-axis. Line charts carry roughly
+-- twice what a bar chart can render legibly before the bars turn into a smear —
+-- the same split Datadog applies to its line vs bar defaults.
+data BinDensity = BarDensity | LineDensity
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default) -- first constructor = BarDensity
+
+
+-- | @"line"@ is the ECharts chart type the frontend already sends; everything
+-- else (bar, stat, distribution…) reads at bar density.
+--
+-- >>> (binDensityFor (Just "line"), binDensityFor (Just "bar"), binDensityFor Nothing)
+-- (LineDensity,BarDensity,BarDensity)
+binDensityFor :: Maybe Text -> BinDensity
+binDensityFor = \case
+  Just "line" -> LineDensity
+  _ -> BarDensity
+
+
+-- | Total on purpose: a stale JS bundle sending an unrecognised chart type must
+-- fall back to bar density, not 400 the whole chart.
+instance FromHttpApiData BinDensity where
+  parseQueryParam = Right . binDensityFor . Just
+
+
+-- | Nice bucket widths, as @time_bucket@-ready PostgreSQL intervals.
+binLadder :: NonEmpty (Double, Text)
+binLadder =
+  (1, "1 second")
+    :| [ (2, "2 seconds")
+       , (5, "5 seconds")
+       , (10, "10 seconds")
+       , (15, "15 seconds")
+       , (30, "30 seconds")
+       , (60, "1 minute")
+       , (120, "2 minutes")
+       , (300, "5 minutes")
+       , (600, "10 minutes")
+       , (900, "15 minutes")
+       , (1800, "30 minutes")
+       , (3600, "1 hour")
+       , (7200, "2 hours")
+       , (10800, "3 hours")
+       , (21600, "6 hours")
+       , (43200, "12 hours")
+       , (86400, "1 day")
+       ]
+
+
+-- | Bin width for a date range: @range / target@, snapped to the nearest rung of
+-- 'binLadder' on a log scale (so 6h picks 2m rather than jumping to 5m).
+--
+-- Snapping a computed ideal rather than matching the range against a hand-tuned
+-- if-ladder is what Grafana and Datadog both do, and it is what keeps density
+-- roughly constant instead of swinging with where the range falls: the old ladder
+-- gave 6h 360 points and 7d — @days < 7@ being exclusive — just 28.
+--
+-- >>> let binFor mins = calculateAutoBinWidth BarDensity (Just (addUTCTime (negate (mins * 60)) fixedUTCTime), Just fixedUTCTime) fixedUTCTime
+-- >>> map binFor [5, 30, 60, 6 * 60, 24 * 60]
+-- ["2 seconds","10 seconds","30 seconds","2 minutes","10 minutes"]
+--
+-- The boundaries the old ladder mishandled, and their neighbours — no cliffs:
+--
+-- >>> map binFor [6 * 60, 6 * 60 + 1, 48 * 60, 49 * 60]
+-- ["2 minutes","2 minutes","15 minutes","15 minutes"]
+-- >>> map binFor [7 * 24 * 60, 14 * 24 * 60, 30 * 24 * 60]
+-- ["1 hour","2 hours","6 hours"]
+--
+-- Line charts get twice the points, so one rung finer where the ladder allows:
+--
+-- >>> calculateAutoBinWidth LineDensity (Just (addUTCTime (-(7 * 86400)) fixedUTCTime), Just fixedUTCTime) fixedUTCTime
+-- "30 minutes"
+calculateAutoBinWidth :: BinDensity -> (Maybe UTCTime, Maybe UTCTime) -> UTCTime -> Text
+calculateAutoBinWidth density (startM, endM) currentTime =
+  -- Nearest by ratio, not by difference: it is the same ordering as |log secs - log ideal|
+  -- without needing logs, and it is what stops a rung's pull from growing with its size.
+  snd $ minimumOn1 (\(secs, _) -> max (secs / ideal) (ideal / secs)) binLadder
   where
     -- Missing bounds default to the 14-day window the UI defaults to, ending now.
     startTime = fromMaybe (addUTCTime (-(14 * 24 * 60 * 60)) currentTime) startM
-    minutes = realToFrac (diffUTCTime (fromMaybe currentTime endM) startTime) / 60 :: Double
-    hours = minutes / 60
-    days = hours / 24
+    seconds = realToFrac (diffUTCTime (fromMaybe currentTime endM) startTime) :: Double
+    ideal = max 1 $ seconds / case density of BarDensity -> 150; LineDensity -> 300
+
+
+-- | The bucket a @bin_auto@ resolves to: the density-targeted width for the range.
+-- Alert queries do not go through here — they read their whole configured window
+-- rather than a bucket of it (see 'finalAlertQuery') — which is why a rangeless cfg
+-- can safely fall back to the 14-day default window:
+--
+-- >>> autoBinWidth (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
+-- "2 hours"
+autoBinWidth :: SqlQueryCfg -> Text
+autoBinWidth cfg = calculateAutoBinWidth cfg.binDensity cfg.dateRange cfg.currentTime
 
 
 defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> Maybe Text -> SqlQueryCfg
 defSqlQueryCfg pid currentTime source spanT =
   SqlQueryCfg
     { pid
-    , presetRollup = Nothing
+    , binDensity = def
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , source = source
@@ -696,8 +782,8 @@ replacePlaceholders :: Map.Map Text Text -> Text -> Text
 replacePlaceholders mappng txt = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
 
 
-variablePresets :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
-variablePresets pid mf mt allParams currentTime =
+variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
+variablePresets density pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
       bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
@@ -710,15 +796,15 @@ variablePresets pid mf mt allParams currentTime =
           , ("to", andPrefix $ fmtUTC mt)
           , ("time_filter", clause "timestamp")
           , ("time_filter_sql_created_at", clause "created_at")
-          , ("rollup_interval", calculateAutoBinWidth (mf, mt) currentTime)
+          , ("rollup_interval", calculateAutoBinWidth density (mf, mt) currentTime)
           ]
         <> (allParams <&> second maybeToMonoid)
 
 
 -- | Like variablePresets but uses KQL format for constants.
-variablePresetsKQL :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
-variablePresetsKQL pid mf mt allParams currentTime =
-  let basePresets = variablePresets pid mf mt allParams currentTime
+variablePresetsKQL :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
+variablePresetsKQL density pid mf mt allParams currentTime =
+  let basePresets = variablePresets density pid mf mt allParams currentTime
       paramsMap = Map.fromList [(k, fromMaybe "" v) | (k, v) <- allParams]
       kqlRemapping = Map.fromList [(k, v) | (k, _) <- allParams, "const-" `T.isPrefixOf` k, not ("-kql" `T.isSuffixOf` k), Just v <- [Map.lookup (k <> "-kql") paramsMap]]
       filteredBase = Map.filterWithKey (\k _ -> not ("-kql" `T.isSuffixOf` k)) basePresets

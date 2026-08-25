@@ -45,17 +45,20 @@ whatsappIncomingPostH val = do
 
       sendText t = sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (Just t)
 
-      withDashboard dashboardId act = do
-        dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
+      -- Scoped to the project this phone number belongs to: @dashboardId@ is
+      -- parsed out of the inbound message body, so an unscoped lookup here
+      -- renders another tenant's dashboard to whoever sends the right id.
+      withDashboard project dashboardId act = do
+        dashboardVMM <- maybe (pure Nothing) (Dashboards.getDashboardByProjectId project.id) (idFromText dashboardId)
         whenJust dashboardVMM $ \dashboardVM -> do
           dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
           whenJust dashboardM act
 
-      handleDashboard dashboardId skip = withDashboard dashboardId $ \dashboard -> do
+      handleDashboard project dashboardId skip = withDashboard project dashboardId $ \dashboard -> do
         let widgets = V.fromList $ (\w -> let t = fromMaybe "Untitled-" w.title in (t, "widg" <> joiner <> t <> joiner <> dashboardId)) <$> dashboard.widgets
         sendWhatsappResponse (getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip) val.from envCfg.whatsappDashboardList Nothing
 
-      handleWidget widget dashboardId project = withDashboard dashboardId $ \dashboard ->
+      handleWidget widget dashboardId project = withDashboard project dashboardId $ \dashboard ->
         whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) $ \w -> do
           now <- Time.currentTime
           let opts = "time=" <> toUriStr (show now) <> "&p=" <> project.id.toText <> "&widget=" <> toUriStr (decodeUtf8 @Text $ AE.encode w)
@@ -102,7 +105,7 @@ whatsappIncomingPostH val = do
     DashboardLoad skip -> do
       dashboards <- V.fromList . map (second (("dash" <> joiner) <>)) <$> getDashboardsForWhatsapp fromN
       sendWhatsappResponse (getWhatsappList "dashboard" "Please select a dashboard" dashboards skip) val.from envCfg.whatsappDashboardList Nothing
-    WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip
+    WidgetsLoad dashboardId skip -> handleDashboard p dashboardId skip
     WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId p
     Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ handlePrompt p
   pure $ AE.object []

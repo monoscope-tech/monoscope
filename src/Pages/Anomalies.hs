@@ -1144,7 +1144,7 @@ buildSystemPromptForIssue pid issue now = do
       monitorM <- runMaybeT do
         monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
         MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
-      metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing []
+      metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
       pure $ Just (alertData, monitorM, metricsData)
     _ -> pure Nothing
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now

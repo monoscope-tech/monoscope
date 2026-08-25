@@ -7,7 +7,7 @@ import NeatInterpolation (text)
 import Pkg.Parser (
   PageCursor (..),
   PageDirection (..),
-  QueryComponents (finalSummarizeQuery, percentilesInfo),
+  QueryComponents (finalAlertQuery, finalSummarizeQuery, percentilesInfo),
   SqlQueryCfg (..),
   defPid,
   defSqlQueryCfg,
@@ -111,21 +111,48 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count(*) by bin_auto(timestamp)"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('2 hours', timestamp) ORDER BY time_bucket('2 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
+
+    -- The ladder is bin_auto's business alone: an explicit bin() is the user's own
+    -- choice of resolution and must survive any time range, in both directions.
+    it "an explicit bin() is never rewritten by the auto ladder" do
+      let atRange secs = (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){dateRange = (Just (addUTCTime (negate secs) fixedUTCTime), Just fixedUTCTime)}
+          binOf secs q = normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents (atRange secs) q) & (.finalSummarizeQuery)
+          fiveMins = 300
+          thirtyDays = 2592000
+      -- over five minutes the ladder picks seconds; the pinned hour does not budge
+      binOf fiveMins "| summarize count(*) by bin_auto(timestamp)" `shouldSatisfy` T.isInfixOf "time_bucket('2 seconds'"
+      binOf fiveMins "| summarize count(*) by bin(timestamp, 1h)" `shouldSatisfy` T.isInfixOf "time_bucket('1 hours'"
+      -- over thirty days it coarsens to hours; the pinned hour still does not budge
+      binOf thirtyDays "| summarize count(*) by bin_auto(timestamp)" `shouldSatisfy` T.isInfixOf "time_bucket('6 hours'"
+      binOf thirtyDays "| summarize count(*) by bin(timestamp, 1h)" `shouldSatisfy` T.isInfixOf "time_bucket('1 hours'"
+
+    -- An alert reads its whole configured window, not a bucket of it. This used to
+    -- bucket by bin_auto's width (the 14-day fallback, since a monitor has no viewer
+    -- time range) and then take the newest bucket — an epoch-aligned fraction of the
+    -- window, so the same monitor read a different amount of data depending on the
+    -- wall clock.
+    it "an alert query reads its lookback window, not a time bucket of it" do
+      let cfg = (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){alertLookbackMins = 60}
+          alertSql q = normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents cfg q) & (.finalAlertQuery)
+      alertSql "| summarize count(*) by bin_auto(timestamp)" `shouldSatisfy` T.isInfixOf "timestamp >= NOW() - INTERVAL '60 minutes'"
+      alertSql "| summarize count(*) by bin_auto(timestamp)" `shouldNotSatisfy` T.isInfixOf "time_bucket"
+      -- a non-time grouping survives; the largest group is the one evaluated
+      alertSql "| summarize count(*) by bin_auto(timestamp), kind" `shouldSatisfy` T.isInfixOf "GROUP BY kind ORDER BY GREATEST( count(*)::float8) DESC LIMIT 1"
 
     it "summarize with arithmetic division by bin_auto()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() / 5.0 by bin_auto(timestamp)"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('6 hours', timestamp))::integer, (COALESCE((count(*)::float / NULLIF(5.0, 0)), 0))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, (COALESCE((count(*)::float / NULLIF(5.0, 0)), 0))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('2 hours', timestamp) ORDER BY time_bucket('2 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
     it "query a metric" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('2 hours', timestamp) ORDER BY time_bucket('2 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
     it "PostgreSQL metrics source uses native JSONB dimensions" do
@@ -140,7 +167,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
       let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.kind.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(resource->'kind'->>'name'::text, 'null')"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE(resource->'kind'->>'name'::text, 'null')"
 
     it "TimeFusion metrics source converts variant dimensions to JSON" do
       let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){metricJsonAsVariant = True}
@@ -152,7 +179,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
       let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.kind.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'kind'->>'name'::text, 'null')"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE(variant_to_json(resource)->'kind'->>'name'::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""

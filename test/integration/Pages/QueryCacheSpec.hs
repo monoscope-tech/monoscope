@@ -42,7 +42,7 @@ clearAllTestData tr = withResource tr.trPool \conn -> do
 
 queryMetrics :: TestResources -> Text -> Text -> Text -> IO Charts.MetricsData
 queryMetrics tr query timeFrom timeTo =
-  runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
+  runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
 
 
 -- Format time offset from baseTime as ISO8601 string
@@ -228,5 +228,5 @@ spec = around withTestResources do
           times@(_, _, t2) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
       key <- seedCache tr q times
       -- No telemetry ingested, so the delta over (t1, t2] succeeds with 0 rows.
-      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing []
+      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
       cachedToFor tr key `shouldReturn` Just t2

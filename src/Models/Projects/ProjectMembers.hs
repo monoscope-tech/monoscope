@@ -39,6 +39,7 @@ module Models.Projects.ProjectMembers (
   NotificationChannel (..),
   channelTargets,
   isChannelEnabled,
+  whenChannelEnabled,
   isEveryoneChannelEnabled,
   teamHasAnyEnabledChannel,
   resolveTeamEmails,
@@ -549,6 +550,10 @@ channelTargets = \case
 -- Absence of targets on the team is a separate question ('channelTargets').
 isChannelEnabled :: NotificationChannel -> Team -> Bool
 isChannelEnabled ch t = not $ V.elem (display ch) t.disabled_channels
+
+
+whenChannelEnabled :: Applicative f => NotificationChannel -> Team -> f () -> f ()
+whenChannelEnabled ch team = when (isChannelEnabled ch team && not (V.null $ channelTargets ch team))
 
 
 -- | Fetch @everyone and ask whether a channel type is enabled there. Defaults to False

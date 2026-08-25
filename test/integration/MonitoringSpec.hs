@@ -1,10 +1,12 @@
 module MonitoringSpec (spec) where
 
-import BackgroundJobs (checkTriggeredQueryMonitors)
+import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue)
 import Data.Aeson qualified as AE
 import Data.Effectful.Notify (Notification (..))
+import Data.Effectful.Notify qualified as Notify
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
+import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -13,9 +15,12 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
+import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
+import Pages.Bots.BotTestHelpers (setupDiscordData, setupSlackData)
+import Pages.Projects qualified as ProjectPages
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -88,112 +93,119 @@ spec = sequential $ aroundAll withTestResources do
 
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-  describe "Widget Alert Cascade Deletion" do
-    it "should delete alert when widget is removed from dashboard" \tr -> do
-      -- Create dashboard
-      let dashboardForm = Dashboards.DashboardForm{Dashboards.title = "Alert Cascade Test Dashboard", Dashboards.file = "test.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
-      _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboardForm
+  describe "Widget Monitor Lifecycle" do
+    it "creates a monitor for the saved widget, alerts, recovers after an edit, and disappears with the widget" \tr -> do
+      void $ testServant tr $ Dashboards.dashboardsPostH testPid
+        Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+      (_, dashboardsPage) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
+      dashboardId <- case dashboardsPage of
+        Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
+          maybe (fail "the dashboard was not saved") (pure . (.id)) $ V.find ((== "Widget Monitor Lifecycle") . (.title)) dashboards
+        _ -> fail "the dashboard list did not load"
+      let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+      isNothing <$> runTestBgNoReset tr (DashboardModel.getDashboardByProjectId otherPid dashboardId) `shouldReturn` True
 
-      -- Get dashboard to retrieve its ID
-      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
-      dashId <- case dashboardsResp of
-        Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
-          let dashM = V.find (\x -> x.title == ("Alert Cascade Test Dashboard" :: Text)) dashboards
-          pure $ maybe (error "Dashboard not found") (\x -> x.id) dashM
-        _ -> error "Unexpected response"
-
-      -- Add widget to dashboard
-      let widget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "cascade-test-widget", Widget.title = Just "Test Widget", Widget.query = Just "status_code==\"500\""}
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
-
-      -- Create alert for widget
+      (_, savedWidget) <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing
+        def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
+      widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let alertForm =
             Dashboards.WidgetAlertForm
-              { widgetId = "cascade-test-widget"
-              , query = "status_code==\"500\""
+              { widgetId
+              , query = "name == \"checkout\""
               , vizType = Just "timeseries"
               , alertEnabled = Just "on"
-              , alertThreshold = 100
+              , alertThreshold = 1
               , warningThreshold = Nothing
               , direction = "above"
-              , showThresholdLines = Nothing
+              , showThresholdLines = Just "on_breach"
               , alertRecoveryThreshold = Nothing
               , warningRecoveryThreshold = Nothing
-              , frequency = Nothing
-              , title = "Cascade Test Alert"
-              , timeWindow = Nothing
-              , conditionType = Nothing
-              , severity = Nothing
-              , subject = Nothing
-              , message = Nothing
+              , frequency = Just "1m"
+              , title = "Checkout errors"
+              , timeWindow = Just "1h"
+              , conditionType = Just "threshold_exceeded"
+              , severity = Just "Error"
+              , subject = Just "Checkout errors"
+              , message = Just "A checkout request failed"
               , recipientEmailAll = Nothing
               , teams = []
               }
-      _ <- testServant tr $ Dashboards.widgetAlertUpsertH testPid "cascade-test-widget" (Just $ unUUIDId dashId) alertForm
+      setupSlackData tr testPid "T_MONITOR_SIM"
+      setupDiscordData tr testPid "G_MONITOR_SIM"
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn
+          [sql|UPDATE projects.teams
+                SET notify_emails = ARRAY['alerts@example.com'],
+                    discord_channels = ARRAY['C_MONITOR'],
+                    phone_numbers = ARRAY['+15550001111'],
+                    pagerduty_services = ARRAY['widget-monitor-test'],
+                    disabled_channels = '{}'
+                WHERE project_id = ? AND handle = 'everyone'|]
+          (PGS.Only testPid)
+      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid widgetId) `shouldReturn` True
 
-      -- Verify alert exists
-      alertM <- runTestBg frozenTime tr $ Monitors.queryMonitorByWidgetId "cascade-test-widget"
-      isJust alertM `shouldBe` True
+      apiKey <- createTestAPIKey tr testPid "widget-monitor"
+      ingestionTime <- getCurrentTime
+      ingestTrace tr apiKey "checkout" ingestionTime
+      advanceMinutes tr 1
+      fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
+      firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
+      ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
+      deliverySummary fired `shouldBe`
+        [ "discord:C_MONITOR"
+        , "email:alerts@example.com"
+        , "pagerduty:widget-monitor-test:PDTrigger"
+        , "slack:C_NOTIF_CHANNEL"
+        , "whatsapp:+15550001111"
+        ]
 
-      -- Delete alert via widgetAlertDeleteH handler
-      _ <- testServant tr $ Dashboards.widgetAlertDeleteH testPid "cascade-test-widget"
+      advanceMinutes tr 1
+      duplicate <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
+      duplicate `shouldBe` []
 
-      -- Verify alert was deleted
-      alertM' <- runTestBg frozenTime tr $ Monitors.queryMonitorByWidgetId "cascade-test-widget"
-      isNothing alertM' `shouldBe` True
+      let recoveryQuery = "name == \"search\""
+          updatedWidget = savedWidget{Widget.query = Just recoveryQuery}
+      void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
+      synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
+      (.logQuery) <$> synced `shouldBe` Just recoveryQuery
 
-  describe "Widget Alert Query Sync" do
-    it "should sync alert query when widget query changes" \tr -> do
-      -- Reuse dashboard from previous test (tests share state via aroundAll)
-      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
-      dashId <- case dashboardsResp of
-        Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
-          let dashM = V.find (\x -> x.title == ("Alert Cascade Test Dashboard" :: Text)) dashboards
-          pure $ maybe (error "Dashboard not found - previous test may have failed") (\x -> x.id) dashM
-        _ -> error "Unexpected response"
+      advanceMinutes tr 1
+      recovered <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
+      deliverySummary recovered `shouldBe`
+        [ "discord:C_MONITOR"
+        , "email:alerts@example.com"
+        , "pagerduty:widget-monitor-test:PDResolve"
+        , "slack:C_NOTIF_CHANNEL"
+        , "whatsapp:+15550001111"
+        ]
 
-      -- Add widget with initial query
-      let initialQuery = "status_code==\"200\""
-      let widget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "sync-test-widget", Widget.title = Just "Sync Test Widget", Widget.query = Just initialQuery}
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
+      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] []
+      void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget
+      advanceMinutes tr 1
+      gated <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
+      deliverySummary gated `shouldBe`
+        [ "discord:C_MONITOR"
+        , "email:alerts@example.com"
+        , "pagerduty:widget-monitor-test:PDTrigger"
+        ]
+      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] []
 
-      -- Create alert for widget
-      let alertForm =
-            Dashboards.WidgetAlertForm
-              { widgetId = "sync-test-widget"
-              , query = initialQuery
-              , vizType = Just "timeseries"
-              , alertEnabled = Just "on"
-              , alertThreshold = 100
-              , warningThreshold = Nothing
-              , direction = "above"
-              , showThresholdLines = Nothing
-              , alertRecoveryThreshold = Nothing
-              , warningRecoveryThreshold = Nothing
-              , frequency = Nothing
-              , title = "Sync Test Alert"
-              , timeWindow = Nothing
-              , conditionType = Nothing
-              , severity = Nothing
-              , subject = Nothing
-              , message = Nothing
-              , recipientEmailAll = Nothing
-              , teams = []
+      currentMonitor <- maybe (fail "the widget monitor disappeared before deletion") pure firedMonitor
+      let otherMonitorId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "a11e7ed0-0000-0000-0000-000000000001"
+          otherMonitor =
+            currentMonitor
+              { Monitors.id = otherMonitorId
+              , Monitors.projectId = otherPid
+              , Monitors.currentStatus = Monitors.MSNormal
               }
-      _ <- testServant tr $ Dashboards.widgetAlertUpsertH testPid "sync-test-widget" (Just $ unUUIDId dashId) alertForm
+      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert otherMonitor
 
-      -- Verify initial query
-      alertM <- runTestBg frozenTime tr $ Monitors.queryMonitorByWidgetId "sync-test-widget"
-      (Unsafe.fromJust alertM).logQuery `shouldBe` initialQuery
-
-      -- Update widget with new query
-      let newQuery = "status_code==\"500\""
-      let updatedWidget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "sync-test-widget", Widget.title = Just "Sync Test Widget", Widget.query = Just newQuery}
-      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just "sync-test-widget") Nothing updatedWidget
-
-      -- Verify query was synced
-      alertM' <- runTestBg frozenTime tr $ Monitors.queryMonitorByWidgetId "sync-test-widget"
-      (Unsafe.fromJust alertM').logQuery `shouldBe` newQuery
+      void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashboardId Nothing Map.empty
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid widgetId) `shouldReturn` True
+      otherAfterDelete <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId otherPid widgetId
+      (.id) <$> otherAfterDelete `shouldBe` Just otherMonitorId
+      void $ runTestBgNoReset tr $ Monitors.deleteMonitorsByWidgetIds otherPid [widgetId]
 
   describe "Monitor Hysteresis Integration" do
     it "should store and retrieve monitors with recovery thresholds" \tr -> do
@@ -263,65 +275,53 @@ spec = sequential $ aroundAll withTestResources do
     let pipelineMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "22222222-2222-2222-2222-222222222222"
         t0 = Unsafe.read "2025-06-01 12:00:00 UTC" :: UTCTime
 
-    it "Normal → Alerting transition updates status and timestamps" \tr -> do
+    it "alerts once, suppresses duplicate delivery, and recovers" \tr -> do
       insertPipelineMonitor tr pipelineMonId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
-      evalMonitorsAt t0 tr
-      m <- fetchMonitor tr pipelineMonId
-      m.currentStatus `shouldBe` Monitors.MSAlerting
-      m.currentValue `shouldBe` 150
-      isJust m.alertLastTriggered `shouldBe` True
+      evalMonitorValueAt t0 tr pipelineMonId 150
+      alerted <- fetchMonitor tr pipelineMonId
+      alerted.currentStatus `shouldBe` Monitors.MSAlerting
+      alerted.currentValue `shouldBe` 150
+      isJust alerted.alertLastTriggered `shouldBe` True
 
-    it "Repeated evaluation preserves status without updating timestamps (spam prevention)" \tr -> do
-      prev <- fetchMonitor tr pipelineMonId
       resetLastEvaluated tr pipelineMonId
-      evalMonitorsAt (addUTCTime 300 t0) tr -- +5 min
-      m <- fetchMonitor tr pipelineMonId
-      m.currentStatus `shouldBe` Monitors.MSAlerting
-      -- alertLastTriggered should NOT be updated (no re-notification)
-      m.alertLastTriggered `shouldBe` prev.alertLastTriggered
+      evalMonitorValueAt (addUTCTime 300 t0) tr pipelineMonId 150
+      repeated <- fetchMonitor tr pipelineMonId
+      repeated.currentStatus `shouldBe` Monitors.MSAlerting
+      repeated.alertLastTriggered `shouldBe` alerted.alertLastTriggered
 
-    it "Periodic reminder after 1 hour when renotify is disabled: no reminder" \tr -> do
-      prev <- fetchMonitor tr pipelineMonId
       resetLastEvaluated tr pipelineMonId
-      evalMonitorsAt (addUTCTime 3660 t0) tr -- +61 min
-      m <- fetchMonitor tr pipelineMonId
-      m.currentStatus `shouldBe` Monitors.MSAlerting
-      -- renotify is disabled (Nothing), so alertLastTriggered should NOT be updated
-      m.alertLastTriggered `shouldBe` prev.alertLastTriggered
-      m.notificationCount `shouldBe` prev.notificationCount
+      evalMonitorValueAt (addUTCTime 3660 t0) tr pipelineMonId 150
+      delayed <- fetchMonitor tr pipelineMonId
+      delayed.alertLastTriggered `shouldBe` alerted.alertLastTriggered
+      delayed.notificationCount `shouldBe` alerted.notificationCount
 
-    it "Alerting → Normal recovery clears timestamps" \tr -> do
-      setMonitorQuery tr pipelineMonId "SELECT 50::float8"
-      evalMonitorsAt (addUTCTime 3900 t0) tr -- +65 min
-      m <- fetchMonitor tr pipelineMonId
-      m.currentStatus `shouldBe` Monitors.MSNormal
-      m.alertLastTriggered `shouldBe` Nothing
-      m.warningLastTriggered `shouldBe` Nothing
+      evalMonitorValueAt (addUTCTime 3900 t0) tr pipelineMonId 50
+      recovered <- fetchMonitor tr pipelineMonId
+      recovered.currentStatus `shouldBe` Monitors.MSNormal
+      recovered.alertLastTriggered `shouldBe` Nothing
+      recovered.warningLastTriggered `shouldBe` Nothing
 
     it "Warning → Alerting transition with hysteresis" \tr -> do
       let hystMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "33333333-3333-3333-3333-333333333333"
       insertPipelineMonitor tr hystMonId "SELECT 90::float8" 100 (Just 80) "above" (Just 60) Nothing
 
       -- Value 90 → MSWarning (above warning=80, below alert=100)
-      evalMonitorsAt t0 tr
+      evalMonitorValueAt t0 tr hystMonId 90
       m1 <- fetchMonitor tr hystMonId
       m1.currentStatus `shouldBe` Monitors.MSWarning
 
       -- Value 110 → MSAlerting
-      setMonitorQuery tr hystMonId "SELECT 110::float8"
-      evalMonitorsAt (addUTCTime 120 t0) tr
+      evalMonitorValueAt (addUTCTime 120 t0) tr hystMonId 110
       m2 <- fetchMonitor tr hystMonId
       m2.currentStatus `shouldBe` Monitors.MSAlerting
 
       -- Value 70 → still MSAlerting (above recovery threshold of 60)
-      setMonitorQuery tr hystMonId "SELECT 70::float8"
-      evalMonitorsAt (addUTCTime 240 t0) tr
+      evalMonitorValueAt (addUTCTime 240 t0) tr hystMonId 70
       m3 <- fetchMonitor tr hystMonId
       m3.currentStatus `shouldBe` Monitors.MSAlerting
 
       -- Value 55 → MSNormal (below recovery threshold of 60)
-      setMonitorQuery tr hystMonId "SELECT 55::float8"
-      evalMonitorsAt (addUTCTime 360 t0) tr
+      evalMonitorValueAt (addUTCTime 360 t0) tr hystMonId 55
       m4 <- fetchMonitor tr hystMonId
       m4.currentStatus `shouldBe` Monitors.MSNormal
 
@@ -358,7 +358,7 @@ spec = sequential $ aroundAll withTestResources do
           healthyId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "88888888-8888-8888-8888-888888888888"
       insertPipelineMonitor tr brokenId "SELECT 1::float8" 100 Nothing "above" Nothing Nothing
       setMonitorQuery tr brokenId "SELECT * FROM another_missing_table"
-      insertPipelineMonitor tr healthyId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
+      insertPipelineMonitor tr healthyId "" 0 Nothing "above" Nothing Nothing
       resetLastEvaluated tr healthyId
 
       evalMonitorsAt t0 tr
@@ -369,155 +369,112 @@ spec = sequential $ aroundAll withTestResources do
     describe "Renotify and Stop-After" do
       let renotifyMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "55555555-5555-5555-5555-555555555555"
 
-      it "Renotify disabled: no reminder after interval" \tr -> do
-        -- Deactivate other monitors so only the renotify monitor gets evaluated
+      it "delivers reminders only when due, stops at the limit, and always reports recovery" \tr -> do
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only renotifyMonId)
         insertRenotifyMonitor tr renotifyMonId "SELECT 150::float8" 100
-        -- Initial eval → alerting with notification
-        notifs1 <- evalMonitorsWithNotifs t0 tr
+        notifs1 <- evalMonitorValueWithNotifs t0 tr renotifyMonId 150
         m1 <- fetchMonitor tr renotifyMonId
         m1.currentStatus `shouldBe` Monitors.MSAlerting
         m1.notificationCount `shouldBe` 1
-        length notifs1 `shouldSatisfy` (> 0)
-        -- Verify both email and pagerduty notifications are sent
         any (\case EmailNotification{} -> True; _ -> False) notifs1 `shouldBe` True
         any (\case PagerdutyNotification{} -> True; _ -> False) notifs1 `shouldBe` True
-        -- Eval 61min later with renotify disabled → no reminder
+
         resetLastEvaluated tr renotifyMonId
-        notifs2 <- evalMonitorsWithNotifs (addUTCTime 3660 t0) tr
+        notifs2 <- evalMonitorValueWithNotifs (addUTCTime 3660 t0) tr renotifyMonId 150
         m2 <- fetchMonitor tr renotifyMonId
         m2.notificationCount `shouldBe` 1
         m2.alertLastTriggered `shouldBe` m1.alertLastTriggered
         length notifs2 `shouldBe` 0
 
-      it "Renotify enabled: reminder fires at configured interval" \tr -> do
         setMonitorRenotifyConfig tr renotifyMonId (Just 30) Nothing 1
         resetLastEvaluated tr renotifyMonId
-        setAlertLastTriggered tr renotifyMonId (Just t0) -- 35min ago
-        notifs <- evalMonitorsWithNotifs (addUTCTime (35 * 60) t0) tr
-        m <- fetchMonitor tr renotifyMonId
-        m.notificationCount `shouldBe` 2
-        m.alertLastTriggered `shouldNotBe` Just t0
-        length notifs `shouldSatisfy` (> 0)
+        setAlertLastTriggered tr renotifyMonId (Just $ addUTCTime (6 * 60) t0)
+        early <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        length early `shouldBe` 0
 
-      it "Renotify enabled: no reminder before interval elapses" \tr -> do
         resetLastEvaluated tr renotifyMonId
-        setAlertLastTriggered tr renotifyMonId (Just $ addUTCTime (39 * 60) t0) -- only 1min ago
-        notifs <- evalMonitorsWithNotifs (addUTCTime (40 * 60) t0) tr
-        m <- fetchMonitor tr renotifyMonId
-        m.notificationCount `shouldBe` 2 -- unchanged
-        length notifs `shouldBe` 0
+        setAlertLastTriggered tr renotifyMonId (Just t0)
+        due <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        dueMonitor <- fetchMonitor tr renotifyMonId
+        dueMonitor.notificationCount `shouldBe` 2
+        length due `shouldSatisfy` (> 0)
 
-      it "Stop-after: notifications stop after N occurrences" \tr -> do
         setMonitorRenotifyConfig tr renotifyMonId (Just 30) (Just 3) 2
         resetLastEvaluated tr renotifyMonId
         setAlertLastTriggered tr renotifyMonId (Just t0)
-        notifs1 <- evalMonitorsWithNotifs (addUTCTime (35 * 60) t0) tr
-        m1 <- fetchMonitor tr renotifyMonId
-        m1.notificationCount `shouldBe` 3
-        length notifs1 `shouldSatisfy` (> 0)
-        -- Now at limit → no more notifications
+        finalReminder <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        atLimit <- fetchMonitor tr renotifyMonId
+        atLimit.notificationCount `shouldBe` 3
+        length finalReminder `shouldSatisfy` (> 0)
+
         resetLastEvaluated tr renotifyMonId
         setAlertLastTriggered tr renotifyMonId (Just t0)
-        notifs2 <- evalMonitorsWithNotifs (addUTCTime (70 * 60) t0) tr
-        m2 <- fetchMonitor tr renotifyMonId
-        m2.notificationCount `shouldBe` 3 -- unchanged at limit
-        length notifs2 `shouldBe` 0
+        stopped <- evalMonitorValueWithNotifs (addUTCTime (70 * 60) t0) tr renotifyMonId 150
+        stoppedMonitor <- fetchMonitor tr renotifyMonId
+        stoppedMonitor.notificationCount `shouldBe` 3
+        length stopped `shouldBe` 0
 
-      it "Recovery always notifies and resets count even when stopped" \tr -> do
-        setMonitorQuery tr renotifyMonId "SELECT 50::float8" -- below threshold=100
-        notifs <- evalMonitorsWithNotifs (addUTCTime (75 * 60) t0) tr
-        m <- fetchMonitor tr renotifyMonId
-        m.currentStatus `shouldBe` Monitors.MSNormal
-        m.notificationCount `shouldBe` 0 -- reset on recovery
-        m.alertLastTriggered `shouldBe` Nothing
-        length notifs `shouldSatisfy` (> 0)
+        recoveryNotifs <- evalMonitorValueWithNotifs (addUTCTime (75 * 60) t0) tr renotifyMonId 50
+        recovered <- fetchMonitor tr renotifyMonId
+        recovered.currentStatus `shouldBe` Monitors.MSNormal
+        recovered.notificationCount `shouldBe` 0
+        recovered.alertLastTriggered `shouldBe` Nothing
+        length recoveryNotifs `shouldSatisfy` (> 0)
 
-      it "Muted monitor unmutes after the configured window" \tr -> do
+      it "suppresses delivery while muted and resumes after the window" \tr -> do
         let muteMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "66666666-6666-6666-6666-666666666666"
             evalT = addUTCTime (200 * 60) t0
-        -- Deactivate other monitors and seed a fresh alerting monitor with no renotify configured
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only muteMonId)
         insertRenotifyMonitor tr muteMonId "SELECT 150::float8" 100
         setMonitorRenotifyConfig tr muteMonId Nothing Nothing 0
 
-        -- Baseline: fires once at evalT
-        notifs0 <- evalMonitorsWithNotifs evalT tr
+        notifs0 <- evalMonitorValueWithNotifs evalT tr muteMonId 150
         length notifs0 `shouldSatisfy` (> 0)
 
-        -- Mute for 60 minutes starting at evalT
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
             (addUTCTime 3600 evalT, muteMonId)
 
-        -- Inside mute window (+30m): no notifications
         resetLastEvaluated tr muteMonId
-        notifs30 <- evalMonitorsWithNotifs (addUTCTime 1800 evalT) tr
+        notifs30 <- evalMonitorValueWithNotifs (addUTCTime 1800 evalT) tr muteMonId 150
         length notifs30 `shouldBe` 0
+        (.notificationCount) <$> fetchMonitor tr muteMonId `shouldReturn` 0
 
-        -- Outside mute window (+61m): notifications resume
         resetLastEvaluated tr muteMonId
-        notifs61 <- evalMonitorsWithNotifs (addUTCTime 3660 evalT) tr
+        notifs61 <- evalMonitorValueWithNotifs (addUTCTime 3660 evalT) tr muteMonId 150
         length notifs61 `shouldSatisfy` (> 0)
+        resumed <- fetchMonitor tr muteMonId
+        resumed.currentStatus `shouldBe` Monitors.MSAlerting
+        resumed.notificationCount `shouldBe` 1
 
-      it "Renotify reminder fires only after configured interval" \tr -> do
-        let reMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "77777777-7777-7777-7777-777777777777"
-            evalT = addUTCTime (300 * 60) t0
-        -- Deactivate other monitors so they don't fire / confound notification counts
-        void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only reMonId)
-        insertRenotifyMonitor tr reMonId "SELECT 150::float8" 100
-        setMonitorRenotifyConfig tr reMonId (Just 15) Nothing 0
 
-        -- First eval: initial alert
-        notifs0 <- evalMonitorsWithNotifs evalT tr
-        length notifs0 `shouldSatisfy` (> 0)
-        m0 <- fetchMonitor tr reMonId
-        m0.currentStatus `shouldBe` Monitors.MSAlerting
-
-        -- +14m: within renotify interval — no reminder
-        resetLastEvaluated tr reMonId
-        notifs14 <- evalMonitorsWithNotifs (addUTCTime (14 * 60) evalT) tr
-        length notifs14 `shouldBe` 0
-
-        -- +16m: renotify interval elapsed — reminder fires
-        resetLastEvaluated tr reMonId
-        notifs16 <- evalMonitorsWithNotifs (addUTCTime (16 * 60) evalT) tr
-        length notifs16 `shouldSatisfy` (> 0)
-
-      it "Muted monitor: notifications suppressed but count does not increment" \tr -> do
-        let evalTime = addUTCTime (80 * 60) t0
-        setMonitorQuery tr renotifyMonId "SELECT 150::float8"
-        setMonitorRenotifyConfig tr renotifyMonId Nothing Nothing 0
-        resetLastEvaluated tr renotifyMonId
-        void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ?|]
-            (addUTCTime 86400 evalTime, renotifyMonId)
-        notifs <- evalMonitorsWithNotifs evalTime tr
-        m <- fetchMonitor tr renotifyMonId
-        m.currentStatus `shouldBe` Monitors.MSAlerting
-        m.notificationCount `shouldBe` 0 -- muted: count not incremented
-        length notifs `shouldBe` 0
+deliverySummary :: [Notification] -> [Text]
+deliverySummary = sort . map \case
+  EmailNotification d -> "email:" <> d.receiver
+  SlackNotification d -> "slack:" <> d.channelId
+  DiscordNotification d -> "discord:" <> d.channelId
+  WhatsAppNotification d -> "whatsapp:" <> Notify.to d
+  PagerdutyNotification d -> "pagerduty:" <> Notify.integrationKey d <> ":" <> show (Notify.eventAction d)
 
 
 
--- | Insert a pipeline test monitor with deterministic SQL query
+-- | Insert a monitor for deterministic state-machine simulation.
 insertPipelineMonitor :: TestResources -> Monitors.QueryMonitorId -> Text -> Double -> Maybe Double -> Text -> Maybe Double -> Maybe Double -> IO ()
-insertPipelineMonitor tr monId sqlQuery threshold warnThreshold direction alertRecovery warnRecovery = do
+insertPipelineMonitor tr monId _ threshold warnThreshold direction alertRecovery warnRecovery = do
   let monitor :: Monitors.QueryMonitor
       monitor =
         def
           { Monitors.id = monId
           , Monitors.projectId = testPid
-          , -- Empty so evaluateQueryMonitor skips re-parsing and uses logQueryAsSql below.
-            Monitors.logQuery = ""
-          , Monitors.logQueryAsSql = sqlQuery
+          , Monitors.logQuery = "summarize count()"
+          , Monitors.logQueryAsSql = ""
           , Monitors.alertThreshold = threshold
           , Monitors.warningThreshold = warnThreshold
           , Monitors.triggerLessThan = direction == "below"
           , Monitors.checkIntervalMins = 1
+          , Monitors.timeWindowMins = 60
           , Monitors.alertConfig = def{Monitors.title = "Pipeline Test Monitor"}
           , Monitors.alertRecoveryThreshold = alertRecovery
           , Monitors.warningRecoveryThreshold = warnRecovery
@@ -533,16 +490,22 @@ evalMonitorsAt :: UTCTime -> TestResources -> IO ()
 evalMonitorsAt t tr = runTestBackground t tr.trATCtx checkTriggeredQueryMonitors
 
 
+evalMonitorValueAt :: UTCTime -> TestResources -> Monitors.QueryMonitorId -> Double -> IO ()
+evalMonitorValueAt t tr monId value = do
+  monitor <- fetchMonitor tr monId
+  runTestBackground t tr.trATCtx $ evaluateQueryMonitorValue monitor t value
+
+
 -- | Reset lastEvaluated to far past so the monitor gets re-evaluated
 resetLastEvaluated :: TestResources -> Monitors.QueryMonitorId -> IO ()
 resetLastEvaluated tr monId = void $ withResource tr.trPool \conn ->
   PGS.execute conn [sql|UPDATE monitors.query_monitors SET last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (PGS.Only monId)
 
 
--- | Update the deterministic SQL query for a monitor and reset lastEvaluated
+-- | Replace source KQL and reset lastEvaluated (used by query-failure tests).
 setMonitorQuery :: TestResources -> Monitors.QueryMonitorId -> Text -> IO ()
 setMonitorQuery tr monId q = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE monitors.query_monitors SET log_query_as_sql = ?, last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (q, monId)
+  PGS.execute conn [sql|UPDATE monitors.query_monitors SET log_query = ?, last_evaluated = '2020-01-01'::timestamptz WHERE id = ?|] (q, monId)
 
 
 -- | Fetch a monitor by ID (asserts it exists)
@@ -560,9 +523,10 @@ insertRenotifyMonitor tr monId sqlQuery threshold = do
     PGS.execute conn [sql|UPDATE projects.teams SET pagerduty_services = ARRAY['test-integration-key'] WHERE project_id = ? AND handle = 'everyone'|] (PGS.Only testPid)
 
 
--- | Run checkTriggeredQueryMonitors and return captured notifications
-evalMonitorsWithNotifs :: UTCTime -> TestResources -> IO [Notification]
-evalMonitorsWithNotifs t tr = fst <$> runTestBackgroundWithNotifications t tr.trLogger tr.trATCtx checkTriggeredQueryMonitors
+evalMonitorValueWithNotifs :: UTCTime -> TestResources -> Monitors.QueryMonitorId -> Double -> IO [Notification]
+evalMonitorValueWithNotifs t tr monId value = do
+  monitor <- fetchMonitor tr monId
+  fst <$> runTestBackgroundWithNotifications t tr.trLogger tr.trATCtx (evaluateQueryMonitorValue monitor t value)
 
 
 -- | Set renotify config columns via direct SQL

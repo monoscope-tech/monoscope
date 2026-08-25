@@ -1,119 +1,72 @@
 module Pages.ReportsSpec (spec) where
 
-import Test.Hspec
-
+import BackgroundJobs qualified
+import Data.Effectful.Notify (Notification (..))
+import Data.Pool (withResource)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Issues (ReportListItem (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Reports qualified as PageReports
-
+import Pages.Reports qualified as Reports
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Test.Hspec
 
 
 spec :: Spec
 spec = around withTestResources do
-  describe "Check Reports" do
-    it "should toggle reports notifs" \tr -> do
-      -- Get initial state
-      (_, res1) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
-      case res1 of
-        PageReports.ReportsGetMain (PageCtx _ (pid1, _, _)) -> pid1 `shouldBe` testPid
-        _ -> error "Unexpected response"
+  describe "Report Notification Lifecycle" do
+    it "delivers enabled daily and weekly reports, records a muted report, and isolates report details" \tr -> do
+      (_, initialPage) <- testServant tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
+      case initialPage of
+        Reports.ReportsGetMain (PageCtx _ (pid, _, _)) -> pid `shouldBe` testPid
+        _ -> fail "the reports page did not load"
       initial <- runTestBg frozenTime tr $ Projects.projectById testPid
-      fmap (.dailyNotif) initial `shouldBe` Just False
-      fmap (.weeklyNotif) initial `shouldBe` Just True
+      ((.dailyNotif) <$> initial, (.weeklyNotif) <$> initial) `shouldBe` (Just False, Just True)
 
-      -- Toggle daily
-      _ <-
-        testServant tr $ PageReports.reportsPostH testPid "daily"
-      -- Toggle weekly
-      _ <-
-        testServant tr $ PageReports.reportsPostH testPid "weekly"
+      void $ testServant tr $ Reports.reportsPostH testPid "daily"
+      void $ testServant tr $ Reports.reportsPostH testPid "weekly"
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn
+          [sql|UPDATE projects.teams
+                SET discord_channels = ARRAY['daily-reports'], disabled_channels = '{}'
+                WHERE project_id = ? AND handle = 'everyone'|]
+          (PGS.Only testPid)
 
-      -- Check final state - fetch project from DB to avoid cache
-      projectM <- runTestBg frozenTime tr $ Projects.projectById testPid
-      case projectM of
-        Just project -> do
-          project.dailyNotif `shouldBe` True -- toggled from True to False
-          project.weeklyNotif `shouldBe` False -- toggled from True to False
-        Nothing -> error "Project not found"
+      sent <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
+      sent `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
 
-      -- Also check via the reports page
-      (_, res) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
-      case res of
-        PageReports.ReportsGetMain (PageCtx _ (pid, reports, _)) -> do
-          pid `shouldBe` testPid
-          length reports `shouldBe` 0
-        _ -> error "Unexpected response"
+      void $ testServant tr $ Reports.reportsPostH testPid "daily"
+      advanceDays tr 1
+      muted <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
+      muted `shouldBe` []
 
--- it "should create and get all reports" \tr -> do
---   -- Ensure the project has notifications enabled
---   _ <- withPool tr.trPool $ DBT.execute
---     [sql|UPDATE projects.projects SET weekly_notif = true, daily_notif = true WHERE id = ?|]
---     (Only testPid)
---
---   currentTime <- getCurrentTime
---   let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
---   -- Update the messages to use the test project ID
---   let updateProjectId :: AE.Value -> AE.Value
---       updateProjectId v = case v of
---         AE.Object obj -> AE.Object $ KeyMap.insert "project_id" (AE.String testPid.toText) obj
---         _ -> v
---   let reqMsg1 = Unsafe.fromJust $ convert $ updateProjectId $ testRequestMsgs.reqMsg1 nowTxt
---   let reqMsg2 = Unsafe.fromJust $ convert $ updateProjectId $ testRequestMsgs.reqMsg2 nowTxt
---
---   let reqMsg3 = Unsafe.fromJust $ convert $ updateProjectId $ testRequestMsgs.reqMsg1 "2024-07-05T13:06:26.620094239Z"
---   let reqMsg4 = Unsafe.fromJust $ convert $ updateProjectId $ testRequestMsgs.reqMsg2 "2024-07-05T12:06:26.620094239Z"
---
---   let msgs = concat (replicate 100 [("m1", BL.toStrict $ AE.encode reqMsg1), ("m2", BL.toStrict $ AE.encode reqMsg2)]) ++ [("m3", BL.toStrict $ AE.encode reqMsg3), ("m4", BL.toStrict $ AE.encode reqMsg4)]
---   _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
---
---   -- Process the spans to generate endpoints and other data needed for reports
---   -- Use a time slightly after the messages to ensure they're captured
---   let processTime = addUTCTime 1 currentTime -- 1 second after the messages
---   _ <- runTestBackground tr.trATCtx $ processFiveMinuteSpans processTime
---
---   -- Make sure there's data to report on by processing background jobs first
---   createTestSpans tr testPid 10
---   processAllBackgroundJobsMultipleTimes tr
---
---   -- Create report jobs
---   _ <- liftIO $ withResource tr.trPool \conn -> do
---     _ <- createJob conn "background_jobs" $ BackgroundJobs.DailyReports testPid
---     _ <- createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports testPid
---     pass
---
---   -- Run all background jobs to process the reports
---   _ <- runAllBackgroundJobs tr.trATCtx
---
---   -- Additional background job processing to ensure reports are created
---   processAllBackgroundJobsMultipleTimes tr
---
---   -- Check if reports were actually created in the database
---   dbReports <- withPool tr.trPool $ Reports.reportHistoryByProject testPid 0
---
---
---   length dbReports `shouldBe` 2
---
---   res <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
---   case res of
---     PageReports.ReportsGetMain (PageCtx _ (pid, reports, next, daily, weekly)) -> do
---       pid `shouldBe` testPid
---       daily `shouldBe` True
---       weekly `shouldBe` False
---       length reports `shouldBe` 2
---       let dailyReport = Unsafe.fromJust $ find (\r -> r.reportType == "daily") reports
---       let weeklyReport = Unsafe.fromJust $ find (\r -> r.reportType == "weekly") reports
---       dailyReport.reportType `shouldBe` "daily"
---       weeklyReport.reportType `shouldBe` "weekly"
---
---       r <- testServant tr $ PageReports.singleReportGetH testPid dailyReport.id Nothing
---       case r of
---         PageReports.ReportsGetSingle (PageCtx _ (prid, reportM)) -> do
---           prid `shouldBe` testPid
---           isJust reportM `shouldBe` True
---           let report = Unsafe.fromJust reportM
---           report.id `shouldBe` dailyReport.id
---           pass
---         _ -> error "Unexpected response"
---     _ -> error "Unexpected response"
+      void $ testServant tr $ Reports.reportsPostH testPid "weekly"
+      weekly <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.WeeklyReports testPid)
+      weekly `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
+
+      (_, reportsPage) <- testServant tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
+      reportId <- case reportsPage of
+        Reports.ReportsGetMain (PageCtx _ (_, reports, _)) -> do
+          V.length reports `shouldBe` 3
+          V.any ((== "weekly") . (.reportType)) reports `shouldBe` True
+          maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== "daily") . (.reportType)) reports
+        _ -> fail "the reports page did not load after generation"
+      (_, reportPage) <- testServant tr $ Reports.singleReportGetH testPid reportId Nothing
+      case reportPage of
+        Reports.ReportsGetSingle (PageCtx _ (reportType, dateLabel, emailHtml)) -> do
+          reportType `shouldBe` "daily"
+          dateLabel `shouldNotBe` ""
+          emailHtml `shouldNotBe` ""
+        _ -> fail "the report detail did not load"
+
+      let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+      (_, otherProjectPage) <- testServant tr $ Reports.singleReportGetH otherPid reportId Nothing
+      case otherProjectPage of
+        Reports.ReportsGetSingle (PageCtx _ (reportType, dateLabel, emailHtml)) ->
+          (reportType, dateLabel, emailHtml) `shouldBe` ("unknown", "Report not found", "")
+        _ -> fail "the other project report page did not load"

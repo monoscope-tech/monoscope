@@ -32,6 +32,7 @@ module Models.Projects.Projects (
   updateProjectPricing,
   updateProjectBilling,
   projectById,
+  activeProjectById,
   projectByOrderId,
   projectByCustomerId,
   UserBilling (..),
@@ -404,8 +405,23 @@ insertProject :: DB es => CreateProject -> Eff es ()
 insertProject p = EHasql.interpExecute_ [HI.sql| INSERT INTO projects.projects (id, title, description, payment_plan, time_zone, sub_id, first_sub_item_id, order_id, daily_notif, weekly_notif, endpoint_alerts, error_alerts) VALUES (#{p.id}, #{p.title}, #{p.description}, #{p.paymentPlan}, #{p.timeZone}, #{p.subId}, #{p.firstSubItemId}, #{p.orderId}, #{p.dailyNotif}, #{p.weeklyNotif}, #{p.endpointAlerts}, #{p.errorAlerts}) |]
 
 
+-- | The project row whatever its state — including deactivated and soft-deleted.
+--
+-- Correct only where the caller must see a project that is going away: the
+-- deletion and cancellation jobs, and anything reporting on a project's own
+-- teardown. Everywhere else, acting on a row this returns means alerting,
+-- billing or serving data for a project that is not supposed to exist —
+-- 'activeProjectById' is what those want.
 projectById :: DB es => ProjectId -> Eff es (Maybe Project)
 projectById pid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where id=#{pid}|]
+
+
+-- | The project only if it is live. A deactivated or soft-deleted project reads
+-- as absent, which is the right answer for delivery (alerts, reports), for
+-- unauthenticated surfaces (share links) and for authenticating a key against
+-- the project that owns it.
+activeProjectById :: DB es => ProjectId -> Eff es (Maybe Project)
+activeProjectById pid = EHasql.interpOne [HI.sql| SELECT p.* FROM projects.projects p WHERE id=#{pid} AND active=TRUE AND deleted_at IS NULL |]
 
 
 projectByOrderId :: DB es => Text -> Eff es (Maybe Project)

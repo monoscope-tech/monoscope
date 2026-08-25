@@ -12,6 +12,7 @@ module Pkg.QueryCache (
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
   slidingWindowSeconds,
+  cacheWindowStart,
   deltaOverlapSeconds,
 ) where
 
@@ -20,7 +21,7 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 
@@ -35,11 +36,17 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
-import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
+import Pkg.Parser (SqlQueryCfg (..), autoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import Utils (toXXHash)
+
+
+-- $setup
+-- >>> import Data.Time (UTCTime (..))
+-- >>> import Data.Time.Calendar (fromGregorian)
+-- >>> :set -XOverloadedStrings
 
 
 data CacheKey = CacheKey
@@ -114,6 +121,27 @@ slidingWindowSeconds binInterval =
    in max 86400 (binSecs * minPoints)
 
 
+-- | The oldest timestamp the cache may trim to for a request over @(from, to)@:
+-- the bin-derived retention window, but never inside the range being viewed.
+--
+-- The retention window scales with bin width, so a fine bin shrinks it below the
+-- requested range — and 'refetchUnlessAdequate' only refetches on an *empty*
+-- result, so the caller would be handed the truncated series instead. At 1h bins
+-- the window is 48h, well short of a 7-day chart:
+--
+-- >>> let day n = UTCTime (fromGregorian 2020 1 n) 0
+-- >>> cacheWindowStart "1 hour" (day 1, day 8) == day 1
+-- True
+--
+-- A narrow request keeps the full retention window, so refreshes stay incremental:
+--
+-- >>> cacheWindowStart "1 hour" (day 7, day 8) == day 6
+-- True
+cacheWindowStart :: Text -> (UTCTime, UTCTime) -> UTCTime
+cacheWindowStart binInterval (from, to) =
+  min from $ addUTCTime (negate $ fromIntegral $ slidingWindowSeconds binInterval) to
+
+
 -- | How far back BEFORE the cache watermark a delta fetch re-reads.
 --
 -- A delta starting exactly at @cachedTo@ reads every bin once and never revisits
@@ -141,7 +169,7 @@ extractBinInterval sqlCfg =
     _ -> Nothing
   where
     getBinInterval (ByBinFunc (Bin _ interval)) = Just interval
-    getBinInterval (ByBinFunc (BinAuto _)) = Just $ calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
+    getBinInterval (ByBinFunc (BinAuto _)) = Just $ autoBinWidth sqlCfg
     getBinInterval _ = Nothing
 
 

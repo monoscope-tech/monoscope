@@ -239,20 +239,33 @@ monitorRemoveTeam pid monitorId teamId =
 
 
 getActiveQueryMonitors :: DB es => Eff es [QueryMonitor]
-getActiveQueryMonitors = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE deactivated_at IS NULL AND deleted_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != '' |])
+getActiveQueryMonitors =
+  Hasql.interp
+    ( selectFrom @QueryMonitor
+        <> [HI.sql|
+          WHERE deactivated_at IS NULL
+            AND deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM projects.projects
+              WHERE id = query_monitors.project_id
+                AND active = TRUE
+                AND deleted_at IS NULL
+            )
+        |]
+    )
 
 
 updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
 updateLastEvaluatedAt qmId time = Hasql.interpExecute [HI.sql|UPDATE monitors.query_monitors SET last_evaluated=#{time} where id=#{qmId}|]
 
 
-queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
-queryMonitorByWidgetId wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE widget_id = #{wId} AND deleted_at IS NULL |])
+queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByWidgetId pid wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND widget_id = #{wId} AND deleted_at IS NULL |])
 
 
-deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64
-deleteMonitorsByWidgetIds widgetIds =
-  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE widget_id = ANY(#{widgetIds}::text[])|]
+deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> [Text] -> Eff es Int64
+deleteMonitorsByWidgetIds pid widgetIds =
+  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE project_id = #{pid} AND widget_id = ANY(#{widgetIds}::text[])|]
 
 
 data WidgetAlertStatus = WidgetAlertStatus

@@ -105,7 +105,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -161,7 +161,7 @@ dashTitle t = t
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 syncDashboardFileInfo :: (DB es, Time.Time :> es) => Dashboards.DashboardId -> Eff es ()
 syncDashboardFileInfo dashId = do
-  dashM <- Dashboards.getDashboardById dashId
+  dashM <- Dashboards.getDashboardByIdUnscoped dashId
   forM_ dashM \dash -> when (isJust dash.schema) do
     teams <- ManageMembers.getTeamsById dash.projectId dash.teams
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
@@ -833,7 +833,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
     (Nothing, Just kqlQuery) ->
       runQuery
         "KQL"
-        (first (\(e :: SomeException) -> show e) <$> try (Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams))
+        (first (\(e :: SomeException) -> show e) <$> try (Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing Nothing allParams))
         (map V.toList . V.toList . (.dataText))
     _ -> pure constant
 
@@ -887,7 +887,9 @@ type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefu
 -- picks both together.
 widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing allParams
+  -- Bin at the density the widget renders at, so a server-prefilled chart and the
+  -- browser's later /chart_data refetch agree on bucket width (and on cache key).
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
     (query, dataType) = Widget.chartQuery widget
 
@@ -913,14 +915,14 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
           (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ AnomalyList.issueCardCompact_ pid now)
   Widget.WTTable -> do
     -- Fetch table data
-    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
     -- Render the table with data server-side
     pure
       $ widget
       & #html
         ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
-    tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
     let trIds = V.map V.last tracesD.dataText
     (shapeWithDuration, spanRecords') <-
       concurrently
@@ -970,7 +972,7 @@ populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   _ <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM dashId Nothing
+  (_, dash) <- getDashAndVM pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
@@ -1025,11 +1027,11 @@ mergeWidgetPreservingQuery original updated =
 
 syncWidgetAlert :: DB es => Projects.ProjectId -> Text -> Widget.Widget -> Eff es ()
 syncWidgetAlert pid widgetId widget = do
-  existingMonitor <- Monitors.queryMonitorByWidgetId widgetId
+  existingMonitor <- Monitors.queryMonitorByWidgetId pid widgetId
   whenJust existingMonitor \monitor -> do
     let newQuery = fromMaybe "" widget.query
     when (monitor.logQuery /= newQuery) do
-      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
@@ -1059,7 +1061,7 @@ dashboardWidgetReorderPatchH
   -> ATAuthCtx (RespHeaders NoContent)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   _ <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM dashId Nothing
+  (_, dash) <- getDashAndVM pid dashId Nothing
 
   let oldWidgets = case (tabSlugM, dash.tabs) of
         (Just slug, Just tabs) -> foldMap (.widgets) $ find (\t -> slugify t.name == slug) tabs
@@ -1074,7 +1076,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
     then addRespHeaders NoContent
     else do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
-      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid deletedWidgetIds
 
       _ <- Dashboards.updateSchema dashId $ overDashWidgets tabSlugM (const reorderedWidgets) dash
       syncDashboardAndQueuePush pid dashId
@@ -1114,12 +1116,12 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
     updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
-getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
-getDashAndVM dashId fileM = do
+getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM pid dashId fileM = do
   appCtx <- ask @AuthContext
   templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   dashVM <-
-    Dashboards.getDashboardById dashId
+    Dashboards.getDashboardByProjectId pid dashId
       `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText}
   dash <- maybe (pure $ fromMaybe def (loadDashboardFromVM templates dashVM)) Dashboards.readDashboardEndpoint fileM
   pure (dashVM, dash)
@@ -1152,7 +1154,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
 
-  (dashVM, dash) <- getDashAndVM dashId fileM
+  (dashVM, dash) <- getDashAndVM pid dashId fileM
 
   -- If the dashboard has tabs, redirect to the first tab's URL
   -- This ensures users always land on a tab-based URL for dashboards with tabs
@@ -1443,13 +1445,13 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
 
   -- Reuse the widget's existing monitor id when there is one
   queryMonitorId <-
-    Monitors.queryMonitorByWidgetId form.widgetId
+    Monitors.queryMonitorByWidgetId pid form.widgetId
       >>= maybe (liftIO $ Monitors.QueryMonitorId <$> UUID.nextRandom) (pure . (.id))
 
   -- Update widget's showThresholdLines in the dashboard
   whenJust dashboardIdM \dashId -> do
     let dashboardId = UUIDId dashId
-    (_, dash) <- getDashAndVM dashboardId Nothing
+    (_, dash) <- getDashAndVM pid dashboardId Nothing
     let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
         dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
     void $ Dashboards.updateSchema dashboardId dash'
@@ -1457,7 +1459,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   -- If alertEnabled is not checked, delete the monitor
   case form.alertEnabled of
     Nothing -> do
-      _ <- Monitors.deleteMonitorsByWidgetIds [form.widgetId]
+      _ <- Monitors.deleteMonitorsByWidgetIds pid [form.widgetId]
       addSuccessToast "Monitor removed from widget" Nothing
       addRespHeaders $ toHtml ("" :: Text)
     Just _ -> do
@@ -1504,7 +1506,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
 widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertDeleteH pid widgetId = do
   _ <- Projects.sessionAndProject pid
-  _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
+  _ <- Monitors.deleteMonitorsByWidgetIds pid [widgetId]
   addSuccessToast "Monitor removed from widget" Nothing
   addRespHeaders $ toHtml ("" :: Text)
 
@@ -1922,7 +1924,7 @@ data DashboardRenameForm = DashboardRenameForm
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
   _ <- Projects.sessionAndProject pid
-  Dashboards.getDashboardById dashId >>= \case
+  Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       _ <- Dashboards.updateTitle dashId form.title
@@ -1946,7 +1948,7 @@ dashboardRenamePatchH pid dashId form = do
 dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
   _ <- Projects.sessionAndProject pid
-  Dashboards.getDashboardById dashId >>= \case
+  Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       sess <- Projects.getSession
@@ -1981,7 +1983,7 @@ dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx 
 dashboardStarPostH pid dashId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  dashVM <- Dashboards.getDashboardById dashId `whenNothingM` throwError err404{errBody = "Dashboard not found"}
+  dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found"}
   let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
   _ <- Dashboards.updateStarredSince dashId newStarredSince
   addSuccessToast (if isJust newStarredSince then "Dashboard starred" else "Dashboard unstarred") Nothing
@@ -1994,7 +1996,7 @@ dashboardStarPostH pid dashId = do
 dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
   _ <- Projects.sessionAndProject pid
-  _ <- Dashboards.getDashboardById dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
+  _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
   _ <- Dashboards.deleteDashboard dashId
   redirectCS $ "/p/" <> pid.toText <> "/dashboards"
   addSuccessToast "Dashboard was deleted successfully" Nothing
@@ -2050,7 +2052,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       isCrossDashboard = sourceDashId /= targetDashId
 
   -- Get source dashboard to find the widget
-  (_, sourceDash) <- getDashAndVM sourceDashId Nothing
+  (_, sourceDash) <- getDashAndVM pid sourceDashId Nothing
   case findWidgetInDashboard widgetId sourceDash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just (tabSlugM, widgetToDuplicate) -> do
@@ -2058,7 +2060,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       now <- Time.currentTime
 
       -- Clone alert if original widget has one
-      existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
+      existingMonitorM <- Monitors.queryMonitorByWidgetId pid (normalizeWidgetId widgetId)
       newAlertIdM <- forM existingMonitorM \monitor -> do
         newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
         let Monitors.QueryMonitor{id = _, widgetId = _, createdAt = _, updatedAt = _, alertLastTriggered = _, warningLastTriggered = _, currentStatus = _, ..} = monitor
@@ -2077,7 +2079,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
         pure newMonitorId.toText
 
       -- Target dashboard (might be the source); its title names the toast on a cross-dashboard copy
-      (targetVM, targetDash) <- getDashAndVM targetDashId Nothing
+      (targetVM, targetDash) <- getDashAndVM pid targetDashId Nothing
       let targetDashNameM = dashTitle targetVM.title <$ guard isCrossDashboard
           titleSuffix = bool " (Copy)" "" isCrossDashboard
           widgetCopy =
@@ -2118,7 +2120,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, project) <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM dashId Nothing
+  (_, dash) <- getDashAndVM pid dashId Nothing
   now <- Time.currentTime
   let timeParams = (Nothing, Nothing, Nothing)
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
@@ -2134,7 +2136,7 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
 dashboardWidgetNewGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   (_, project) <- Projects.sessionAndProject pid
-  _ <- getDashAndVM dashId Nothing
+  _ <- getDashAndVM pid dashId Nothing
   let currentRange = (,) <$> rangeStartM <*> rangeEndM
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit"
 
@@ -2350,7 +2352,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
 
-  (dashVM, dash) <- getDashAndVM dashId fileM
+  (dashVM, dash) <- getDashAndVM pid dashId fileM
 
   -- Find the active tab by slug
   let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
@@ -2381,7 +2383,7 @@ dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text 
 dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  (_, dash) <- getDashAndVM dashId fileM
+  (_, dash) <- getDashAndVM pid dashId fileM
   let timeParams = (sinceStr, fromDStr, toDStr)
       paramsWithVarDefaults = addVariableDefaults allParams dash.variables
       -- Check if constants are already in params (passed from initial page load)
@@ -2452,7 +2454,7 @@ instance ToHtml TabRenameRes where
 dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (RespHeaders TabRenameRes)
 dashboardTabRenamePatchH pid dashId tabSlug form = do
   _ <- Projects.sessionAndProject pid
-  (_, dash) <- getDashAndVM dashId Nothing
+  (_, dash) <- getDashAndVM pid dashId Nothing
   now <- Time.currentTime
 
   tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
@@ -2523,7 +2525,7 @@ newtype YamlForm = YamlForm {yaml :: Text}
 dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
 dashboardYamlGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
-  (dashVM, dash) <- getDashAndVM dashId Nothing
+  (dashVM, dash) <- getDashAndVM pid dashId Nothing
   teams <- ManageMembers.getTeamsById pid dashVM.teams
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
       yamlText = decodeUtf8 $ GitSync.dashboardToYaml schema

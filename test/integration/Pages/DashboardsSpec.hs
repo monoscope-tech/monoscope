@@ -4,6 +4,7 @@ import "cryptonite" Crypto.Hash qualified as Crypto
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent (runConcurrent)
@@ -149,15 +150,42 @@ spec = sequential $ aroundAll withTestResources do
     -- resulting three-column series hit the one-slot DTFloat decoder
     -- ("mismatch between number of columns to convert and number in target type")
     -- and every stat on the overview dashboard rendered an error overlay.
-    it "statWidget_scalarSummarize_isNotBinnedIntoASeries" \tr -> do
+    it "filters ingested data by time and URL parameters, reports a bad query, and recovers" \tr -> do
       apiKey <- createTestAPIKey tr testPid "stat-widget-key"
       ingestTrace tr apiKey "GET /api/stat-widget" frozenTime
-      let statWidget q = (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.query = Just q}
+      ingestTrace tr apiKey "GET /api/other-widget" frozenTime
+      ingestTrace tr apiKey "GET /api/old-widget" (addUTCTime (-48 * 60 * 60) frozenTime)
+      let widget wt q = (def :: Widget.Widget){Widget.wType = wt, Widget.query = Just q}
+          runWith timeRange params wt q = runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid timeRange params (widget wt q)
+          run = runWith (Just "24h", Nothing, Nothing) []
+
+      logs <- run Widget.WTLogs "name == \"GET /api/stat-widget\""
+      table <- run Widget.WTTable "name != null | summarize count(*) by service"
+      series <- run Widget.WTTimeseries "name != null"
+      for_ [logs, table, series] \md -> (md.error :: Maybe Text) `shouldBe` Nothing
+      V.length logs.dataText `shouldSatisfy` (> 0)
+      V.length table.dataText `shouldSatisfy` (> 0)
+      V.length series.dataset `shouldSatisfy` (> 0)
+
       -- a scalar summarize, and a filter-only stat that has to grow one
       for_ ["name != null | summarize dcount(name)", "name != null"] \q -> do
-        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [] (statWidget q)
+        md <- run Widget.WTStat q
         (md.error :: Maybe Text) `shouldBe` Nothing
         (md.dataFloat :: Maybe Double) `shouldSatisfy` (> Just 0)
+
+      -- Dashboard URL parameters are interpolated into the real query, while the
+      -- selected range still excludes the otherwise matching 48-hour-old trace.
+      filtered <- runWith (Just "24h", Nothing, Nothing) [("var-operation", Just "GET /api/stat-widget")] Widget.WTLogs "name == \"{{var-operation}}\""
+      (filtered.error :: Maybe Text) `shouldBe` Nothing
+      V.length filtered.dataText `shouldBe` 1
+
+      -- A malformed edit becomes widget-local error data. Correcting the query on the
+      -- next request clears it and returns data, which is the browser's retry contract.
+      broken <- run Widget.WTTimeseries "name =="
+      (broken.error :: Maybe Text) `shouldSatisfy` isJust
+      recovered <- run Widget.WTTimeseries "name == \"GET /api/stat-widget\""
+      (recovered.error :: Maybe Text) `shouldBe` Nothing
+      V.length recovered.dataset `shouldSatisfy` (> 0)
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do

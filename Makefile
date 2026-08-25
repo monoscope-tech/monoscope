@@ -374,6 +374,45 @@ test-e2e-ui: e2e-install
 	scripts/e2e.sh --ui
 
 # ---------------------------------------------------------------------------
+# A worktree that reuses this checkout's build state instead of rebuilding it.
+#
+# Dependencies are already shared system-wide through ~/.cabal/store — but only
+# while every checkout resolves to the same store keys. A `package *` stanza in
+# cabal.project.local feeds its ghc-options into EVERY dependency's hash and
+# forks a private copy of the whole dependency set, so keep dev flags scoped to
+# the named local packages (see cabal.project.local).
+#
+# What is left is per-worktree: dist-newstyle/src (~450MB of source-repository-package
+# git checkouts — cabal has no global VCS cache, so each worktree re-clones them)
+# and node_modules. On APFS `cp -c` clones both, near-instantly and at no disk
+# cost until the copies diverge.
+#
+# dist-newstyle/build is deliberately NOT seeded: cabal's build config records
+# the absolute project root, so a clone at a new path always reconfigures and
+# GHC recompiles every module anyway (measured — a seeded worktree recompiled
+# monoscope-shared from scratch). The three local packages are the one thing a
+# worktree genuinely has to build.
+#
+#   make worktree NAME=my-feature [WORKTREE_DIR=/path/to/checkout]
+WORKTREE_DIR ?= $(abspath ..)/monoscope-$(NAME)
+
+worktree:
+	@test -n "$(NAME)" || { echo "usage: make worktree NAME=<branch> [WORKTREE_DIR=path]"; exit 1; }
+	git worktree add -b "$(NAME)" "$(WORKTREE_DIR)"
+	@mkdir -p "$(WORKTREE_DIR)/dist-newstyle"
+	@for d in dist-newstyle/src node_modules web-components/node_modules e2e/node_modules; do \
+		[ -d "$$d" ] || continue; \
+		printf 'seeding %s ... ' "$$d"; \
+		cp -Rc "$$d" "$(WORKTREE_DIR)/$$d" 2>/dev/null \
+			|| { rm -rf "$(WORKTREE_DIR)/$$d"; cp -R "$$d" "$(WORKTREE_DIR)/$$d"; }; \
+		echo done; \
+	done
+	@for f in .env cabal.project.local; do [ -f "$$f" ] && cp "$$f" "$(WORKTREE_DIR)/$$f" || true; done
+	@echo "worktree ready: $(WORKTREE_DIR)"
+
+.PHONY: worktree
+
+# ---------------------------------------------------------------------------
 # Local CI. Runs the same checks GitHub Actions runs, in the same images, and
 # publishes a signed-by-push attestation so CI skips whatever you already proved.
 # Restrict to some of them with CHECKS: `make ci CHECKS="doctests unit-tests"`.

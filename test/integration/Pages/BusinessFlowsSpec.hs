@@ -7,16 +7,19 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime, getZonedTime)
+import Data.Time (addUTCTime, getCurrentTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Lucid (renderText)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.LogExplorer.Log qualified as Log
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
@@ -26,6 +29,7 @@ import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
+import Data.Text.Lazy qualified as TL
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified
@@ -82,9 +86,9 @@ spec = around withTestProject do
 
 -- | Onboarding Tests - Test through API calls instead of DB queries
 onboardingTests :: SpecWith TestContext
-onboardingTests = do
+onboardingTests =
   describe "should complete all onboarding steps in sequence" do
-    it "Step 1: Info - should save and retrieve user information" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    it "moves one new project from profile setup to its first queryable event" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let infoForm =
             Onboarding.OnboardingInfoForm
               { firstName = "John"
@@ -93,10 +97,10 @@ onboardingTests = do
               , companySize = "11 - 25"
               , whereDidYouHearAboutUs = "google"
               }
-      (headers, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
-      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
-      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
-      case result of
+      (infoHeaders, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
+      lookupResponseHeader @"HX-Redirect" infoHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
+      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      case infoResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
             companyName `shouldBe` "ACME Corp"
@@ -104,23 +108,21 @@ onboardingTests = do
             foundUsFrom `shouldBe` "google"
           _ -> fail "Expected InfoStep"
 
-    it "Step 2: Survey - should save and retrieve survey preferences" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let surveyForm =
             Onboarding.OnboardingConForm
               { location = "usa"
               , functionality = ["logs", "analytics"]
               }
-      (headers, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
-      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
-      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
-      case result of
+      (surveyHeaders, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
+      lookupResponseHeader @"HX-Redirect" surveyHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
+      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
+      case surveyResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
             location `shouldBe` "usa"
             functionality `shouldMatchList` ["logs", "analytics"]
           _ -> fail "Expected SurveyStep"
 
-    it "Step 3: NotifChannel - should save and retrieve notification preferences" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let notifForm =
             Onboarding.NotifChannelForm
               { phoneNumber = "+1234567890"
@@ -131,34 +133,36 @@ onboardingTests = do
         Onboarding.OnboardingPhoneEmailsPost pid emails _ -> do
           pid `shouldBe` testPid
           V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
-      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
-      case result of
+      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
+      case notifResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
             phoneNumber `shouldBe` "+1234567890"
             V.toList emails `shouldMatchList` ["team@example.com", "alerts@example.com"]
           _ -> fail "Expected NotifChannelStep"
 
-    it "Step 4: Integration - should show error when no events ingested yet" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-      (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
-      case lookupResponseHeader @"HX-Trigger-After-Settle" headers of
+      (emptyHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
+      case lookupResponseHeader @"HX-Trigger-After-Settle" emptyHeaders of
         Header triggerHeader -> triggerHeader `shouldSatisfy` T.isInfixOf "No events found yet"
         _ -> fail "Expected HX-Trigger-After-Settle header with error toast"
 
-    it "Step 4: Integration - should show API key after integration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-      -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
-      currentTime <- liftIO getCurrentTime
-      ingestTrace tr apiKey "test" currentTime
+      eventTime <- getCurrentTime
+      ingestTrace tr apiKey "onboarding-first-span" eventTime
 
-      (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
-      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
-      (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
-      case result of
+      (integratedHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
+      lookupResponseHeader @"HX-Redirect" integratedHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
+      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
+      case integrationResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.IntegrationStep _stepPid stepApiKey -> do
             stepApiKey `shouldNotBe` "<API_KEY>"
           _ -> fail "Expected IntegrationStep"
+
+      let from = toText $ iso8601Show $ addUTCTime (-60) eventTime
+          to = toText $ iso8601Show $ addUTCTime 60 eventTime
+      (_, events) <- testServant tr $ Log.logExplorerDataH testPid (Just "span_name == \"onboarding-first-span\"") Nothing Nothing Nothing Nothing (Just from) (Just to) Nothing Nothing
+      V.length events.logsData `shouldBe` 1
 
 
 -- | Settings Page Tests - Verify project settings created during onboarding
@@ -529,54 +533,28 @@ replayTests = do
       _ -> fail "Expected Object response"
 
 
--- | S3 Configuration Tests - Table-driven testing for validation scenarios
+-- | S3 settings use the same real MinIO instance as the replay integration tier.
 s3ConfigTests :: SpecWith TestContext
-s3ConfigTests = do
-  describe "should validate S3 credentials" do
-    it "PENDING: Requires Minio setup" $ \_ -> do
-      -- TODO: Re-enable when Minio is set up
-      pendingWith "S3 validation tests require Minio to be configured"
-  -- forM_ s3ValidationCases $ \(testDesc, s3Form, shouldSucceed) ->
-  --   it testDesc $ \tr -> do
-  --     result <- testServant tr $ S3.brings3PostH testPid s3Form
+s3ConfigTests =
+  it "connects real S3 storage, renders it, and removes it" \TestContext{tcResources = tr, tcProjectId = testPid} ->
+    requireMinio tr pendingWith do
+      let s3Form =
+            Projects.ProjectS3Bucket
+              { accessKey = "minioadmin"
+              , secretKey = "minioadmin"
+              , region = "us-east-1"
+              , bucket = "monoscope-test"
+              , endpointUrl = "http://127.0.0.1:9000"
+              }
+      (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
+      TL.toStrict (renderText connected) `shouldSatisfy` T.isInfixOf "Connected"
 
-  --     -- Check if S3 config was saved based on success expectation
-  --     savedConfigM <-
-  --       DBT.withPool tr.trPool
-  --         $ DBT.queryOne [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid)
-  --     let savedConfig = fmap fromOnly savedConfigM
+      (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
+      let savedHtml = TL.toStrict $ renderText savedPage
+      savedHtml `shouldSatisfy` T.isInfixOf "monoscope-test"
+      savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
-  --     case (shouldSucceed, savedConfig) of
-  --       (True, Just (Just (_ :: Projects.ProjectS3Bucket))) -> pass -- Success case
-  --       (False, Just (Nothing :: Maybe Projects.ProjectS3Bucket)) -> pass -- Failure case (no config saved)
-  --       (False, Nothing) -> fail "Project not found"
-  --       _ -> pure () -- Other cases - validation might fail but that's ok for invalid credentials
-
-  it "should remove S3 configuration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    -- First add an S3 config
-    let s3Form =
-          Projects.ProjectS3Bucket
-            { accessKey = "test-key"
-            , secretKey = "test-secret"
-            , region = "us-east-1"
-            , bucket = "test-bucket"
-            , endpointUrl = ""
-            }
-
-    _ <- withResource tr.trPool \conn ->
-      PGS.execute
-        conn
-        [sql|UPDATE projects.projects SET s3_bucket = ? WHERE id = ?|]
-        (Just s3Form, testPid)
-
-    -- Now remove it
-    _ <- testServant tr $ S3.brings3RemoveH testPid
-
-    -- Verify it was removed
-    savedConfigM <- withResource tr.trPool \conn ->
-      PGS.query conn [sql|SELECT s3_bucket FROM projects.projects WHERE id = ?|] (Only testPid) :: IO [Only (Maybe Projects.ProjectS3Bucket)]
-    let savedConfig = fmap fromOnly (listToMaybe savedConfigM)
-
-    case savedConfig of
-      Just (Nothing :: Maybe Projects.ProjectS3Bucket) -> pass -- Successfully removed
-      _ -> fail "S3 config was not removed"
+      (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
+      TL.toStrict (renderText removed) `shouldSatisfy` T.isInfixOf "Not connected"
+      project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
+      project.s3Bucket `shouldSatisfy` isNothing

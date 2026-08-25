@@ -179,7 +179,7 @@ import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
@@ -826,6 +826,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , twilioAccountSid = bool envConfig.twilioAccountSid "ACtest_account_sid_for_tests_only" (T.null envConfig.twilioAccountSid)
               , twilioAuthToken = bool envConfig.twilioAuthToken "test_auth_token_for_tests_only" (T.null envConfig.twilioAuthToken)
               , whatsappFromNumber = bool envConfig.whatsappFromNumber "+15555551234" (T.null envConfig.whatsappFromNumber)
+              , whatsappMonitorTemplate = envConfig.whatsappMonitorTemplate <|> mkTwilioContentSid "HX00000000000000000000000000000000"
               , slackBotToken = bool envConfig.slackBotToken "xoxb-test-token-not-real" (T.null envConfig.slackBotToken)
               , discordBotToken = bool envConfig.discordBotToken "test-discord-bot-token" (T.null envConfig.discordBotToken)
               , openaiApiKey = bool envConfig.openaiApiKey "sk-test-key-not-real" (T.null envConfig.openaiApiKey)
@@ -1490,7 +1491,7 @@ routeRequest tr path params
   | "/chart_data" `T.isPrefixOf` path = do
       result <-
         runQueryEffect tr
-          $ Charts.queryMetrics Nothing Nothing (Just testPid) query Nothing since from to source []
+          $ Charts.queryMetrics Nothing Nothing (Just testPid) query Nothing since from to source Nothing []
       pure $ mockResponse $ AE.encode result
   | "/api/v1/" `T.isPrefixOf` path = routeApiV1Get tr (T.drop 8 path) params
   | otherwise = error $ "runHTTPtoServant: unhandled GET path: " <> path
@@ -1530,7 +1531,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["metrics"] -> do
     result <-
       runQueryEffect tr
-        $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) []
+        $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) Nothing []
     pure $ mockResponse $ AE.encode result
   ["monitors"] ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorsList testPid)

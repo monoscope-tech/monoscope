@@ -47,6 +47,7 @@ import BackgroundJobs qualified
 import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
+import Data.Cache qualified as Cache
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
@@ -1314,7 +1315,9 @@ deleteProjectGetH pid = do
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
       whenJustM (Projects.projectById pid) $ Settings.cancelProjectSubscription appCtx.config
+      apiKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
       _ <- Projects.deleteProject pid
+      liftIO $ forM_ apiKeys \key -> Cache.insert appCtx.projectKeyCache key.keyPrefix Nothing
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
       Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing

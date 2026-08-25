@@ -188,13 +188,13 @@ discordInteractionsH rawBody signatureM timestampM = do
         case custom_id of
           "dashboard-select" -> do
             deferAck envCfg interaction
-            withDashboard selected \dashboard -> do
+            withDashboard discordData.projectId selected \dashboard -> do
               let widgets = (\w -> let t = fromMaybe "Untitled-" w.title in (t, t <> "___" <> selected)) <$> dashboard.widgets
               followup envCfg interaction $ discordSelectContent widgets "widget-select" "Select a widget"
           "widget-select" -> do
             deferAck envCfg interaction
             case T.splitOn "___" selected of
-              [widget, dashboardId] -> withDashboard dashboardId \dashboard ->
+              [widget, dashboardId] -> withDashboard discordData.projectId dashboardId \dashboard ->
                 whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) \w -> do
                   chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
                   followup envCfg interaction $ sharedWidgetContent widget chartUrl (envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId)
@@ -203,9 +203,13 @@ discordInteractionsH rawBody signatureM timestampM = do
         pure $ AE.object []
 
     -- Resolve a dashboard id to its on-disk template, running the continuation if both exist.
-    withDashboard :: Text -> (Dashboards.Dashboard -> ATBaseCtx ()) -> ATBaseCtx ()
-    withDashboard dashboardId act = whenJust (idFromText dashboardId) \did ->
-      whenJustM (Dashboards.getDashboardById did) \dashboardVM -> do
+    --
+    -- Scoped to the interaction's own project: @dashboardId@ arrives inside the
+    -- component @custom_id@, which is whatever the sender's client sent, so an
+    -- unscoped lookup here renders another tenant's widget into this channel.
+    withDashboard :: Projects.ProjectId -> Text -> (Dashboards.Dashboard -> ATBaseCtx ()) -> ATBaseCtx ()
+    withDashboard pid dashboardId act = whenJust (idFromText dashboardId) \did ->
+      whenJustM (Dashboards.getDashboardByProjectId pid did) \dashboardVM -> do
         dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
         whenJust dashboardM act
 

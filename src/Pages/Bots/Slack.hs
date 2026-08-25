@@ -252,14 +252,25 @@ newtype SlackUser = SlackUser {id :: Text}
   deriving anyclass (AE.FromJSON)
 
 
+-- | @team@ is what ties an interaction to a project: everything else in the
+-- payload is chosen by the sender's client, including the dashboard id in a
+-- selected option, so it is the only field a scoped lookup can trust.
+-- 'Maybe' because Slack omits it on some payload shapes; absent means we cannot
+-- establish a tenant and must not answer.
 data SlackAction = SlackAction
   { type_ :: Text
   , view :: SlackView
   , actions :: Maybe [SAction]
   , user :: SlackUser
+  , team :: Maybe SlackTeamRef
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] SlackAction
+
+
+newtype SlackTeamRef = SlackTeamRef {id :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
 
 
 data SlackView = SlackView
@@ -302,9 +313,15 @@ slackActionsH action = do
   where
     noAction = pure $ AE.object []
 
-    handleDashboardSelect slackAction opt =
-      maybe (pure Nothing) Dashboards.getDashboardById (idFromText opt.value)
-        >>= maybe noAction (\dashboardVM -> updateDashboardModal slackAction dashboardVM opt.text)
+    -- Scoped to the workspace's own project. @opt.value@ is the dashboard id the
+    -- sender's client submitted, so looking it up unscoped renders another
+    -- tenant's dashboard into this workspace's modal.
+    handleDashboardSelect slackAction opt = case (slackAction.team, idFromText opt.value) of
+      (Just team, Just did) ->
+        getSlackDataByTeamId team.id
+          >>= maybe (pure Nothing) (\sd -> Dashboards.getDashboardByProjectId sd.projectId did)
+          >>= maybe noAction (\dashboardVM -> updateDashboardModal slackAction dashboardVM opt.text)
+      _ -> noAction
 
     handleViewSubmission authCtx slackAction = do
       let meta = slackAction.view.private_metadata

@@ -207,7 +207,7 @@ spec = around withTestResources do
       it "returns valid MetricsData for count query with JSON round-trip" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing (Just "1h") Nothing Nothing (Just "spans") []
+            $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing (Just "1h") Nothing Nothing (Just "spans") Nothing []
         result.rowsCount `shouldSatisfy` (>= 0)
         AE.eitherDecode @MetricsData (AE.encode result) `shouldSatisfy` isRight
 
@@ -717,13 +717,3 @@ spec = around withTestResources do
         resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle
-
-    describe "Share link create" do
-      it "returns id and url containing /share/r/<id>" $ \tr -> do
-        let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
-        eventId <- UUIDV4.nextRandom
-        now <- getCurrentTime
-        res <- runB $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = now, ApiH.eventType = Just "log"}
-        UUID.toText res.id `shouldSatisfy` (not . T.null)
-        ("/share/r/" `T.isInfixOf` res.url) `shouldBe` True

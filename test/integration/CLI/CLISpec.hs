@@ -127,7 +127,7 @@ spec = around withTestResources do
 
       result <-
         runQueryEffect tr $
-          Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) (Just "spans") []
+          Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) (Just "spans") Nothing []
       checkJsonValue (AE.toJSON result) $ \obj ->
         shouldHaveKeys obj ["headers", "dataset", "rows_count"]
 
@@ -138,7 +138,7 @@ spec = around withTestResources do
 
       result <-
         runQueryEffect tr $
-          Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) (Just "spans") []
+          Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) (Just "spans") Nothing []
       result.error `shouldBe` Nothing
       result.dataFloat `shouldSatisfy` isJust
 

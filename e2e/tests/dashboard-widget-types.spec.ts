@@ -154,4 +154,22 @@ test.describe("every widget type on a dashboard canvas", () => {
 
     expect(after).toEqual(before);
   });
+
+  test("a failed chart shows a local error and a successful refresh clears it", async ({ page }) => {
+    await openDashboard(page, "All Widget Types");
+    const chart = page.locator("[data-chart-widget]").first();
+    await chart.scrollIntoViewIfNeeded();
+    const chartId = await chart.getAttribute("id");
+    expect(chartId).toBeTruthy();
+    const banner = page.locator(`[id="${chartId}_error"]`);
+
+    await page.route("**/chart_data?**", route => route.fulfill({ json: { error: "deterministic backend failure" } }));
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("deterministic backend failure");
+
+    await page.unroute("**/chart_data?**");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
+    await expect(banner).toBeHidden();
+  });
 });

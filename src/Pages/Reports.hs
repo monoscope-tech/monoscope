@@ -299,7 +299,7 @@ wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content =
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project, bw) <- mkPageCtx pid
-  reportM <- Issues.getReportById rid
+  reportM <- Issues.getReportById pid rid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   content <- case reportM of
     Nothing -> pure ("unknown", "Report not found", "")

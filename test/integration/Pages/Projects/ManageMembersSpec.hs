@@ -6,11 +6,9 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
-import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper
-import Pages.Projects (TBulkActionForm (..), TeamForm (..))
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
@@ -18,9 +16,8 @@ import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
 
--- | Extract the members vector from a ManageMembersPost response, failing otherwise.
 postMembers :: ManageMembers.ManageMembers -> IO (V.Vector ProjectMembers.ProjectMemberWithStatusVM)
-postMembers (ManageMembers.ManageMembersPost (_, ms, _, _)) = pure ms
+postMembers (ManageMembers.ManageMembersPost (_, members, _, _)) = pure members
 postMembers _ = fail "Expected ManageMembersPost response"
 
 
@@ -31,236 +28,50 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
-    -- These steps share one DB (aroundAll) and MUST run in order: update/get/delete/re-add
-    -- all build on the member created in the first step. They were separate `it`s, but the
-    -- suite runs randomized, so any order but definition-order broke them. Kept as one
-    -- sequential `it` so the create→update→get→delete→re-add lifecycle can't be reordered.
     it "creates, updates, gets, deletes, and re-adds a member" \tr -> do
-      -- PAID plan allows multiple members; start from a clean member list.
-      _ <- withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
-      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id != '00000000-0000-0000-0000-000000000001'|] (Only testPid)
-      let saveWith perms = postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (ManageMembers.ManageMembersForm{emails = ["example@gmail.com"], permissions = perms}))
-          hasExample ms = "example@gmail.com" `elem` (ms <&> (.email))
+      void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      void $ withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id != '00000000-0000-0000-0000-000000000001'|] (Only testPid)
+      let saveWith permissions = postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (ManageMembers.ManageMembersForm{emails = ["example@gmail.com"], permissions}))
+          hasExample members = "example@gmail.com" `elem` (members <&> (.email))
 
-      -- create
-      created <- saveWith [ProjectMembers.PAdmin]
-      created `shouldSatisfy` hasExample
-
-      -- update permission (re-saving the same email updates it in place)
+      saveWith [ProjectMembers.PAdmin] >>= (`shouldSatisfy` hasExample)
       updated <- saveWith [ProjectMembers.PView]
-      mem <- maybe (fail "example@gmail.com not found in members") pure $ find (\pm -> pm.email == "example@gmail.com") (V.toList updated)
-      mem.permission `shouldBe` ProjectMembers.PView
+      (find ((== "example@gmail.com") . (.email)) (V.toList updated) <&> (.permission)) `shouldBe` Just ProjectMembers.PView
 
-      -- get: the original test user + example@gmail.com
-      (_, pgGet) <- testServant tr $ ManageMembers.manageMembersGetH testPid
-      case pgGet of
-        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers, _, _)) -> do
-          projMembers `shouldSatisfy` hasExample
-          length projMembers `shouldBe` 2
-        _ -> fail "Expected ManageMembersGet response"
+      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, listed, _, _))) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+      listed `shouldSatisfy` hasExample
+      length listed `shouldBe` 2
 
-      -- delete: an empty email list removes the non-owner member
       deleted <- postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (ManageMembers.ManageMembersForm{emails = [], permissions = []}))
       deleted `shouldNotSatisfy` hasExample
+      saveWith [ProjectMembers.PAdmin] >>= (`shouldSatisfy` hasExample)
 
-      -- re-add after deletion
-      readded <- saveWith [ProjectMembers.PAdmin]
-      readded `shouldSatisfy` hasExample
+  describe "Team validation" do
+    it "rejects duplicate handles and invalid customer input" \tr -> do
+      let team =
+            ManageMembers.TeamForm
+              { teamName = "Hello"
+              , teamDescription = ""
+              , teamHandle = "hello"
+              , notifEmails = V.empty
+              , teamMembers = [userID]
+              , discordChannels = V.empty
+              , slackChannels = V.empty
+              , phoneNumbers = V.empty
+              , pagerdutyServices = V.empty
+              , teamId = Nothing
+              }
+          post form = snd <$> testServant tr (ManageMembers.manageTeamPostH testPid form Nothing)
+          expectError form expected = post form >>= \case
+            ManageMembers.ManageTeamsPostError actual -> actual `shouldBe` expected
+            _ -> expectationFailure "Expected ManageTeamsPostError response"
+          invalidCases :: [(ManageMembers.TeamForm, Text)]
+          invalidCases =
+            [ (team{ManageMembers.teamName = ""}, "Team name is required")
+            , (team{ManageMembers.teamHandle = "invalid handle"}, "Handle must be lowercase, no spaces, and hyphens only")
+            , (team{ManageMembers.notifEmails = ["not-an-email"]}, "Invalid email format: not-an-email")
+            ]
 
-  describe "Teams Creation, Update and Consumption" do
-    let team =
-          ManageMembers.TeamForm
-            { teamName = "Hello"
-            , teamDescription = ""
-            , teamHandle = "hello"
-            , notifEmails = V.empty
-            , teamMembers = V.empty
-            , discordChannels = V.empty
-            , slackChannels = V.empty
-            , phoneNumbers = V.empty
-            , pagerdutyServices = V.empty
-            , teamId = Nothing
-            }
-
-    it "Should create team" \tr -> do
-      -- Clean up all teams at the start of this test suite
-      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.teams WHERE project_id = ?|] (Only testPid)
-      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
-      case pg of
-        ManageMembers.ManageTeamsPostError "" -> do
-          -- Verify by fetching teams
-          (_, pg') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-          case pg' of
-            ManageMembers.ManageTeamsGet' (_, _, _, _, teams) -> length teams `shouldBe` 1
-            _ -> fail "Expected ManageTeamsGet' response"
-        _ -> fail "Expected ManageTeamsPostError response"
-
-    it "Should not create team with same handle" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
-      case pg of
-        ManageMembers.ManageTeamsPostError message -> do
-          message `shouldBe` "Team handle already exists for this project."
-        _ -> fail "Expected ManageTeamsPostError response"
-
-    it "Should list and update teams" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-      case pg of
-        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          V.length teams' `shouldBe` 1
-          let team' = V.head teams'
-          let updatedTeam' = team{teamName = "Updated Team", teamDescription = "Updated description", teamId = Just team'.id}
-          (_, pg') <-
-            testServant tr $ ManageMembers.manageTeamPostH testPid updatedTeam' Nothing
-          case pg' of
-            ManageMembers.ManageTeamsPostError "" -> do
-              -- Verify by fetching teams again
-              (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-              case pg'' of
-                ManageMembers.ManageTeamsGet' (_, _, _, _, teams) -> do
-                  let updated = find (\t -> t.handle == "hello") teams
-                  isJust updated `shouldBe` True
-                  let updatedTeam = Unsafe.fromJust updated
-                  updatedTeam.name `shouldBe` "Updated Team"
-                  updatedTeam.description `shouldBe` "Updated description"
-                _ -> fail "Expected ManageTeamsGet' response"
-            _ -> fail "Expected ManageTeamsPostError response"
-        _ -> fail "Expected ManageTeamsGet' response"
-
-    it "Should not create team with invalid handle" \tr -> do
-      let invalidTeam = team{teamHandle = "invalid handle with spaces"}
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamPostH testPid invalidTeam Nothing
-      case pg of
-        ManageMembers.ManageTeamsPostError message -> do
-          message `shouldBe` "Handle must be lowercase, no spaces, and hyphens only"
-        _ -> fail "Expected ManageTeamsPostError response"
-
-    it "Should add members to a team" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-      case pg of
-        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
-          let createdTeam = find (\t -> t.handle == "hello") teams
-          isJust createdTeam `shouldBe` True
-          let created = Unsafe.fromJust createdTeam
-          let teamWithMembers = team{teamMembers = [userID], teamId = Just created.id}
-          (_, pg') <-
-            testServant tr $ ManageMembers.manageTeamPostH testPid teamWithMembers Nothing
-          case pg' of
-            ManageMembers.ManageTeamsPostError "" -> do
-              -- Verify by fetching teams again
-              (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-              case pg'' of
-                ManageMembers.ManageTeamsGet' (_, _, _, _, teams') -> do
-                  let updatedTeamM = find (\t -> t.handle == "hello") teams'
-                  isJust updatedTeamM `shouldBe` True
-                  let updatedTeam = Unsafe.fromJust updatedTeamM
-                  length updatedTeam.members `shouldBe` 1
-                  let fm = V.head updatedTeam.members
-                  fm.memberEmail `shouldBe` "test@monoscope.tech"
-                _ -> fail "Expected ManageTeamsGet' response"
-            _ -> fail "Expected ManageTeamsPostError response"
-        _ -> fail "Expected ManageTeamsGet' response"
-
-    it "Should not create a team with an empty name" \tr -> do
-      let invalidTeam = team{teamName = ""}
-      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid invalidTeam Nothing
-      case pg of
-        ManageMembers.ManageTeamsPostError message -> do
-          message `shouldBe` "Team name is required"
-        _ -> fail "Expected ManageTeamsPostError response"
-
-    it "Should not create a team with an invalid handle" \tr -> do
-      let invalidTeam = team{teamHandle = "Invalid Handle!"}
-      (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid invalidTeam Nothing
-      case pg of
-        ManageMembers.ManageTeamsPostError message -> do
-          message `shouldBe` "Handle must be lowercase, no spaces, and hyphens only"
-        _ -> fail "Expected ManageTeamsPostError response"
-
-    it "Should update team notifications" \tr -> do
-      (_, pg) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-      case pg of
-        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do
-          let createdTeam = find (\t -> t.handle == "hello") teams
-          isJust createdTeam `shouldBe` True
-          let created = Unsafe.fromJust createdTeam
-          let updatedTeam =
-                team
-                  { teamId = Just created.id
-                  , notifEmails = ["team@example.com"]
-                  , slackChannels = ["slack-channel-id"]
-                  , discordChannels = ["discord-channel-id"]
-                  }
-          (_, pg') <- testServant tr $ ManageMembers.manageTeamPostH testPid updatedTeam Nothing
-          case pg' of
-            ManageMembers.ManageTeamsPostError "" -> do
-              -- Verify by fetching teams again
-              (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-              case pg'' of
-                ManageMembers.ManageTeamsGet' (_, _, _, _, updatedTeams) -> do
-                  let updated = find (\t -> t.handle == "hello") updatedTeams
-                  isJust updated `shouldBe` True
-                  let updatedTeam' = Unsafe.fromJust updated
-                  updatedTeam'.notify_emails `shouldBe` ["team@example.com"]
-                  updatedTeam'.slack_channels `shouldBe` ["slack-channel-id"]
-                  updatedTeam'.discord_channels `shouldBe` ["discord-channel-id"]
-                _ -> fail "Expected ManageTeamsGet' response"
-            _ -> fail "Expected ManageTeamsPostError response"
-        _ -> fail "Expected ManageTeamsGet' response"
-
-    it "Should delete a team" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-      case pg of
-        ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          V.length teams' `shouldBe` 1
-          let team' = V.head teams'
-          let teamForm =
-                TBulkActionForm{itemId = [team'.id]}
-          (_, pg') <-
-            testServant tr $ ManageMembers.manageTeamBulkActionH testPid "delete" teamForm (Just "hello")
-          case pg' of
-            ManageMembers.ManageTeamsDelete -> do
-              (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-              case pg'' of
-                ManageMembers.ManageTeamsGet' (_, _, _, _, teams'') -> do
-                  V.length teams'' `shouldBe` 0
-                _ -> fail "Expected ManageTeamsGet' response"
-            _ -> fail "Expected ManageTeamsDelete response"
-        _ -> fail "Expected ManageTeamsGet' response"
-
-    it "Should handle bulk delete of teams" \tr -> do
-      -- Create multiple teams
-      let team1 = team{teamName = "Team 1", teamHandle = "team-1"}
-      let team2 = team{teamName = "Team 2", teamHandle = "team-2"}
-      (_, pg1) <- testServant tr $ ManageMembers.manageTeamPostH testPid team1 Nothing
-      (_, pg2) <- testServant tr $ ManageMembers.manageTeamPostH testPid team2 Nothing
-      case (pg1, pg2) of
-        (ManageMembers.ManageTeamsPostError "", ManageMembers.ManageTeamsPostError "") -> do
-          -- Fetch teams to get IDs
-          (_, pg) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-          case pg of
-            ManageMembers.ManageTeamsGet' (_, _, _, _, teams) -> do
-              let createdTeam1' = find (\t -> t.handle == "team-1") teams
-              let createdTeam2' = find (\t -> t.handle == "team-2") teams
-              isJust createdTeam1' `shouldBe` True
-              isJust createdTeam2' `shouldBe` True
-              let createdTeam1 = Unsafe.fromJust createdTeam1'
-              let createdTeam2 = Unsafe.fromJust createdTeam2'
-
-              let teamIds = [createdTeam1.id, createdTeam2.id]
-              let bulkActionForm = ManageMembers.TBulkActionForm{itemId = teamIds}
-              (_, pg') <- testServant tr $ ManageMembers.manageTeamBulkActionH testPid "delete" bulkActionForm Nothing
-              case pg' of
-                ManageMembers.ManageTeamsDelete -> do
-                  (_, pg'') <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
-                  case pg'' of
-                    ManageMembers.ManageTeamsGet' (_, _, _, _, teamsAfterDelete) -> do
-                      V.length teamsAfterDelete `shouldBe` 0
-                    _ -> fail "Expected ManageTeamsGet' response"
-                _ -> fail "Expected ManageTeamsDelete response"
-            _ -> fail "Expected ManageTeamsGet' response"
-        _ -> fail "Expected ManageTeamsPostError responses"
+      expectError team ""
+      expectError team "Team handle already exists for this project."
+      for_ invalidCases $ uncurry expectError

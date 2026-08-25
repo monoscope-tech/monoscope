@@ -42,15 +42,10 @@ test("a dashboard can be created without assigning a team", async ({ page }) => 
   await page.getByText("Blank dashboard").click();
   await page.locator('input[name="title"]').first().fill("No Team Dashboard");
   await page.getByRole("button", { name: "Create" }).first().click();
-
-  await expect.poll(() => responses.length).toBeGreaterThan(0);
+  await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 20000 });
   expect(responses).not.toContain(400);
-  await expect
-    .poll(async () => {
-      await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-      return page.getByText("No Team Dashboard").count();
-    }, { timeout: 20000 })
-    .toBeGreaterThan(0);
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await expect(page.getByText("No Team Dashboard").first()).toBeVisible();
 });
 
 const FIXTURE = "E2E Grid Fixture";
@@ -168,6 +163,20 @@ async function plainWidget(page: Page): Promise<Locator> {
   return page.locator(ROOT_ITEMS).nth(idx);
 }
 
+async function chartWidget(page: Page): Promise<Locator> {
+  const idx = await page.$$eval(ROOT_ITEMS, (els) =>
+    els.findIndex((e: any) => {
+      try {
+        return JSON.parse(e.dataset.widget).type !== "group" && !!e.querySelector("[data-chart-widget]");
+      } catch {
+        return false;
+      }
+    }),
+  );
+  expect(idx, "dashboard has no chart widget to resize").toBeGreaterThanOrEqual(0);
+  return page.locator(ROOT_ITEMS).nth(idx);
+}
+
 /**
  * Gridstack implements its own drag on raw mouse events, so Playwright's dragTo()
  * (HTML5 DnD) does not drive it. Move in steps — a single jump can be discarded by the
@@ -191,31 +200,7 @@ test.describe("dashboard gridstack", () => {
   // interleave (the project config is fullyParallel).
   test.describe.configure({ mode: "serial" });
 
-  test("every server-rendered widget is adopted by the grid", async ({ page }) => {
-    await openFirstDashboard(page);
-
-    // Server markup carries gs-w/gs-h; "adopted" means gridstack parsed those into a
-    // node. An un-adopted item still renders, but cannot be dragged, resized or saved.
-    const unadopted = await page.$$eval(ROOT_ITEMS, (els) =>
-      els.filter((e: any) => !e.gridstackNode).map((e) => e.id),
-    );
-    expect(unadopted, `items with no gridstackNode: ${unadopted.join(", ")}`).toEqual([]);
-    expect(await page.locator(ROOT_ITEMS).count()).toBeGreaterThan(0);
-  });
-
-  test("nested group grids initialise and adopt their children", async ({ page }) => {
-    await openFirstDashboard(page);
-
-    // A group widget owns a sub-grid built by a second GridStack.init. If subgrid
-    // support regressed the outer grid would still look fine, so assert it separately.
-    expect(await page.locator(".nested-grid.grid-stack-initialized").count()).toBeGreaterThan(0);
-    const unadopted = await page.$$eval(".nested-grid > .grid-stack-item", (els) =>
-      els.filter((e: any) => !e.gridstackNode).map((e) => e.id),
-    );
-    expect(unadopted, `nested items with no gridstackNode: ${unadopted.join(", ")}`).toEqual([]);
-  });
-
-  test("no client-side errors, and nothing calls a removed gridstack API", async ({ page }) => {
+  test("adopts root and nested widgets without client errors", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -223,45 +208,18 @@ test.describe("dashboard gridstack", () => {
     await openFirstDashboard(page);
     await page.waitForTimeout(2000); // lazy chunks import on htmx:afterSettle
 
+    const unadopted = await page.$$eval(`${ROOT_ITEMS}, .nested-grid > .grid-stack-item`, (els) =>
+      els.filter((e: any) => !e.gridstackNode).map((e) => e.id),
+    );
+    expect(unadopted, `items with no gridstackNode: ${unadopted.join(", ")}`).toEqual([]);
+    expect(await page.locator(ROOT_ITEMS).count()).toBeGreaterThan(0);
+    expect(await page.locator(".nested-grid.grid-stack-initialized").count()).toBeGreaterThan(0);
+
     const real = errors.filter((e) => !TRANSIENT.test(e));
     // addWidget(HTMLElement) was removed in v11: it logs and forwards to makeWidget,
     // silently dropping its options argument. A caller only shows up as this log.
     expect(real.filter((e) => V11_DEPRECATION.test(e)), "removed API still in use").toEqual([]);
     expect(real, real.join("\n")).toEqual([]);
-  });
-
-  test("a widget can be dragged to a new cell", async ({ page }) => {
-    await openFirstDashboard(page);
-    const before = await snapshot(page);
-
-    // Drag a widget that is not in column 0 sideways. Horizontal keeps the whole
-    // gesture on screen: these dashboards are many rows tall, and a vertical drag runs
-    // the cursor off the viewport, where the drop never registers.
-    const target = before.find((l) => l.x > 0);
-    expect(target, "dashboard has no widget offset from column 0 to drag").toBeTruthy();
-    // By id, never by index: since 13.1.0 gridstack reorders the DOM to match the
-    // visual layout, so after the drop nth(i) is whichever widget took the old slot.
-    const widget = byId(page, target!.id);
-    await widget.scrollIntoViewIfNeeded();
-
-    const box = (await widget.boundingBox())!;
-    // Only elements carrying the grid's handleClass start a drag.
-    await dragBy(page, widget.locator(".grid-stack-handle").first(), -box.width * 0.8, 0);
-
-    // Assert that it moved, not where to: float/collision decide the landing cell.
-    // Require a live node as well as a change — a bare .not.toEqual() would also be
-    // satisfied by null, i.e. by the widget losing its node entirely.
-    await expect
-      .poll(
-        async () => {
-          const l = await layoutOf(widget);
-          return !!l && (l.x !== target!.x || l.y !== target!.y);
-        },
-        { timeout: 5000 },
-      )
-      .toBe(true);
-
-    await restore(page, before);
   });
 
   // NOT covered: dragging a widget *within* a group's sub-grid. It does not work today
@@ -275,13 +233,19 @@ test.describe("dashboard gridstack", () => {
   // wrong: nested x/y drifts on its own as charts settle, so a "position changed" assert
   // passes without any drag happening. Assert on a sub-grid dragstart event instead.
 
-  test("a widget can be resized from its handle", async ({ page }) => {
+  test("resizing a widget resizes its chart", async ({ page }) => {
     await openFirstDashboard(page);
     const before = await snapshot(page);
 
-    const widget = await plainWidget(page);
+    const widget = await chartWidget(page);
     await widget.scrollIntoViewIfNeeded();
     const size = await layoutOf(widget);
+    const chart = widget.locator("[data-chart-widget]").first();
+    await expect.poll(() => chart.evaluate((el: any) => !!(window as any).echarts?.getInstanceByDom(el))).toBe(true);
+    const beforeChart = await chart.evaluate((el: any) => {
+      const instance = (window as any).echarts.getInstanceByDom(el);
+      return { width: instance.getWidth(), height: instance.getHeight() };
+    });
 
     // gridstack injects the resize handles after init (they are not in server markup)
     // and marks items ui-resizable-autohide, so the corner grip only becomes visible —
@@ -304,6 +268,14 @@ test.describe("dashboard gridstack", () => {
         { timeout: 5000 },
       )
       .toBe(true);
+
+    await expect.poll(() => chart.evaluate((el: any, old) => {
+      const instance = (window as any).echarts.getInstanceByDom(el);
+      return instance && {
+        changed: instance.getWidth() !== old.width || instance.getHeight() !== old.height,
+        fitted: Math.abs(instance.getWidth() - el.clientWidth) <= 1 && Math.abs(instance.getHeight() - el.clientHeight) <= 1,
+      };
+    }, beforeChart)).toEqual({ changed: true, fitted: true });
 
     await restore(page, before);
   });

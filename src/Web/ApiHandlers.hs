@@ -213,7 +213,7 @@ monitorFromInput pid now mid existingM inp =
     , warningThreshold = inp.warningThreshold
     , logQuery = inp.query
     , logQueryAsSql =
-        let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.presetRollup = Just "5m"}
+        let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = inp.timeWindowMins}
          in fromMaybe (foldMap (.logQueryAsSql) existingM)
               $ (.finalAlertQuery)
               . snd
@@ -255,6 +255,7 @@ monitorFromInput pid now mid existingM inp =
 -- input can't supply (createdAt, trigger history, status).
 saveMonitor :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
 saveMonitor pid mid existingM inp = do
+  when (inp.timeWindowMins <= 0) $ throwError err400{errBody = "time_window_mins must be positive"}
   now <- Time.currentTime
   let mon = monitorFromInput pid now mid existingM inp
   mon <$ Monitors.queryMonitorUpsert mon
@@ -316,6 +317,7 @@ apiMonitorYaml pid mid = do
 -- | PATCH — merge fields into existing monitor.
 apiMonitorPatch :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorPatch -> ATBaseCtx Monitors.QueryMonitor
 apiMonitorPatch pid mid patch = do
+  when (maybe False (<= 0) patch.timeWindowMins) $ throwError err400{errBody = "time_window_mins must be positive"}
   existing <- apiMonitorGet pid mid
   now <- Time.currentTime
   let ac = existing.alertConfig
@@ -427,7 +429,7 @@ apiDashboardsList pid sortM teamIdM = do
 
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardGet pid did = toFull <$> (ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did)
+apiDashboardGet pid did = toFull <$> (notFoundOr "Dashboard not found" =<< Dashboards.getDashboardByProjectId pid did)
 
 
 -- | Server-rendered dashboard data: one request returns every widget on the
@@ -437,7 +439,7 @@ apiDashboardGet pid did = toFull <$> (ownedOr "Dashboard not found" pid =<< Dash
 -- uses to paint charts in a terminal.
 apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx DashboardData
 apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
-  vm <- ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did
+  vm <- notFoundOr "Dashboard not found" =<< Dashboards.getDashboardByProjectId pid did
   (_, dash) <- DashPage.getDashAndVM pid did Nothing
   now <- Time.currentTime
   let timeParams = (sinceM, fromM, toM)
@@ -719,6 +721,7 @@ data ShareLinkCreated = ShareLinkCreated
 apiShareLinkCreate :: Projects.ProjectId -> ShareLinkCreate -> ATBaseCtx ShareLinkCreated
 apiShareLinkCreate pid req = do
   authCtx <- ask @AuthContext
+  _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
   ShareEvents.createShareLink shareId pid req.eventId (fromMaybe "request" req.eventType) req.eventCreatedAt
   let url = authCtx.config.hostUrl <> "/share/r/" <> UUID.toText shareId

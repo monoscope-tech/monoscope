@@ -10,7 +10,8 @@ module Models.Projects.Dashboards (
   SecuredSql (..),
   Tab (..),
   Constant (..),
-  getDashboardById,
+  getDashboardByIdUnscoped,
+  getDashboardByProjectId,
   getDashboardByFilePath,
   readDashboardsFromDirectory,
   readDashboardEndpoint,
@@ -219,17 +220,34 @@ readDashboardEndpoint uri = do
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
 replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
   where
-    replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
+    replace = replacePlaceholders (variablePresets def pid.toText mf mt allParams currentTime)
 
 
 replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
 replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
   where
-    replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
+    replace = replacePlaceholders (variablePresets def pid.toText mf mt allParams currentTime)
 
 
-getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardById did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
+-- | Look up a dashboard WITHOUT checking which project owns it.
+--
+-- Almost never what you want: a dashboard id reaching a handler from a URL, a
+-- chat message or an API body is attacker-controlled, and answering it without
+-- a project scope serves one tenant another tenant's dashboard. Use
+-- 'getDashboardByProjectId'.
+--
+-- Legitimate only where the caller has no project in hand precisely BECAUSE it
+-- is acting on a row it already fetched (post-update sync) or on a job it
+-- already scoped. The name is deliberately loud so those sites are a decision
+-- rather than a default.
+getDashboardByIdUnscoped :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
+getDashboardByIdUnscoped did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
+
+
+-- | The scoped lookup. A dashboard belonging to another project reads as absent,
+-- which is the correct answer to give a caller that should not know it exists.
+getDashboardByProjectId :: DB es => Projects.ProjectId -> DashboardId -> Eff es (Maybe DashboardVM)
+getDashboardByProjectId pid did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = #{did} |])
 
 
 getDashboardByFilePath :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardVM)

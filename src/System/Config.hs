@@ -1,9 +1,10 @@
-module System.Config (EnvConfig (..), AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
+module System.Config (EnvConfig (..), TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
 import Data.Base64.Types qualified as B64
 import Data.Cache (Cache, newCache)
+import Data.Char (isHexDigit)
 import Data.Default (Default (..))
 import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
@@ -133,6 +134,7 @@ data EnvConfig = EnvConfig
   , whatsappEndpointTemplate :: Text
   , whatsappAllReportTemplate :: Text
   , whatsappErrorReportTemplate :: Text
+  , whatsappMonitorTemplate :: Maybe TwilioContentSid
   , whatsappBotChart :: Text
   , whatsappBotText :: Text
   , whatsappDashboardList :: Text
@@ -306,6 +308,25 @@ instance DefConfig EnvConfig where
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
   toVar = toString . T.intercalate ","
+
+
+-- | A validated Twilio Content Template SID: "HX" followed by 32 hexadecimal digits.
+newtype TwilioContentSid = TwilioContentSid Text
+  deriving stock (Eq, Generic, Show)
+
+
+mkTwilioContentSid :: Text -> Maybe TwilioContentSid
+mkTwilioContentSid sid =
+  TwilioContentSid sid <$ guard (T.length sid == 34 && T.take 2 sid == "HX" && T.all isHexDigit (T.drop 2 sid))
+
+
+twilioContentSidText :: TwilioContentSid -> Text
+twilioContentSidText (TwilioContentSid sid) = sid
+
+
+instance Var TwilioContentSid where
+  fromVar = mkTwilioContentSid . toText
+  toVar = toString . twilioContentSidText
 
 
 -- Support unmarshalling LogLevel from environment variable

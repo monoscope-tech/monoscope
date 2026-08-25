@@ -1,11 +1,12 @@
 module Pages.ApiSpec (spec) where
 
-import Data.Vector qualified as V
 import Models.Projects.ProjectApiKeys (ProjectApiKey (..))
+import Network.GRPC.Common (GrpcError (GrpcUnauthenticated), GrpcException (..))
+import Network.GRPC.Common.Protobuf (Proto (..))
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.TestUtils
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
 import Pages.Settings qualified as Api
@@ -15,39 +16,23 @@ import Pages.Settings qualified as Api
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Check API Keys" do
-    it "should have one default apikey" \tr -> do
-      (_, Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
-      length apiKeys `shouldBe` 1 -- Default API key from test setup
-
-    it "should add apikey" \tr -> do
+    it "creates, revokes, and reactivates a key around real ingest" \tr -> do
+      let ingest key body = void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key [body] frozenTime)
+      (_, Api.ApiGet (PageCtx _ (_, initialKeys))) <- testServant tr $ Api.apiGetH testPid
+      length initialKeys `shouldBe` 1
       let apikeyForm = Api.GenerateAPIKeyForm{title = "Test", from = Nothing}
-      (_, Api.ApiPost pid apiKeys apiKeyM) <- testServant tr $ Api.apiPostH testPid apikeyForm
-      length apiKeys `shouldBe` 2
-      testPid `shouldBe` pid
-      isJust apiKeyM `shouldBe` True
-      let (apiKey, keyText) = Unsafe.fromJust apiKeyM
+      (_, Api.ApiPost pid createdKeys (Just (apiKey, keyText))) <- testServant tr $ Api.apiPostH testPid apikeyForm
+      (pid, length createdKeys) `shouldBe` (testPid, 2)
       apiKey.title `shouldBe` "Test"
       apiKey.active `shouldBe` True
       apiKey.keyPrefix `shouldBe` keyText
+      ingest keyText "accepted before revoke"
 
-    it "should get apikey list" \tr -> do
-      (_, Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
-      length apiKeys `shouldBe` 2
+      (_, Api.ApiPost _ revokedKeys Nothing) <- testServant tr $ Api.apiDeleteH testPid apiKey.id
+      (find ((== apiKey.id) . (.id)) revokedKeys <&> (.active)) `shouldBe` Just False
+      ingest keyText "rejected after revoke"
+        `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
-    it "should delete apikey" \tr -> do
-      (_, Api.ApiGet (PageCtx bwconf (_pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid
-      length apiKeys `shouldBe` 2
-      let apiKey = V.head apiKeys
-
-      (_, Api.ApiPost pid apiKys apiKeyM) <- testServant tr $ Api.apiDeleteH testPid apiKey.id
-      isNothing apiKeyM `shouldBe` True
-      length apiKys `shouldBe` 2
-      let apk = V.head apiKys
-      apk.active `shouldBe` False
-      pid `shouldBe` testPid
-    it "should get apikey list (revoked)" \tr -> do
-      (_, Api.ApiGet (PageCtx _ (_pid, apks))) <- testServant tr $ Api.apiGetH testPid
-      length apks `shouldBe` 2
-      -- Find the revoked key (the one we just deleted)
-      let revokedKey = V.find (not . (.active)) apks
-      isJust revokedKey `shouldBe` True
+      (_, Api.ApiPost _ activeKeys Nothing) <- testServant tr $ Api.apiActivateH testPid apiKey.id
+      (find ((== apiKey.id) . (.id)) activeKeys <&> (.active)) `shouldBe` Just True
+      ingest keyText "accepted after activation"

@@ -10,11 +10,13 @@ import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Pages.BodyWrapper (PageCtx (..))
+import Pages.Projects qualified as ProjectPages
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -43,8 +45,9 @@ spec :: Spec
 spec = around withTestResources do
   describe "Error notification sweep + rate limiting" do
 
-    it "1. Orphan patterns older than 1h are still picked up by the sweep (regression guard for 60-min cutoff bug)" \tr -> do
+    it "1. Project settings disable and restore delivery for an orphaned runtime error" \tr -> do
       seedSlackChannel tr
+      saveErrorAlerts tr True
       apiKey <- createTestAPIKey tr pid "notif-orphan-key"
       -- Ingest an error 3h before frozenTime so processOneMinuteErrors's inline notify window (15 min) misses it.
       let stack = "TypeError: x is undefined\n    at f (/a.js:1:1)"
@@ -70,6 +73,17 @@ spec = around withTestResources do
       case stamped of
         [PGS.Only n] -> n `shouldSatisfy` (> 0)
         _ -> expectationFailure "stamped count query returned no row"
+
+      let clearNotified = withResource tr.trPool \conn ->
+            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE project_id = ? |] (PGS.Only pid)
+          sweep = fst <$> captureNotifs tr (BackgroundJobs.sweepErrorSubscriptions pid)
+      saveErrorAlerts tr False
+      clearNotified
+      sweep `shouldReturn` []
+
+      saveErrorAlerts tr True
+      clearNotified
+      sweep >>= (`shouldSatisfy` (not . null))
 
     it "2. Rate limit enforces 20/hr; overflow lands in notification_digest_queue" \tr -> do
       seedSlackChannel tr
@@ -196,3 +210,9 @@ spec = around withTestResources do
       (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
         $ BackgroundJobs.runNotificationSweep frozenTime
       notifs `shouldSatisfy` (not . null)
+
+
+saveErrorAlerts :: TestResources -> Bool -> IO ()
+saveErrorAlerts tr enabled = do
+  (_, ProjectPages.CreateProject (PageCtx _ (_, _, _, _, _, form, _, _))) <- testServant tr $ ProjectPages.projectSettingsGetH pid
+  void $ testServant tr $ ProjectPages.createProjectPostH pid form{ProjectPages.errorAlerts = bool Nothing (Just "on") enabled}

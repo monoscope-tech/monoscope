@@ -143,7 +143,7 @@ spec = sequential $ aroundAll withTestResources do
       -- job (not by runAllBackgroundJobs), so flush explicitly before asserting it.
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       V.length result.dataset `shouldSatisfy` (> 0)
       rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
       rawRows `shouldBe` V.singleton 4
@@ -280,7 +280,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing
       toString (Lucid.renderText card) `shouldContain` "request.duration.full · mean"
       let (timeFrom, timeTo) = testTimeRange
-      chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       chart.error `shouldBe` Nothing
       chart.dataset `shouldSatisfy` (not . V.null)
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text))
@@ -397,7 +397,7 @@ spec = sequential $ aroundAll withTestResources do
       let (timeFrom, timeTo) = testTimeRange
       -- data_type omitted so the scalar summarize auto-decodes to a float (the
       -- CLI --assert path); the read goes through queryMetrics' otel_metrics SQL.
-      scalar <- runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just pid) (Just "metrics | where metric_name == \"tf.read.match\" | summarize sum(value)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      scalar <- runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just pid) (Just "metrics | where metric_name == \"tf.read.match\" | summarize sum(value)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       scalar.error `shouldBe` Nothing
       scalar.dataFloat `shouldBe` Just 42
 
@@ -418,7 +418,7 @@ spec = sequential $ aroundAll withTestResources do
       forM_ ([0 .. 5] :: [Int]) $ \i -> ingestLog tr key "Log entry" (addUTCTime (fromIntegral (i * 60)) frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") Nothing []
       V.length result.dataset `shouldSatisfy` (> 0)
       V.toList result.headers `shouldContain` ["timestamp"]
 
@@ -436,7 +436,7 @@ spec = sequential $ aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 6) -- 3 logs + 3 traces
       -- Verify metrics
       let (timeFrom, timeTo) = testTimeRange
-      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
     it "Test 8.1: persists a large bulk OTLP request in one unnest insert" $ \tr -> do
@@ -477,7 +477,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
         V.length result.dataset `shouldSatisfy` (> 0)
 
       it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do

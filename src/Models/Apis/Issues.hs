@@ -601,6 +601,48 @@ data AckSet = AckSet {at :: UTCTime, by :: Maybe Projects.UserId, window :: AckW
 setAckState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe AckSet -> Eff es Int64
 setAckState pid iids ackM
   | null iids = pure 0
+  -- Several acknowledged recurrences of one signal may coexist, while the partial
+  -- unique index permits only one open recurrence. Reopening a batch in one plain
+  -- UPDATE therefore 500'd. Keep the newest selected recurrence actionable and
+  -- archive competing selected or already-open rows before reopening it.
+  | Nothing <- ackM = do
+      void $ Hasql.interpExecute
+        [HI.sql|
+          WITH selected AS (
+            SELECT id, project_id, target_hash, issue_type, updated_at
+            FROM apis.issues
+            WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
+          ), keepers AS (
+            SELECT DISTINCT ON (project_id, target_hash, issue_type)
+                   id, project_id, target_hash, issue_type
+            FROM selected
+            ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
+          )
+          UPDATE apis.issues i
+          SET archived_at = app_now(), updated_at = app_now()
+          FROM keepers k
+          WHERE i.project_id = k.project_id
+            AND i.target_hash = k.target_hash
+            AND i.issue_type = k.issue_type
+            AND i.id <> k.id
+            AND (i.id = ANY(#{iids}::uuid[])
+                 OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
+      Hasql.interpExecute
+        [HI.sql|
+          WITH selected AS (
+            SELECT id, project_id, target_hash, issue_type, updated_at
+            FROM apis.issues
+            WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
+          ), keepers AS (
+            SELECT DISTINCT ON (project_id, target_hash, issue_type) id
+            FROM selected
+            ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
+          )
+          UPDATE apis.issues i
+          SET acknowledged_at = NULL, acknowledged_by = NULL,
+              acknowledged_until = NULL, archived_at = NULL, updated_at = app_now()
+          FROM keepers k
+          WHERE i.id = k.id |]
   | otherwise =
       Hasql.interpExecute
         [HI.sql|
@@ -616,13 +658,44 @@ setAckState pid iids ackM
 -- the caller can log 'IEAckExpired'. Nothing else clears a timed ack, so this is
 -- what stops one from silently rotting out of sight forever.
 expireAcks :: DB es => UTCTime -> Eff es [IssueId]
-expireAcks now =
+expireAcks now = do
+  -- Expired recurrences can share a signal key. Archive all but the newest before
+  -- reopening it, or the open-issue partial index rejects the whole expiry sweep.
+  void $ Hasql.interpExecute
+    [HI.sql|
+      WITH expired AS (
+        SELECT id, project_id, target_hash, issue_type, updated_at
+        FROM apis.issues
+        WHERE acknowledged_at IS NOT NULL AND archived_at IS NULL
+          AND acknowledged_until <= #{now}
+      ), keepers AS (
+        SELECT DISTINCT ON (project_id, target_hash, issue_type)
+               id, project_id, target_hash, issue_type
+        FROM expired
+        ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
+      )
+      UPDATE apis.issues i
+      SET archived_at = #{Just now}, updated_at = #{now}
+      FROM keepers k
+      WHERE i.project_id = k.project_id
+        AND i.target_hash = k.target_hash
+        AND i.issue_type = k.issue_type
+        AND i.id <> k.id
+        AND (i.id IN (SELECT id FROM expired)
+             OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
   HI.getOneColumn
     <<$>> Hasql.interp
       [HI.sql|
         UPDATE apis.issues
-        SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL
-        WHERE acknowledged_at IS NOT NULL AND archived_at IS NULL AND acknowledged_until <= #{now}
+        SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL,
+            archived_at = NULL, updated_at = #{now}
+        WHERE id IN (
+          SELECT DISTINCT ON (project_id, target_hash, issue_type) id
+          FROM apis.issues
+          WHERE acknowledged_at IS NOT NULL AND archived_at IS NULL
+            AND acknowledged_until <= #{now}
+          ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
+        )
         RETURNING id |]
 
 
@@ -1189,8 +1262,8 @@ addReport (r :: Report) =
       VALUES (#{r.id}, #{r.createdAt}, #{r.updatedAt}, #{r.projectId}, #{r.reportType}, #{r.reportJson}, #{r.startTime}, #{r.endTime}) |]
 
 
-getReportById :: DB es => ReportId -> Eff es (Maybe Report)
-getReportById rid = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE id = #{rid} |])
+getReportById :: DB es => Projects.ProjectId -> ReportId -> Eff es (Maybe Report)
+getReportById pid rid = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE id = #{rid} AND project_id = #{pid} |])
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]

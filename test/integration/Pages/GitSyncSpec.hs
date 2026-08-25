@@ -252,24 +252,18 @@ spec = sequential do
   -- Layer 1: Unit/Integration tests (no external deps)
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
-      it "creates sync config with PAT" \tr -> do
-        let form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "test-owner", repo = "test-repo", branch = "main", accessToken = "ghp_test", webhookSecret = Just "s3cret", pathPrefix = Nothing}
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
-        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
-        syncM `shouldSatisfy` isJust
-        let sync = fromJust syncM
+      it "connects, updates, and disconnects a repository" \tr -> do
+        let form owner repo branch token = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = Nothing}
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test")
+        sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
 
-      it "updates sync config" \tr -> do
-        let form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "updated", repo = "updated-repo", branch = "dev", accessToken = "ghp_new", webhookSecret = Just "s3cret", pathPrefix = Nothing}
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
-        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
-        (fromJust syncM).owner `shouldBe` "updated"
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "ghp_new")
+        updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
+        (updated.owner, updated.repo, updated.branch) `shouldBe` ("updated", "updated-repo", "dev")
 
-      it "deletes sync config" \tr -> do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
-        syncM `shouldSatisfy` isNothing
+        runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= (`shouldSatisfy` isNothing)
 
     describe "Sync Plan Building" do
       it "creates for new files" \_ -> do
@@ -342,7 +336,7 @@ spec = sequential do
       it "updates filePath and fileSha" \tr -> do
         dashId <- createDash tr "Git Info Test" []
         _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId "dashboards/test.yaml" "abc123"
-        dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardById dashId
+        dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid dashId
         (fromJust dashM).filePath `shouldBe` Just "dashboards/test.yaml"
         (fromJust dashM).fileSha `shouldBe` Just "abc123"
 
@@ -479,7 +473,7 @@ spec = sequential do
             let expectedPath = "dashboards/sha-test.yaml"
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
-            dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardById dashId
+            dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid dashId
             let dash = fromJust dashM
             dash.filePath `shouldBe` Just expectedPath
             dash.fileSha `shouldSatisfy` isJust

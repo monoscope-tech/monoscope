@@ -153,7 +153,9 @@ shareReplaySessionGetH sid sessionId = do
   when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
   anchor <- Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
   when ((Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes) >>= UUID.fromText) /= Just sessionId) $ throwIO err404
-  project <- Projects.projectById row.pid `whenNothingM` throwIO err404
+  -- Unauthenticated surface: a share link must die with its project, so this
+  -- asks for an ACTIVE one rather than any row bearing the id.
+  project <- Projects.activeProjectById row.pid `whenNothingM` throwIO err404
   Replay.fetchReplaySession project sessionId
 
 

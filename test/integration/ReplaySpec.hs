@@ -24,7 +24,7 @@ import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..))
 import System.Mem (performGC)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -116,6 +116,8 @@ spec = around withTestResources do
           (sid, pid, key1)
       keys <- runQueryEffect tr $ sessionFileKeys pid sid
       keys `shouldBe` [key1]
+      let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+      runQueryEffect tr (sessionFileKeys otherPid sid) `shouldReturn` []
       clearReplaySessions tr
 
   -- Regression for the 2026-07-13 incident: a live 1.4 GiB session had ~24

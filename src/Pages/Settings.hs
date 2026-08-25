@@ -57,6 +57,7 @@ import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit, isHexDigit)
 import Data.Default
@@ -265,20 +266,30 @@ apiPostH pid apiKeyForm = do
 
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiDeleteH pid = apiKeySetActive pid ProjectApiKeys.revokeApiKey Projects.AEApiKeyRevoked "Revoked"
+apiDeleteH pid = apiKeySetActive pid RevokeApiKey
 
 
 apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiActivateH pid = apiKeySetActive pid ProjectApiKeys.activateApiKey Projects.AEApiKeyActivated "Activated"
+apiActivateH pid = apiKeySetActive pid ActivateApiKey
 
 
-apiKeySetActive :: Projects.ProjectId -> (ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx Int64) -> Projects.AuditEvent -> Text -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiKeySetActive pid act event verb keyid = do
+data ApiKeyMutation = ActivateApiKey | RevokeApiKey
+
+
+apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
+apiKeySetActive pid mutation keyid = do
   (sess, _) <- Projects.sessionAndProject pid
-  res <- act keyid
+  currentKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
+  let ownedKey = find ((== keyid) . (.id)) currentKeys
+      (act, event, verb, cachedProject) = case mutation of
+        ActivateApiKey -> (ProjectApiKeys.activateApiKey, Projects.AEApiKeyActivated, "Activated", Just pid)
+        RevokeApiKey -> (ProjectApiKeys.revokeApiKey, Projects.AEApiKeyRevoked, "Revoked", Nothing)
+  res <- maybe (pure 0) (const $ act keyid) ownedKey
   apikeys <- apiKeysForProject pid
   if res > 0
     then do
+      appCtx <- ask @AuthContext
+      whenJust ownedKey \key -> liftIO $ Cache.insert appCtx.projectKeyCache key.keyPrefix cachedProject
       Projects.logAuditS pid event sess Nothing
       addSuccessToast (verb <> " API Key Successfully") Nothing
     else addErrorToast "Something went wrong" Nothing

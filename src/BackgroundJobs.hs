@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -499,16 +499,22 @@ processBackgroundJob authCtx bgJob =
                 max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
             (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-            let totalUsage = totalToReport + totalMetricsCount
-                totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
+            let totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
+                -- Only events go to the events meter. Metric datapoints used to be
+                -- added in here and billed 1:1 with requests, which made a metrics
+                -- bill out of a request-priced plan: one project emits ~33M metric
+                -- rows a day against ~40k requests. They are now priced separately
+                -- ($1 per 10M datapoints) and are not submitted until that meter
+                -- exists. `apis.daily_usage.total_metrics` keeps recording them, so
+                -- the un-submitted window stays billable once it does.
                 chunks = case provider of
                   Projects.NoBillingProvider -> []
                   -- Both paid providers chunk identically. LS's 1M POST cap forces
                   -- splitting; Stripe has no documented cap but N meter-events with
                   -- the same meter+customer aggregate identically to one big event,
                   -- so we share the same code path for a single invariant surface.
-                  _ -> Projects.splitUsageIntoChunks totalUsage
-            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "event_bytes", eventBytes, "metrics", totalMetricsCount, "metric_bytes", metricBytes, "total", totalUsage, "chunks", length chunks)
+                  _ -> Projects.splitUsageIntoChunks totalToReport
+            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "event_bytes", eventBytes, "metrics_unbilled", totalMetricsCount, "metric_bytes", metricBytes, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
 
             -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
@@ -1525,7 +1531,7 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
 -- Email stays with the caller: recipients and body differ per alert kind.
 broadcastToEveryone :: Maybe ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ()
 broadcastToEveryone teamM alert pid title url = whenJust teamM \t -> do
-  let ifCh ch = when (ProjectMembers.isChannelEnabled ch t && not (V.null (ProjectMembers.channelTargets ch t)))
+  let ifCh ch = ProjectMembers.whenChannelEnabled ch t
   ifCh ProjectMembers.Slack $ forM_ t.slack_channels (sendSlackAlert alert pid title . Just)
   ifCh ProjectMembers.Discord $ forM_ t.discord_channels (sendDiscordAlert alert pid title . Just)
   ifCh ProjectMembers.Phone $ sendWhatsAppAlert alert pid title t.phone_numbers
@@ -2878,15 +2884,17 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
 dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj renderedBody = do
   let emails = ProjectMembers.resolveTeamEmails team
+      enabled = ProjectMembers.isChannelEnabled
   -- notify_emails is the authoritative audience now (no implicit member fallback) —
   -- if it's empty the alert goes to zero email recipients, which is almost never intended.
   when (null emails && ProjectMembers.isChannelEnabled ProjectMembers.Email team)
     $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
     $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
-  for_ emails \email -> sendRenderedEmail (CI.original email) subj renderedBody
-  for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
-  for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
-  for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
+  when (enabled ProjectMembers.Email team) $ for_ emails \email -> sendRenderedEmail (CI.original email) subj renderedBody
+  ProjectMembers.whenChannelEnabled ProjectMembers.Slack team $ for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
+  ProjectMembers.whenChannelEnabled ProjectMembers.Discord team $ for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
+  ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert projectId projectTitle team.phone_numbers
+  ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -2942,7 +2950,7 @@ sendReportForProject pid rType = do
             sqlQueryComponents = (defSqlQueryCfg pid currentTime Nothing Nothing){dateRange = (Just startTime, Just currentTime)}
             (_, qc) = queryASTToComponents sqlQueryComponents qAST
          in maybeToMonoid qc.finalSummarizeQuery
-  whenJustM (Projects.projectById pid) \pr -> do
+  whenJustM (Projects.activeProjectById pid) \pr -> do
     ( (stats, statsPrev)
       , ( (statsBySpanType, statsBySpanTypePrev)
           , ((slowDbQueriesL, (endpointStats, endpointStatsPrev)), ((chartDataEvents, chartDataErrors), (anomalies, _)))
@@ -3013,8 +3021,8 @@ sendReportForProject pid rType = do
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       teamM <- ProjectMembers.getEveryoneTeam pid
-      when pr.weeklyNotif do
-        broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
+      broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
+      when (typTxt == "weekly") do
         when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           when (totalRequest > 0) do
@@ -4196,7 +4204,7 @@ fetchAndParseDashboard conn repoRef path = Git.fetchFile conn repoRef path <&> (
 gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
 gitSyncPushDashboard pid dashId = do
   Log.logInfo "Pushing dashboard to git host" (pid, dashId)
-  Dashboards.getDashboardById dashId >>= \case
+  Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> Log.logAttention "Dashboard not found for git push" dashId
     Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
     Just dash -> withGitSync pid \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
@@ -4343,27 +4351,14 @@ evaluateQueryMonitor monitor startWall = do
   ctx <- ask @Config.AuthContext
   let tfEnabled = ctx.config.enableTimefusionReads
       title = monitor.alertConfig.title
-      -- Use the monitor's configured "Include rows from" time window.
-      -- Fall back to 60 when unset/zero (e.g. def-constructed monitors).
-      lookbackMins = if monitor.timeWindowMins > 0 then monitor.timeWindowMins else 60
+      -- Positivity is enforced at every write boundary and by the database.
+      lookbackMins = monitor.timeWindowMins
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
-      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m", alertLookbackMins = lookbackMins}
-  -- Empty logQuery means no source KQL is tracked; trust the cached SQL.
-  freshSql <-
-    if T.null (T.strip monitor.logQuery)
-      then pure monitor.logQueryAsSql
-      else case parseQueryToComponents parseCfg monitor.logQuery of
-        Right (_, qc) -> case qc.finalAlertQuery of
-          Just q -> pure q
-          Nothing -> do
-            Log.logAttention "Monitor parsed but produced no alert query; using stale cached SQL" (monitor.id, title, monitor.logQuery)
-            pure monitor.logQueryAsSql
-        Left err -> do
-          -- Escalate to logError: the user's saved KQL no longer parses, meaning
-          -- the monitor is silently running stale SQL. On-call should see this.
-          Log.logError "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
-          pure monitor.logQueryAsSql
+      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins}
+  freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
+    Right (_, qc) -> maybe (throwIO $ CE.ErrorCall "monitor query produced no alert SQL") pure qc.finalAlertQuery
+    Left err -> throwIO $ CE.ErrorCall $ "monitor KQL parse failed: " <> toString err
   let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
   results <- Hasql.withHasqlTimefusion (tfEnabled && isOtelQuery) $ Hasql.interp (rawSql freshSql)
@@ -4465,6 +4460,14 @@ evaluateWithResults monitor startWall title total durationNs = do
   Log.logInfo "Monitor notify decision" (monitor.id, title, status, total, shouldNotify, isMuted, reason)
   when (shouldNotify && not isMuted)
     $ notifyQueryMonitorStatusChange monitor total isRecovery
+
+
+-- | Feed a deterministic reading through the production monitor state machine.
+-- Query parsing/execution is deliberately outside this seam; integration tests for
+-- scheduling and query failures continue through 'checkTriggeredQueryMonitors'.
+evaluateQueryMonitorValue :: Monitors.QueryMonitor -> UTCTime -> Double -> ATBackgroundCtx ()
+evaluateQueryMonitorValue monitor at value =
+  evaluateWithResults monitor at monitor.alertConfig.title value 0
 
 
 -- | Determine monitor status with hysteresis support.
