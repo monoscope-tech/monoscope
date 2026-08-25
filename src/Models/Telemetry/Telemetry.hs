@@ -1049,10 +1049,10 @@ dayWindows start end
     next = min end (addUTCTime nominalDay start)
 
 
--- | (eventCount, eventBytes, metricCount, metricBytes) for a project over
--- @(wStart, wEnd]@. Single helper so ReportUsage stays a 1-call site instead of
--- juggling four separate queries.
-getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (Int, Int64, Int, Int64)
+-- | Billable totals for a project over @(wStart, wEnd]@ — one per metered
+-- dimension. Single helper so ReportUsage stays a 1-call site instead of
+-- juggling a query per meter.
+getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es Projects.UsageTotals
 getUsageTotals useTimefusion pid wStart wEnd = do
   -- Both halves follow the read flag. The events query used to be hardcoded to
   -- Postgres while only metrics was routed, which was survivable until
@@ -1074,7 +1074,16 @@ getUsageTotals useTimefusion pid wStart wEnd = do
           (dayWindows wStart wEnd)
   (eC, eB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
   (mC, mB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
-  pure (eC, eB, mC, mB)
+  -- Replays are Postgres-only — projects.replay_sessions is the session index;
+  -- rrweb payloads live in S3/R2 and never reach TimeFusion. `created_at` is
+  -- written once, on a session's first chunk, and never mutated, so a window's
+  -- count cannot change after we have billed it (`last_event_at` would).
+  -- Same half-open window as above, so a session is billed exactly once.
+  rC <-
+    fromMaybe 0
+      <$> Hasql.interpOne
+        [HI.sql| SELECT count(*)::bigint FROM projects.replay_sessions WHERE project_id = #{pid} AND created_at > #{wStart} AND created_at <= #{wEnd} |]
+  pure Projects.UsageTotals{events = eC, eventBytes = eB, metrics = mC, metricBytes = mB, replays = rC}
 
 
 -- | The catalogue aggregate: one row per metric name with its de-duplicated label union.

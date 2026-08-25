@@ -71,10 +71,23 @@ module Models.Projects.Projects (
   ChunkQuantity,
   mkChunkQuantity,
   chunkQuantityInt,
+  UsageChunk (..),
   splitUsageIntoChunks,
   pendingUsageSubmissions,
   recordUsageWindow,
   UsageTotals (..),
+  -- Metered billing dimensions
+  MeterKind (..),
+  meterQuantity,
+  stripeMeterEventName,
+  MeterTarget (..),
+  DormantReason (..),
+  ProjectMeterConfig (..),
+  projectMeterConfig,
+  resolveMeterTarget,
+  meterIsDormant,
+  meterSubItemIds,
+  setMeterSubItemId,
   markUsageSubmissionSucceeded,
   markUsageSubmissionFailed,
   upgradeToPaid,
@@ -110,6 +123,7 @@ import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
+import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
@@ -136,6 +150,7 @@ import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), i
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import System.Envy (Var)
 import Web.Cookie (SetCookie (setCookieHttpOnly, setCookieMaxAge, setCookieName, setCookiePath, setCookieSameSite, setCookieSecure, setCookieValue), defaultSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (ToHttpApiData)
@@ -832,6 +847,7 @@ data UsageSubmission = UsageSubmission
   , windowStart :: UTCTime
   , windowEnd :: UTCTime
   , quantity :: ChunkQuantity
+  , meter :: MeterKind
   , status :: Text
   , submittedAt :: Maybe UTCTime
   , lastError :: Maybe Text
@@ -841,20 +857,28 @@ data UsageSubmission = UsageSubmission
   deriving anyclass (HI.DecodeRow, NFData)
 
 
--- | >>> splitUsageIntoChunks 0
+-- | One provider submission: which meter it bills against and how much. The
+-- 900k cap is a Lemon Squeezy POST limit, not a pricing one, so it applies
+-- identically to all three meters — the per-unit rate lives provider-side.
+data UsageChunk = UsageChunk
+  { meter :: MeterKind
+  , quantity :: ChunkQuantity
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+-- | >>> splitUsageIntoChunks Events 0
 -- []
--- >>> splitUsageIntoChunks 500
--- [500]
--- >>> splitUsageIntoChunks 900000
--- [900000]
--- >>> splitUsageIntoChunks 900001
+-- >>> splitUsageIntoChunks Events 500
+-- [UsageChunk {meter = Events, quantity = 500}]
+-- >>> map (.quantity) (splitUsageIntoChunks SessionReplays 900001)
 -- [900000,1]
--- >>> splitUsageIntoChunks 2700000
+-- >>> map (.quantity) (splitUsageIntoChunks MetricDatapoints 2700000)
 -- [900000,900000,900000]
--- >>> splitUsageIntoChunks 2700001
--- [900000,900000,900000,1]
-splitUsageIntoChunks :: Int -> [ChunkQuantity]
-splitUsageIntoChunks total = mapMaybe mkChunkQuantity $ replicate fulls chunkCap <> [rem_]
+-- >>> map (.meter) (splitUsageIntoChunks MetricDatapoints 2700001)
+-- [MetricDatapoints,MetricDatapoints,MetricDatapoints,MetricDatapoints]
+splitUsageIntoChunks :: MeterKind -> Int -> [UsageChunk]
+splitUsageIntoChunks meter total = UsageChunk meter <$> mapMaybe mkChunkQuantity (replicate fulls chunkCap <> [rem_])
   where
     (fulls, rem_) = max 0 total `divMod` chunkCap
 
@@ -863,7 +887,7 @@ pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
 pendingUsageSubmissions pid =
   EHasql.interp
     [HI.sql|
-      SELECT id, project_id, window_start, window_end, quantity::int8, status, submitted_at, last_error, created_at
+      SELECT id, project_id, window_start, window_end, quantity::int8, meter_kind, status, submitted_at, last_error, created_at
       FROM projects.usage_report_submissions
       WHERE project_id = #{pid} AND status <> 'submitted'
       ORDER BY created_at ASC
@@ -879,33 +903,56 @@ data UsageTotals = UsageTotals
   , eventBytes :: Int64
   , metrics :: Int
   , metricBytes :: Int64
+  , replays :: Int
   }
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Generic, Show)
+
+
+instance Default UsageTotals where
+  def = UsageTotals 0 0 0 0 0
+
+
+-- | The billable count for one dimension. Single mapping from meter to number,
+-- so a dimension cannot silently read the wrong column at one of several sites.
+--
+-- >>> map (`meterQuantity` def{events = 3, metrics = 7, replays = 2}) [minBound .. maxBound]
+-- [3,7,2]
+meterQuantity :: MeterKind -> UsageTotals -> Int
+meterQuantity = \case
+  Events -> (.events)
+  MetricDatapoints -> (.metrics)
+  SessionReplays -> (.replays)
 
 
 recordUsageWindow
   :: (DB es, UUIDEff :> es)
-  => ProjectId -> UTCTime -> UTCTime -> UsageTotals -> [ChunkQuantity] -> Eff es ()
+  => ProjectId -> UTCTime -> UTCTime -> UsageTotals -> [UsageChunk] -> Eff es ()
 recordUsageWindow pid wStart wEnd totals chunks = do
   chunkRows <- forM chunks \c -> (,c) <$> genUUID
   let exec :: HI.Sql -> Tx.Transaction ()
       exec s = void $ Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected)
-      -- total_requests historically = events + metrics (drives splitUsageIntoChunks
-      -- and getTotalUsage). Preserve that invariant; new columns are additive.
+      -- total_requests historically = events + metrics (drives getTotalUsage and
+      -- the Settings billing estimate). Preserve that invariant; new columns are
+      -- additive. Replays are deliberately NOT folded in — they are priced 1000x
+      -- differently, so adding them would corrupt that estimate.
       totalUsage = totals.events + totals.metrics
+      -- Guard on ANY metered dimension, not just total_requests: a replay-only
+      -- window (no spans, no metrics, some replays) would otherwise skip both the
+      -- daily_usage row and its chunks, and go silently unbilled.
+      anyUsage = any (\k -> meterQuantity k totals > 0) [minBound .. maxBound]
   EHasql.transaction TxS.ReadCommitted TxS.Write do
     -- usage_last_reported always advances (even on zero-usage days); otherwise
     -- the next tick re-scans an ever-growing window, which is the failure mode
     -- that produced the original 15-month poison loop.
     exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
-    when (totalUsage > 0) do
+    when anyUsage do
       exec
-        [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
-                       VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.eventBytes}, #{totals.metricBytes}, #{wStart}, #{wEnd}) |]
-      for_ chunkRows \(cid, ChunkQuantity qty) ->
+        [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_replays, total_event_bytes, total_metric_bytes, window_start, window_end)
+                       VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.replays}, #{totals.eventBytes}, #{totals.metricBytes}, #{wStart}, #{wEnd}) |]
+      for_ chunkRows \(cid, UsageChunk meter (ChunkQuantity qty)) ->
         exec
-          [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
-                      VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}) |]
+          [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity, meter_kind)
+                      VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}, #{meter}) |]
 
 
 markUsageSubmissionSucceeded :: DB es => UUID.UUID -> Eff es Int64
@@ -1006,6 +1053,163 @@ projectProvider p = case p.billingProvider of
   NoBillingProvider -> billingProviderFromSubId p.subId
   StripeProvider -> StripeProvider
   LemonSqueezyProvider -> LemonSqueezyProvider
+
+
+-- | A separately-metered billing dimension. Constructors are the single source
+-- of truth for the meter's spelling everywhere (JSON, the @meter_kind@ column,
+-- the @ENABLED_USAGE_METERS@ env var) — @WrappedEnumSC@ derives them all from
+-- the constructor name, so they cannot drift apart.
+--
+-- Rates are provider-side; we only ever submit raw counts:
+-- 'Events' $1/1M, 'MetricDatapoints' $1/10M, 'SessionReplays' $1/1k.
+data MeterKind = Events | MetricDatapoints | SessionReplays
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, Var) via WrappedEnumSC 'Nothing "" MeterKind
+
+
+-- | Stripe addresses a meter by @event_name@ against the customer, so a meter
+-- name is derivable and needs no config entry. @events_usage@ is preserved
+-- verbatim — it is the name of the meter already live in Stripe.
+--
+-- >>> map stripeMeterEventName [minBound .. maxBound]
+-- ["events_usage","metric_datapoints_usage","session_replays_usage"]
+stripeMeterEventName :: MeterKind -> Text
+stripeMeterEventName = \case
+  Events -> "events_usage"
+  MetricDatapoints -> "metric_datapoints_usage"
+  SessionReplays -> "session_replays_usage"
+
+
+-- | Where one meter's usage is submitted. The two providers address a meter
+-- completely differently: Stripe by customer + meter event name, Lemon Squeezy
+-- by subscription item. Carrying the resolved address in the type means the
+-- submit path cannot be reached without one.
+data MeterTarget
+  = StripeMeter {customerId :: Text, eventName :: Text}
+  | LemonSqueezyMeter {subItemId :: Text}
+  deriving stock (Eq, Generic, Show)
+
+
+-- | Why a meter is not submitting. Every reason is logged, so "why is this not
+-- being billed" is answerable from logs alone rather than by reading this file.
+data DormantReason
+  = -- | Not listed in @ENABLED_USAGE_METERS@. The deliberate off-switch: a meter
+    -- stays dormant until it is confirmed to exist provider-side.
+    MeterNotEnabled
+  | -- | Stripe project with neither @customer_id@ nor @order_id@ — a misconfig.
+    NoStripeCustomer
+  | -- | Lemon Squeezy project with no subscription item for this meter. LS
+    -- usage records are addressed only by subscription item, so a second and
+    -- third metered variant must exist on the subscription before its metrics
+    -- or replays can be billed.
+    NoSubscriptionItem
+  | -- | Paid plan whose provider could not be determined.
+    ProviderUnusable
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | Does this reason mean "this dimension does not bill for this project yet",
+-- or "we are owed this but cannot send it"?
+--
+-- The distinction decides whether a window cuts submission chunks at all. Only a
+-- misconfig cuts them (so the drain leaves an auditable, retriable @failed@ row);
+-- a dormant meter records its totals in @apis.daily_usage@ and nothing else.
+--
+-- 'NoSubscriptionItem' is dormancy, not misconfig: a Lemon Squeezy customer whose
+-- subscription has no metered variant for this dimension never agreed to that
+-- price. Cutting chunks for them would accrue failed rows forever against a
+-- product that does not exist. 'NoStripeCustomer' is the opposite — the project
+-- is on the plan and we simply cannot address it.
+--
+-- >>> map meterIsDormant [MeterNotEnabled, NoSubscriptionItem, NoStripeCustomer, ProviderUnusable]
+-- [True,True,False,False]
+meterIsDormant :: DormantReason -> Bool
+meterIsDormant = \case
+  MeterNotEnabled -> True
+  NoSubscriptionItem -> True
+  NoStripeCustomer -> False
+  ProviderUnusable -> False
+
+
+-- | Everything 'resolveMeterTarget' needs about a project, lifted out of
+-- 'Project' so the decision stays a pure, totally-testable function.
+data ProjectMeterConfig = ProjectMeterConfig
+  { provider :: BillingProvider
+  , stripeCustomerId :: Maybe Text
+  , eventsSubItemId :: Maybe Text
+  -- ^ The @Events@ subscription item, from @projects.first_sub_item_id@.
+  , subItemIds :: Map MeterKind Text
+  -- ^ Per-meter subscription items from @projects.billing_meter_items@.
+  }
+  deriving stock (Generic, Show)
+
+
+projectMeterConfig :: Project -> Map MeterKind Text -> ProjectMeterConfig
+projectMeterConfig p subItemIds =
+  ProjectMeterConfig
+    { provider = projectProvider p
+    , stripeCustomerId = mfilter (not . T.null) (p.customerId <|> p.orderId)
+    , eventsSubItemId = mfilter (not . T.null) p.firstSubItemId
+    , subItemIds
+    }
+
+
+-- | The single decision point for "may this meter submit, and to where".
+--
+-- Enablement is checked first so a disabled meter reports 'MeterNotEnabled'
+-- rather than a misconfig reason it would only hit once enabled.
+--
+-- >>> let ls n = ProjectMeterConfig LemonSqueezyProvider Nothing (Just "si_1") n
+-- >>> resolveMeterTarget [Events] (ls mempty) Events
+-- Right (LemonSqueezyMeter {subItemId = "si_1"})
+-- >>> resolveMeterTarget [Events] (ls mempty) SessionReplays
+-- Left MeterNotEnabled
+-- >>> resolveMeterTarget [minBound ..] (ls mempty) SessionReplays
+-- Left NoSubscriptionItem
+-- >>> resolveMeterTarget [minBound ..] (ls (fromList [(SessionReplays, "si_9")])) SessionReplays
+-- Right (LemonSqueezyMeter {subItemId = "si_9"})
+-- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider (Just "cus_1") Nothing mempty) MetricDatapoints
+-- Right (StripeMeter {customerId = "cus_1", eventName = "metric_datapoints_usage"})
+-- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider Nothing Nothing mempty) Events
+-- Left NoStripeCustomer
+-- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig NoBillingProvider Nothing Nothing mempty) Events
+-- Left ProviderUnusable
+resolveMeterTarget :: [MeterKind] -> ProjectMeterConfig -> MeterKind -> Either DormantReason MeterTarget
+resolveMeterTarget enabled cfg kind
+  | kind `notElem` enabled = Left MeterNotEnabled
+  | otherwise = case cfg.provider of
+      NoBillingProvider -> Left ProviderUnusable
+      -- Stripe meter events key off customer + event_name; the subscription item
+      -- id is not part of the call, so no per-meter item is needed.
+      StripeProvider -> maybe (Left NoStripeCustomer) (Right . (`StripeMeter` stripeMeterEventName kind)) cfg.stripeCustomerId
+      -- LS usage records are addressed ONLY by subscription item. Events falls
+      -- back to the legacy single column so existing subscriptions keep billing
+      -- untouched; metrics/replays need their own item, which is exactly what
+      -- keeps them dormant until someone provisions the metered variants.
+      LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds <|> (guard (kind == Events) >> cfg.eventsSubItemId) of
+        Just sid -> Right (LemonSqueezyMeter sid)
+        Nothing -> Left NoSubscriptionItem
+
+
+-- | Per-meter Lemon Squeezy subscription items. Empty for every project until
+-- the metered variants exist provider-side and are recorded here.
+meterSubItemIds :: DB es => ProjectId -> Eff es (Map MeterKind Text)
+meterSubItemIds pid =
+  Map.fromList
+    <$> EHasql.interp
+      [HI.sql| SELECT meter_kind, sub_item_id FROM projects.billing_meter_items WHERE project_id = #{pid} |]
+
+
+setMeterSubItemId :: DB es => ProjectId -> MeterKind -> Text -> Eff es Int64
+setMeterSubItemId pid kind sid =
+  EHasql.interpExecute
+    [HI.sql|
+      INSERT INTO projects.billing_meter_items (project_id, meter_kind, sub_item_id)
+      VALUES (#{pid}, #{kind}, #{sid})
+      ON CONFLICT (project_id, meter_kind) DO UPDATE SET sub_item_id = EXCLUDED.sub_item_id, updated_at = now()
+    |]
 
 
 -- | Typed view over the open-valued @payment_plan@ column. Storage stays 'Text'
