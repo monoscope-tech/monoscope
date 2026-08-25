@@ -103,8 +103,11 @@ Five defects the merge itself produced or exposed, each fixed:
    them fixable: counts inflated by other specs' rows (fixable by per-example project isolation,
    which `createTestProject` now gives `ReportUsageSpec`), and counts *deflated* by write→read
    visibility (`expected 500, got 65`) — which no isolation or SQL fix can make synchronous.
-   Reads are now pinned off; writes still go to a real TimeFusion. Reasoning and the red/green
-   repro are in `plans/tf-reads-in-tests.md`.
+   I first pinned reads off — one line, fixes both shapes — and **reverted it**: a concurrent
+   session fixed the assertions instead (per-query read routing, isolated counts, `variant_get`
+   for attributes) and took CI from 23 failures to 1, keeping the prod-like read path. One
+   example is still open, the deflated shape: `LogSpec / Time Range Selection`. See
+   `plans/tf-reads-in-tests.md`.
 
    The pin was not wasted: it made CI briefly prod-like and surfaced a **real production bug** —
    `fetchLogPatterns`' fallback used a SQL `mode() WITHIN GROUP`, which DataFusion cannot plan,

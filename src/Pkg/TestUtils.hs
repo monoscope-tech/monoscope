@@ -795,17 +795,11 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       -- developer .env (where it is False for TF-only prod) makes both flags False, which
       -- writeTargetFor maps to WriteBoth — and with no real TF the "timefusion" pool is the
       -- same Postgres, so every row is inserted twice.
-      -- Reads are pinned OFF, and it is not only a routing choice: without a real TimeFusion
-      -- the labeled pool IS Postgres, so a developer .env with ENABLE_TIMEFUSION_READS=True
-      -- would have queries emit TimeFusion-only SQL (the `variant_get` resource accessor)
-      -- against Postgres, which errors outright.
-      --
-      -- Off rather than `tfEnabled`, which is what CI sets: Postgres is cloned per example
-      -- from a template, but a real TimeFusion is ONE instance for the whole run, keyed only
-      -- by project_id and with no reset between examples. Routing reads there made 23
-      -- examples across seven specs depend on what had already run — see
-      -- plans/tf-reads-in-tests.md. Writes still go to TF so the dual-write path is exercised.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = False, enablePostgresTelemetryWrites = True}
+      -- Reads are pinned for the same reason, and it is not only a routing choice: without a
+      -- real TimeFusion the labeled pool IS Postgres, so a developer .env with
+      -- ENABLE_TIMEFUSION_READS=True would have queries emit TimeFusion-only SQL (the
+      -- `variant_get` resource accessor) against Postgres, which errors outright.
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enableTimefusionReads = tfEnabled, enablePostgresTelemetryWrites = True}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -860,8 +854,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , enableDailyJobScheduling = False
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , enableTimefusionWrites = tfEnabled
-              , -- Off for the reason above: a shared TF instance has no per-example reset.
-                enableTimefusionReads = False
+              , enableTimefusionReads = tfEnabled
               , enablePostgresTelemetryWrites = True
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
