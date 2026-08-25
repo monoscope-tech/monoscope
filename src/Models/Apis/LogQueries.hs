@@ -592,29 +592,37 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
           bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::BIGINT"
       rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- Hasql.withHasqlTimefusion enableTfReads case resolveFieldExpr target of
         Just (Left colExpr) ->
-          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000")
+          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, level as lvl, resource___service___name as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000")
         Just (Right pathParts) ->
-          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000|]
+          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, level as lvl, resource___service___name as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2, 4, 5 ORDER BY cnt DESC LIMIT 20000|]
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
-      let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
+      -- Level and service arrive per (pattern, bucket, level, service) group rather than
+      -- as a SQL `mode()`: DataFusion has no such aggregate, so TimeFusion — which is what
+      -- prod reads — cannot plan the query at all. Tallying the counts here keeps the modal
+      -- value exact, and unlike the previous `<|>` it stays exact once drain merges several
+      -- patterns into one template.
+      let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, HM.unionWith (+) l1 l2, HM.unionWith (+) s1 s2, b1 ++ b2)
+          tally n = maybe HM.empty (\v -> one (v, n))
+          -- Ties break on the value so a pattern's level doesn't flicker between renders.
+          modal = fmap fst . listToMaybe . sortOn (\(v, c) -> (Down c, v)) . HM.toList
           grouped =
             HM.fromListWith
               agg
-              [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
+              [(replaceAllFormats val, (cnt, tally cnt lvl, tally cnt svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
           drainTree =
             let keys = V.fromList $ HM.keys grouped
              in Drain.buildDrainTree Drain.tokenizeForDrain id (const Nothing) Drain.emptyDrainTree keys now
           merged =
             HM.fromListWith
               agg
-              [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HM.lookup` grouped) $ V.toList dr.logIds)
+              [ (dr.templateStr, foldl' agg (0, HM.empty, HM.empty, []) $ mapMaybe (`HM.lookup` grouped) $ V.toList dr.logIds)
               | dr <- V.toList $ Drain.getAllLogGroups drainTree
               ]
           sorted = take aggregatePageSize $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
           range = bucketRange [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
-      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl, hashes = []} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = modal lvls, service = modal svcs, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) (modal lvls), hashes = []} | (pat, (cnt, lvls, svcs, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, the inline root-column list). Right branch uses parameterized #>> operator.
