@@ -67,11 +67,15 @@ spec = around withTestResources do
   describe "replay object layout" do
     let at = UTCTime (fromGregorian 2026 5 8) 0
         sid = UUID.fromWords 0 0 0 42
-        prefix = UUID.toText UUID.nil <> "/rrweb/2026-05-08/" <> UUID.toText sid <> "/"
-    it "groups keys by project, ISO date, and session" $ \_ ->
+        prefix = "rrweb/" <> UUID.toText UUID.nil <> "/2026-05-08/" <> UUID.toText sid <> "/"
+    it "groups keys under one rrweb root, then project, ISO date, and session" $ \_ ->
       replayObjectPrefix pid at sid `shouldBe` prefix
-    it "maps legacy keys without changing their filename" $ \_ ->
+    -- Both legacy shapes must land on the new root: the flat session-scoped keys
+    -- and the interim <project>/rrweb/… ones that predate the root segment.
+    it "maps legacy keys without changing their filename" $ \_ -> do
       migratedReplayKey pid at sid (UUID.toText sid <> "/shard-000001-10.json.gz")
+        `shouldBe` prefix <> "shard-000001-10.json.gz"
+      migratedReplayKey pid at sid (UUID.toText UUID.nil <> "/rrweb/2026-05-07/" <> UUID.toText sid <> "/shard-000001-10.json.gz")
         `shouldBe` prefix <> "shard-000001-10.json.gz"
     it "is idempotent for already structured keys" $ \_ -> do
       let key = prefix <> "20260508T000000.json"

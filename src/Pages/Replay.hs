@@ -472,21 +472,48 @@ projectMinioConn envCfg p =
    in (conn, bucket)
 
 
+-- | Root segment owning every replay object, so a bucket listing separates
+-- replay data from anything else we store alongside it.
+replayObjectRoot :: Text
+replayObjectRoot = "rrweb/"
+
+
 -- | Stable, UTC, lexicographically sortable replay namespace. ISO dates are
 -- deliberately used instead of DD-MM-YYYY so an object-store listing is also
 -- chronological.
 replayObjectPrefix :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Text
 replayObjectPrefix pid at sid =
-  pid.toText <> "/rrweb/" <> toText (formatTime defaultTimeLocale "%Y-%m-%d" at) <> "/" <> UUID.toText sid <> "/"
+  replayObjectRoot <> pid.toText <> "/" <> toText (formatTime defaultTimeLocale "%Y-%m-%d" at) <> "/" <> UUID.toText sid <> "/"
 
 
 -- | Move any old replay key into the structured namespace while retaining its
 -- filename. Already-migrated keys are returned unchanged, making migration
--- retries idempotent.
+-- retries idempotent. Covers both legacy shapes: the flat @<session>/…@ keys and
+-- the interim @<project>/rrweb/…@ ones that predate the shared root segment.
 migratedReplayKey :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Text -> Text
 migratedReplayKey pid at sid oldKey
-  | (pid.toText <> "/rrweb/") `T.isPrefixOf` oldKey = oldKey
+  | replayObjectRoot `T.isPrefixOf` oldKey = oldKey
   | otherwise = replayObjectPrefix pid at sid <> T.takeWhileEnd (/= '/') oldKey
+
+
+-- | Does object key @k@ belong to session @sid@ of project @pid@? Guards the
+-- shard endpoint so a crafted key can't read another session's (or another
+-- bucket's) objects. Accepts the current namespace plus both legacy shapes still
+-- in flight behind the online migration; legacy flat keys carry no project
+-- segment, so session scoping is all they can be checked against.
+--
+-- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s1/shard-000001-10.json.gz", "p1/rrweb/2026-05-08/s1/shard-000001-10.json.gz", "s1/merged.json.gz", "s1.json"]
+-- [True,True,True,True]
+-- >>> map (replayKeyScoped "p1" "s1") ["rrweb/p1/2026-05-08/s2/shard-000001-10.json.gz", "rrweb/p2/2026-05-08/s1/shard-000001-10.json.gz", "rrweb/p1/s1", "s11/x.json"]
+-- [False,False,False,False]
+replayKeyScoped :: Text -> Text -> Text -> Bool
+replayKeyScoped pid sid k =
+  (any (`T.isPrefixOf` k) [replayObjectRoot <> pid <> "/", pid <> "/rrweb/"] && ("/" <> sid <> "/") `T.isInfixOf` k)
+    || (sid <> "/")
+    `T.isPrefixOf` k
+    || k
+    == sid
+    <> ".json"
 
 
 -- | Fetch every tracked key individually, tolerating per-key failures (NoSuchKey is
@@ -759,8 +786,8 @@ fetchReplaySession p sessionId = do
 
 
 -- | One fetchable segment of a session's recording, oldest→newest. `key` is the
--- storage object key (always under "<sid>/"); the shard endpoint validates that
--- prefix before streaming. `firstTs` (first event's ms-epoch timestamp) lets the
+-- storage object key (always session-scoped); the shard endpoint validates that
+-- scoping before streaming. `firstTs` (first event's ms-epoch timestamp) lets the
 -- player pick which segment covers a seek target without downloading it.
 data ReplaySegment = ReplaySegment
   { key :: Text
@@ -818,22 +845,8 @@ fetchReplayShard
 fetchReplayShard p sessionId mkey = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let (conn, bucket) = projectMinioConn ctx.config p
-      sidText = UUID.toText sessionId
-      -- Authorize against both the current structured namespace and legacy
-      -- session-scoped keys while their online migration is in progress.
-      structuredMarker = "/rrweb/"
-      scoped k =
-        (p.id.toText <> structuredMarker)
-          `T.isPrefixOf` k
-          && ("/" <> sidText <> "/")
-          `T.isInfixOf` k
-          || (sidText <> "/")
-          `T.isPrefixOf` k
-          || k
-          == sidText
-          <> ".json"
   case mkey of
-    Just k | scoped k -> do
+    Just k | replayKeyScoped p.id.toText (UUID.toText sessionId) k -> do
       liftIO (Minio.runMinio conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
         Right raw -> pure $ RawJson raw
         -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
@@ -979,9 +992,9 @@ shardSealBytes = 12 * 1024 * 1024
 -- key — read/manifest order shards by the embedded first-event timestamp, parsed
 -- from the key without opening any blob.
 --
--- >>> shardKeyFor "project/rrweb/2026-05-08/session/" 7 1700000000000
--- "project/rrweb/2026-05-08/session/shard-000007-1700000000000.json.gz"
--- >>> parseShardKey (shardKeyFor "project/rrweb/2026-05-08/session/" 7 1700000000000)
+-- >>> shardKeyFor "rrweb/project/2026-05-08/session/" 7 1700000000000
+-- "rrweb/project/2026-05-08/session/shard-000007-1700000000000.json.gz"
+-- >>> parseShardKey (shardKeyFor "rrweb/project/2026-05-08/session/" 7 1700000000000)
 -- Just (7,1700000000000)
 shardKeyFor :: Text -> Int -> Integer -> Minio.Object
 shardKeyFor prefix idx firstTsMs =
@@ -1098,8 +1111,10 @@ maxMigrateObjectBytes :: Int64
 maxMigrateObjectBytes = 512 * 1024 * 1024
 
 
--- | Online migration from legacy @<session>/...@ keys to
--- @<project>/rrweb/YYYY-MM-DD/<session>/...@. Processes at most @batchSize@
+-- | Online migration from legacy keys — flat @<session>/...@ and the interim
+-- @<project>/rrweb/...@ — to @rrweb/<project>/YYYY-MM-DD/<session>/...@. Both
+-- legacy shapes fail the @NOT LIKE 'rrweb/%'@ test below, so one pass drains
+-- them together. Processes at most @batchSize@
 -- sessions and returns the number whose DB references were switched. Safe to
 -- run repeatedly and concurrently with ingestion: the conditional UPDATE loses
 -- the race (and retries later) if either key array changed after selection.
@@ -1129,7 +1144,7 @@ migrateReplayStorageShard requestedShardCount requestedShardIndex batchSize = do
         FROM projects.replay_sessions
         WHERE EXISTS (
           SELECT 1 FROM unnest(COALESCE(file_keys, '{}'::text[]) || COALESCE(shard_keys, '{}'::text[])) k
-          WHERE k NOT LIKE project_id::text || '/rrweb/%'
+          WHERE k NOT LIKE 'rrweb/%'
         )
           AND ((hashtextextended(session_id::text, 0) % #{shardCount}) + #{shardCount}) % #{shardCount} = #{shardIndex}
         ORDER BY last_event_at, session_id

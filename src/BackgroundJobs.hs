@@ -157,7 +157,7 @@ data BgJobs
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
   | -- TEMPORARY: delete this constructor + handler after every replay_sessions
-    -- key has the <project>/rrweb/<date>/ prefix and migration has been verified.
+    -- key has the rrweb/<project>/<date>/ prefix and migration has been verified.
     MigrateReplayStorage Int
   | -- TEMPORARY: delete this constructor + handler after replay migration.
     MigrateReplayStorageShard Int Int Int -- shard count, shard index, batch size
