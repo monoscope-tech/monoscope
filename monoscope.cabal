@@ -165,6 +165,7 @@ extra-source-files:
     static/migrations/0134_backfill_first_member_count.sql
     static/migrations/0135_monitor_positive_time_window.sql
     static/migrations/0136_billing_meters.sql
+    static/migrations/0137_replay_rrweb_root_prefix.sql
 
 source-repository head
   type: git
