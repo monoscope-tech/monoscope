@@ -548,6 +548,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders QueryLibrary.QueryLibraryView)
   , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , logExplorerRelatedMetricsGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "related_metrics" :> Get '[HTML] (RespHeaders (Html ()))
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
@@ -603,6 +604,9 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  , -- HTML for the metric page's Exemplars tab, JSON for the chart's diamond overlay:
+    -- one query, so the list and the markers can't disagree.
+    metricExemplarsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "exemplars" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML, JSON] (RespHeaders Metrics.MetricExemplarsGet)
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
@@ -967,6 +971,7 @@ logExplorerServer pid =
     , deleteQueryPost = QueryLibrary.deleteQueryH pid
     , alertFormGet = Log.alertFormH pid
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
+    , logExplorerRelatedMetricsGet = Metrics.relatedMetricsGetH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
     , codeContextGet = PageCodeContext.codeContextH pid
@@ -1009,6 +1014,7 @@ telemetryServer pid =
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
+    , metricExemplarsGetH = Metrics.metricExemplarsGetH pid
     , metricCardGetH = Metrics.metricCardGetH pid
     , serviceMapGetH = ServiceMap.serviceMapGetH pid
     , metricServicesGetH = Metrics.metricServicesGetH pid
