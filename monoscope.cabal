@@ -197,6 +197,7 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.Containers
       Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
@@ -210,6 +211,7 @@ library
       Pages.Charts.Charts
       Pages.CodeContext
       Pages.CommandPalette
+      Pages.Containers
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints
@@ -789,6 +791,7 @@ test-suite test-dev
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Telemetry.Containers
       Models.Telemetry.DeterministicId
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
@@ -802,6 +805,7 @@ test-suite test-dev
       Pages.Charts.Charts
       Pages.CodeContext
       Pages.CommandPalette
+      Pages.Containers
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints

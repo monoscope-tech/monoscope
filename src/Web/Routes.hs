@@ -109,6 +109,7 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
+import Pages.Containers qualified as Containers
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
@@ -606,6 +607,8 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
+  , containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+  , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -1012,6 +1015,8 @@ telemetryServer pid =
     , metricCardGetH = Metrics.metricCardGetH pid
     , serviceMapGetH = ServiceMap.serviceMapGetH pid
     , metricServicesGetH = Metrics.metricServicesGetH pid
+    , containersGetH = Containers.containersGetH pid
+    , containerDetailGetH = Containers.containerDetailGetH pid
     }
 
 

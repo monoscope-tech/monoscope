@@ -1502,7 +1502,7 @@ explorerNavTabs_ pid active =
 -- Live Tail leads the strip but Events remains the section's landing route: arriving at
 -- Explorer should answer "what happened", and watching a stream is a thing you opt into.
 explorerTabs :: [(Text, Text)]
-explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
+explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Containers", "/containers"), ("Service Map", "/service_map")]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.
