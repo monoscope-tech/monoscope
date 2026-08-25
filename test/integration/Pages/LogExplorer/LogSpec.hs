@@ -84,8 +84,17 @@ fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log
 -- asserts on, so a persistent failure still reports the real value). TimeFusion is
 -- an asynchronous store: a row is durable when the write returns but not
 -- necessarily readable in the same instant, so a single read is a race.
+--
+-- 30s rather than 10s. The examples that read a project of their own — created by
+-- 'createTestProject' so their counts are not perturbed by the shared 'testPid' —
+-- are also the ones asking TimeFusion for a partition that has never existed
+-- before, which is slower to become visible than an append to a partition the
+-- store has been serving all run. 'should respect exact time boundaries' is the
+-- one that outran the old budget under CI load. Waiting longer cannot turn a
+-- genuinely wrong answer into a right one; it only stops a slow one reading as
+-- wrong.
 eventually :: IO a -> (a -> Bool) -> IO a
-eventually act ok = go (40 :: Int)
+eventually act ok = go (120 :: Int)
   where
     go n = do
       a <- act
