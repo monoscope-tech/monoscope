@@ -325,9 +325,12 @@ instance Var [Text] where
   toVar = toString . T.intercalate ","
 
 
--- | @ENABLED_USAGE_METERS=events,session_replays@. An unparseable name fails the
--- whole list rather than being silently dropped — quietly ignoring a typo here
--- would switch off revenue for that dimension with no signal.
+-- | @ENABLED_USAGE_METERS=events,session_replays@. An unparseable name yields
+-- Nothing for the whole list rather than silently dropping the bad entry — envy's
+-- generic decode (@envMaybe .!= def@) then falls back to the default @[Events]@,
+-- so a typo degrades to "events still bills" rather than to a partial list that
+-- silently drops a dimension. Every meter's dormancy is logged each run, which is
+-- where a typo actually surfaces.
 instance Var [Projects.MeterKind] where
   fromVar = traverse (fromVar . toString) . filter (not . T.null) . map T.strip . T.splitOn "," . toText
   toVar = toString . T.intercalate "," . map (toText . toVar)

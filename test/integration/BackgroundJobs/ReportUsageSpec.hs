@@ -120,12 +120,17 @@ seedMetrics tr n = do
 
 
 -- | Run the job with provider calls recorded instead of sent, so the drain path
--- reaches its success branch without touching api.stripe.com. Returns the URLs
--- posted to, which is the only place "what did we actually bill" is observable.
-runReportRecording :: TestResources -> IO [Text]
+-- reaches its success branch without touching api.stripe.com. Returns (url, body)
+-- per request — the body is where the meter identity actually rides, so it is the
+-- only place "what did we bill, and against which meter" is observable.
+runReportRecording :: TestResources -> IO [(Text, Text)]
 runReportRecording tr = do
   (reqs, _) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage pid)
-  pure (map fst reqs)
+  pure [(u, decodeUtf8 b) | (u, b) <- reqs]
+
+
+postsTo :: Text -> [(Text, Text)] -> [Text]
+postsTo host reqs = [b | (u, b) <- reqs, host `T.isInfixOf` u]
 
 
 lastReportedOf :: TestResources -> IO UTCTime
@@ -264,8 +269,8 @@ spec = around withTestResources do
       paidUnaddressable tr
 
       -- Unaddressable throws before any HTTP, so this never touches the network.
-      urls <- runReportRecording tr
-      urls `shouldBe` []
+      reqs <- runReportRecording tr
+      reqs `shouldBe` []
 
       meteredSubmissions tr >>= (`shouldBe` [("session_replays", 2, "failed")])
 
@@ -276,14 +281,24 @@ spec = around withTestResources do
       seedReplays tr 3 (addUTCTime (-3600) frozenTime)
       paid tr
 
-      urls <- runReportRecording tr
+      reqs <- runReportRecording tr
 
       rows <- meteredSubmissions tr
       map (\(k, q, _) -> (k, q)) rows `shouldMatchList` [("events", 3), ("metric_datapoints", 4), ("session_replays", 3)]
       -- Every chunk drained: the recording interpreter answers 200, so the
       -- success branch is the one under test here.
       for_ rows \(_, _, status) -> status `shouldBe` "submitted"
-      length (filter (T.isInfixOf "stripe.com") urls) `shouldBe` 3
+
+      -- The point of the whole feature: each dimension rides its OWN Stripe meter.
+      -- Asserting only on row counts would pass even if all three POSTs carried
+      -- event_name=events_usage, which is the bug this pins.
+      -- wreq form-encodes the keys, so payload[value] arrives as payload%5Bvalue%5D.
+      let bodies = T.replace "%5B" "[" . T.replace "%5D" "]" <$> postsTo "stripe.com" reqs
+          meterOf b = find (`T.isInfixOf` b) ["events_usage", "metric_datapoints_usage", "session_replays_usage"]
+          valueOf b = viaNonEmpty head $ mapMaybe (T.stripPrefix "payload[value]=") (T.splitOn "&" b)
+      length bodies `shouldBe` 3
+      mapMaybe (\b -> (,) <$> meterOf b <*> valueOf b) bodies
+        `shouldMatchList` [("events_usage", "3"), ("metric_datapoints_usage", "4"), ("session_replays_usage", "3")]
 
     -- The condition that makes replays different from events and metrics: a
     -- project can have replays and no telemetry at all. The old guard keyed on
@@ -324,12 +339,12 @@ spec = around withTestResources do
       -- A numeric sub_id is what marks the project as Lemon Squeezy.
       setBilling tr "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
 
-      urls <- runReportRecording tr
+      reqs <- runReportRecording tr
 
       -- Events falls back to first_sub_item_id; the other two have no item.
       rows <- meteredSubmissions tr
       map (\(k, _, _) -> k) rows `shouldBe` ["events"]
-      length (filter (T.isInfixOf "lemonsqueezy.com") urls) `shouldBe` 1
+      postsTo "lemonsqueezy.com" reqs `shouldSatisfy` \bs -> length bs == 1 && all (T.isInfixOf "912345") bs
 
     it "bills a Lemon Squeezy meter once its subscription item is recorded" \tr0 -> do
       let tr = withMeters [minBound .. maxBound] tr0
@@ -337,9 +352,17 @@ spec = around withTestResources do
       setBilling tr "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
       void $ runTestBg frozenTime tr $ Projects.setMeterSubItemId pid Projects.SessionReplays "912999"
 
-      void $ runReportRecording tr
+      reqs <- runReportRecording tr
 
       meteredSubmissions tr >>= (`shouldBe` [("session_replays", 2, "submitted")])
+      -- Billed against the replays subscription item, NOT the events item that
+      -- first_sub_item_id falls back to — a fallback that leaked past its own
+      -- meter would charge replays against the events variant.
+      case postsTo "lemonsqueezy.com" reqs of
+        [body] -> do
+          body `shouldSatisfy` T.isInfixOf "912999"
+          body `shouldSatisfy` (not . T.isInfixOf "912345")
+        other -> fail $ "expected exactly one Lemon Squeezy usage record, got " <> show (length other)
 
     -- A succeeded chunk must never be re-sent: that is a duplicate charge.
     it "does not re-submit a chunk that already succeeded" \tr0 -> do
@@ -348,12 +371,12 @@ spec = around withTestResources do
       paid tr
 
       first_ <- runReportRecording tr
-      length (filter (T.isInfixOf "stripe.com") first_) `shouldBe` 1
+      length (postsTo "stripe.com" first_) `shouldBe` 1
 
       -- Second tick: the window is empty now (watermark advanced) and the earlier
       -- chunk is 'submitted', so nothing should be posted at all.
       second_ <- runReportRecording tr
-      filter (T.isInfixOf "stripe.com") second_ `shouldBe` []
+      postsTo "stripe.com" second_ `shouldBe` []
       meteredSubmissions tr >>= (`shouldBe` [("session_replays", 2, "submitted")])
 
     -- Turning a meter off between recording a chunk and draining it must not
@@ -369,8 +392,8 @@ spec = around withTestResources do
 
       -- Meter switched off: the drain must neither submit nor re-mark it.
       setStripeCustomer tr0 (Just "cus_test_reportusage")
-      urls <- runReportRecording tr0
-      filter (T.isInfixOf "stripe.com") urls `shouldBe` []
+      reqs <- runReportRecording tr0
+      postsTo "stripe.com" reqs `shouldBe` []
       meteredSubmissions tr0 >>= (`shouldBe` pendingBefore)
 
       -- Re-enabled and now addressable: the backlog drains.
