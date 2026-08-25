@@ -45,6 +45,7 @@ module Pkg.TestUtils (
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
+  createTestProject,
   createTestAPIKey,
   ingestLog,
   ingestLogAt,
@@ -1313,6 +1314,34 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
 
 -- OTLP/Telemetry helper functions for ingesting test data
 -- These helpers allow tests to ingest data through handlers instead of raw SQL
+
+-- | A paid project of the example's own, under a freshly random id.
+--
+-- Postgres is per-example (a database cloned from the template), but TimeFusion is ONE
+-- shared instance for the whole run and its rows are keyed only by project id — so any
+-- spec that ingests into the shared demo project sees every other spec's rows too. Use
+-- this whenever an assertion is about counts for a project. The id must be genuinely
+-- random: the test UUID stream restarts at the same values every example, which would
+-- reintroduce exactly the collision this avoids.
+createTestProject :: TestResources -> Text -> IO Projects.ProjectId
+createTestProject tr title = do
+  pid <- UUIDId <$> nextRandom
+  withResource tr.trPool \conn -> do
+    void
+      $ PGS.execute
+        conn
+        [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+              VALUES (?, ?, 'GraduatedPricing', true, NULL, true, true) |]
+        (pid, title)
+    void
+      $ PGS.execute
+        conn
+        [sql| INSERT INTO projects.project_members (project_id, user_id, permission)
+              VALUES (?, '00000000-0000-0000-0000-000000000001', 'admin')
+              ON CONFLICT (project_id, user_id) DO NOTHING |]
+        (Only pid)
+  pure pid
+
 
 -- | Helper to create an API key for testing using handler
 createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
