@@ -27,6 +27,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.TestUtils
+import Utils (formatUTC)
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
@@ -134,11 +135,39 @@ spec = around withTestResources $ describe "Metric/trace correlation via exempla
           (testPid, traceIdHex)
         :: IO (V.Vector (UUID.UUID, UTCTime))
     (rid, ts) <- maybe (error "ingested span missing from otel_logs_and_spans") pure (rows V.!? 0)
+
+    -- The service tier reads the metric catalogue, which OTLP ingestion fills through
+    -- an async buffer this test does not drive — so seed it directly. Without a row
+    -- here the section renders its empty state and there is no chart to assert on.
+    void
+      $ withPool tr.trPool
+      $ DBT.execute
+        [sql| INSERT INTO otel_metrics_meta
+                (project_id, metric_name, metric_type, metric_unit, metric_description,
+                 service_name, scope_name, scope_version, first_seen_at, last_seen_at,
+                 first_timestamp, last_timestamp, metric_labels)
+              VALUES (?, ?, 'GAUGE', 'ms', '', 'test-service', '', '', ?, ?, ?, ?, '{}')
+              ON CONFLICT DO NOTHING |]
+        (testPid, metricName, ts, ts, ts, ts)
+
     (_, related) <- testServant tr $ TelemetryPage.relatedMetricsGetH testPid rid ts
     let relatedHtml = LT.toStrict $ Lucid.renderText related
     relatedHtml `shouldSatisfy` T.isInfixOf "Recorded in this trace"
     relatedHtml `shouldSatisfy` T.isInfixOf metricName
     relatedHtml `shouldSatisfy` T.isInfixOf "Metrics from test-service"
+
+    -- Those charts are scoped to the span rather than to whatever range the page
+    -- happens to show, and shade the span's own extent inside that window. Every
+    -- vendor surveyed draws the interval; without it the chart cannot answer
+    -- "was my request inside the spike?" and is decoration. `timeFrom` pins the
+    -- query window, `highlightFrom` the band, and they are deliberately different
+    -- values — the window is padded around the span.
+    relatedHtml `shouldSatisfy` T.isInfixOf "timeFrom"
+    relatedHtml `shouldSatisfy` T.isInfixOf "highlightFrom"
+    let windowStart = formatUTC $ addUTCTime (-120) ts
+        spanStart = formatUTC ts
+    relatedHtml `shouldSatisfy` T.isInfixOf windowStart
+    relatedHtml `shouldSatisfy` T.isInfixOf spanStart
 
     -- The panel offers the tab but pays for nothing: opening a span must not run a
     -- metrics lookup. Two levels of deferral, and the test pins both — the panel

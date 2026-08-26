@@ -193,6 +193,10 @@ export const getChartStyles = () => {
     successColor: get('--color-fillSuccess-strong'),
     strokeStrong: get('--color-strokeStrong'),
     brandColor: get('--color-fillBrand-strong'),
+    // Shading for a subject's own interval on a wider chart (applyHighlightBand).
+    // The weak brand fill is already the token for "this region, not a value",
+    // and carries its own alpha in both themes.
+    highlightBandColor: get('--color-fillBrand-weak'),
   };
 };
 
@@ -335,9 +339,17 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
-const chartDataUrl = ({ query, querySQL, pid, chartType }: WidGetData): string => {
+const chartDataUrl = ({ query, querySQL, pid, chartType, timeFrom, timeTo }: WidGetData): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
+  // A widget carrying its own window is about that window, not the page's. `since`
+  // has to go with them: the server prefers it over from/to, so leaving it behind
+  // would silently widen the request back to the page range.
+  if (timeFrom && timeTo) {
+    params.delete('since');
+    params.set('from', timeFrom);
+    params.set('to', timeTo);
+  }
   // Lets the server size bin_auto buckets for how this widget renders: a line
   // chart carries twice the points a bar chart can show legibly.
   if (chartType) params.set('chart_type', chartType);
@@ -534,6 +546,50 @@ type WidGetData = {
   unit?: string;
   alertThreshold?: number | null;
   warningThreshold?: number | null;
+  // Pins the widget's own query window instead of inheriting the page's, and shades
+  // the subject's extent inside it. Both are ISO-8601; absent on ordinary widgets.
+  timeFrom?: string | null;
+  timeTo?: string | null;
+  highlightFrom?: string | null;
+  highlightTo?: string | null;
+};
+
+/**
+ * Shade the subject's own interval on a chart whose window is wider than it.
+ *
+ * This is the detail every vendor surveyed treats as the point of showing the chart
+ * at all: a span's metrics are only meaningful once you can see whether the span sat
+ * inside the spike or merely near it. The band is drawn on a throwaway series rather
+ * than on series[0] so it survives a data refresh replacing the real series, and it
+ * is non-interactive so it never steals a tooltip from the data.
+ */
+const applyHighlightBand = (chart: any, { highlightFrom, highlightTo }: WidGetData) => {
+  if (!highlightFrom || !highlightTo) return;
+  const from = new Date(highlightFrom).getTime();
+  const to = new Date(highlightTo).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+  // A zero-width band renders as nothing; give an instant a visible sliver.
+  const [lo, hi] = to > from ? [from, to] : [from, from + 1000];
+  const styles = getChartStyles();
+  chart.setOption(
+    {
+      series: [
+        {
+          id: '__highlight',
+          type: 'line',
+          data: [],
+          silent: true,
+          animation: false,
+          markArea: {
+            silent: true,
+            itemStyle: { color: styles.highlightBandColor || 'rgba(99,102,241,0.12)' },
+            data: [[{ xAxis: lo }, { xAxis: hi }]],
+          },
+        },
+      ],
+    },
+    { replaceMerge: [] },
+  );
 };
 
 type Exemplar = { trace_id: string; timestamp: string; value: number; metric_name: string; url: string };
@@ -680,6 +736,7 @@ const chartWidget = (widgetData: WidGetData) => {
   }
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
+  applyHighlightBand(chart, widgetData);
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
 
   // Opt-in per chart: the Lucid container declares data-exemplars-url next to the

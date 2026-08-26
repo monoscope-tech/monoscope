@@ -162,6 +162,16 @@ data Widget = Widget
   , dataset :: Maybe WidgetDataset
   , -- eager
     eager :: Maybe Bool
+  , timeFrom :: Maybe Text
+  -- ^ Pins this widget's own query window instead of inheriting the page's. A
+  -- related-metrics chart beside a span is about that span's minutes, not whatever
+  -- range the explorer happens to be showing.
+  , timeTo :: Maybe Text
+  , highlightFrom :: Maybe Text
+  -- ^ Sub-interval shaded on the chart — the subject's own extent inside the padded
+  -- window. Every vendor surveyed draws this; without it the reader cannot tell
+  -- whether their request was inside the spike or merely near it.
+  , highlightTo :: Maybe Text
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
   , _isNested :: Maybe Bool
@@ -925,6 +935,12 @@ renderChart widget = do
                 -- server data never calls /chart_data, so prefetching one would be a
                 -- wasted request. See prefetchChartData in web-components/src/widgets.ts.
                 willFetchJS = if maybe True ((== AE.Null) . (.source)) widget.dataset then "true" else "false" :: Text
+                -- Encoded rather than interpolated bare: these are absent far more
+                -- often than not, and `null` is what the client tests for.
+                timeFromJS = encodeText widget.timeFrom
+                timeToJS = encodeText widget.timeTo
+                highlightFromJS = encodeText widget.highlightFrom
+                highlightToJS = encodeText widget.highlightTo
             script_
               [type_ "text/javascript"]
               [text|
@@ -947,7 +963,11 @@ renderChart widget = do
                   legendPosition: "${legendPos}",
                   unit: "${widgetUnit}",
                   alertThreshold: ${alertThresholdJS},
-                  warningThreshold: ${warningThresholdJS}
+                  warningThreshold: ${warningThresholdJS},
+                  timeFrom: ${timeFromJS},
+                  timeTo: ${timeToJS},
+                  highlightFrom: ${highlightFromJS},
+                  highlightTo: ${highlightToJS}
                 };
 
                 // Start the data request during HTML parse rather than after echarts,

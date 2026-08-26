@@ -447,11 +447,16 @@ relatedMetricsGetH pid rdId timestamp = withSpan_ "log-explorer.related-metrics"
         Nothing -> pure []
         Just trId -> Telemetry.metricExemplars env.enableTimefusionReads pid (Telemetry.ExemplarsOfTrace trId) (lo, hi) exemplarPageSize
       serviceMetrics <- if T.null service then pure [] else take 6 . sortOn (Down . (.lastSeen)) <$> Telemetry.getMetricChartListData pid (Just service) Nothing
-      addRespHeaders $ relatedMetrics_ pid service exemplars serviceMetrics
+      -- The charts get the same padded window the exemplar query used, and shade the
+      -- record's own extent inside it: a log is an instant, a span is its start..end.
+      let subject
+            | record.kind == Just "log" = (record.timestamp, record.timestamp)
+            | otherwise = (record.start_time, LogItem.spanEndOrCap record)
+      addRespHeaders $ relatedMetrics_ pid service (lo, hi) subject exemplars serviceMetrics
 
 
-relatedMetrics_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> [Telemetry.MetricChartListData] -> Html ()
-relatedMetrics_ pid service exemplars serviceMetrics = div_ [class_ "flex flex-col gap-6 py-2"] do
+relatedMetrics_ :: Projects.ProjectId -> Text -> (UTCTime, UTCTime) -> (UTCTime, UTCTime) -> [Telemetry.MetricExemplar] -> [Telemetry.MetricChartListData] -> Html ()
+relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = div_ [class_ "flex flex-col gap-6 py-2"] do
   section "Recorded in this trace" $ case exemplars of
     [] -> hint "No metric reported a datapoint from this trace. Only metrics recorded inside a sampled span carry an exemplar."
     xs -> div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ xs \x ->
@@ -467,8 +472,16 @@ relatedMetrics_ pid service exemplars serviceMetrics = div_ [class_ "flex flex-c
     ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
       div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
         $ toHtml
+        $ scopedToSubject
         $ metricWidget pid m.metricName m.metricType m.metricUnit Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing
   where
+    scopedToSubject w =
+      w
+        { Widget.timeFrom = Just $ formatUTC lo
+        , Widget.timeTo = Just $ formatUTC hi
+        , Widget.highlightFrom = Just $ formatUTC subLo
+        , Widget.highlightTo = Just $ formatUTC subHi
+        }
     hint :: Text -> Html ()
     hint t = div_ [class_ "px-3 py-4 text-sm text-textWeak"] $ toHtml t
     section :: Text -> Html () -> Html ()
