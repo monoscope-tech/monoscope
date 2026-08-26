@@ -24,7 +24,6 @@ module Pages.Telemetry (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Default
-import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Set qualified as S
