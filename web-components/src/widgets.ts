@@ -563,31 +563,41 @@ type WidGetData = {
  * than on series[0] so it survives a data refresh replacing the real series, and it
  * is non-interactive so it never steals a tooltip from the data.
  */
-const applyHighlightBand = (chart: any, { highlightFrom, highlightTo }: WidGetData) => {
+const applyHighlightBand = (chart: any, { highlightFrom, highlightTo, timeFrom, timeTo }: WidGetData) => {
   if (!highlightFrom || !highlightTo) return;
   const from = new Date(highlightFrom).getTime();
   const to = new Date(highlightTo).getTime();
   if (!Number.isFinite(from) || !Number.isFinite(to)) return;
-  // A zero-width band renders as nothing; give an instant a visible sliver.
-  const [lo, hi] = to > from ? [from, to] : [from, from + 1000];
+
+  // Most spans are milliseconds inside a window of minutes, where a band drawn to
+  // scale is narrower than a pixel — an overlay nobody can see is the same as no
+  // overlay. Below that threshold say *where* rather than *how long*: a line marks
+  // the instant honestly, whereas widening the band to be visible would overstate
+  // the duration, which is the one thing the reader is here to judge.
+  const windowMs =
+    timeFrom && timeTo ? new Date(timeTo).getTime() - new Date(timeFrom).getTime() : NaN;
+  const tooNarrow = Number.isFinite(windowMs) && windowMs > 0 && (to - from) / windowMs < 0.01;
   const styles = getChartStyles();
-  chart.setOption(
-    {
-      series: [
-        {
-          id: '__highlight',
-          type: 'line',
-          data: [],
+  const color = styles.highlightBandColor || 'rgba(99,102,241,0.12)';
+  const mark = tooNarrow
+    ? {
+        markLine: {
           silent: true,
-          animation: false,
-          markArea: {
-            silent: true,
-            itemStyle: { color: styles.highlightBandColor || 'rgba(99,102,241,0.12)' },
-            data: [[{ xAxis: lo }, { xAxis: hi }]],
-          },
+          symbol: 'none',
+          lineStyle: { color: styles.brandColor, type: 'dashed', width: 1 },
+          label: { show: false },
+          data: [{ xAxis: from }],
         },
-      ],
-    },
+      }
+    : {
+        markArea: {
+          silent: true,
+          itemStyle: { color },
+          data: [[{ xAxis: from }, { xAxis: to }]],
+        },
+      };
+  chart.setOption(
+    { series: [{ id: '__highlight', type: 'line', data: [], silent: true, animation: false, ...mark }] },
     { replaceMerge: [] },
   );
 };
