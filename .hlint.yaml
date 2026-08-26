@@ -1747,11 +1747,12 @@
     name: "Use 'fromException' from Relude"
     note: "'fromException' is already exported from Relude"
     rhs: fromException
-- warn:
-    lhs: Control.Exception.displayException
-    name: "Use 'displayException' from Relude"
-    note: "'displayException' is already exported from Relude"
-    rhs: displayException
+# NOTE: no `displayException` rule here. Relude re-exports
+# Control.Exception.displayException, so `lhs: Control.Exception.displayException`
+# also matches the already-correct unqualified use and suggests replacing the
+# symbol with itself — 10 unfixable hints, one per call site, which no edit can
+# satisfy. The sibling rules below are only safe while nothing uses those symbols
+# bare; if one starts self-suggesting, delete it for the same reason.
 - warn:
     lhs: Data.Foldable.asum
     name: "Use 'asum' from Relude"
