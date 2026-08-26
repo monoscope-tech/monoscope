@@ -7,7 +7,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder qualified as B
 import Data.ByteString.Lazy qualified as BSL
 import Data.Scientific qualified as Scientific
-import Data.Text.Encoding qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V5 qualified as UUIDv5
@@ -36,12 +35,12 @@ canonical = \case
   AE.Null -> B.word8 0
   AE.Bool False -> B.word8 1
   AE.Bool True -> B.word8 2
-  AE.Number n -> B.word8 3 <> bytes (T.encodeUtf8 $ toText $ Scientific.formatScientific Scientific.Generic Nothing $ Scientific.normalize n)
-  AE.String s -> B.word8 4 <> bytes (T.encodeUtf8 s)
+  AE.Number n -> B.word8 3 <> bytes (encodeUtf8 $ toText $ Scientific.formatScientific Scientific.Generic Nothing $ Scientific.normalize n)
+  AE.String s -> B.word8 4 <> bytes (encodeUtf8 s)
   AE.Array xs -> B.word8 5 <> count (V.length xs) <> foldMap canonical xs
   AE.Object object ->
     let fields = sortOn (AEK.toText . fst) $ AEKM.toList object
-     in B.word8 6 <> count (length fields) <> foldMap (\(key, value) -> bytes (T.encodeUtf8 $ AEK.toText key) <> canonical value) fields
+     in B.word8 6 <> count (length fields) <> foldMap (\(key, value) -> bytes (encodeUtf8 $ AEK.toText key) <> canonical value) fields
   where
     bytes :: ByteString -> B.Builder
     bytes bs = B.word64BE (fromIntegral $ BS.length bs) <> B.byteString bs

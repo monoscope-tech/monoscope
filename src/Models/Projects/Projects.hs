@@ -1069,15 +1069,21 @@ data MeterKind = Events | MetricDatapoints | SessionReplays
 
 
 -- | Stripe addresses a meter by @event_name@ against the customer, so a meter
--- name is derivable and needs no config entry. @events_usage@ is preserved
--- verbatim — it is the name of the meter already live in Stripe.
+-- name is derivable and needs no config entry. Both of these names are the ones
+-- already live in the Stripe account, not ones we chose:
+--
+--   * @events_usage@ carries the existing overage price and is on every subscription.
+--   * @metrics_usage@ predates this work and already has a \"Metrics\" product priced
+--     at 0.00001 cents/unit — exactly the \$1 per 10M we want — attached to no
+--     subscription yet. Reused rather than duplicated under a tidier name; a second
+--     meter would have meant a second product and a second price saying the same thing.
 --
 -- >>> map stripeMeterEventName [minBound .. maxBound]
--- ["events_usage","metric_datapoints_usage","session_replays_usage"]
+-- ["events_usage","metrics_usage","session_replays_usage"]
 stripeMeterEventName :: MeterKind -> Text
 stripeMeterEventName = \case
   Events -> "events_usage"
-  MetricDatapoints -> "metric_datapoints_usage"
+  MetricDatapoints -> "metrics_usage"
   SessionReplays -> "session_replays_usage"
 
 
@@ -1171,7 +1177,7 @@ projectMeterConfig p subItemIds =
 -- >>> resolveMeterTarget [minBound ..] (ls (fromList [(SessionReplays, "si_9")])) SessionReplays
 -- Right (LemonSqueezyMeter {subItemId = "si_9"})
 -- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider (Just "cus_1") Nothing mempty) MetricDatapoints
--- Right (StripeMeter {customerId = "cus_1", eventName = "metric_datapoints_usage"})
+-- Right (StripeMeter {customerId = "cus_1", eventName = "metrics_usage"})
 -- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider Nothing Nothing mempty) Events
 -- Left NoStripeCustomer
 -- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig NoBillingProvider Nothing Nothing mempty) Events

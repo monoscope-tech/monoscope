@@ -292,11 +292,11 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       -- event_name=events_usage, which is the bug this pins.
       -- wreq form-encodes the keys, so payload[value] arrives as payload%5Bvalue%5D.
       let bodies = T.replace "%5B" "[" . T.replace "%5D" "]" <$> postsTo "stripe.com" reqs
-          meterOf b = find (`T.isInfixOf` b) ["events_usage", "metric_datapoints_usage", "session_replays_usage"]
+          meterOf b = find (`T.isInfixOf` b) ["events_usage", "metrics_usage", "session_replays_usage"]
           valueOf b = viaNonEmpty head $ mapMaybe (T.stripPrefix "payload[value]=") (T.splitOn "&" b)
       length bodies `shouldBe` 3
       mapMaybe (\b -> (,) <$> meterOf b <*> valueOf b) bodies
-        `shouldMatchList` [("events_usage", "3"), ("metric_datapoints_usage", "4"), ("session_replays_usage", "3")]
+        `shouldMatchList` [("events_usage", "3"), ("metrics_usage", "4"), ("session_replays_usage", "3")]
 
     -- The condition that makes replays different from events and metrics: a
     -- project can have replays and no telemetry at all. The old guard keyed on

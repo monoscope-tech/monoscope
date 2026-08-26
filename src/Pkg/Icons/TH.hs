@@ -43,14 +43,14 @@ parseSprite kind contents = stripComments contents >>= go []
         name <- requiredAttribute "id" attrs
         viewBox <- requiredAttribute "viewBox" attrs
         let (body, afterBody) = T.breakOn "</symbol>" $ T.drop 1 afterOpening
-        when (T.null afterBody) $ Left $ "unterminated <symbol> for icon " <> T.unpack name
+        when (T.null afterBody) $ Left $ "unterminated <symbol> for icon " <> toString name
         let presentationAttrs = filter (\(key, _) -> key /= "id" && key /= "viewBox" && key /= "width" && key /= "height") attrs
             entry =
               ( kind
-              , T.unpack name
-              , T.unpack viewBox
-              , map (bimap T.unpack T.unpack) presentationAttrs
-              , T.unpack $ minifyMarkup $ prefixInternalIds (toText kind <> "-" <> name) body
+              , toString name
+              , toString viewBox
+              , map (bimap toString toString) presentationAttrs
+              , toString $ minifyMarkup $ prefixInternalIds (toText kind <> "-" <> name) body
               )
         go (entry : acc) $ T.drop (T.length "</symbol>") afterBody
 
@@ -76,7 +76,7 @@ stripComments source = case T.breakOn "<!--" source of
 
 requiredAttribute :: Text -> [(Text, Text)] -> Either String Text
 requiredAttribute key attrs =
-  maybe (Left $ "<symbol> is missing required " <> T.unpack key <> " attribute") Right $ lookup key attrs
+  maybe (Left $ "<symbol> is missing required " <> toString key <> " attribute") Right $ lookup key attrs
 
 
 parseAttributes :: Text -> Either String [(Text, Text)]
@@ -87,11 +87,11 @@ parseAttributes = go [] . T.strip
       | otherwise = do
           let (key, afterKey) = T.breakOn "=" input
               trimmedKey = T.strip key
-          when (T.null trimmedKey || T.null afterKey) $ Left $ "invalid <symbol> attributes: " <> T.unpack input
+          when (T.null trimmedKey || T.null afterKey) $ Left $ "invalid <symbol> attributes: " <> toString input
           let valueStart = T.stripStart $ T.drop 1 afterKey
-          unless (T.isPrefixOf "\"" valueStart) $ Left $ "attribute value must use double quotes: " <> T.unpack input
+          unless (T.isPrefixOf "\"" valueStart) $ Left $ "attribute value must use double quotes: " <> toString input
           let (value, afterValue) = T.breakOn "\"" $ T.drop 1 valueStart
-          when (T.null afterValue) $ Left $ "unterminated attribute value: " <> T.unpack input
+          when (T.null afterValue) $ Left $ "unterminated attribute value: " <> toString input
           go ((trimmedKey, value) : acc) $ T.stripStart $ T.drop 1 afterValue
 
 
