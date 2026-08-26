@@ -721,9 +721,25 @@ saveReplayMinio envCfg jobsPool ackId payload =
           liftIO (Minio.runMinio conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
+              -- The object is durable BEFORE anything records its key, so a failure
+              -- here orphans it: the message is retried under a new key (the name
+              -- embeds `now`) and this one is referenced by nothing, unreachable to
+              -- readers that resolve objects only via file_keys/shard_keys. Naming
+              -- the key in the log is what makes it recoverable afterwards —
+              -- scripts/local/replay-repair-untracked.sh takes exactly this input.
+              -- Re-thrown, so the nack/retry path is unchanged (never silent-ack).
               countRows :: [Int] <-
-                Hasql.interp
-                  [HI.sql|
+                either
+                  ( \(e :: SomeException) -> do
+                      Log.logAttention
+                        "Replay object saved but recording its key failed; object is orphaned"
+                        (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
+                      liftIO $ throwIO e
+                  )
+                  pure
+                  =<< tryAny
+                    ( Hasql.interp
+                        [HI.sql|
                 INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
                 VALUES (#{sessionId}, #{projectId}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{userId}, #{userEmail}, #{userName})
                 ON CONFLICT (session_id) DO UPDATE SET
@@ -736,6 +752,7 @@ saveReplayMinio envCfg jobsPool ackId payload =
                   updated_at = #{now}
                 RETURNING event_file_count
               |]
+                    )
               let fileCount = fromMaybe 0 (listToMaybe countRows)
               -- Enqueue at exact multiples of the threshold so a busy session
               -- with N events past 14/28/42/... fires at most one merge per
@@ -968,12 +985,20 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
               if rowsAffected == 0
                 then Log.logAttention "Post-merge UPDATE affected 0 rows; row vanished, skipping afterMerge" logCtx
                 else do
-                  afterMerge now'
+                  -- Finalize only once nothing is left. On the cron path
+                  -- `afterMerge` is what sets `merged`, and the cron selects
+                  -- `merged = FALSE` — so marking it while files remain strands
+                  -- them: the re-enqueue below becomes the only way back, and if
+                  -- that is lost (this pass still holds the lease, a worker
+                  -- restarts) nothing revisits the session. Found in production
+                  -- as 183 sessions holding 9,999 files, the worst 798.
+                  let drained = length allFileKeys <= maxFilesPerMerge
+                  when drained $ afterMerge now'
                   Log.logInfo (maybe "Merged replay session" ("Merged replay session " <>) logSuffix) ("session_id", UUID.toText sessionId)
                   -- We capped the merge at `maxFilesPerMerge`; re-enqueue while
                   -- there's backlog so a session that fell behind drains in
                   -- bounded-heap chunks instead of waiting for the 30-min cron.
-                  when (length allFileKeys > maxFilesPerMerge)
+                  unless drained
                     $ enqueueBgJob ctx.jobsPool "MergeReplaySession" [AE.toJSON pid, AE.toJSON sessionId]
 
 

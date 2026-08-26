@@ -17,7 +17,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, copyReplayObjectVerified, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, copyReplayObjectVerified, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
@@ -29,6 +29,16 @@ import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, 
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
+
+
+-- | The `merged` flag decides whether the cron will ever look at a session
+-- again, so it is worth asserting on directly rather than inferring from counts.
+mergedFlag :: TestResources -> UUID.UUID -> IO Bool
+mergedFlag tr sid = do
+  rows :: V.Vector (Only Bool) <-
+    withPool tr.trPool
+      $ DBT.query [sql| SELECT merged FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |] (sid, pid)
+  pure $ maybe False fromOnly (rows V.!? 0)
 
 
 clearReplaySessions :: TestResources -> IO ()
@@ -510,6 +520,39 @@ spec = around withTestResources do
     -- This is the O(n²)→O(n)/flat-heap fix. Verify end-to-end: batches → shards,
     -- the manifest lists them in order, and the read path stitches them back in
     -- event-time order with nothing lost.
+    -- Regression (2026-08-26): a session holding more than `maxFilesPerMerge`
+    -- files was marked merged after its FIRST pass, and the cron selects on
+    -- `merged = FALSE` — so the remainder was stranded with no way back. Found
+    -- in production as 183 sessions holding 9,999 unmerged files, the worst
+    -- 798. The cron path is the one that marks; `mergeReplaySession` passes
+    -- `const pass`, which is why the per-session job never showed the bug.
+    it "keeps merged=FALSE while a session still has unmerged files" $ \tr ->
+      requireMinio tr pendingWith $ do
+        let sid = UUID.fromWords 0 0 0 301
+            ev t = AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (t :: Int), "data" AE..= AE.object []] :: AE.Value
+        clearSessionRow tr sid
+        -- One file per batch, one more than a single pass can consume. Distinct
+        -- frozen times keep the per-message object keys from colliding.
+        forM_ [1 .. 26 :: Int] $ \i ->
+          void
+            $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr
+            $ processReplayEvents [("m" <> show i, mkBody sid (AE.toJSON ([ev (i * 10)] :: [AE.Value])))] HM.empty
+        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 26
+        -- The cron only picks up sessions idle for 30 min, measured against the
+        -- clock it is handed — so it has to run LATER than the writes, not at
+        -- the same frozen instant, or it selects nothing and proves nothing.
+        let afterIdle = addUTCTime 3600 frozen
+        void $ runTestBg afterIdle tr compressAndMergeReplaySessions
+        -- A pass consumes at most maxFilesPerMerge, leaving one behind …
+        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 1
+        -- … so the session must stay selectable, or the cron never returns for it.
+        mergedFlag tr sid `shouldReturn` False
+        -- And a second pass finishes the job and only then marks it merged.
+        void $ runTestBg afterIdle tr compressAndMergeReplaySessions
+        (length <$> runQueryEffect tr (sessionFileKeys pid sid)) `shouldReturn` 0
+        mergedFlag tr sid `shouldReturn` True
+        clearSessionRow tr sid
+
     it "seals ingested events into ordered shards; manifest + read return them in order" $ \tr ->
       requireMinio tr pendingWith $ do
         let sid = UUID.fromWords 0 0 0 300
