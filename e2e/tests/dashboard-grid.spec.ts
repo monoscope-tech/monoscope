@@ -82,17 +82,12 @@ async function openFirstDashboard(page: Page) {
 
   await links.first().click();
 
-  // A dashboard with unanswered required variables opens a full-screen picker (z-index
-  // 99999) that deliberately blocks the grid — one per unset variable, so they stack. This
-  // has to come before the init wait, not after: while a picker is up the grid never
-  // initialises, so waiting first just times out. Raw clicks, not locator clicks: the
-  // topmost intercepts the others, and clicking the backdrop itself is what dismisses it.
-  const backdrops = page.locator(".var-picker-backdrop");
-  for (let i = 0; i < 6 && (await backdrops.count()) > 0; i++) {
-    await page.mouse.click(5, 5);
-    await page.waitForTimeout(250);
-  }
-  await expect(backdrops).toHaveCount(0);
+  // An unanswered required variable used to open a full-screen picker over the grid,
+  // and this spec dismissed it by clicking the backdrop. It is now rendered as the tab's
+  // content instead, so there is nothing to dismiss — and nothing covers the grid. The
+  // fixture this spec opens declares no variables, so it never prompts; asserting the
+  // backdrop is gone keeps that true if someone reintroduces the overlay.
+  await expect(page.locator(".var-picker-backdrop")).toHaveCount(0);
 
   // The detail route redirects to /tab/<slug>; a DOMContentLoaded handler adds this
   // class once GridStack.init returns.
@@ -105,7 +100,7 @@ async function openFirstDashboard(page: Page) {
   await page.waitForTimeout(2500);
 
   // Nothing re-opened a picker while the widgets were loading.
-  await expect(backdrops).toHaveCount(0);
+  await expect(page.locator(".var-picker-backdrop")).toHaveCount(0);
 }
 
 /** Live gridstack position/size for every root widget. */

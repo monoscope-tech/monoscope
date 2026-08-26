@@ -234,10 +234,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       formField_ FieldSm def{value = maybe "" ((.name) . snd) activeTabInfo, placeholder = "Enter tab name"} "Tab Name" "newName" False Nothing
       Components.formActionsModal_ "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
-  -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
-  whenJust dash.variables \variables ->
-    whenJust (findVarToPrompt (snd <$> activeTabInfo) variables) \v -> variablePickerModal_ pid dashId activeTabSlug allParams v False
-
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
@@ -321,13 +317,17 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         Just tabs ->
           -- Tab system with htmx lazy loading - only render active tab content
           div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"]
-            $ whenJust (tabs !!? activeTabIdx) \activeTab -> do
-              tabContentPanel_ pid dashIdText activeTabIdx activeTab.name activeTab.widgets False
-              -- Variable picker modal inside content div so it's included in HTMX tab swaps
-              whenJust dash.variables \variables ->
-                whenJust (findVarToPrompt renderTab variables) \v ->
-                  variablePickerModal_ pid dashId renderTabSlug allParams v False
+            $ whenJust (tabs !!? activeTabIdx) \activeTab ->
+              -- An unanswered required variable IS the tab's content, not a modal over
+              -- it. Rendering the widgets underneath meant every one of them ran with
+              -- the variable interpolated to '' and reported "no data in the selected
+              -- time range" — a lie about the data rather than a prompt — and dismissing
+              -- the modal left that as the whole page.
+              case findVarToPrompt renderTab (fold dash.variables) of
+                Just v -> variablePickerModal_ pid dashId renderTabSlug allParams v False
+                Nothing -> tabContentPanel_ pid dashIdText activeTabIdx activeTab.name activeTab.widgets False
         -- Fall back to old behavior for dashboards without tabs
+        Nothing | Just v <- findVarToPrompt Nothing (fold dash.variables) -> variablePickerModal_ pid dashId activeTabSlug allParams v False
         Nothing -> do
           let rootWidgets = Widget.normalizeWidgetLayouts (dash :: Dashboards.Dashboard).widgets
           div_ (class_ "grid-stack grid-stack-preloaded -m-2" : Widget.gridStackAttrs rootWidgets) do
@@ -698,18 +698,24 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       opts = fold var.options
       optCount = length opts
   div_ oobAttr do
-    div_ [class_ "var-picker-backdrop fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40", style_ "z-index:99999", [__|on click if event.target is me remove me|]] do
+    div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12"] do
       div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
-        span_ [class_ "text-2xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
-        span_ [class_ "var-picker-count text-xs text-white/80 dark:text-white/50", data_ "total" (show optCount)] $ toHtml $ show optCount <> " items"
-      div_ [class_ "var-picker w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", [__|on click halt the event's bubbling|]] do
-        div_ [class_ "px-3 border-b border-base-300"] do
-          input_
-            [ type_ "text"
-            , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
-            , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
-            , autofocus_
-            , [__|on input
+        span_ [class_ "text-2xs font-medium text-textWeak uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
+        span_ [class_ "var-picker-count text-xs text-textWeak", data_ "total" (show optCount)] $ toHtml $ show optCount <> " items"
+      -- Nothing to choose from is a different answer than "search found nothing", and a
+      -- search box over an empty list reads as a broken page. Say why instead.
+      if optCount == 0
+        then div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"] do
+          div_ [class_ "text-sm text-textStrong"] $ toHtml $ "No " <> T.toLower varTitle <> " to choose from yet"
+          div_ [class_ "mt-1 text-xs text-textWeak"] "This dashboard reports on one at a time, so it has nothing to show until data arrives."
+        else div_ [class_ "var-picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
+          div_ [class_ "px-3 border-b border-base-300"] do
+            input_
+              [ type_ "text"
+              , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
+              , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
+              , autofocus_
+              , [__|on input
                 set :q to my value.toLowerCase()
                 show <.var-opt/> in closest .var-picker when its textContent.toLowerCase() contains :q
                 for opt in <a.var-opt/> in closest .var-picker remove .active from opt end
@@ -750,26 +756,26 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                   if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
                 end
               |]
-            ]
-        div_ [class_ "max-h-80 overflow-y-auto p-1"] do
-          forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
-            let optVal = maybeToMonoid (opt !!? 0)
-                optLbl = fromMaybe optVal (opt !!? 1)
-                isCurrent = var.value == Just optVal
-            a_
-              [ class_
-                  $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                  <> bool "" " active" (idx == 0)
-                  <> bool "" " var-opt-current" isCurrent
-              , href_ $ urlPrefix <> optVal
               ]
-              do
-                span_ [class_ "truncate flex-1"] $ toHtml optLbl
-                when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-          div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
+          div_ [class_ "max-h-80 overflow-y-auto p-1"] do
+            forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
+              let optVal = maybeToMonoid (opt !!? 0)
+                  optLbl = fromMaybe optVal (opt !!? 1)
+                  isCurrent = var.value == Just optVal
+              a_
+                [ class_
+                    $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                    <> bool "" " active" (idx == 0)
+                    <> bool "" " var-opt-current" isCurrent
+                , href_ $ urlPrefix <> optVal
+                ]
+                do
+                  span_ [class_ "truncate flex-1"] $ toHtml optLbl
+                  when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
+            div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
       -- Keyboard hints
-      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"]
-        $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"]), ("Close", ["esc"])] :: [(Text, [Text])]) \(label, keys) ->
+      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
+        $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
           div_ [class_ "flex items-center gap-1.5"] do
             toHtml label
             forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
@@ -2425,13 +2431,27 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 
   -- Process variables to check if tab requires one that's not set
   dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dash
-  widgetsWithPngUrls <- processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
 
-  -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
-  addRespHeaders do
-    tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True
-    whenJust (findVarToPrompt (Just tab) (fold dash'.variables)) \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
-    widgetOrderTriggerForm_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug) True
+  -- Render the tab's content, which is the picker itself while a required variable is
+  -- unanswered. Widget processing is skipped entirely in that case: every query would
+  -- interpolate the variable to '' and come back empty, at the cost of a real round
+  -- trip each, only to be covered by a prompt.
+  let orderForm = widgetOrderTriggerForm_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug) True
+  case findVarToPrompt (Just tab) (fold dash'.variables) of
+    Just v -> addRespHeaders do
+      breadcrumbSuffixOob_ tab.name
+      div_
+        [ class_ "tab-panel"
+        , data_ "tab-index" (show idx)
+        , id_ $ "tab-panel-" <> dashId.toText <> "-" <> show idx
+        ]
+        $ variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v False
+      orderForm
+    Nothing -> do
+      widgetsWithPngUrls <- processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
+      addRespHeaders do
+        tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True
+        orderForm
 
 
 -- | Render a single tab content panel.

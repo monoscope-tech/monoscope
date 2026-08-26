@@ -298,3 +298,36 @@ test.describe("adding widgets to a dashboard", () => {
     await deleteDashboard(page, target);
   });
 });
+
+test("a dashboard needing a variable asks for it instead of covering itself", async ({ page }) => {
+  // Endpoint Analytics reports on one endpoint at a time, so its `host` variable is
+  // genuinely required — there is no all-endpoints rendering of it. What was wrong was
+  // the shape of the ask: a full-screen picker over a grid whose widgets had all run
+  // with the variable interpolated to '' and were reporting "no data in the selected
+  // time range". Dismissing it left that as the entire page.
+  const title = `E2E Variable Prompt ${Date.now()}`;
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await page.getByText("Endpoint Analytics").first().click();
+  await page.locator('input[name="title"]').first().fill(title);
+  await page.getByRole("button", { name: "Create" }).first().click();
+  await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
+  const dash = {
+    id: page.url().match(/\/dashboards\/([0-9a-f-]{36})/i)![1],
+    title,
+  };
+
+  // The ask is the page, not something on top of it.
+  await expect(page.locator(".var-picker-backdrop")).toHaveCount(0);
+  await expect(page.locator(".var-picker-page, .var-picker-none").first()).toBeVisible({
+    timeout: 20000,
+  });
+  await expect(page.getByText(/Select Domain/i).first()).toBeVisible();
+
+  // And no widget ran. This is the half that made the old page a lie: a chart that
+  // says "no data" is a claim about the data, not a prompt.
+  await expect(page.locator(ROOT_ITEMS)).toHaveCount(0);
+  await expect(page.getByText("No events match in the selected time range")).toHaveCount(0);
+
+  await deleteDashboard(page, dash);
+});
