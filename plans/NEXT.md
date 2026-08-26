@@ -1,4 +1,4 @@
-# Next steps — as of 2026-08-12
+# Next steps — as of 2026-08-26
 
 Closed since the 08-11 edition:
 
@@ -20,6 +20,73 @@ Closed since the 08-11 edition:
   read** — that needs a real incident or a loaded window.
 
 Everything below is open. Ordered by "what bites first if ignored", not by size.
+
+## From the 2026-08-25 parallel streams (dashboards, exemplars, containers, billing)
+
+All four shipped to production. Each stream's plan doc carries its full reasoning; these are the
+open threads pulled out of them so they are findable from here.
+
+### P0 — billing cannot meter until a human acts
+
+Code is live and correct; every new meter ships **dormant** on purpose, so today nobody's bill
+changed. `plans/billing-pricing-v2.md` has the detail.
+
+- [ ] **Create the provider-side meters.** Stripe: `metric_datapoints_usage` and
+      `session_replays_usage` (events keeps the existing `events_usage`). Lemon Squeezy: a
+      metered variant per dimension — LS addresses a usage record *only* by subscription item,
+      so three dimensions need three items.
+- [ ] **Insert `projects.billing_meter_items` rows** for the LS projects. Nothing writes them —
+      no webhook does, because the variants do not exist yet. Stripe needs no rows (its meters
+      are addressed by customer + event name).
+- [ ] **Flip `ENABLED_USAGE_METERS`** (defaults to `[Events]`) once the meters exist.
+- [ ] **Update pricing copy in the same breath** — showing new prices before the meters exist
+      misstates them. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
+      Landing repo: `pricing/index.md`, `index.md`, `assets/js/main.js`. All still say
+      events-only "$1 per 1M".
+- [ ] **Decide what to do about the dormant window.** Usage accrues in `apis.daily_usage` but
+      cuts no chunks while a meter is off, so enabling one bills from that day forward.
+      Anything owed for the dormant period is a deliberate manual reconciliation, not a backfill
+      — this is the shape that leaked on a previous provider switch.
+
+### P1 — the follow-up each stream named as its next step
+
+- [ ] **Exemplars: scope the related-metrics charts to the span's own interval, shaded.**
+      `plans/exemplars-correlation.md` §4.2 calls this the first follow-up. The charts currently
+      inherit the explorer's time range because `Widget` has no `from`/`to` of its own. The
+      vendor survey is unambiguous that the interval overlay is what makes the chart worth
+      showing at all, so this is the difference between shipped and useful.
+- [ ] **Dashboards: stop a required variable blocking the whole dashboard.**
+      `plans/dashboard-variable-defaults.md`. Today an unset required variable covers the page
+      with a modal, and dismissing it leaves every widget empty, because an unset variable
+      interpolates to `''` rather than to a match-all. Datadog defaults template variables to
+      `*` and never blocks. Needs a clause-level placeholder (the way `{{time_filter}}` already
+      works) plus a template migration — scope it to `variable.required` and leave
+      `tab.requires` blocking, since a drill-down tab genuinely has no all-values rendering.
+
+### P2 — verification the streams could not do themselves
+
+- [ ] **Nothing in the exemplars UI is browser-verified.** Booting the server locally migrates
+      production, so the agent could not click through it. The Exemplars tab reveal was hardened
+      with a click-triggered fallback rather than left to `intersect` (a `display:none`
+      container cannot intersect), but the chart-in-a-lazy-fragment path wants real eyes.
+- [ ] **Containers has no cluster facet** until collectors emit `k8s.cluster.name`; production
+      currently sends only `k8s.cluster.uid`. Everything else deliberately out of v1 is listed
+      in `plans/container-monitoring.md` §4.2 — no agent, no Orchestrator resource views, no
+      Cluster Map, no images/SBOM, no throttling metrics, no container alerts.
+- [ ] **Migrations 0137 and 0138 were reserved and never used.** Containers and exemplars both
+      turned out to need no schema change. Do not renumber; just know they are free.
+
+### P3 — hygiene from this session
+
+- [ ] **`make lint` is broken locally** — the installed hlint rejects `.hlint.yaml`
+      (`Not allowed keys: asRequired qualifiedStyle importStyle`). Reproduces on untouched files,
+      so it is a version mismatch, not a code problem. CI runs hlint in its own container and is
+      unaffected, which is why it went unnoticed.
+- [ ] **A dead `Data.Effectful.Hasql` import sits in `src/Pages/Telemetry.hs`** — zero uses, and
+      `-Werror` carries no `-Wno-error=unused-imports`. CI builds pass, so it may be an
+      instance-only import GHC false-positives on; worth one look rather than a blind delete.
+
+
 Companion to [README.md](README.md) (the overnight batch) and
 `timefusion/docs/plans/2026-08-11-certification-survival.md`.
 
