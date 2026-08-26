@@ -26,31 +26,56 @@ Everything below is open. Ordered by "what bites first if ignored", not by size.
 All four shipped to production. Each stream's plan doc carries its full reasoning; these are the
 open threads pulled out of them so they are findable from here.
 
-### P0 — billing cannot meter until a human acts
+### P0 — billing: Stripe is wired end-to-end, two decisions are yours
 
-Code is live and correct; every new meter ships **dormant** on purpose, so today nobody's bill
-changed. `plans/billing-pricing-v2.md` has the detail.
+Done 2026-08-26 (`plans/billing-pricing-v2.md` has the design):
 
-- [ ] **Create the provider-side meters.** Stripe: `metric_datapoints_usage` and
-      `session_replays_usage` (events keeps the existing `events_usage`). Lemon Squeezy: a
-      metered variant per dimension — LS addresses a usage record *only* by subscription item,
-      so three dimensions need three items.
-- [ ] **Insert `projects.billing_meter_items` rows** for the LS projects. Nothing writes them —
-      no webhook does, because the variants do not exist yet. Stripe needs no rows (its meters
-      are addressed by customer + event name).
-- [ ] **Flip `ENABLED_USAGE_METERS`** (defaults to `[Events]`) once the meters exist.
-- [ ] **Update pricing copy in the same breath** — showing new prices before the meters exist
-      misstates them. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
-      Landing repo: `pricing/index.md`, `index.md`, `assets/js/main.js`. All still say
-      events-only "$1 per 1M".
-- [ ] **Decide what to do about the dormant window.** Usage accrues in `apis.daily_usage` but
-      cuts no chunks while a meter is off, so enabling one bills from that day forward.
-      Anything owed for the dormant period is a deliberate manual reconciliation, not a backfill
-      — this is the shape that leaked on a previous provider switch.
+- **Stripe meters and prices exist**, live and test. `session_replays_usage` was created
+  with a "Session replays" price at `0.1` cents/unit — \$1 per 1,000.
+- **Metric datapoints reuse `metrics_usage`**, which already existed in the account with a
+  "Metrics" product priced at `0.00001` cents/unit — exactly the \$1 per 10M we want, and
+  attached to nothing. The code named a meter that did not exist; it now names that one, and
+  the duplicate created while working this out has been deactivated.
+
+Still open, and both are genuinely yours rather than engineering:
+
+- [ ] **Attach the metered prices to live subscriptions, then flip `ENABLED_USAGE_METERS`.**
+      All 9 Stripe subscriptions today carry exactly two items: the base price and the
+      `events_usage` overage. Nothing bills metrics or replays until an item for those prices
+      is added to each. **Attach before flipping** — Stripe aggregates a meter over the whole
+      billing period, so enabling the meter first and attaching later can bill a customer for
+      usage recorded before the item existed. This raises live customers' bills, which is why
+      it is not done unprompted. `ENABLED_USAGE_METERS` is a deployed env var, so flipping it
+      is a CapRover update — and `appDefinitions/update` is a FULL REPLACE, so send the whole
+      definition back.
+- [ ] **Decide what LemonSqueezy customers are charged.** LS is alive — 10 active
+      subscriptions — but **a LS subscription carries exactly one subscription item and the
+      API offers no way to add another**, so the three dimensions cannot be billed separately
+      there the way they can on Stripe. The code already handles this safely: with no
+      `billing_meter_items` row those meters stay dormant, so LS customers are billed for
+      events exactly as before and nothing is silently wrong. The options are to leave LS on
+      events-only, or migrate those customers to Stripe. Creating "LS metered variants" — the
+      earlier instruction here — is not possible as written.
+- [ ] **Pricing copy stays unchanged until the attach happens**, or we display prices we do
+      not charge. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
+      Landing: `pricing/index.md`, `index.md`, `assets/js/main.js`. All say events-only
+      "\$1 per 1M".
+- [ ] **Dormant-window usage is not backfilled.** It accrues in `apis.daily_usage` but cuts no
+      chunks, so enabling a meter bills from that day forward. Anything owed for the dormant
+      period is a deliberate manual reconciliation — buffering and draining it is the shape
+      that leaked on a previous provider switch.
+
+**The LS API key in `.env` is stale** and 404s on every subscription; the working one is in
+`.env.prod`. Reading the wrong one makes LS look dead.
 
 ### P1 — the follow-up each stream named as its next step
 
-- [ ] **Exemplars: scope the related-metrics charts to the span's own interval, shaded.**
+- [x] ~~**Exemplars: scope the related-metrics charts to the span's own interval, shaded.**~~
+      Done 2026-08-26. `Widget` carries its own `from`/`to` plus a highlight interval; a
+      widget with them queries that window instead of the page's. Browser verification against
+      production caught the follow-on: a 4.8ms span inside its padded 4-minute window is
+      0.002% of the chart width, so below 1% the overlay is a dashed line at the instant
+      rather than a band nobody can see. Original text:
       `plans/exemplars-correlation.md` §4.2 calls this the first follow-up. The charts currently
       inherit the explorer's time range because `Widget` has no `from`/`to` of its own. The
       vendor survey is unambiguous that the interval overlay is what makes the chart worth
