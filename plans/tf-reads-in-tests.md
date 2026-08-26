@@ -49,7 +49,24 @@ Fix the tests, not the routing — `226d42b05`, `7dbd35b71`, `13b93a2be`, `58963
 
 That took CI from 23 failures to 1.
 
-## What is still open
+## The last one — RESOLVED, and it was a real store bug
+
+**Outcome: a TimeFusion bug, fixed in timefusion `bf3abc8`; the example is restored
+(`a21485f30`), not pending.** Read the elimination trail below with that ending in mind — the
+reasoning is kept because every step of it was sound and still describes how to attack this
+class, but the conclusion it was heading toward ("test artifact, prod unaffected") was wrong.
+
+A mem bucket advertised its **routing** timestamp instead of the range of rows it actually
+held. A batch spanning 21:00–23:00 reported `max=21:00`, so any `timestamp >= 21:30` pruned the
+whole bucket. Only *unflushed* rows were ever hidden, which is why the prod spot-checks below
+(2–3h and 25–26h back, both reading flushed parquet) came back healthy and looked like
+counter-evidence when they were consistent with the bug.
+
+The example is kept rather than deleted because it is the only one that catches this class: it
+ingests several rows in one batch and then reads a window above the earliest. Single-row
+inserts make `min == max` per batch and hide it completely.
+
+### How it looked while open
 
 One example: `Pages.LogExplorer.Log / Time Range Selection / should respect exact time
 boundaries`, failing `predicate failed on: 0`.
@@ -72,6 +89,11 @@ is `2025-01-01`, and TimeFusion partitions on `date`.
 That suggested a `date` predicate derived from "now" rather than from the requested window. I
 looked: **there is no such predicate in the log-explorer query path**, so that explanation is out
 too. Do not spend time on it.
+
+The description was the right scent and the diagnosis was one layer lower than anyone looked:
+"narrow window offset into the past" mattered not because of `date` partitioning but because
+the window's lower bound sat *above the earliest row of a multi-row batch* — precisely the
+shape that the mem bucket's mis-advertised max pruned away.
 
 ### A warning about reproducing this locally
 
