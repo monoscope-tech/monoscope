@@ -156,11 +156,6 @@ data BgJobs
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
-  | -- TEMPORARY: delete this constructor + handler after every replay_sessions
-    -- key has the rrweb/<project>/<date>/ prefix and migration has been verified.
-    MigrateReplayStorage Int
-  | -- TEMPORARY: delete this constructor + handler after replay migration.
-    MigrateReplayStorageShard Int Int Int -- shard count, shard index, batch size
   | ExpireReplayData
   | ExpireShareEvents
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
@@ -501,7 +496,6 @@ processBackgroundJob authCtx bgJob =
             totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
             subItems <- Projects.meterSubItemIds pid
             let meterCfg = Projects.projectMeterConfig project subItems
-                enabled = authCtx.config.enabledUsageMeters
             -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
             -- all. A dormant meter records its total and nothing else: draining
             -- months of buffered backlog the day a meter goes live is the
@@ -510,7 +504,7 @@ processBackgroundJob authCtx bgJob =
             -- auditable, retriable failed row for money we are actually owed.
             chunks <- fmap concat $ forM [minBound .. maxBound] \kind -> do
               let qty = Projects.meterQuantity kind totals
-              case Projects.resolveMeterTarget enabled meterCfg kind of
+              case Projects.resolveMeterTarget meterCfg kind of
                 Left reason
                   | Projects.meterIsDormant reason -> do
                       -- Events dormant on a paid project is a silent revenue-off
@@ -555,7 +549,7 @@ processBackgroundJob authCtx bgJob =
                 -- than failed: the backlog is bounded and drains cleanly on
                 -- re-enable, whereas 'failed' would re-log it every tick forever.
                 -- A misconfig reason falls through and is marked failed as before.
-                case Projects.resolveMeterTarget authCtx.config.enabledUsageMeters meterCfg row.meter of
+                case Projects.resolveMeterTarget meterCfg row.meter of
                   Left reason
                     | Projects.meterIsDormant reason ->
                         Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
@@ -639,13 +633,6 @@ processBackgroundJob authCtx bgJob =
     ServiceMapRollup pid bucket -> rollUpServiceMap authCtx pid bucket
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
-    MigrateReplayStorage batchSize -> do
-      moved <- Replay.migrateReplayStorage batchSize
-      when (moved >= max 1 batchSize) $ do
-        ctx <- Effectful.Reader.Static.ask @Config.AuthContext
-        void $ liftIO $ withResource ctx.jobsPool \conn -> createJob conn "background_jobs" (MigrateReplayStorage batchSize)
-    MigrateReplayStorageShard shardCount shardIndex batchSize ->
-      void $ Replay.migrateReplayStorageShard shardCount shardIndex batchSize
     ExpireReplayData -> Replay.expireOldReplayData
     -- 48h expiry + 30d grace so "Link expired" still renders before deletion.
     ExpireShareEvents -> do

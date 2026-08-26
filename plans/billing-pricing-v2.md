@@ -169,7 +169,7 @@ resolveMeterTarget :: [MeterKind] -> BillingProvider -> ProjectMeterConfig -> Me
 
 `resolveMeterTarget` is a pure total function — the single decision point for
 "may this meter submit, and where to". `EnvConfig.enabledUsageMeters :: [MeterKind]`
-(env `ENABLED_USAGE_METERS`, default `[Events]`) is the deliberate on-switch; a LS project
+**Superseded 2026-08-27: the enable list was removed.** Metering is on by default and the only gate is addressability — a Stripe meter with no price attached bills nothing, which puts the off-switch provider-side. A LS project
 additionally has to have a `billing_meter_items` row, so enabling the config alone cannot
 POST to a meter that does not exist.
 
@@ -195,7 +195,7 @@ while a misconfig reason marks it `failed` as before.
 Totals for every dimension land in `apis.daily_usage` regardless, so a dormant window stays
 reconcilable. `DormantReason` is logged per meter per run, so "why is nothing being billed"
 is answerable from logs alone. `Events` resolving dormant on a paid project logs at
-`logAttention` — an empty or typo'd `ENABLED_USAGE_METERS` is a silent revenue-off switch,
+`logAttention` — a meter that silently stops billing is a revenue-off switch,
 which is the shape of the five-week zero-usage incident.
 
 ### 2.4 Schema — migration `0136_billing_meters.sql`

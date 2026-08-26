@@ -1057,8 +1057,8 @@ projectProvider p = case p.billingProvider of
 
 -- | A separately-metered billing dimension. Constructors are the single source
 -- of truth for the meter's spelling everywhere (JSON, the @meter_kind@ column,
--- the @ENABLED_USAGE_METERS@ env var) — @WrappedEnumSC@ derives them all from
--- the constructor name, so they cannot drift apart.
+-- the @CHECK@ constraint) — @WrappedEnumSC@ derives them all from the constructor
+-- name, so they cannot drift apart.
 --
 -- Rates are provider-side; we only ever submit raw counts:
 -- 'Events' $1/1M, 'MetricDatapoints' $1/10M, 'SessionReplays' $1/1k.
@@ -1100,10 +1100,7 @@ data MeterTarget
 -- | Why a meter is not submitting. Every reason is logged, so "why is this not
 -- being billed" is answerable from logs alone rather than by reading this file.
 data DormantReason
-  = -- | Not listed in @ENABLED_USAGE_METERS@. The deliberate off-switch: a meter
-    -- stays dormant until it is confirmed to exist provider-side.
-    MeterNotEnabled
-  | -- | Stripe project with neither @customer_id@ nor @order_id@ — a misconfig.
+  = -- | Stripe project with neither @customer_id@ nor @order_id@ — a misconfig.
     NoStripeCustomer
   | -- | Lemon Squeezy project with no subscription item for this meter. LS
     -- usage records are addressed only by subscription item, so a second and
@@ -1129,11 +1126,10 @@ data DormantReason
 -- product that does not exist. 'NoStripeCustomer' is the opposite — the project
 -- is on the plan and we simply cannot address it.
 --
--- >>> map meterIsDormant [MeterNotEnabled, NoSubscriptionItem, NoStripeCustomer, ProviderUnusable]
--- [True,True,False,False]
+-- >>> map meterIsDormant [NoSubscriptionItem, NoStripeCustomer, ProviderUnusable]
+-- [True,False,False]
 meterIsDormant :: DormantReason -> Bool
 meterIsDormant = \case
-  MeterNotEnabled -> True
   NoSubscriptionItem -> True
   NoStripeCustomer -> False
   ProviderUnusable -> False
@@ -1164,39 +1160,52 @@ projectMeterConfig p subItemIds =
 
 -- | The single decision point for "may this meter submit, and to where".
 --
--- Enablement is checked first so a disabled meter reports 'MeterNotEnabled'
--- rather than a misconfig reason it would only hit once enabled.
+-- There is no enable list. Every dimension submits wherever it is addressable,
+-- and addressability is the only gate — which puts the off-switch provider-side,
+-- where it belongs: a Stripe meter with no price attached bills nothing however
+-- many events it receives.
 --
 -- >>> let ls n = ProjectMeterConfig LemonSqueezyProvider Nothing (Just "si_1") n
--- >>> resolveMeterTarget [Events] (ls mempty) Events
+-- >>> resolveMeterTarget (ls mempty) Events
 -- Right (LemonSqueezyMeter {subItemId = "si_1"})
--- >>> resolveMeterTarget [Events] (ls mempty) SessionReplays
--- Left MeterNotEnabled
--- >>> resolveMeterTarget [minBound ..] (ls mempty) SessionReplays
+--
+-- Metric datapoints ride the events item on Lemon Squeezy, where a subscription
+-- cannot carry a second one; replays do not, because the events rate would
+-- undercharge them a thousandfold.
+--
+-- >>> resolveMeterTarget (ls mempty) MetricDatapoints
+-- Right (LemonSqueezyMeter {subItemId = "si_1"})
+-- >>> resolveMeterTarget (ls mempty) SessionReplays
 -- Left NoSubscriptionItem
--- >>> resolveMeterTarget [minBound ..] (ls (fromList [(SessionReplays, "si_9")])) SessionReplays
+-- >>> resolveMeterTarget (ls (fromList [(SessionReplays, "si_9")])) SessionReplays
 -- Right (LemonSqueezyMeter {subItemId = "si_9"})
--- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider (Just "cus_1") Nothing mempty) MetricDatapoints
+-- >>> resolveMeterTarget (ProjectMeterConfig StripeProvider (Just "cus_1") Nothing mempty) MetricDatapoints
 -- Right (StripeMeter {customerId = "cus_1", eventName = "metrics_usage"})
--- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig StripeProvider Nothing Nothing mempty) Events
+-- >>> resolveMeterTarget (ProjectMeterConfig StripeProvider Nothing Nothing mempty) Events
 -- Left NoStripeCustomer
--- >>> resolveMeterTarget [minBound ..] (ProjectMeterConfig NoBillingProvider Nothing Nothing mempty) Events
+-- >>> resolveMeterTarget (ProjectMeterConfig NoBillingProvider Nothing Nothing mempty) Events
 -- Left ProviderUnusable
-resolveMeterTarget :: [MeterKind] -> ProjectMeterConfig -> MeterKind -> Either DormantReason MeterTarget
-resolveMeterTarget enabled cfg kind
-  | kind `notElem` enabled = Left MeterNotEnabled
-  | otherwise = case cfg.provider of
-      NoBillingProvider -> Left ProviderUnusable
-      -- Stripe meter events key off customer + event_name; the subscription item
-      -- id is not part of the call, so no per-meter item is needed.
-      StripeProvider -> maybe (Left NoStripeCustomer) (Right . (`StripeMeter` stripeMeterEventName kind)) cfg.stripeCustomerId
-      -- LS usage records are addressed ONLY by subscription item. Events falls
-      -- back to the legacy single column so existing subscriptions keep billing
-      -- untouched; metrics/replays need their own item, which is exactly what
-      -- keeps them dormant until someone provisions the metered variants.
-      LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds <|> (guard (kind == Events) >> cfg.eventsSubItemId) of
-        Just sid -> Right (LemonSqueezyMeter sid)
-        Nothing -> Left NoSubscriptionItem
+resolveMeterTarget :: ProjectMeterConfig -> MeterKind -> Either DormantReason MeterTarget
+resolveMeterTarget cfg kind = case cfg.provider of
+  NoBillingProvider -> Left ProviderUnusable
+  -- Stripe meter events key off customer + event_name; the subscription item
+  -- id is not part of the call, so no per-meter item is needed.
+  StripeProvider -> maybe (Left NoStripeCustomer) (Right . (`StripeMeter` stripeMeterEventName kind)) cfg.stripeCustomerId
+  -- LS usage records are addressed ONLY by subscription item, and an LS
+  -- subscription carries exactly one — the API cannot add a second. So a
+  -- per-dimension price is not expressible there the way it is on Stripe.
+  --
+  -- Metric datapoints therefore ride the events item, billing at the events
+  -- rate. That is a deliberate pricing decision, not a fallback: it charges an
+  -- LS customer ~10x per datapoint what a Stripe customer pays (\$1/1M rather
+  -- than \$1/10M), and it is the only way to bill them for metrics at all.
+  --
+  -- Session replays do NOT ride it. The error is asymmetric: replays are priced
+  -- \$1/1,000, so billing them at the events rate would undercharge by a factor
+  -- of a thousand. They stay dormant until a per-meter item exists.
+  LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds <|> (guard (kind `elem` [Events, MetricDatapoints]) >> cfg.eventsSubItemId) of
+    Just sid -> Right (LemonSqueezyMeter sid)
+    Nothing -> Left NoSubscriptionItem
 
 
 -- | Per-meter Lemon Squeezy subscription items. Empty for every project until

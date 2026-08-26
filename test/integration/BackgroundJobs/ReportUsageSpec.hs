@@ -20,7 +20,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldSatisfy)
 
 
 -- | Put the project on a known plan/provider footing. `billing_day` anchors the cycle, and
@@ -83,17 +83,6 @@ setStripeCustomer tr pid cust = withResource tr.trPool \conn ->
 -- | Turn meters on for one run. Dormancy is config, so this is the whole switch.
 -- AuthContext carries two copies of EnvConfig (`env` and `config`); set both so
 -- the switch works regardless of which one a read site happens to use.
-withMeters :: [Projects.MeterKind] -> TestResources -> TestResources
-withMeters ms tr =
-  tr
-    { trATCtx =
-        tr.trATCtx
-          { Config.env = tr.trATCtx.env{Config.enabledUsageMeters = ms}
-          , Config.config = tr.trATCtx.config{Config.enabledUsageMeters = ms}
-          }
-    }
-
-
 -- | Insert replay sessions started inside the window. `created_at` is what
 -- billing counts; it is written once on a session's first chunk and never moves.
 seedReplays :: TestResources -> Projects.ProjectId -> Int -> UTCTime -> IO ()
@@ -240,29 +229,31 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
           setBilling tr pid "GraduatedPricing" (Just "sub_item_1") stripeSub (addUTCTime (-86400 * 3) frozenTime)
           setStripeCustomer tr pid Nothing
 
-    it "records all three dimensions but only submits the meters that are enabled" \(tr0, pid) -> do
+    it "records and submits all three dimensions for an addressable Stripe project" \(tr0, pid) -> do
       seedUsage tr0 pid
       seedMetrics tr0 pid 4
       seedReplays tr0 pid 3 (addUTCTime (-3600) frozenTime)
       paid tr0 pid
 
-      -- Default config: only the events meter exists in Stripe today.
       void $ runReportRecording tr0 pid
 
       [(_, metrics, replays)] <- dailyUsage tr0 pid
-      -- Counted regardless of dormancy — this is what makes a dormant window
-      -- reconcilable by hand once the meter goes live.
+      -- Counted independently of whether they submitted, which is what makes any
+      -- unbilled window reconcilable by hand afterwards.
       metrics `shouldBe` 4
       replays `shouldBe` 3
 
+      -- There is no enable list: a dimension submits wherever it is addressable.
+      -- The off-switch lives provider-side, where a meter with no price attached
+      -- receives events and bills nothing.
       kinds <- L.nub . map (\(k, _, _) -> k) <$> meteredSubmissions tr0 pid
-      kinds `shouldBe` ["events"]
+      kinds `shouldBe` ["events", "metric_datapoints", "session_replays"]
 
     -- A meter that is enabled but has nowhere to send to is a misconfig on money
     -- we are owed, NOT dormancy: the chunk must still exist and be visibly failed
     -- so it is retried and can be audited. Only a disabled meter cuts no chunks.
     it "still cuts an auditable failed chunk when an enabled meter is unaddressable" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
       seedReplays tr pid 2 (addUTCTime (-3600) frozenTime)
       paidUnaddressable tr pid
 
@@ -273,7 +264,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "failed")])
 
     it "submits every dimension to its own Stripe meter once all three are enabled" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
       seedUsage tr pid
       seedMetrics tr pid 4
       seedReplays tr pid 3 (addUTCTime (-3600) frozenTime)
@@ -302,7 +293,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
     -- project can have replays and no telemetry at all. The old guard keyed on
     -- events+metrics only, so such a window recorded nothing and billed nothing.
     it "records and bills a replay-only window with no events or metrics" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
       seedReplays tr pid 2 (addUTCTime (-3600) frozenTime)
       paid tr pid
 
@@ -313,24 +304,36 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
     -- Dormancy must be a decision not to submit, not a backlog that fires all at
     -- once the day a meter is switched on.
-    it "cuts no chunks for a dormant meter, so enabling it later cannot bill the dormant window" \(tr0, pid) -> do
-      seedMetrics tr0 pid 4
-      paid tr0 pid
+    -- Dormancy is now purely a question of addressability — there is no enable
+    -- list — and Lemon Squeezy replays are the case that still has one: LS
+    -- addresses a usage record only by subscription item and cannot carry a second,
+    -- so replays have nowhere to bill until an item is recorded.
+    it "cuts no chunks for a dormant meter, so making it billable later cannot charge the dormant window" \(tr0, pid) -> do
+      seedReplays tr0 pid 3 (addUTCTime (-3600) frozenTime)
+      setBilling tr0 pid "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
 
       void $ runReportRecording tr0 pid
-      meteredSubmissions tr0 pid >>= (`shouldBe` [])
+      -- Events rode its own item and metrics rode the events item; replays did not,
+      -- and crucially left no chunk behind to be drained later.
+      rows <- meteredSubmissions tr0 pid
+      map (\(k, _, _) -> k) rows `shouldNotSatisfy` elem "session_replays"
 
-      -- Now enable metrics and re-run: only usage after the watermark is billable.
-      let tr = withMeters [minBound .. maxBound] tr0
-      void $ runReportRecording tr pid
-      rows <- meteredSubmissions tr pid
-      map (\(k, q, _) -> (k, q)) rows `shouldBe` []
+      -- Now give replays an item. The window that was dormant stays unbilled: only
+      -- usage after the watermark can be charged. Buffering the dormant period and
+      -- draining it on the day a meter goes live is the backlog leak we have hit.
+      void $ runTestBg frozenTime tr0 $ Projects.setMeterSubItemId pid Projects.SessionReplays "912999"
+      void $ runReportRecording tr0 pid
+      after <- meteredSubmissions tr0 pid
+      map (\(k, _, _) -> k) after `shouldNotSatisfy` elem "session_replays"
 
     -- Lemon Squeezy addresses a usage record only by subscription item, so a
     -- second and third metered variant must exist before those meters can bill —
     -- enabling them in config alone must not POST anything.
-    it "keeps a Lemon Squeezy project's extra meters dormant until it has a subscription item for them" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+    -- An LS subscription carries exactly one item and the API cannot add another, so
+    -- the two extra dimensions cannot both be priced there. They are treated
+    -- differently on purpose, because the error is asymmetric.
+    it "rides metric datapoints on a Lemon Squeezy events item, but never replays" \(tr0, pid) -> do
+      let tr = tr0
       seedUsage tr pid
       seedMetrics tr pid 4
       seedReplays tr pid 3 (addUTCTime (-3600) frozenTime)
@@ -339,13 +342,15 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
       reqs <- runReportRecording tr pid
 
-      -- Events falls back to first_sub_item_id; the other two have no item.
+      -- Metrics bill at the events rate against the events item — 10x what a Stripe
+      -- customer pays per datapoint, and the only way to bill them at all here.
+      -- Replays stay dormant: the events rate would undercharge them 1000-fold.
       rows <- meteredSubmissions tr pid
-      map (\(k, _, _) -> k) rows `shouldBe` ["events"]
-      postsTo "lemonsqueezy.com" reqs `shouldSatisfy` \bs -> length bs == 1 && all (T.isInfixOf "912345") bs
+      map (\(k, _, _) -> k) rows `shouldBe` ["events", "metric_datapoints"]
+      postsTo "lemonsqueezy.com" reqs `shouldSatisfy` \bs -> length bs == 2 && all (T.isInfixOf "912345") bs
 
     it "bills a Lemon Squeezy meter once its subscription item is recorded" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
       seedReplays tr pid 2 (addUTCTime (-3600) frozenTime)
       setBilling tr pid "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
       void $ runTestBg frozenTime tr $ Projects.setMeterSubItemId pid Projects.SessionReplays "912999"
@@ -364,7 +369,7 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
     -- A succeeded chunk must never be re-sent: that is a duplicate charge.
     it "does not re-submit a chunk that already succeeded" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
       seedReplays tr pid 2 (addUTCTime (-3600) frozenTime)
       paid tr pid
 
@@ -379,8 +384,8 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
     -- Turning a meter off between recording a chunk and draining it must not
     -- churn: the row stays pending and drains cleanly on re-enable.
-    it "leaves an unsubmitted chunk alone when its meter is disabled before the drain" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+    it "drains a chunk that was unaddressable when it was cut, once it can be addressed" \(tr0, pid) -> do
+      let tr = tr0
       seedReplays tr pid 2 (addUTCTime (-3600) frozenTime)
       -- Cut the chunk, and leave it unsubmitted without any network call.
       paidUnaddressable tr pid
@@ -388,20 +393,19 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       pendingBefore <- meteredSubmissions tr pid
       map (\(k, _, s) -> (k, s)) pendingBefore `shouldBe` [("session_replays", "failed")]
 
-      -- Meter switched off: the drain must neither submit nor re-mark it.
+      -- A misconfig cuts a chunk on purpose, so money we are actually owed leaves an
+      -- auditable, retriable row rather than vanishing. Once addressable, it drains
+      -- — and is submitted exactly once.
       setStripeCustomer tr0 pid (Just "cus_test_reportusage")
-      reqs <- runReportRecording tr0 pid
-      postsTo "stripe.com" reqs `shouldBe` []
-      meteredSubmissions tr0 pid >>= (`shouldBe` pendingBefore)
-
-      -- Re-enabled and now addressable: the backlog drains.
       void $ runReportRecording tr pid
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "submitted")])
+      reqs <- runReportRecording tr pid
+      postsTo "stripe.com" reqs `shouldBe` []
 
     -- Replays are counted on an immutable created_at over a half-open window, so
     -- a session must land in exactly one billing window.
     it "counts a replay session in exactly one window" \(tr0, pid) -> do
-      let tr = withMeters [minBound .. maxBound] tr0
+      let tr = tr0
           earlier = addUTCTime (-86400 * 2) frozenTime
       paid tr pid
       seedReplays tr pid 2 earlier

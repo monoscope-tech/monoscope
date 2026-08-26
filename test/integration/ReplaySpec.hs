@@ -17,7 +17,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, copyReplayObjectVerified, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
@@ -445,22 +445,6 @@ spec = around withTestResources do
               case AE.decode (AE.encode resp) of
                 Just (AE.Object obj) | Just (AE.Array a) <- AEKM.lookup "events" obj -> pure a
                 _ -> expectationFailure "serialized response missing events array" >> pure V.empty
-
-    -- Regression (2026-08-05 crash-loop): the migration copy holds ~2x an object
-    -- in memory, so anything over the cap must be refused from statObject alone,
-    -- BEFORE any bytes load — the uncapped path heap-overflowed (-M14G) every
-    -- replica in turn on one giant merged session.
-    it "copyReplayObjectVerified_refusesObjectsOverSizeCap" $ \tr ->
-      requireMinio tr pendingWith $ do
-        project <- runQueryEffect tr (Projects.projectById pid) >>= maybe (fail "demo project missing") pure
-        let (conn, bucket) = projectMinioConn tr.trATCtx.config project
-            payload = BL.fromStrict (BS.replicate 64 120)
-        putRes <- Minio.runMinio conn $ Minio.putObject bucket "cap-test/src" (CC.sourceLazy payload) (Just 64) Minio.defaultPutObjectOptions
-        whenLeft_ putRes \e -> expectationFailure ("seed object write failed: " <> show e)
-        tooBig <- copyReplayObjectVerified conn bucket 10 "cap-test/src" "cap-test/dst-refused"
-        first (T.isInfixOf "size cap") tooBig `shouldBe` Left True
-        smallEnough <- copyReplayObjectVerified conn bucket 1024 "cap-test/src" "cap-test/dst-ok"
-        smallEnough `shouldBe` Right ()
 
     it "round-trips events posted via the kafka entry point through the player API" $ \tr ->
       requireMinio tr pendingWith $ do

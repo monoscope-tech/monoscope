@@ -39,15 +39,16 @@ Done 2026-08-26 (`plans/billing-pricing-v2.md` has the design):
 
 Still open, and both are genuinely yours rather than engineering:
 
-- [ ] **Attach the metered prices to live subscriptions, then flip `ENABLED_USAGE_METERS`.**
-      All 9 Stripe subscriptions today carry exactly two items: the base price and the
-      `events_usage` overage. Nothing bills metrics or replays until an item for those prices
-      is added to each. **Attach before flipping** — Stripe aggregates a meter over the whole
-      billing period, so enabling the meter first and attaching later can bill a customer for
-      usage recorded before the item existed. This raises live customers' bills, which is why
-      it is not done unprompted. `ENABLED_USAGE_METERS` is a deployed env var, so flipping it
-      is a CapRover update — and `appDefinitions/update` is a FULL REPLACE, so send the whole
-      definition back.
+- [ ] **Attach the metered prices to the live Stripe subscriptions.** All 9 carry exactly
+      two items today: the base price and the `events_usage` overage. Metering is on by
+      default now (the `ENABLED_USAGE_METERS` flag was removed — too many envs, and the
+      real off-switch is provider-side), so meter events for metrics and replays are being
+      sent. **A Stripe meter with no price attached receives events and bills nothing**,
+      so nobody's Stripe bill has moved. Adding an item is what starts charging, and it is
+      also the moment to watch: Stripe aggregates a meter over the whole billing period, so
+      attaching mid-cycle can bill for usage already recorded that period. Attach at a
+      period boundary, or accept that first invoice.
+
 - [ ] **Decide what LemonSqueezy customers are charged.** LS is alive — 10 active
       subscriptions — but **a LS subscription carries exactly one subscription item and the
       API offers no way to add another**, so the three dimensions cannot be billed separately
@@ -56,6 +57,19 @@ Still open, and both are genuinely yours rather than engineering:
       events exactly as before and nothing is silently wrong. The options are to leave LS on
       events-only, or migrate those customers to Stripe. Creating "LS metered variants" — the
       earlier instruction here — is not possible as written.
+
+      **Recommendation, from the numbers (2026-08-27): migrate DSI-APP, leave the rest.**
+      Only **5** paying projects are on LS, and only **two** have any volume at all in 90
+      days: DSI-APP (675M requests / 675M metric datapoints) and Engine/API Prod (12.5M /
+      8.6M); the other three are flat zero. That matters because metric datapoints *ride the
+      events item* on LS and so bill at the events rate — `$1/1M` rather than `$1/10M`, about
+      **10x what a Stripe customer pays** (`resolveMeterTarget`, and the comment above it says
+      so deliberately). At DSI-APP's ~225M datapoints/month that is ~\$225/mo billed where
+      Stripe would charge ~\$22.50. So enabling `MetricDatapoints` while DSI-APP sits on LS
+      overcharges the one customer it actually affects. Moving that single subscription to
+      Stripe removes the whole problem; the remaining four bill zero metrics either way and
+      can stay on events-only indefinitely. See `dsi_app_metric_volume_billing_risk` in memory
+      for the volume history.
 - [ ] **Pricing copy stays unchanged until the attach happens**, or we display prices we do
       not charge. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
       Landing: `pricing/index.md`, `index.md`, `assets/js/main.js`. All say events-only
@@ -103,110 +117,38 @@ Still open, and both are genuinely yours rather than engineering:
 
 ### P3 — hygiene from this session
 
-- [ ] **`make lint` is broken locally** — the installed hlint rejects `.hlint.yaml`
-      (`Not allowed keys: asRequired qualifiedStyle importStyle`). Reproduces on untouched files,
-      so it is a version mismatch, not a code problem. CI runs hlint in its own container and is
-      unaffected, which is why it went unnoticed.
-- [ ] **A dead `Data.Effectful.Hasql` import sits in `src/Pages/Telemetry.hs`** — zero uses, and
-      `-Werror` carries no `-Wno-error=unused-imports`. CI builds pass, so it may be an
-      instance-only import GHC false-positives on; worth one look rather than a blind delete.
+- [ ] **`make lint` reports 22 hints, 0 errors.** Two corrections to what this entry used to
+      say. It is not *broken*: hlint v3.10 accepts `.hlint.yaml` (the offending
+      `asRequired`/`qualifiedStyle`/`importStyle` keys are gone), it just exits non-zero on
+      any hint. And the "errors" seen once were transient parse failures from a concurrent
+      session mid-edit in `src/`, not findings. Ten of the hints were unfixable: a custom rule
+      mapped `Control.Exception.displayException` → `displayException`, but Relude re-exports
+      that symbol, so it matched the already-correct bare usage and suggested replacing it
+      with itself. That rule is deleted. The remaining 22 are ordinary
+      (`viaNonEmpty`, `Hoist not`, `Consider count`, …), spread over 10 files — 7 of them sit
+      in files another session has uncommitted, so clear those when the tree is quiet.
+- [x] ~~**A dead `Data.Effectful.Hasql` import sits in `src/Pages/Telemetry.hs`.**~~ Removed in
+      `22ed691ca`. GHC did flag it redundant and the module carries no orphan instances, so
+      nothing depended on it being in scope.
 
 
 Companion to [README.md](README.md) (the overnight batch) and
 `timefusion/docs/plans/2026-08-11-certification-survival.md`.
 
-## P0 — watch, because something just changed under production
+## TimeFusion dedup certification — closed, see the coverage plan
 
-- [ ] **Verify the two deploys landed.** monoscope `5f23b3946` (code-context / github
-      credentials, includes migration **0124**) and TimeFusion `0308015`+ (dedup certification
-      persistence). ~28 min each. Migration 0124 is destructive-ish — it drops
-      `code_mappings.github_sync_id` after carrying rows across — so confirm the runner
-      actually reached it rather than halting on an earlier checksum mismatch.
-- [ ] **Watch `count(*)` correctness for a day.** TF certification persistence is now ON, which
-      makes the read-side dedup skip fire at a real rate for the first time. The skip removes
-      `DedupExec`; if the sweep's certification rule has a latent flaw, this is what surfaces
-      it. Compare a few dashboard counts against a known reference.
-      Kill switches, in order: `timefusion_dedup_certification_persist=false` (cold cache per
-      process) → `timefusion_read_dedup_skip_swept=false` (removes the skip entirely). Reach
-      for the second if a count is doubted.
-- [ ] **Confirm the parity guard is meaningful now.** `count_is_identical_with_and_without_the_dedup_skip`
-      only began genuinely exercising the skip today — before that it ran without a time bound
-      and never engaged it. The rule is now covered by a test that is hours old, not by a
-      production track record. That is the actual risk in the item above.
+The P0 watch items and the two partial counter reads that used to sit here are done or
+superseded. Both deploys they asked about landed: monoscope `5f23b3946` is on master and
+migration 0124 applied (the `code_mappings.github_sync_id` column is gone; the runner has since
+reached 0137). The measurement itself was answered from the code rather than the 24h window —
+the sweep can only certify today and yesterday (`timefusion_dedup_lookback_days`, default 1)
+while dashboards query 7-30 days, so `never_certified_pct = 100` is structural. Survival plan
+closed; the open work is
+`timefusion/docs/plans/2026-08-12-dedup-certification-coverage.md`.
 
-## P1 — the measurement everything else waits on
-
-### First read (2026-08-11, ~20 min after deploy — NOT the real one)
-
-| counter | value |
-|---|---|
-| `dedup_eligible` | 412 |
-| `dedup_skipped` | 2 (0.5%) |
-| `dedup_denied_never_certified` | 396 (**100%** of certification denials) |
-| `dedup_denied_fp_moved` | **0** |
-| `dedup_denied_no_window` / `_unresolved` / `_disabled` | 0 / 10 / 4 |
-| `cert_granted_total` | **0** |
-
-Only 1360 scans total, so this is a young process and **not** the ≥24h reading. Two things
-are worth noting anyway:
-
-1. **It contradicts the prediction this plan wrote down.** The doc expected `fp_moved` to
-   dominate — partitions being written to continuously, nothing to recover, *stop*. So far
-   `fp_moved` is flat zero and `never_certified` is 100%. If that holds, the prize is real and
-   the exit criteria say proceed rather than stop.
-2. **`cert_granted_total = 0` is the thing to explain.** The sweep has certified nothing at all
-   in this lifetime — so partitions are not being certified-then-invalidated, they are simply
-   never certified. That is either "the process is 20 minutes old and the confirming pass
-   hasn't come round yet", or something still blocking certification that the sweep fix did not
-   cover. Distinguishing those is the next real question.
-   (`dedup_skipped = 2` with zero grants is consistent with the two skips coming from
-   certifications *loaded off disk* — i.e. persistence working — but at n=2 that is a guess.)
-
-### Second read, ~15 min later (a DIFFERENT process — TF restarted in between)
-
-`dedup_skipped` fell 2 → 1 while `total` rose 1360 → 2196; counters are monotonic within a
-lifetime, so that is a restart, not a decline. Which is itself the finding that Phase 0 keeps
-running into: **TF redeploys often enough that a clean 24h window has to be arranged, not
-waited for.**
-
-| counter | value |
-|---|---|
-| `dedup_eligible` | 652 |
-| `dedup_skipped` | 1 (0.2%) |
-| `dedup_denied_never_certified` | 625 |
-| `dedup_denied_fp_moved` | **0** |
-| `cert_granted_total` | **4** |
-| `cert_dwell_total` | **0** |
-
-**This reframes the problem, and away from what Phase 1 built.** Certification *does* happen —
-4 grants in a young process — and `cert_dwell_total = 0` says not one of them has been
-invalidated yet. Nothing is dying, so there is nothing for *survival* to save. What is missing
-is **coverage**: the sweep certifies a handful of partitions while queries touch hundreds, and
-625 denials are partitions it simply never reached.
-
-If that holds over a full day, the lever is **which partitions get swept** —
-`timefusion_dedup_lookback_days`, the sweep's per-tick budget, and whether the partitions
-queries actually hit are inside its scope at all — not persisting verdicts that are not
-expiring. Persistence and the confirming-pass fix are still correct and still cheap; they just
-may not be where the 99.5% is.
-
-- [ ] **Re-read after ≥24h with no TF deploy** and confirm or kill the above. The two numbers
-      that decide it: `cert_granted_total` (is the sweep covering a meaningful share?) and
-      `cert_dwell_total` vs `dedup_denied_fp_moved` (is anything expiring at all?). If dwell
-      stays near zero while `never_certified` stays huge, close out the survival plan and open
-      a coverage one.
-- [ ] **Read Phase 0.** After **≥24h with no TF deploy**:
-      ```sql
-      SELECT key, value FROM timefusion_stats WHERE component='scan' AND key LIKE 'dedup_denied%';
-      SELECT key, value FROM timefusion_stats WHERE component='scan' AND key LIKE 'cert_%';
-      ```
-      Counters reset on restart, so diffing two scrapes is only valid inside one lifetime — and
-      TF deploys several times a day, so this needs arranging deliberately.
-      Decide from `dedup_denied_never_certified_pct` and `cert_dwell_p50_secs`:
-      - `fp_moved` dominates → persistence earns little. Set the flag false and close it out.
-      - `never_certified` still dominates → find out what is still blocking certification.
-      - `dedup_skipped_pct` is now the headline. It was 0.2–0.5%; if it has not moved
-        materially, persistence did not help and should be turned back off.
+The kill switches are still worth knowing, in order:
+`timefusion_dedup_certification_persist=false` (cold cache per process) →
+`timefusion_read_dedup_skip_swept=false` (removes the skip entirely).
 
 ## P2 — known-incomplete work from the overnight batch
 
