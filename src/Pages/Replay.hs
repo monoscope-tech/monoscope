@@ -937,10 +937,26 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
         then do
           -- No tracked files: reset counter so the threshold path doesn't re-trigger
           -- on a stale value, then finalize.
+          --
+          -- Both guarded on the row STILL being empty. `sessionKeys` read a
+          -- snapshot; an ingest append landing between then and now would
+          -- otherwise be finalized away — marked merged with a file nobody will
+          -- merge, and the cron selects merged = FALSE, so nothing revisits it.
+          -- Observed live: three sessions stranded this way within a minute of
+          -- appending to them.
           now' <- Time.currentTime
-          Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
-          afterMerge now'
-          Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
+          changed <-
+            Hasql.interpExecute
+              [HI.sql|
+                UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = #{now'}
+                WHERE session_id = #{sessionId} AND project_id = #{pid}
+                  AND COALESCE(cardinality(file_keys), 0) = 0
+              |]
+          if changed == 0
+            then Log.logInfo "Replay session gained files mid-merge; leaving it for the next pass" ("session_id", UUID.toText sessionId)
+            else do
+              afterMerge now'
+              Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
         else do
           -- Next append index from the DB shard count (no S3 listing).
           let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existingShards)
