@@ -82,6 +82,7 @@ onboarding.back:                "Back"
 # --- Sidebar navigation
 nav.dashboards:           "Dashboards"
 nav.explorer:             "Explorer"
+nav.infrastructure:       "Infrastructure"
 nav.api_catalog:          "API Catalog"
 nav.issues:               "Issues"
 nav.monitors:             "Monitors"

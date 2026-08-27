@@ -22,7 +22,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.I18n qualified as I18n
 
 
@@ -72,6 +72,7 @@ menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
   [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
   , (I18n.t lang "nav.explorer", p "/log_explorer", "explore")
+  , (I18n.t lang "nav.infrastructure", p "/infrastructure/hosts", "server")
   , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
   , (I18n.t lang "nav.issues", p "/issues", "bug")
   , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
@@ -850,6 +851,7 @@ navBottomList pidTxt =
 navFlyoutItems :: Text -> Text -> [(Text, Text)]
 navFlyoutItems pidTxt = \case
   "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
+  "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
   "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]

@@ -82,6 +82,7 @@ onboarding.back:                  "Atrás"
 # --- Navegación lateral
 nav.dashboards:           "Paneles"
 nav.explorer:             "Explorador"
+nav.infrastructure:       "Infraestructura"
 nav.api_catalog:          "Catálogo API"
 nav.issues:               "Problemas"
 nav.monitors:             "Monitores"

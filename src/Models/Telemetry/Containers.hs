@@ -65,6 +65,10 @@ data ContainerRow = ContainerRow
   , namespace :: Maybe Text
   , nodeName :: Maybe Text
   , cluster :: Maybe Text
+  , provider :: Maybe Text
+  , region :: Maybe Text
+  , osType :: Maybe Text
+  , architecture :: Maybe Text
   , image :: Maybe Text
   , imageTag :: Maybe Text
   , workload :: Maybe Text
@@ -74,6 +78,9 @@ data ContainerRow = ContainerRow
   , memBytes :: Maybe Double
   , memLimit :: Maybe Double
   , memRequest :: Maybe Double
+  , load1 :: Maybe Double
+  , storagePct :: Maybe Double
+  , uptime :: Maybe Double
   , restarts :: Maybe Double
   , ready :: Maybe Double
   }
@@ -146,7 +153,7 @@ memPctOfLimit r = ratio r.memBytes r.memLimit
 -- stores can prune on.
 --
 -- >>> metricNameInList
--- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready','k8s.pod.cpu.usage','k8s.pod.memory.working_set','k8s.pod.memory.usage','system.cpu.utilization','system.memory.usage')"
+-- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready','k8s.pod.cpu.usage','k8s.pod.memory.working_set','k8s.pod.memory.usage','system.cpu.utilization','system.memory.usage','system.cpu.load_average.1m','system.filesystem.utilization','system.uptime')"
 containerMetricNames :: [Text]
 containerMetricNames =
   [ "container.cpu.usage"
@@ -169,6 +176,9 @@ containerMetricNames =
     -- memory per state — which is why the pivot below aggregates them differently.
     "system.cpu.utilization"
   , "system.memory.usage"
+  , "system.cpu.load_average.1m"
+  , "system.filesystem.utilization"
+  , "system.uptime"
   ]
 
 
@@ -352,6 +362,18 @@ containersInWindow useTimefusion pid now =
           <> [HI.sql|, |]
           <> raw (resourcePath useTimefusion ["k8s", "cluster", "uid"])
           <> [HI.sql|) END AS cluster,
+          |]
+          <> raw (resourcePath useTimefusion ["cloud", "provider"])
+          <> [HI.sql| AS provider,
+          |]
+          <> raw (resourcePath useTimefusion ["cloud", "region"])
+          <> [HI.sql| AS region,
+          |]
+          <> raw (resourcePath useTimefusion ["os", "type"])
+          <> [HI.sql| AS os_type,
+          |]
+          <> raw (resourcePath useTimefusion ["host", "arch"])
+          <> [HI.sql| AS architecture,
           -- Only a container has an image. A pod rollup covers every container in the pod and
           -- a host none at all, so both must read blank rather than borrow one.
           CASE WHEN |]
@@ -414,6 +436,7 @@ containersInWindow useTimefusion pid now =
       SELECT
         container_name,
         MAX(scope), MAX(pod_name), MAX(namespace), MAX(node_name), MAX(cluster),
+        MAX(provider), MAX(region), MAX(os_type), MAX(architecture),
         MAX(image), MAX(image_tag), MAX(workload),
         -- Docker reports CPU with Docker's own formula, percent-of-a-single-core, so 200 means
         -- two full cores. Dividing by 100 puts it on the same cores axis as Kubernetes.
@@ -445,6 +468,9 @@ containersInWindow useTimefusion pid now =
           MAX(CASE WHEN metric_name = 'container.memory.usage.limit' THEN value END),
           SUM(CASE WHEN metric_name = 'system.memory.usage' AND mem_state IS NOT NULL THEN value END)),
         MAX(CASE WHEN metric_name = 'k8s.container.memory_request' THEN value END),
+        MAX(CASE WHEN metric_name = 'system.cpu.load_average.1m' THEN value END),
+        MAX(CASE WHEN metric_name = 'system.filesystem.utilization' THEN value END),
+        MAX(CASE WHEN metric_name = 'system.uptime' THEN value END),
         MAX(CASE WHEN metric_name = 'k8s.container.restarts' THEN value END),
         MAX(CASE WHEN metric_name = 'k8s.container.ready' THEN value END)
       FROM latest
@@ -476,4 +502,4 @@ containersInWindow useTimefusion pid now =
 
 -- $setup
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
--- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

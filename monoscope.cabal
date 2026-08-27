@@ -167,6 +167,7 @@ extra-source-files:
     static/migrations/0136_billing_meters.sql
     static/migrations/0137_replay_rrweb_root_prefix.sql
     static/migrations/0138_drop_replay_migration_jobs.sql
+    static/migrations/0139_git_sync_announced_revision.sql
 
 source-repository head
   type: git
@@ -224,6 +225,7 @@ library
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.Infrastructure
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -821,6 +823,7 @@ test-suite test-dev
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.Infrastructure
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem

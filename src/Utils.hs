@@ -58,6 +58,8 @@ module Utils (
   navTabAttrs,
   explorerNavTabs_,
   explorerTabs,
+  infrastructureNavTabs_,
+  infrastructureTabs,
   popoverTrigger_,
   popoverPanel_,
   fieldMenuPanel_,
@@ -1504,7 +1506,28 @@ explorerNavTabs_ pid active =
 -- Live Tail leads the strip but Events remains the section's landing route: arriving at
 -- Explorer should answer "what happened", and watching a stream is a thing you opt into.
 explorerTabs :: [(Text, Text)]
-explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Containers", "/containers"), ("Service Map", "/service_map")]
+explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
+
+
+-- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
+-- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
+infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Html ()
+infrastructureNavTabs_ pid active =
+  nav_ [class_ "tabs tabs-box tabs-outline items-center max-md:overflow-x-auto max-md:flex-nowrap", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
+    $ forM_ infrastructureTabs
+    $ \(label, path) ->
+      a_
+        ( [ href_ $ "/p/" <> pid.toText <> path
+          , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active text-textStrong" (label == active)
+          , term "aria-current" $ bool "false" "page" (label == active)
+          ]
+            <> navTabAttrs
+        )
+        (toHtml label)
+
+
+infrastructureTabs :: [(Text, Text)]
+infrastructureTabs = [("Hosts", "/infrastructure/hosts"), ("Containers", "/infrastructure/containers"), ("Images", "/infrastructure/images"), ("Kubernetes", "/infrastructure/kubernetes"), ("Host Map", "/infrastructure/host-map")]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.

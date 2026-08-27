@@ -11,6 +11,7 @@ import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Containers qualified as Containers
+import Pages.Infrastructure qualified as Infrastructure
 import Pkg.Components.Table (Table (..))
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
@@ -279,6 +280,9 @@ spec = sequential $ aroundAll withTestResources do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
       html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01"]
+      -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
+      -- column, crossing the badge border. The label is one indivisible status.
+      html `shouldContainAll` ["Not ready", "class=\"badge badge-sm badge-error whitespace-nowrap\""]
 
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
@@ -297,6 +301,27 @@ spec = sequential $ aroundAll withTestResources do
       listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldMatchList` ["coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
       -- A bare node is its own runtime, so it is reachable and does not pollute the others.
       listWith (Containers.containersGetH testPid (Just "host") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["vps-bare-01"])
+
+    it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
+      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
+        `shouldContainAll` ["Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Group by", "Columns"]
+
+      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
+        `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable"]
+
+      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
+        `shouldContainAll` ["Pods", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "whitespace-nowrap"]
+
+      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "cpu") Nothing Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostMap)
+        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon"]
+
+      (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01")
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostDetail)
+        `shouldContainAll` ["CPU usage", "Memory used", "Max storage usage", "Load average", "View logs"]
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")

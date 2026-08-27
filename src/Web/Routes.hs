@@ -97,6 +97,7 @@ import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.Infrastructure qualified as Infrastructure
 import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -611,7 +612,15 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
-  , containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+  , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
+  , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> Get '[HTML] (RespHeaders Infrastructure.HostDetailGet)
+  , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+  , infrastructureContainerDetailGetH :: mode :- "infrastructure" :> "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
+  , imagesGetH :: mode :- "infrastructure" :> "images" :> QPT "runtime" :> QPT "registry" :> Get '[HTML] (RespHeaders Infrastructure.ImagesGet)
+  , kubernetesGetH :: mode :- "infrastructure" :> "kubernetes" :> QPT "resource" :> QPT "cluster" :> QPT "namespace" :> QPT "status" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesGet)
+  , hostMapGetH :: mode :- "infrastructure" :> "host-map" :> QPT "fill" :> QPT "group" :> QPT "provider" :> QPT "region" :> QPT "os" :> Get '[HTML] (RespHeaders Infrastructure.HostMapGet)
+  , -- Legacy compatibility route. Navigation and generated links use /infrastructure/containers.
+    containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
   , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
@@ -1021,6 +1030,13 @@ telemetryServer pid =
     , metricCardGetH = Metrics.metricCardGetH pid
     , serviceMapGetH = ServiceMap.serviceMapGetH pid
     , metricServicesGetH = Metrics.metricServicesGetH pid
+    , hostsGetH = Infrastructure.hostsGetH pid
+    , hostDetailGetH = Infrastructure.hostDetailGetH pid
+    , infrastructureContainersGetH = Containers.containersGetH pid
+    , infrastructureContainerDetailGetH = Containers.containerDetailGetH pid
+    , imagesGetH = Infrastructure.imagesGetH pid
+    , kubernetesGetH = Infrastructure.kubernetesGetH pid
+    , hostMapGetH = Infrastructure.hostMapGetH pid
     , containersGetH = Containers.containersGetH pid
     , containerDetailGetH = Containers.containerDetailGetH pid
     }

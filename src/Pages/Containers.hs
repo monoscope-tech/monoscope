@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, facetValues) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, facetValues, runtimeLabel, formatBytes, showFFloat') where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -22,10 +22,12 @@ import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersI
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pkg.Components.Table (Column, Config (..), Features (..), FilterMenu (..), FilterOption (..), SearchMode (..), Table (..), TableHeaderActions (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
+import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, explorerNavTabs_, faSprite_, toUriStr)
+import Utils (drawerLoadAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -95,7 +97,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
   let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
-      baseUrl = "/p/" <> pid.toText <> "/containers"
+      baseUrl = "/p/" <> pid.toText <> "/infrastructure/containers"
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
       menu label param selected fromRow =
@@ -136,6 +138,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
                             ]
                         , activeFilters = activeFilterChips filters
                         }
+                , header = Just $ containerSummary_ pid
                 , zeroState =
                     Just
                       ZeroState
@@ -149,10 +152,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
           }
       bwconf =
         bw
-          { prePageTitle = Just "Explorer"
+          { prePageTitle = Just "Infrastructure"
           , pageTitle = "Containers"
-          , menuItem = Just "Explorer"
-          , navTabs = Just $ explorerNavTabs_ pid "Containers"
+          , menuItem = Just "Infrastructure"
+          , navTabs = Just $ infrastructureNavTabs_ pid "Containers"
           }
   addRespHeaders $ ContainersPage $ PageCtx bwconf table
 
@@ -221,8 +224,8 @@ readyCell :: ContainerVM -> Html ()
 readyCell vm = case vm.row.ready of
   Nothing -> span_ [class_ "text-textWeak"] "—"
   Just v
-    | v > 0 -> span_ [class_ "badge badge-sm badge-success"] "Ready"
-    | otherwise -> span_ [class_ "badge badge-sm badge-error"] "Not ready"
+    | v > 0 -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap"] "Ready"
+    | otherwise -> span_ [class_ "badge badge-sm badge-error whitespace-nowrap"] "Not ready"
 
 
 renderNameCol :: ContainerVM -> Html ()
@@ -255,7 +258,7 @@ detailUrl :: ContainerVM -> Text
 detailUrl vm =
   "/p/"
     <> vm.pid.toText
-    <> "/containers/detail?container="
+    <> "/infrastructure/containers/detail?container="
     <> toUriStr vm.row.containerName
     <> foldMap (("&pod=" <>) . toUriStr) vm.row.podName
 
@@ -336,6 +339,35 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
     trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 
 
+containerSummary_ :: Projects.ProjectId -> Html ()
+containerSummary_ pid =
+  details_ [class_ "group/summary border-b border-strokeWeak", open_ ""] do
+    summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2"] do
+      faSprite_ "chart-simple" "regular" "h-3.5 w-3.5 text-iconNeutral"
+      "Summary graphs"
+      faSprite_ "chevron-down" "regular" "ml-auto h-3 w-3 text-iconNeutral transition-transform group-open/summary:rotate-180"
+    div_ [class_ "grid grid-cols-2 gap-3 border-t border-strokeWeak p-3 max-lg:grid-cols-1", style_ "min-height:176px"] do
+      Widget.widget_ $ infrastructureWidget pid "containers-cpu" "CPU by container" "cores" "metrics | where metric_name == \"container.cpu.usage\" | summarize avg(value) by bin_auto(timestamp), resource.k8s.container.name"
+      Widget.widget_ $ infrastructureWidget pid "containers-memory" "Memory by container" "bytes" "metrics | where metric_name == \"container.memory.working_set\" | summarize avg(value) by bin_auto(timestamp), resource.k8s.container.name"
+
+
+infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget
+infrastructureWidget pid wid title unit query =
+  (def :: Widget.Widget)
+    { Widget.id = Just wid
+    , Widget.wType = WTTimeseriesLine
+    , Widget.title = Just title
+    , Widget.query = Just query
+    , Widget.unit = Just unit
+    , Widget._projectId = Just pid
+    , Widget.standalone = Just True
+    , Widget.hideSubtitle = Just True
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
+    }
+
+
 -- $setup
 -- `namespace` names a field of both ContainerFilters and ContainerRow, so a record update
 -- mentioning only it is ambiguous in the doctest session. These build filters
@@ -343,6 +375,6 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
 -- >>> import Models.Telemetry.Containers (ContainerRow (..), Scope (..))
--- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
 -- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing
