@@ -54,8 +54,19 @@ demoProjectId :: Projects.ProjectId
 demoProjectId = UUIDId UUID.nil
 
 
--- | Rows the demo project currently holds in otel_logs_and_spans. Used as a
--- before/after delta so leg-targeting can be asserted without a DB reset.
+-- | Rows this message has written to otel_logs_and_spans. Used as a before/after
+-- delta so leg-targeting can be asserted without a DB reset.
+--
+-- Scoped to the caller's ack id, not to the whole demo project. CI forks four
+-- shards concurrently against ONE shared TimeFusion, and the demo project is
+-- @UUID.nil@ — the id 31 spec files write to — so a project-wide count is another
+-- shard's row away from being wrong. That is what made the tf-replay assertion
+-- fail in CI while passing locally, where no real TF means no shared store; a
+-- direct real-TF run in isolation passes. The sibling assertion below survived
+-- only because its window contains no write at all, so it is far shorter.
+--
+-- This is narrower than the project-wide count, not weaker: a genuine duplicate
+-- of THIS message still shows up as 2.
 -- Count spans in the store the write leg actually targets. When TF writes are
 -- enabled we must read the hasql TF pool, NOT trPool: the postgres-simple
 -- timefusionPgPool always points at the main test DB even when
@@ -64,12 +75,19 @@ demoProjectId = UUIDId UUID.nil
 -- there (withHasqlTimefusion False = main pool) — mirroring the app rather than
 -- unconditionally hitting TF. project_id is embedded as a literal so the query
 -- works whether TF is real (text column) or the Postgres-as-TF fallback (uuid).
-countDemoSpans :: TestResources -> IO Int
-countDemoSpans tr =
+countDemoSpans :: TestResources -> Text -> IO Int
+countDemoSpans tr ackId =
   fromIntegral @Int64
     <$> runTestBg frozenTime tr (EHasql.withHasqlTimefusion tr.trATCtx.config.enableTimefusionWrites (HI.getOneColumn . HI.getOneRow <$> EHasql.interp (rawSql sql)))
   where
-    sql = "SELECT count(*)::int8 FROM otel_logs_and_spans WHERE project_id = '" <> demoProjectId.toText <> "'"
+    -- 'validLogMsg' writes the ack id into the body, which is what makes the row
+    -- attributable to one message across a store other shards are also writing.
+    sql =
+      "SELECT count(*)::int8 FROM otel_logs_and_spans WHERE project_id = '"
+        <> demoProjectId.toText
+        <> "' AND body::text LIKE '%valid record from "
+        <> ackId
+        <> "%'"
 
 
 -- | Force the dual-write on (both pools point at the shared test DB unless
@@ -332,9 +350,9 @@ spec = around withTestResources $ beforeWith mkResWithKey do
     it "tf-failed replay rewrites only TF — adds exactly one row, never a duplicate" \(tr, key) -> do
       let tr' = withTfEnabled tr
           replayAttrs = HM.insert "monoscope-write-failure" "tf-failed" logsAttrs
-      before <- countDemoSpans tr'
+      before <- countDemoSpans tr' "ack-tf-replay"
       res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-tf-replay"] replayAttrs
-      after <- countDemoSpans tr'
+      after <- countDemoSpans tr' "ack-tf-replay"
       case res of
         Right (acks, poison) -> do
           acks `shouldBe` ["ack-tf-replay"]
@@ -378,9 +396,9 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       -- Byte-identical in shape to a real customer batch; only the key differs.
       let unknownKey = "no-such-project-key-2026-07-27"
           msgs = [validLogMsg unknownKey "ack-unresolvable"]
-      before <- countDemoSpans tr
+      before <- countDemoSpans tr "ack-unresolvable"
       res <- runTestBg frozenTime tr $ OtlpServer.processList msgs logsAttrs
-      after <- countDemoSpans tr
+      after <- countDemoSpans tr "ack-unresolvable"
       (after - before) `shouldBe` 0 -- nothing was written, by construction
       case res of
         -- The defect: every offset acked, nothing dead-lettered, no trace of
