@@ -1396,7 +1396,14 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
       div_ [class_ "text-xs text-textWeak"] do
         if isFree
           then "Free plan — usage shown for reference only."
-          else toHtml $ "Cycle started " <> cycleStartText <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests."
+          else -- Each dimension has its own included tier and its own rate, so
+          -- state all three rather than letting the 20M read as covering
+          -- everything. Mirrors the graduated Stripe prices exactly.
+            toHtml
+              $ "Cycle started "
+              <> cycleStartText
+              <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
+              <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
 
 
 -- | Past billing cycles, newest first. Estimated cost is computed from the
