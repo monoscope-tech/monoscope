@@ -49,18 +49,14 @@ Still open, and both are genuinely yours rather than engineering:
       attaching mid-cycle can bill for usage already recorded that period. Attach at a
       period boundary, or accept that first invoice.
 
-- [x] ~~**Decide what LemonSqueezy customers are charged.**~~ Decided and shipped 2026-08-27:
-      metric datapoints ride the events subscription item. An LS subscription carries exactly
-      one item and the API cannot add another, so this is the only way to bill LS metrics at
-      all — at the events rate, ~10x per datapoint what a Stripe customer pays. Replays
-      deliberately do **not** ride it: the same substitution would undercharge them
-      thousandfold, so they stay dormant until an item exists.
-- [ ] **Two LS customers' bills go up on the next deploy, silently.** The consequence of the
-      line above, with numbers: over the last 30 days `be87ebc1` recorded 37.6M metric
-      datapoints against 65.0M events, and `98fdd4f3` recorded 10.9M against 30.5M. At the
-      events rate that is **+\$37.62** and **+\$10.91** a month, against \$3.76 and \$1.09 if
-      they were priced at the intended \$1/10M. Decide whether that warrants notice before it
-      lands on an invoice. Nobody else on LS has meaningful metric volume.
+- [x] ~~**Decide what LemonSqueezy customers are charged.**~~ Solved 2026-08-27, and at the
+      intended price rather than a compromise. An LS subscription carries one item billed at
+      \$1/1M and cannot carry a second, so the first attempt rode metrics on it at the events
+      rate — 10x too much. Restating the count in that meter's units prices it exactly:
+      metrics are ten to a unit (10M datapoints → 1M units → \$1), replays a thousandth (1k
+      replays → 1M units → \$1). Verified against the two affected customers: Velox Payments
+      \$3.76 and Mainhedge \$1.09 for 30 days of metrics, matching \$1/10M to the cent.
+      Replays no longer need to sit dormant either.
 
 - [ ] **Pricing copy stays unchanged until the attach happens**, or we display prices we do
       not charge. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
