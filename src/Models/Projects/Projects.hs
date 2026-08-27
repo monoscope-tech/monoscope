@@ -1204,6 +1204,7 @@ projectMeterConfig p subItemIds =
 -- many events it receives.
 --
 -- >>> let ls n = ProjectMeterConfig LemonSqueezyProvider Nothing (Just "si_1") n
+--
 -- Every Lemon Squeezy dimension falls back to the shared events item, which is the
 -- only one a subscription has; a dimension with an item of its own takes it instead.
 --
