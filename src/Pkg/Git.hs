@@ -48,6 +48,7 @@ module Pkg.Git (
   WebhookReq (..),
   isPushEvent,
   parseWebhookRepo,
+  parseWebhookRevision,
   verifyWebhook,
 ) where
 
@@ -770,6 +771,41 @@ parseWebhookRepo h raw = case h of
   Bitbucket -> full
   where
     full = raw ^? key "repository" . key "full_name" . _String
+
+
+-- | The head commit a push delivery announces.
+--
+-- Kept so the sync job can tell "the host and I agree nothing changed" apart from "the host is
+-- answering with a view older than the push it just told me about". Without it the second case
+-- looks exactly like the first, and the push is dropped rather than retried.
+--
+-- GitHub, Gitea and GitLab all name the resulting head, under three different keys. Bitbucket
+-- reports per-branch changes instead, so the new head is the first change's @new.target.hash@.
+--
+-- >>> parseWebhookRevision GitHub "{\"after\":\"abc123\"}"
+-- Just "abc123"
+-- >>> parseWebhookRevision Gitea "{\"after\":\"abc123\"}"
+-- Just "abc123"
+-- >>> parseWebhookRevision GitLab "{\"checkout_sha\":\"abc123\"}"
+-- Just "abc123"
+-- >>> parseWebhookRevision Bitbucket "{\"push\":{\"changes\":[{\"new\":{\"target\":{\"hash\":\"abc123\"}}}]}}"
+-- Just "abc123"
+--
+-- A branch deletion announces the all-zero sha, which is not a revision anything can be
+-- fetched at; treating it as one would pin a retry on a commit that cannot exist.
+--
+-- >>> parseWebhookRevision GitHub "{\"after\":\"0000000000000000000000000000000000000000\"}"
+-- Nothing
+-- >>> parseWebhookRevision GitHub "not json"
+-- Nothing
+parseWebhookRevision :: GitHost -> ByteString -> Maybe Text
+parseWebhookRevision h raw = mfilter (T.any (/= '0')) $ case h of
+  GitHub -> after
+  Gitea -> after
+  GitLab -> raw ^? key "checkout_sha" . _String
+  Bitbucket -> raw ^? key "push" . key "changes" . values . key "new" . key "target" . key "hash" . _String
+  where
+    after = raw ^? key "after" . _String
 
 
 -- | Decide whether a delivery really came from the host that owns this repository.

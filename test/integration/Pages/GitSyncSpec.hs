@@ -393,6 +393,44 @@ spec = sequential do
         verified <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
         verified `shouldSatisfy` (>= 1)
 
+      -- Why the announcement is recorded at all: the sync job decides "nothing changed" by
+      -- comparing what it already has against the head the host reports at fetch time. When
+      -- the host answers with a view older than the push it just announced, that comparison
+      -- says "unchanged" and the job completes having done nothing — and nothing re-queues, so
+      -- the push is never applied, only swept up by whatever push comes next. Measured on the
+      -- demo project: 3 of 5 pushes applied, the two misses still unapplied seven minutes on.
+      -- Keeping what the webhook said is what lets the job tell those two cases apart.
+      it "records the head a push announced, so a stale fetch cannot look like no change" \tr -> do
+        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
+        let body =
+              toStrict
+                $ AE.encode
+                $ AE.object
+                  [ "repository" AE..= AE.object ["full_name" AE..= ("webhook-owner/webhook-repo" :: Text)]
+                  , "after" AE..= ("f00dcafe" :: Text)
+                  ]
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
+        announced <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ GitSync.getGitHubSync testPid
+        announced `shouldBe` Just "f00dcafe"
+
+      -- The announcement has to outlive a pull that did not reach it, or the retry it exists
+      -- to license is cleared by the very fetch that failed to satisfy it.
+      it "keeps an announcement until the revision it names is actually fetched" \tr -> do
+        setupSyncOn tr Git.GitHub "ann-owner" "ann-repo" (Just "s3cret")
+        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        _ <- runQueryEffect tr $ GitSync.setAnnouncedRevision sync.id "newhead"
+
+        -- A pull that landed on an older head: the announcement must survive it.
+        _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "oldhead"
+        stillPending <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ GitSync.getGitHubSync testPid
+        stillPending `shouldBe` Just "newhead"
+
+        -- The pull that finally reaches it retires it.
+        _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "newhead"
+        settled <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        (settled >>= (.announcedRevision)) `shouldBe` Nothing
+        (settled >>= (.lastRevision)) `shouldBe` Just "newhead"
+
       it "verifies each host in its own dialect" \tr -> do
         forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
           setupSyncOn tr host "acme" "config" (Just "s3cret")

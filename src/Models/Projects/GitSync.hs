@@ -18,6 +18,8 @@ module Models.Projects.GitSync (
   updateGitHubSyncKeepToken,
   updateGitHubSyncRepo,
   updateLastRevision,
+  setAnnouncedRevision,
+  clearAnnouncedRevision,
   deleteGitHubSync,
   getDashboardGitState,
   updateDashboardGitInfo,
@@ -130,6 +132,13 @@ data GitHubSync = GitHubSync
   , host :: Git.GitHost
   , apiBase :: Maybe Text
   -- ^ Already-normalised API base for a self-hosted install; 'Nothing' is the host's SaaS.
+  , announcedRevision :: Maybe Text
+  -- ^ The head a push webhook announced, held until a fetch actually returns it. Without it
+  -- a fetch that answers with a stale head is indistinguishable from one that answers "no
+  -- change", and the push is dropped rather than retried. See 0139.
+  , announcedAt :: Maybe UTCTime
+  -- ^ When that announcement arrived, so the retry it licenses cannot run forever against a
+  -- sha a force-push has since made unfetchable.
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -137,7 +146,7 @@ data GitHubSync = GitHubSync
 
 
 instance Default GitHubSync where
-  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing
+  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing
     where
       epoch = posixSecondsToUTCTime 0
 
@@ -252,8 +261,14 @@ credentialCreds :: GitHubCredential -> Maybe GitCreds
 credentialCreds c = mkGitCreds c.installationId c.accessToken
 
 
+-- | A project's grants, most recently granted first.
+--
+-- The order is load-bearing: 'Pages.CodeContext.codeContextCredential' falls back to the head
+-- of this list when no grant matches the config-sync repo's account. Ordering by account name
+-- made that fallback alphabetical, so a stray grant could outrank the one the project actually
+-- uses. Newest-first at least means the most recent deliberate act wins.
 getGitHubCredentials :: DB es => ProjectId -> Eff es [GitHubCredential]
-getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} ORDER BY account |])
+getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at DESC |])
 
 
 -- | One credential, with its PAT decrypted.
@@ -345,10 +360,38 @@ updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix = do
 
 -- | Remember the head commit we last synced to, so the next pull can tell "nothing changed"
 -- from "everything was deleted".
+-- | Record a pull, and retire the announcement it satisfied.
+--
+-- Clearing the announcement only when it matches what was actually fetched is what stops a
+-- stale read from looking like a completed sync: if the host answered with an older head, the
+-- announcement survives and the next attempt still knows something is outstanding.
 updateLastRevision :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
 updateLastRevision sid rev = do
   now <- Time.currentTime
-  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_revision = #{rev}, updated_at = #{now} WHERE id = #{sid} |]
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.git_sync
+             SET last_revision = #{rev}
+               , announced_revision = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_revision END
+               , announced_at = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_at END
+               , updated_at = #{now}
+             WHERE id = #{sid} |]
+
+
+-- | Note the head a push delivery announced, before the job that will chase it is queued.
+--
+-- Written by the webhook rather than carried in the job payload so that existing queued jobs
+-- keep decoding, and so a delivery that arrives while a job is already running still leaves a
+-- record that something newer exists.
+setAnnouncedRevision :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
+setAnnouncedRevision sid rev = do
+  now <- Time.currentTime
+  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET announced_revision = #{rev}, announced_at = #{now} WHERE id = #{sid} |]
+
+
+-- | Give up chasing an announcement, after 'announcedAt' has aged out.
+clearAnnouncedRevision :: DB es => GitHubSyncId -> Eff es Int64
+clearAnnouncedRevision sid =
+  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET announced_revision = NULL, announced_at = NULL WHERE id = #{sid} |]
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64

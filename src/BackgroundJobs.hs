@@ -4123,6 +4123,18 @@ withGitSync pid k = do
             Right conn -> k conn sync
 
 
+-- | How long to keep re-fetching for a head a webhook announced but the host will not serve.
+--
+-- Long enough to outlast the replication lag that causes this (observed in seconds), short
+-- enough that a sha a force-push has orphaned stops being chased the same day.
+announcedRevisionTTL :: NominalDiffTime
+announcedRevisionTTL = 10 * 60
+
+
+announcedRevisionRetryDelay :: NominalDiffTime
+announcedRevisionRetryDelay = 15
+
+
 -- | Sync dashboards from the linked repository into Monoscope.
 gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
@@ -4138,6 +4150,27 @@ gitSyncFromRepo pid = do
           Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
           Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
         Right (revision, entries)
+          -- The host answered with the head we already have, but told us over the webhook
+          -- about a different one. That is not "nothing changed" — it is the host serving a
+          -- view older than the push it announced, and accepting it drops that push for good:
+          -- nothing re-queues, so it stays unapplied until some later push happens to be
+          -- fetched freshly and sweeps it up. Chase it instead.
+          | sync.lastRevision == Just revision
+          , Just announced <- sync.announcedRevision
+          , announced /= revision -> do
+              now <- Time.currentTime
+              let waitedTooLong = maybe False (\t -> diffUTCTime now t > announcedRevisionTTL) sync.announcedAt
+              if waitedTooLong
+                then do
+                  -- A force-push can make an announced sha permanently unfetchable. Retrying
+                  -- one forever is a worse failure than the one being fixed, so give up loudly.
+                  _ <- GitSync.clearAnnouncedRevision sync.id
+                  Log.logAttention "Gave up waiting for an announced revision to become fetchable" (pid, announced, revision)
+                else do
+                  Log.logInfo "Host is behind the revision it announced, retrying" (pid, announced, revision)
+                  ctx <- ask @Config.AuthContext
+                  liftIO $ withResource ctx.jobsPool \jobsConn ->
+                    void $ scheduleJob jobsConn "background_jobs" (GitSyncFromRepo pid) (addUTCTime announcedRevisionRetryDelay now)
           | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
           | otherwise -> do
               dbState <- GitSync.getDashboardGitState pid

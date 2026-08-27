@@ -132,19 +132,31 @@ codeMappingsContent pid sample = do
 -- that installation reaches every repo in the account — so adopt it rather than asking for a
 -- second authorisation to the same place. Adding an account beyond that one is installing the
 -- App there, which is the same flow the git-sync settings already run.
+--
+-- Which one, when there are several, is the whole subtlety. A project can hold grants for more
+-- than one account — a second org, or one left behind by an integration nobody uses any more —
+-- and only one of them can back the panel. Taking the head of a list ordered by account name
+-- meant a stray grant could sort ahead of the real one and silently decide where every snippet
+-- came from, with nothing on the page saying the account shown was a pick out of several.
+--
+-- So prefer the account the config-sync repo actually lives in, which is the installation this
+-- comment always claimed was being adopted, and fall back to the most recently granted rather
+-- than the alphabetically luckiest.
 codeContextCredential :: Projects.ProjectId -> ATAuthCtx (Maybe GitSync.GitHubCredential)
-codeContextCredential pid =
+codeContextCredential pid = do
+  syncM <- GitSync.getGitHubSync pid
   GitSync.getGitHubCredentials pid >>= \case
-    cred : _ -> pure $ Just cred
-    [] ->
-      GitSync.getGitHubSync pid >>= \case
-        Just sync | isJust sync.installationId || isJust sync.accessToken -> do
-          -- The sync row holds the PAT already encrypted; hand the credential the plaintext
-          -- so it is stored under this table's own encryption rather than double-wrapped.
-          encKey <- encodeUtf8 @Text . (.apiKeyEncryptionSecretKey) . (.config) <$> Effectful.Reader.Static.ask @AuthContext
-          plain <- GitSync.getGitHubSyncDecrypted encKey pid
-          GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner sync.installationId (plain >>= (.accessToken))
-        _ -> pure Nothing
+    creds@(newest : _) -> pure $ Just $ fromMaybe newest do
+      sync <- syncM
+      find (\c -> c.host == sync.host && c.account == sync.owner) creds
+    [] -> case syncM of
+      Just sync | isJust sync.installationId || isJust sync.accessToken -> do
+        -- The sync row holds the PAT already encrypted; hand the credential the plaintext
+        -- so it is stored under this table's own encryption rather than double-wrapped.
+        encKey <- encodeUtf8 @Text . (.apiKeyEncryptionSecretKey) . (.config) <$> Effectful.Reader.Static.ask @AuthContext
+        plain <- GitSync.getGitHubSyncDecrypted encKey pid
+        GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner sync.installationId (plain >>= (.accessToken))
+      _ -> pure Nothing
 
 
 -- | The repositories a credential reaches, for the picker.

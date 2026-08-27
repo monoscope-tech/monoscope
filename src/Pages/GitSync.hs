@@ -100,6 +100,11 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
           if Git.isPushEvent host req.event
             then do
               ctx <- ask @Config.AuthContext
+              -- Record the announced head BEFORE queueing, not after: the job can start before
+              -- a later write lands, and a job that runs without the announcement is exactly
+              -- the job that mistakes a stale read for "nothing changed".
+              whenJust (Git.parseWebhookRevision host req.body) \rev ->
+                void $ GitSync.setAnnouncedRevision sync.id rev
               liftIO $ withResource ctx.jobsPool \conn ->
                 void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
               statusResp "ok" <$ Log.logTrace "Triggered git sync from webhook" (sync.projectId, Git.hostSlug host, fullName)

@@ -179,6 +179,21 @@ spec = do
             runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \ms -> length ms `shouldBe` 1
           [] -> expectationFailure "expected two mappings, got none"
 
+      -- A project can hold grants for several accounts — a second org, or a stray one left by
+      -- an old integration. Picking whichever login sorted first meant one such grant silently
+      -- decided where every snippet was read from, with nothing on the page saying the account
+      -- shown was one pick out of several. The account the config-sync repo lives in is the one
+      -- the comment above 'codeContextCredential' always claimed was adopted.
+      it "reads source from the sync repo's account, not the first one alphabetically" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "zzz-ours" "monoscope-config" "main" "ghp_test" Nothing ""
+        _ <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "aaa-stray" (Just 111) Nothing
+        _ <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "zzz-ours" (Just 222) Nothing
+
+        out <- render . snd <$> testServant tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+        out `shouldSatisfy` T.isInfixOf "zzz-ours"
+        out `shouldNotSatisfy` T.isInfixOf "aaa-stray"
+
       -- A frame that no mapping covers is exactly when someone needs the mapping form, and
       -- the one thing they cannot be expected to retype is the path they were just looking at.
       it "carries the unmapped frame's path into the form" \tr -> do
