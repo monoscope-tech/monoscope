@@ -502,21 +502,22 @@ processBackgroundJob authCtx bgJob =
             -- backlog-leak failure we have already hit on a provider switch. A
             -- misconfigured one cuts chunks anyway, so the drain leaves an
             -- auditable, retriable failed row for money we are actually owed.
-            chunks <- fmap concat $ forM [minBound .. maxBound] \kind -> do
-              let qty = Projects.meterQuantity kind totals
-              case Projects.resolveMeterTarget meterCfg kind of
-                Left reason
-                  | Projects.meterIsDormant reason -> do
-                      -- Events dormant on a paid project is a silent revenue-off
-                      -- switch — the exact shape of the 5-week zero-usage incident.
-                      let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
-                      when (qty > 0 || kind == Projects.Events)
-                        $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
-                      pure []
-                -- Both paid providers chunk identically. LS's 1M POST cap forces
-                -- splitting; Stripe has no documented cap but N meter-events with
-                -- the same meter+customer aggregate identically to one big event.
-                _ -> pure $ Projects.splitUsageIntoChunks kind qty
+            chunks <-
+              concat <$> forM [minBound .. maxBound] \kind -> do
+                let qty = Projects.meterQuantity kind totals
+                case Projects.resolveMeterTarget meterCfg kind of
+                  Left reason
+                    | Projects.meterIsDormant reason -> do
+                        -- Events dormant on a paid project is a silent revenue-off
+                        -- switch — the exact shape of the 5-week zero-usage incident.
+                        let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
+                        when (qty > 0 || kind == Projects.Events)
+                          $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                        pure []
+                  -- Both paid providers chunk identically. LS's 1M POST cap forces
+                  -- splitting; Stripe has no documented cap but N meter-events with
+                  -- the same meter+customer aggregate identically to one big event.
+                  _ -> pure $ Projects.splitUsageIntoChunks kind qty
             Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
 
@@ -3296,7 +3297,7 @@ groupAnomaliesByEndpointHash anomalies =
         Anomalies.ATEndpoint -> a.targetHash
         _ -> T.take 8 a.targetHash
       grouped = groupBy ((==) `on` getEndpointHash) $ sortOn getEndpointHash $ V.toList anomalies
-   in mapMaybe (fmap (\grp -> (getEndpointHash (head grp), grp)) . nonEmpty) grouped
+   in mapMaybe (viaNonEmpty (\grp -> (getEndpointHash (head grp), grp))) grouped
 
 
 -- | Process issues enhancement job - finds issues that need LLM enhancement
@@ -3600,7 +3601,7 @@ residualGroups minMembers paths =
     byNode =
       HM.fromListWith
         (<>)
-        [ ((T.intercalate "/" (take i segs), i), S.singleton seg)
+        [ ((T.intercalate "/" (take i segs), i), one seg)
         | segs <- paths
         , (i, seg) <- zip [0 ..] segs
         ]

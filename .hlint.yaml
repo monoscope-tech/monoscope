@@ -3249,10 +3249,10 @@
     lhs: fmap . second
     note: "Use `secondF` from `Relude.Extra.Bifunctor`"
     rhs: secondF
-- hint:
-    lhs: "[minBound .. maxBound]"
-    note: "Use `universe` from `Relude.Extra.Enum`"
-    rhs: universe
+# NOTE: no `[minBound .. maxBound]` -> `universe` rule. Relude.Extra.Enum does
+# not export `universe` in the version pinned here, so applying the suggestion
+# fails to compile (GHC-61689: does not export). Restore it only alongside a
+# Relude bump that provides the symbol.
 - hint:
     lhs: succ
     note: "`succ` from `Prelude` is a pure function but it may throw exception. Consider using `next` from `Relude.Extra.Enum` instead."
@@ -3429,7 +3429,9 @@
 - error: {lhs: "fmap f (fmap g x)", rhs: "fmap (f . g) x", name: "Fuse fmap (functor composition)"}
 
 # --- 8. Suggestions (non-blocking) ---
-- suggest: {lhs: "length (filter f x)", rhs: "length (filter f x)", name: "Consider count function", note: "Consider using a count helper instead of length . filter"}
+# NOTE: no "count function" rule here — its lhs and rhs were identical
+# ("length (filter f x)" on both sides), so it could never be satisfied and no
+# such helper exists in the codebase. Same defect as the displayException rule.
 
 # --- 9. Import Consistency ---
 - modules:

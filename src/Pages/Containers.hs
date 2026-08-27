@@ -232,7 +232,7 @@ renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
       $ toHtml vm.row.containerName
   div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
     whenJust vm.row.image \img -> span_ [class_ "truncate"] $ toHtml $ shortImage img <> maybe "" (":" <>) vm.row.imageTag
-    whenJust vm.row.workload \w -> span_ [class_ "badge badge-xs badge-ghost shrink-0"] $ toHtml w
+    whenJust vm.row.workload $ span_ [class_ "badge badge-xs badge-ghost shrink-0"] . toHtml
 
 
 -- | Datadog's @short_image@: the last path segment, which is the lowest-cardinality useful
