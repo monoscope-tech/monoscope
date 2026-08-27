@@ -49,27 +49,19 @@ Still open, and both are genuinely yours rather than engineering:
       attaching mid-cycle can bill for usage already recorded that period. Attach at a
       period boundary, or accept that first invoice.
 
-- [ ] **Decide what LemonSqueezy customers are charged.** LS is alive — 10 active
-      subscriptions — but **a LS subscription carries exactly one subscription item and the
-      API offers no way to add another**, so the three dimensions cannot be billed separately
-      there the way they can on Stripe. The code already handles this safely: with no
-      `billing_meter_items` row those meters stay dormant, so LS customers are billed for
-      events exactly as before and nothing is silently wrong. The options are to leave LS on
-      events-only, or migrate those customers to Stripe. Creating "LS metered variants" — the
-      earlier instruction here — is not possible as written.
+- [x] ~~**Decide what LemonSqueezy customers are charged.**~~ Decided and shipped 2026-08-27:
+      metric datapoints ride the events subscription item. An LS subscription carries exactly
+      one item and the API cannot add another, so this is the only way to bill LS metrics at
+      all — at the events rate, ~10x per datapoint what a Stripe customer pays. Replays
+      deliberately do **not** ride it: the same substitution would undercharge them
+      thousandfold, so they stay dormant until an item exists.
+- [ ] **Two LS customers' bills go up on the next deploy, silently.** The consequence of the
+      line above, with numbers: over the last 30 days `be87ebc1` recorded 37.6M metric
+      datapoints against 65.0M events, and `98fdd4f3` recorded 10.9M against 30.5M. At the
+      events rate that is **+\$37.62** and **+\$10.91** a month, against \$3.76 and \$1.09 if
+      they were priced at the intended \$1/10M. Decide whether that warrants notice before it
+      lands on an invoice. Nobody else on LS has meaningful metric volume.
 
-      **Recommendation, from the numbers (2026-08-27): migrate DSI-APP, leave the rest.**
-      Only **5** paying projects are on LS, and only **two** have any volume at all in 90
-      days: DSI-APP (675M requests / 675M metric datapoints) and Engine/API Prod (12.5M /
-      8.6M); the other three are flat zero. That matters because metric datapoints *ride the
-      events item* on LS and so bill at the events rate — `$1/1M` rather than `$1/10M`, about
-      **10x what a Stripe customer pays** (`resolveMeterTarget`, and the comment above it says
-      so deliberately). At DSI-APP's ~225M datapoints/month that is ~\$225/mo billed where
-      Stripe would charge ~\$22.50. So enabling `MetricDatapoints` while DSI-APP sits on LS
-      overcharges the one customer it actually affects. Moving that single subscription to
-      Stripe removes the whole problem; the remaining four bill zero metrics either way and
-      can stay on events-only indefinitely. See `dsi_app_metric_volume_billing_risk` in memory
-      for the volume history.
 - [ ] **Pricing copy stays unchanged until the attach happens**, or we display prices we do
       not charge. App: `Pages/Settings.hs`, `Pages/Components.hs`, `Pages/Onboarding.hs`.
       Landing: `pricing/index.md`, `index.md`, `assets/js/main.js`. All say events-only
@@ -94,20 +86,26 @@ Still open, and both are genuinely yours rather than engineering:
       inherit the explorer's time range because `Widget` has no `from`/`to` of its own. The
       vendor survey is unambiguous that the interval overlay is what makes the chart worth
       showing at all, so this is the difference between shipped and useful.
-- [ ] **Dashboards: stop a required variable blocking the whole dashboard.**
-      `plans/dashboard-variable-defaults.md`. Today an unset required variable covers the page
-      with a modal, and dismissing it leaves every widget empty, because an unset variable
-      interpolates to `''` rather than to a match-all. Datadog defaults template variables to
-      `*` and never blocks. Needs a clause-level placeholder (the way `{{time_filter}}` already
-      works) plus a template migration — scope it to `variable.required` and leave
-      `tab.requires` blocking, since a drill-down tab genuinely has no all-values rendering.
+- [x] ~~**Dashboards: stop a required variable blocking the whole dashboard.**~~ Done
+      2026-08-26 — but **not** as the match-all default this entry proposed, and
+      `plans/dashboard-variable-defaults.md` now records why that was wrong. The only
+      dashboard using `variable.required` is Endpoint Analytics, a per-endpoint drill-down
+      where "all endpoints" has no meaning, so the ask was right and only its shape was
+      wrong. The prompt is now the tab's content rather than a modal over it, and no widget
+      runs until the variable is answered — previously every one ran a query that could only
+      come back empty and then reported "no data in the selected time range", which is a
+      claim about the data rather than a prompt. No clause-level placeholder and no template
+      migration were needed.
 
 ### P2 — verification the streams could not do themselves
 
-- [ ] **Nothing in the exemplars UI is browser-verified.** Booting the server locally migrates
-      production, so the agent could not click through it. The Exemplars tab reveal was hardened
-      with a click-triggered fallback rather than left to `intersect` (a `display:none`
-      container cannot intersect), but the chart-in-a-lazy-fragment path wants real eyes.
+- [x] ~~**Nothing in the exemplars UI is browser-verified.**~~ Verified 2026-08-26 against the
+      local server on production data, once it was confirmed safe to boot. Opening a span's
+      Metrics tab renders the exemplar tier and the service charts; the `/chart_data` requests
+      carry the span's window with `since` dropped, and the charts' x-axis reads the span's
+      minutes rather than the page's range. Two caveats it surfaced, both since fixed: a stale
+      server was still holding :8080 so the first check tested old code, and the highlight band
+      was invisible for short spans (now a dashed line below 1% of the window).
 - [ ] **Containers has no cluster facet** until collectors emit `k8s.cluster.name`; production
       currently sends only `k8s.cluster.uid`. Everything else deliberately out of v1 is listed
       in `plans/container-monitoring.md` §4.2 — no agent, no Orchestrator resource views, no

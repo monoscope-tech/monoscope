@@ -27,14 +27,14 @@ to describe itself in HTTP terms: `POST`, the RPC path as `http.route`, and 200/
 from whether the handler errored. That mapping is lossy — a gRPC status code carries more than
 "ok or not" (`NOT_FOUND`, `PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`, …).
 
-**Open question to settle before the work fans out past the first SDK:** do we (a) keep
-synthesising HTTP fields, accepting the loss; or (b) extend the server to accept
-`rpc.system` / `rpc.grpc.status_code` on an SDK span and render gRPC natively in the UI?
+**Resolution: emit both, now.** Span attributes are additive, so every interceptor sets the
+HTTP-shaped fields the lift requires *and* the honest ones alongside — `rpc.system`,
+`rpc.method`, `rpc.grpc.status_code`. The server ignores what it does not read today, and if it
+later learns to render gRPC natively, no SDK needs re-releasing to feed it.
 
-(b) is more work but stops every language from repeating the same lossy mapping, and gRPC
-status is exactly the field an on-call engineer filters by. **Decide (a) vs (b) first** — it
-changes the attribute set every SDK below emits, and retrofitting it across seven languages
-afterwards is the expensive order.
+Teaching the server and UI to render gRPC natively (filter by `NOT_FOUND` rather than by a
+synthesised 500) is worth doing, but it is server work and independent of this. It is not a
+prerequisite, and treating it as one would block every language behind it.
 
 ## Per-language tasks
 
