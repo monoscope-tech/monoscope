@@ -776,10 +776,15 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
             div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
               let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                   navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
-                  tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
+                  -- Radio inside the label, panel shown by a CSS variant off
+                  -- #error-details-container's group: no JS, and the choice
+                  -- survives the htmx morphs this card does on every filter.
+                  tabBtn (tabId, lbl, isActive) = label_ [class_ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
+                    input_ $ [type_ "radio", name_ "err-tabs", id_ tabId, class_ "sr-only"] <> [checked_ | isActive]
+                    toHtml (lbl :: Text)
               forM_ ([(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured", "First"), (aUrl, not isFirst, "Show recent trace the error occured", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
               span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-              forM_ ([("#span-content", "Trace", not isLogPatternIssue), ("#log-content", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
+              forM_ ([("err-tab-trace", "Trace", not isLogPatternIssue), ("err-tab-logs", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
               span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
               -- Icon state is CSS-driven off the container's fullscreen class; the click only
               -- sends the event. tippy, not daisyUI: the card is `overflow-hidden`, which clips
@@ -790,7 +795,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
             -- The trace ships its own details panel (#trace_details_container), so this tab renders
             -- no second one — clicking a span replaces the open panel instead of stacking another.
-            div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
+            div_ [class_ "hidden group-has-[#err-tab-trace:checked]/inv:block w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
               -- The waterfall arrives on its own: a cold read of a multi-thousand-span
               -- trace took >56s and used to 504 this entire page. `load`, not
               -- `intersect` — the pane is full-height and its trigger never scrolls
@@ -806,7 +811,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     ]
                     $ loadingIndicator_ LdMD LdSpinner
 
-          div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
+          div_ [id_ "log-content", class_ "hidden group-has-[#err-tab-logs:checked]/inv:flex err-tab-content flex-col lg:flex-row w-full lg:h-[70vh]"] do
             let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
                 isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
                 lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
@@ -1550,11 +1555,10 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , clientSide = False
                   , options =
-                      [ TabFilterOpt "Inbox" Nothing Nothing
-                      , TabFilterOpt "Acknowledged" Nothing Nothing
-                      , TabFilterOpt "Archived" Nothing Nothing
+                      [ TabFilterOpt "Inbox" Nothing
+                      , TabFilterOpt "Acknowledged" Nothing
+                      , TabFilterOpt "Archived" Nothing
                       ]
                   }
               -- Each tab differs only in how long the silence lasts and whether

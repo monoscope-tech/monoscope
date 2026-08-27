@@ -6,30 +6,8 @@
 // The functions below are invoked from inline attributes rendered by Lucid
 // setCookie/getCookie deliberately stay inline in BodyWrapper: the theme script calls
 // getCookie mid-parse, before this deferred module runs.
-// (onpointerdown="navigatable(...)", onclick="filterByField(...)"), so they MUST be
+// (onclick="filterByField(...)"), so they MUST be
 // published on window — a module's top-level declarations are not globals.
-
-
-        function navigatable(me: HTMLElement, target: string, container: string, activeClass: string, tabPrefix?: string) {
-            const tabeName = tabPrefix ? tabPrefix + "-tab" : "a-tab";
-            const contentName = tabPrefix ? tabPrefix + "-tab-content" : "a-tab-content";
-            const nav = document.querySelector(container)!;
-            const tabs = nav.querySelectorAll("." + tabeName);
-            const contents = nav.querySelectorAll("." + contentName);
-            const targetElement = document.querySelector(target)!;
-            
-            // Batch DOM updates using requestAnimationFrame
-            requestAnimationFrame(() => {
-              tabs.forEach((tab: Element) => {
-                tab.classList.remove(activeClass);
-              });
-              me.classList.add(activeClass);
-              contents.forEach((content: Element) => content.classList.add("hidden"));
-              targetElement.classList.remove("hidden");
-              targetElement.dispatchEvent(new CustomEvent("tab-visible", { bubbles: true }));
-            });
-        }
-
 
 
         const onReady = (fn: () => void) => document.readyState === 'loading'
@@ -230,4 +208,4 @@ onReady(function(){
         url.searchParams.delete('aggregate_skip');
         window.location.href = url.toString();
     }
-Object.assign(window, { navigatable, filterByField, viewFieldPatterns });
+Object.assign(window, { filterByField, viewFieldPatterns });

@@ -518,10 +518,9 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 $ TabFilter
                   { current = filterType
                   , currentURL
-                  , clientSide = False
                   , options =
-                      [ TabFilterOpt{name = "Active", count = Just $ length activeAlerts, targetId = Nothing}
-                      , TabFilterOpt{name = "Inactive", count = Just $ length inactiveAlerts, targetId = Nothing}
+                      [ TabFilterOpt{name = "Active", count = Just $ length activeAlerts}
+                      , TabFilterOpt{name = "Inactive", count = Just $ length inactiveAlerts}
                       ]
                   }
           }

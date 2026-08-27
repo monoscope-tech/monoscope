@@ -123,11 +123,10 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                 $ TabFilter
                   { current = currentTab
                   , currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&period=" <> period
-                  , clientSide = False
                   , options =
-                      [ TabFilterOpt{name = "Incoming", count = Nothing, targetId = Nothing}
-                      , TabFilterOpt{name = "Outgoing", count = Nothing, targetId = Nothing}
-                      , TabFilterOpt{name = "Archived", count = Nothing, targetId = Nothing}
+                      [ TabFilterOpt{name = "Incoming", count = Nothing}
+                      , TabFilterOpt{name = "Outgoing", count = Nothing}
+                      , TabFilterOpt{name = "Archived", count = Nothing}
                       ]
                   }
           }
@@ -269,10 +268,9 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , clientSide = False
                   , options =
-                      [ TabFilterOpt{name = "Endpoints", count = Nothing, targetId = Nothing}
-                      , TabFilterOpt{name = "Archived", count = Nothing, targetId = Nothing}
+                      [ TabFilterOpt{name = "Endpoints", count = Nothing}
+                      , TabFilterOpt{name = "Archived", count = Nothing}
                       ]
                   }
           }

@@ -287,7 +287,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
   const debouncedRedraw = debounce(redraw, 100);
   RESIZE_EVENTS.forEach((e) => window.addEventListener(e, debouncedRedraw, { signal }));
 
-  // Re-render when tab becomes visible via navigatable()
+  // Re-render when the tab radio reveals this panel and sends tab-visible
   const flameTab = flameGraphContainer.closest('.a-tab-content');
   if (flameTab) {
     flameTab.addEventListener('tab-visible', () => requestAnimationFrame(redraw), { signal });
@@ -513,7 +513,7 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
 
   fullRender();
 
-  // Re-render when tab becomes visible via navigatable()
+  // Re-render when the tab radio reveals this panel and sends tab-visible
   const waterfallTab = (container as HTMLElement).closest('.a-tab-content');
   if (waterfallTab) {
     waterfallTab.addEventListener('tab-visible', () => requestAnimationFrame(fullRender), { signal });

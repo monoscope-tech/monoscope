@@ -76,8 +76,8 @@ test("the module entry is hashed in its filename, not a query", async ({
 });
 
 // Page chrome (tab switching, cookies, the log-explorer field filters) lives in the bundle
-// but is invoked from inline attributes Lucid renders — onpointerdown="navigatable(...)",
-// onclick="filterByField(...)". A module's top-level declarations are not globals, so the
+// but is invoked from inline attributes Lucid renders — onclick="filterByField(...)".
+// A module's top-level declarations are not globals, so the
 // contract is the explicit Object.assign(window, …) in page-chrome.ts.
 //
 // Regression guard for a real break: when that code moved out of BodyWrapper's inline
@@ -90,7 +90,6 @@ test("page-chrome publishes the globals inline handlers call", async ({
   await page.goto(PAGES[0], { waitUntil: "networkidle" });
   const missing = await page.evaluate(() =>
     [
-      "navigatable",
       "filterByField",
       "viewFieldPatterns",
       // Inline in BodyWrapper, not the bundle — the theme script needs them mid-parse.

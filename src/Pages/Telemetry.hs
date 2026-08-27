@@ -927,19 +927,12 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
       metricDetailChart pid metric source selected chartId
 
       div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
-        div_ [class_ "flex", [__|on click halt|]] $ do
-          button_ [class_ "cursor-pointer a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
-          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
-          -- `navigatable` reveals the panel by toggling display, and a display:none
-          -- container never intersects — the same reason Log.hs's alert panel fires
-          -- off its toggle rather than off `intersect`. Trigger the fetch from the
-          -- click too, so the panel loads whichever way the browser resolves it;
-          -- `once` on both means it still runs exactly one request.
-          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ex-content', '#metric-tabs-container', 't-tab-active');htmx.trigger('#ex-content', 'revealExemplars')"] "Exemplars"
-          div_ [class_ "w-full border-b border-b-strokeWeak"] pass
-
-        div_ [class_ "grid px-4 pb-4 mt-2 text-textWeak font-normal"] $ do
-          div_ [class_ "a-tab-content", id_ "ov-content"] $ do
+        -- DaisyUI radio tabs: the checked input drives which `.tab-content`
+        -- shows, in CSS. No global JS, and the state survives an htmx morph
+        -- because it lives in the DOM rather than in a class a script applied.
+        div_ [role_ "tablist", class_ "tabs tabs-border", [__|on click halt the bubbling|]] $ do
+          input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
+          div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ "ov-content"] $ do
             div_ [class_ "flex flex-col gap-4"] do
               div_ [class_ "flex flex-wrap gap-x-6 gap-y-3 text-sm"] do
                 div_ [class_ "flex flex-col gap-0.5"] do
@@ -982,14 +975,19 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
                       a_ [class_ "flex cursor-pointer items-center justify-between gap-3 px-1 py-2 text-sm hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus", href_ $ "/p/" <> pid.toText <> "/" <> path] do
                         span_ [class_ "truncate text-textStrong"] $ toHtml label
                         faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
-          div_ [class_ "hidden a-tab-content", id_ "rl-content"] $ relatedMetrics pid source metric candidates
+          input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Related metrics"]
+          div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ "rl-content"] $ relatedMetrics pid source metric candidates
+          -- The fetch hangs off this radio's own `change`, via htmx's `from:`.
+          -- It cannot hang off the panel: a `.tab-content` that is not selected
+          -- is display:none, and a display:none element never fires `intersect`.
+          input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Exemplars", id_ "metric-tab-ex"]
           -- Fetched on first reveal rather than with the page: an exemplar lookup is a
           -- text scan over raw metric rows, and most visits never open this tab.
           div_
-            [ class_ "hidden a-tab-content"
+            [ class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal"
             , id_ "ex-content"
             , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"
-            , hxTrigger_ "intersect once, revealExemplars once"
+            , hxTrigger_ "change from:#metric-tab-ex once"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
             , term "hx-ext" "forward-page-params"
@@ -1173,14 +1171,27 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
               $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
       div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5"] $ do
-        div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
+        div_ [role_ "tablist", class_ "w-full flex flex-col gap-2 group/tt", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
               div_ [class_ "flex items-center gap-2 text-textWeak font-medium min-w-0 overflow-x-auto"] do
-                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 t-tab-active", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#service_map', '#trace-tabs', 't-tab-active')"] "Map"
+                -- Radio inside the label: which tab is open is DOM state, so it
+                -- survives an htmx morph and needs no JS to restore. `tab-visible`
+                -- is still dispatched because charts.ts defers the flame-graph
+                -- build and the waterfall re-render until their panel is shown.
+                let traceTab (tabId, panelId, lbl, isActive) =
+                      label_ [class_ "a-tab cursor-pointer text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
+                        input_ $ [type_ "radio", name_ "trace-tabs", id_ tabId, class_ "sr-only", term "_" $ "on change send tab-visible to " <> panelId] <> [checked_ | isActive]
+                        toHtml lbl
+                 in forM_
+                      ( [ ("tab-waterfall", "#water_fall", "Waterfall", True)
+                        , ("tab-timeline", "#flame_graph", "Timeline", False)
+                        , ("tab-services", "#span_list", "Services", False)
+                        , ("tab-map", "#service_map", "Map", False)
+                        ]
+                          :: [(Text, Text, Text, Bool)]
+                      )
+                      traceTab
               div_ [class_ "flex items-center gap-2 shrink-0"] do
                 -- The stats describe what is drawn, so "Spans" reads e.g. "300+"
                 -- while more remain rather than claiming to be the whole trace.
@@ -1221,7 +1232,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                     ]
                     $ faSprite_ "chevron-down" "regular" "h-3 w-3"
               button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
-          div_ [role_ "tabpanel", class_ "a-tab-content w-full hidden", id_ "flame_graph"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content w-full hidden group-has-[#tab-timeline:checked]/tt:block", id_ "flame_graph"] do
             div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2 relative", style_ "--tl-left:65%", id_ $ "timeline-layout-" <> traceItem.traceId] do
               div_
                 [ class_ "md:w-[var(--tl-left)] w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
@@ -1254,7 +1265,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                         div_ [class_ "w-[80px] h-2 bg-fillWeak rounded-sm overflow-hidden"]
                           $ div_ [class_ $ "h-full " <> color, style_ $ "width:" <> percent <> "%"] pass
 
-          div_ [role_ "tabpanel", class_ "a-tab-content pt-2", id_ "water_fall"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-waterfall:checked]/tt:block", id_ "water_fall"] do
             when (length serviceNames > 1)
               $ div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 pb-2 text-xs text-textWeak"]
               $ forM_ serviceNames
@@ -1274,14 +1285,14 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
               div_ [class_ "py-1", id_ $ "waterfall-rows-" <> traceItem.traceId] do
                 forM_ rootSpans \c -> buildSpanTree_ pid c 0 serviceColors
 
-          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-services:checked]/tt:block", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
 
           -- How this one request moved through the system: the same graph grammar as the
           -- global service map, scoped to this trace's spans (no extra query — the spans
           -- are already on the page).
-          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-map:checked]/tt:block", id_ "service_map"] do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Same grip affordance as resizer_ (border + centred dots, brand-coloured on hover):
     -- the drag target was invisible without it, so the panel read as unresizable.

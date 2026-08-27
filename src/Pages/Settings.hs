@@ -347,20 +347,13 @@ apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey ->
 apiMainContent pid apiKeys newKeyM = section_ [] do
   copyNewApiKey newKeyM False
   let (activeKeys, revokedKeys) = V.partition (.active) apiKeys
-      tabs =
-        Table.TabFilter
-          { current = "Active keys"
-          , currentURL = ""
-          , clientSide = True
-          , options =
-              [ Table.TabFilterOpt{name = "Active keys", count = Just $ V.length activeKeys, targetId = Just "#active_content"}
-              , Table.TabFilterOpt{name = "Archived keys", count = Just $ V.length revokedKeys, targetId = Just "#revoked_content"}
-              ]
-          }
-
-  toHtml tabs
-  div_ [class_ "a-tab-content", id_ "active_content"] $ toHtml $ makeApiKeysTable pid activeKeys "active_content"
-  div_ [class_ "hidden a-tab-content", id_ "revoked_content"] $ toHtml $ makeApiKeysTable pid revokedKeys "revoked_content"
+  -- DaisyUI radio tabs: each input and the panel it reveals are adjacent
+  -- siblings, so which tab is open is DOM state that CSS reads directly.
+  div_ [role_ "tablist", class_ "tabs tabs-border mb-6"] $ forM_
+    ([("active_content", "Active keys", activeKeys, True), ("revoked_content", "Archived keys", revokedKeys, False)] :: [(Text, Text, V.Vector ProjectApiKeys.ProjectApiKey, Bool)])
+    \(elemId, lbl, keys, isActive) -> do
+      input_ $ [type_ "radio", name_ "api-key-tabs", role_ "tab", class_ "tab", term "aria-label" $ lbl <> " (" <> show (V.length keys) <> ")"] <> [checked_ | isActive]
+      div_ [class_ "tab-content pt-4", id_ elemId] $ toHtml $ makeApiKeysTable pid keys elemId
 
 
 makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table ProjectApiKeys.ProjectApiKey
