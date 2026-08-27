@@ -2,7 +2,6 @@ module Pkg.Icons.TH (embedIconEntries) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Relude
@@ -15,10 +14,11 @@ import Relude
 -- restriction: the parser must be compiled before the splice which invokes it.
 embedIconEntries :: [(String, FilePath)] -> TH.Q TH.Exp
 embedIconEntries sprites = do
-  entries <- fmap concat $ forM sprites \(kind, path) -> do
-    TH.qAddDependentFile path
-    contents <- TH.runIO $ TIO.readFile path
-    either (fail . ((path <> ": ") <>)) pure $ parseSprite kind contents
+  entries <-
+    concat <$> forM sprites \(kind, path) -> do
+      TH.qAddDependentFile path
+      contents <- TH.runIO $ readFileText path
+      either (fail . ((path <> ": ") <>)) pure $ parseSprite kind contents
   -- SVG fragment lookup resolves the first matching id. Preserve that behavior
   -- for the few legacy duplicate symbols already present in the sheets.
   TH.lift $ deduplicate entries
@@ -76,7 +76,7 @@ stripComments source = case T.breakOn "<!--" source of
 
 requiredAttribute :: Text -> [(Text, Text)] -> Either String Text
 requiredAttribute key attrs =
-  maybe (Left $ "<symbol> is missing required " <> toString key <> " attribute") Right $ lookup key attrs
+  maybeToRight ("<symbol> is missing required " <> toString key <> " attribute") $ lookup key attrs
 
 
 parseAttributes :: Text -> Either String [(Text, Text)]
@@ -98,7 +98,7 @@ parseAttributes = go [] . T.strip
 -- The sprite formatting is useful to humans but wasteful when repeated in page
 -- HTML. XML whitespace between/inside tags is insignificant for these paths.
 minifyMarkup :: Text -> Text
-minifyMarkup = T.unwords . T.words
+minifyMarkup = unwords . words
 
 
 -- Inline SVGs share the document id namespace. Prefix definitions and their

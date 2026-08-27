@@ -497,7 +497,7 @@ normalizeWidgetLayouts widgets =
           widget' = normalizedWidget{layout = Just Layout{x = Just placedX, y = Just placedY, w = Just width, h = Just height}}
        in (rect : occupied, (idx, widget') : acc)
 
-    isFree occupied width height (y, x) = all (not . overlaps (x, y, width, height)) occupied
+    isFree occupied width height (y, x) = not (any (overlaps (x, y, width, height)) occupied)
     overlaps (x1, y1, w1, h1) (x2, y2, w2, h2) = x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2
 
 
