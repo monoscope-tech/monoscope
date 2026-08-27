@@ -1795,7 +1795,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       isTeamView = isJust teamIdM
       -- Not an applicative over both: a missing source dashboard is a legitimate picker
       -- (an ad-hoc widget being added), not a reason to fall back to the plain list.
-      copyMode = copyWidgetIdM <&> \wid -> (wid, UUIDId <$> sourceDashIdM)
+      copyMode = copyWidgetIdM <&> (,UUIDId <$> sourceDashIdM)
 
   templates <- getDashboardTemplates bw.config.liveReloadDashboards
   if embedded || isTeamView

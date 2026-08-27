@@ -3034,8 +3034,8 @@ sendReportForProject pid rType = do
 
       teamM <- ProjectMembers.getEveryoneTeam pid
       broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
-      when (typTxt == "weekly") do
-        when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
+      when (typTxt == "weekly")
+        $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           when (totalRequest > 0) do
             patterns <- LogPatterns.getLogPatterns pid 10 0

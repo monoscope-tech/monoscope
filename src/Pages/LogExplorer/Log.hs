@@ -596,19 +596,19 @@ renderFacetFields facetGroup facetSummary = do
         if null values
           then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
           else forM_ visibleValues (renderFacetValue facet)
-        when (hiddenCount > 0) do
-          div_ [class_ "facet-tail"]
-            $ button_
-              [ type_ "button"
-              , class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"
-              , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer/facets?field=" <> toUriStr facet.path
-              , hxTarget_ "closest .facet-tail"
-              , hxSwap_ "outerHTML"
-              ]
-            $ toHtml
-            $ "+ More ("
-            <> prettyPrintCount hiddenCount
-            <> ")"
+        when (hiddenCount > 0)
+          $ div_ [class_ "facet-tail"]
+          $ button_
+            [ type_ "button"
+            , class_ "facet-more text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline"
+            , hxGet_ $ "/p/" <> facetSummary.projectId <> "/log_explorer/facets?field=" <> toUriStr facet.path
+            , hxTarget_ "closest .facet-tail"
+            , hxSwap_ "outerHTML"
+            ]
+          $ toHtml
+          $ "+ More ("
+          <> prettyPrintCount hiddenCount
+          <> ")"
 
 
 -- Native details/summary owns open state and keyboard/AT behavior. No `contain`:
