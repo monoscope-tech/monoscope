@@ -77,8 +77,18 @@ interceptor should be thin — if one is getting large, it is duplicating the co
 
 ### Tier 2 — gRPC exists but is less common
 
-- [ ] **Python** (`monoscope-python`, `common`) — `grpc.ServerInterceptor`. Note the sync and
-      `grpc.aio` APIs differ; cover both or state plainly which is supported.
+- [x] **Python** (`monoscope-python`, `common`) — **implemented, PR #2 open** (not merged:
+      unlike monoscope-js there is no standing instruction to merge without review here).
+      `MonoscopeServerInterceptor`, with `grpc` as an optional import so HTTP-only users are
+      unaffected.
+
+      Renders messages with `MessageToJson` to a JSON **string**, not a dict — both halves
+      matter. `redact_fields` does `json.loads(body)`, so an already-decoded object makes it
+      throw and return the value **unredacted**, and a gRPC message arrives decoded.
+
+      **Still open here: `grpc.aio`.** The async server API has a separate
+      `grpc.aio.ServerInterceptor` whose `intercept_service` is a coroutine; the sync
+      interceptor does not cover it. State that plainly in the docs until it does.
 - [ ] **Elixir** (`apitoolkit-phoenix`) — only if a user asks. gRPC in Elixir usually means
       the `grpc` hex package, not Phoenix, so this may want its own package rather than
       living in the Phoenix SDK.
@@ -120,13 +130,18 @@ Both Node and Go hit the same three things, so assume the remaining languages wi
 
 1. **Generated protobuf types do not serialise to the JSON the user expects.** Node renders
    int64 as `{low, high, unsigned}`; Go's `encoding/json` on a generated struct emits the
-   generator's internal fields. Both defeat readability *and* any JSONPath redaction rule
+   generator's internal fields; Python has to reach for `MessageToJson`. Both defeat readability *and* any JSONPath redaction rule
    written against the `.proto`'s field names. Use the language's protobuf-aware JSON encoder
    (`protojson` in Go), or normalise before serialising.
 2. **The failure paths need their own tests.** Go's test for an unmarshalable message caught
    that `RedactJSON(nil, …)` returns the literal `null`, which would have been captured as a
    body reading `"null"` — indistinguishable from a message that genuinely was null.
-3. **The interceptor must be transparent.** Every test should assert the handler's own response
+3. **Check where the shared primitive ends the span.** JS's `setAttributes` and Python's
+   `set_attributes` both end it in a `finally`, so `rpc.*` attributes set afterwards land on a
+   finished span and are dropped silently — that shipped in the Python draft and only a test
+   caught it. Go's `CreateSpan` does *not* end the span, so the same code is correct there.
+   Confirm per language rather than copying the ordering across.
+4. **The interceptor must be transparent.** Every test should assert the handler's own response
    *and* error object reach the caller unchanged. Capture is never allowed to be the reason an
    RPC fails.
 
