@@ -64,6 +64,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum)
 import Data.Default (Default (..), def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
@@ -456,9 +457,39 @@ yamlToDashboard :: ByteString -> Either Text Dashboard
 yamlToDashboard = first (toText . show) . Yaml.decodeEither'
 
 
--- | Convert dashboard title to kebab-case file path
+-- | Convert dashboard title to a kebab-case file path.
+--
+-- Falls back to @untitled@ unless the slug has something nameable in it, which is not a
+-- hypothetical: a dashboard saved with an empty title used to round-trip to a file literally
+-- named @.yaml@ — a dotfile, invisible in a normal listing and meaningless in a diff.
+--
+-- >>> titleToFilePath "My Dashboard"
+-- "my-dashboard.yaml"
+--
+-- >>> titleToFilePath "  Performance Stats  "
+-- "performance-stats.yaml"
+--
+-- The invariant: whatever the title, the result names something.
+--
+-- >>> titleToFilePath ""
+-- "untitled.yaml"
+--
+-- >>> titleToFilePath "   "
+-- "untitled.yaml"
+--
+-- The guard is "contains an alphanumeric", not "is non-empty", because 'toKebab' keeps
+-- punctuation rather than dropping it — a title of @!!!@ survives as @!!!@ and would have
+-- produced @!!!.yaml@, which is a legal filename and a hostile one.
+--
+-- >>> titleToFilePath "!!!"
+-- "untitled.yaml"
+--
+-- >>> titleToFilePath "Q3 2026"
+-- "q3-2026.yaml"
 titleToFilePath :: Text -> Text
-titleToFilePath = (<> ".yaml") . toText . toKebab . fromAny . toString . T.strip
+titleToFilePath title = (if T.any isAlphaNum slug then slug else "untitled") <> ".yaml"
+  where
+    slug = toText $ toKebab $ fromAny $ toString $ T.strip title
 
 
 -- | Build a Dashboard schema with title, tags, and team handles populated
