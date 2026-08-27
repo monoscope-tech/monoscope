@@ -58,6 +58,10 @@ processors:
         - k8s.pod.uid
         - k8s.pod.start_time
         - k8s.deployment.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.cronjob.name
+        - k8s.job.name
         - k8s.node.name
         - k8s.cluster.uid
         - container.id

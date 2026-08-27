@@ -19,6 +19,7 @@ module Models.Telemetry.Containers (
   cpuPctOfLimit,
   memPctOfLimit,
   containerMetricNames,
+  imageAndTag,
   containersInWindow,
   containerListWindow,
 ) where
@@ -102,7 +103,8 @@ memPctOfLimit r = ratio r.memBytes r.memLimit
 -- | Exactly the metrics the list needs, named in full.
 --
 -- Never a @LIKE 'container.%'@: kubeletstats' @container.memory.usage@ is a strict prefix of
--- docker_stats' @container.memory.usage.total@ and they mean different things. Never an
+-- docker_stats' @container.memory.usage.total@ and they mean different things. Naming both in
+-- full is what makes it safe to read both. Never an
 -- OR-chain either — TimeFusion miscomputes chained equality on its @Utf8View@ string columns
 -- and silently returns a near-empty result, so this must lower to a single @IN@.
 -- These are compile-time constants, so rendering them into the statement rather than binding
@@ -110,13 +112,14 @@ memPctOfLimit r = ratio r.memBytes r.memLimit
 -- stores can prune on.
 --
 -- >>> metricNameInList
--- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready')"
+-- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready')"
 containerMetricNames :: [Text]
 containerMetricNames =
   [ "container.cpu.usage"
   , "container.cpu.utilization"
   , "container.memory.working_set"
   , "container.memory.usage.total"
+  , "container.memory.usage"
   , "container.memory.usage.limit"
   , "k8s.container.cpu_limit"
   , "k8s.container.cpu_request"
@@ -154,6 +157,45 @@ resourcePath useTimefusion path
   | otherwise = "resource #>> '{" <> T.intercalate "," path <> "}'"
 
 
+-- | Split a tag off an image reference. docker_stats sends the whole @repo:tag@ string as
+-- @container.image.name@ and no @container.image.tag@ at all, so without this the Image
+-- column reads @repo:tag@ for Docker and a bare repo for Kubernetes, the Tag column is
+-- blank for 39% of production containers, and the Image facet lists one entry per tag.
+--
+-- The colon only separates a tag when it comes after the last @\/@ — a registry may carry a
+-- port. A @\@sha256:@ digest is not a tag and is left whole.
+--
+-- >>> imageAndTag "docker.redpanda.com/redpandadata/redpanda:v25.1.4"
+-- ("docker.redpanda.com/redpandadata/redpanda",Just "v25.1.4")
+-- >>> imageAndTag "redis:7"
+-- ("redis",Just "7")
+-- >>> imageAndTag "redis"
+-- ("redis",Nothing)
+-- >>> imageAndTag "registry:5000/app"
+-- ("registry:5000/app",Nothing)
+-- >>> imageAndTag "registry:5000/app:1.2"
+-- ("registry:5000/app",Just "1.2")
+-- >>> imageAndTag "ghcr.io/acme/api@sha256:abc123"
+-- ("ghcr.io/acme/api@sha256:abc123",Nothing)
+imageAndTag :: Text -> (Text, Maybe Text)
+imageAndTag img
+  | T.isInfixOf "@" img = (img, Nothing)
+  | T.null tag = (img, Nothing)
+  | otherwise = (registry <> name, Just $ T.drop 1 tag)
+  where
+    (registry, lastSegment) = T.breakOnEnd "/" img
+    (name, tag) = T.breakOn ":" lastSegment
+
+
+-- | Fill in what a receiver left implicit, so a row means the same thing whichever collector
+-- produced it. Applied once, at the query, so the table, the facet menus, the filters and the
+-- detail drawer all agree on the values.
+normalizeRow :: ContainerRow -> ContainerRow
+normalizeRow r = case r.imageTag of
+  Just _ -> r
+  Nothing -> maybe r (\img -> let (i, t) = imageAndTag img in r{image = Just i, imageTag = t}) r.image
+
+
 -- | Every container seen in the trailing window, newest datapoint per series.
 --
 -- One pass: a window function picks the latest datapoint per (container, metric), then
@@ -170,6 +212,7 @@ containersInWindow
 containersInWindow useTimefusion pid now =
   Hasql.withHasqlTimefusion useTimefusion
     $ V.fromList
+    . map normalizeRow
     <$> Hasql.interp
       ( [HI.sql|
       WITH latest AS (
@@ -195,8 +238,15 @@ containersInWindow useTimefusion pid now =
           <> raw (resourcePath useTimefusion ["container", "image", "tag"])
           <> [HI.sql| AS image_tag,
           |]
-          <> raw (resourcePath useTimefusion ["k8s", "deployment", "name"])
-          <> [HI.sql| AS workload,
+          -- k8sattributes names the controller after its kind, so a Deployment is the only
+          -- kind our own shipped config could ever produce. Ladder every kind a pod can
+          -- have, most specific first: without this a DaemonSet or StatefulSet container
+          -- shows no workload at all, which is 20% of the Kubernetes rows in production.
+          -- ReplicaSet is last because k8sattributes sets it alongside the Deployment that
+          -- owns it, and the Deployment name is the one a human recognises.
+          <> [HI.sql|COALESCE(|]
+          <> raw (T.intercalate ", " [resourcePath useTimefusion ["k8s", k, "name"] | k <- ["deployment", "statefulset", "daemonset", "cronjob", "job", "replicaset"]])
+          <> [HI.sql|) AS workload,
           metric_name, value,
           row_number() OVER (
             PARTITION BY
@@ -226,7 +276,8 @@ containersInWindow useTimefusion pid now =
         -- Working set, not usage: it is what the kubelet's eviction and OOM logic acts on.
         COALESCE(
           MAX(CASE WHEN metric_name = 'container.memory.working_set' THEN value END),
-          MAX(CASE WHEN metric_name = 'container.memory.usage.total' THEN value END)),
+          MAX(CASE WHEN metric_name = 'container.memory.usage.total' THEN value END),
+          MAX(CASE WHEN metric_name = 'container.memory.usage' THEN value END)),
         COALESCE(
           MAX(CASE WHEN metric_name = 'k8s.container.memory_limit' THEN value END),
           MAX(CASE WHEN metric_name = 'container.memory.usage.limit' THEN value END)),

@@ -22,12 +22,17 @@ import Test.Hspec
 -- cores and bytes from the @container.*@ family, requests/limits/restarts/ready from
 -- @k8s.container.*@, and the node only ever present inside the resource blob.
 k8sResource :: Text -> Text -> Text -> [PC.KeyValue]
-k8sResource ns pod container =
+k8sResource ns pod container = mkAttr "k8s.deployment.name" container : k8sPodResource ns pod container
+
+
+-- | The same pod without any controller attribute. k8sattributes names the controller after
+-- its kind, so a StatefulSet or DaemonSet pod carries no @k8s.deployment.name@ whatsoever.
+k8sPodResource :: Text -> Text -> Text -> [PC.KeyValue]
+k8sPodResource ns pod container =
   [ mkAttr "k8s.namespace.name" ns
   , mkAttr "k8s.pod.name" pod
   , mkAttr "k8s.container.name" container
   , mkAttr "k8s.node.name" "vps-d6d7e318"
-  , mkAttr "k8s.deployment.name" container
   , mkAttr "container.image.name" "ghcr.io/open-telemetry/demo"
   , mkAttr "container.image.tag" "2.2.0"
   , -- k8sattributes can supply the uid; nothing can supply the cluster's name, which is
@@ -59,6 +64,7 @@ ingestFixture tr key = do
       emit res (name, value) = ingestMetric tr key res name value frozenTime
       k8sChecked = mkAttr "k8s.cluster.name" "otel-demo" : k8sResource "default" "checkout-7fb5b4f859-nlcjs" "checkout"
       k8sOther = k8sResource "kube-system" "coredns-c6d9fc49c-bj5sw" "coredns"
+      k8sStateful = mkAttr "k8s.statefulset.name" "postgres" : k8sPodResource "data" "postgres-0" "postgres"
 
   -- 0.5 cores against a 2-core limit and 512 MiB against 1 GiB: both percentages land on
   -- round numbers so a unit slip anywhere in the pipeline is obvious rather than plausible.
@@ -97,6 +103,10 @@ ingestFixture tr key = do
         :: [(Text, Double)]
     )
     (emit $ dockerResource "srv-captain--redpanda-0.1.tt13bkp5")
+
+  -- A StatefulSet pod, and memory on kubeletstats' container.memory.usage rather than
+  -- working_set: neither the workload nor the memory reading survives without a fallback.
+  forM_ ([("container.cpu.usage", 0.1), ("container.memory.usage", 16777216)] :: [(Text, Double)]) (emit k8sStateful)
 
   -- Noise the inventory must ignore: a metric with no container identity at all.
   ingestMetric tr key [] "http.server.duration" 12 frozenTime
@@ -144,7 +154,7 @@ spec = sequential $ aroundAll withTestResources do
       let byName = rowsByName rows
 
       -- The noise metric carries no container identity, so it must not become a row.
-      map fst byName `shouldMatchList` ["checkout", "coredns", "srv-captain--redpanda-0.1.tt13bkp5"]
+      map fst byName `shouldMatchList` ["checkout", "coredns", "postgres", "srv-captain--redpanda-0.1.tt13bkp5"]
 
       k8s <- containerNamed byName "checkout"
       runtimeOf k8s `shouldBe` Kubernetes
@@ -174,6 +184,16 @@ spec = sequential $ aroundAll withTestResources do
       -- Docker reports no CPU limit and no restart count; both must stay absent.
       cpuPctOfLimit docker `shouldBe` Nothing
       docker.restarts `shouldBe` Nothing
+      -- docker_stats sends the tag inside the image name and no container.image.tag, so the
+      -- tag is split off rather than left to make the Image column disagree between runtimes.
+      docker.image `shouldBe` Just "docker.redpanda.com/redpandadata/redpanda"
+      docker.imageTag `shouldBe` Just "v25.1.4"
+
+      -- Every controller kind names the workload, not just Deployment, and kubeletstats'
+      -- container.memory.usage stands in when working_set is absent.
+      stateful <- containerNamed byName "postgres"
+      stateful.workload `shouldBe` Just "postgres"
+      stateful.memBytes `shouldBe` Just 16777216
 
       -- A container with no CPU limit yields no percentage — never a fabricated 0%.
       noLimit <- containerNamed byName "coredns"
@@ -183,7 +203,7 @@ spec = sequential $ aroundAll withTestResources do
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
       (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
       let Containers.ContainersPage (PageCtx _ table) = page
-      V.length table.rows `shouldBe` 3
+      V.length table.rows `shouldBe` 4
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
       html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo"]
@@ -196,13 +216,13 @@ spec = sequential $ aroundAll withTestResources do
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
       listWith (Containers.containersGetH testPid Nothing (Just "default") Nothing Nothing Nothing) >>= (`shouldBe` ["checkout"])
       listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns"])
+      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns", "postgres"])
       listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
       listWith (Containers.containersGetH testPid Nothing (Just "no-such-namespace") Nothing Nothing Nothing) >>= (`shouldBe` [])
       -- Cluster prefers the name where the collector set one, and falls back to the uid
       -- where it did not, so the facet is usable before anyone edits a collector config.
       listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just "otel-demo")) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldBe` ["coredns"])
+      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldMatchList` ["coredns", "postgres"])
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")

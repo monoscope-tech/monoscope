@@ -178,6 +178,10 @@ data:
           metadata:
             - k8s.namespace.name
             - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.daemonset.name
+            - k8s.cronjob.name
+            - k8s.job.name
             - k8s.pod.name
             - k8s.node.name
             - k8s.cluster.uid
