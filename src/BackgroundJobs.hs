@@ -123,7 +123,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash, usageWindowStart)
 
 
 data BgJobs
@@ -487,12 +487,15 @@ processBackgroundJob authCtx bgJob =
             --    'splitUsageIntoChunks' for the per-provider quantity policy.
             nowU <- Time.currentTime
             let
-              -- Cap wStart to the current cycle start: if usage_last_reported is
-              -- older than the cycle boundary, we must not charge for events from
-              -- previous cycles — that's our fault.
+              -- Cap wStart to the cycle start (never charge for a previous cycle —
+              -- that's our fault) AND to the retention horizon (telemetry older than
+              -- that is deleted, so asking for it times out and the watermark can
+              -- never advance). See 'usageWindowStart'.
               wStart =
-                max project.usageLastReported
-                  $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
+                usageWindowStart
+                  project.usageLastReported
+                  (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
+                  nowU
             totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
             subItems <- Projects.meterSubItemIds pid
             let meterCfg = Projects.projectMeterConfig project subItems

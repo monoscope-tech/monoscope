@@ -72,6 +72,8 @@ module Utils (
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,
+  usageWindowStart,
+  usageCountableDays,
   -- NUL-byte scrubbing for PG `jsonb` ingest paths.
   scrubNulText,
   scrubNulValue,
@@ -1800,6 +1802,39 @@ calculateCycleStartDate start current =
         | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
         | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
+
+
+-- | Telemetry retention, in days. Usage cannot be counted past this — the rows
+-- are deleted — so a billing window that reaches further back can never be
+-- satisfied. Enforced infra-side (TimescaleDB/TimeFusion), not by the app, so
+-- this mirrors that setting rather than controlling it.
+usageCountableDays :: Integer
+usageCountableDays = 7
+
+
+-- | Where a usage-reporting window may start: no earlier than the watermark, the
+-- billing-cycle boundary, or the retention horizon — whichever is latest.
+--
+-- The cycle cap stops us charging for a previous cycle. The retention cap is what
+-- keeps the job alive: a watermark that falls behind retention asks for telemetry
+-- that no longer exists, the scan crawls tombstoned partitions and times out, and
+-- the watermark can never advance because the query never finishes. That killed
+-- reporting for 2,471 of 2,485 projects between 2026-07-17 and 2026-08-27.
+--
+-- Clamping only ever moves the start FORWARD, so it can under-count a gap but can
+-- never double-charge. The skipped span is already unbillable: its telemetry is
+-- deleted and no daily_usage row was ever written for it.
+--
+-- >>> let t d = UTCTime (fromGregorian 2026 8 d) 0
+-- >>> usageWindowStart (t 20) (t 1) (t 27) == t 20   -- watermark inside retention wins
+-- True
+-- >>> usageWindowStart (t 1) (t 1) (t 27) == t 20    -- stale watermark clamped to now-7d
+-- True
+-- >>> usageWindowStart (t 25) (t 24) (t 27) == t 25  -- never earlier than the cycle
+-- True
+usageWindowStart :: UTCTime -> UTCTime -> UTCTime -> UTCTime
+usageWindowStart lastReported cycleStart now =
+  lastReported `max` cycleStart `max` addUTCTime (negate . fromInteger $ usageCountableDays * 86400) now
 
 
 -- | Drop empty values for @key@ before a form is decoded.
