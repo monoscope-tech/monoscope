@@ -1,0 +1,116 @@
+# gRPC payload capture in the SDKs
+
+Every Monoscope SDK today is an HTTP middleware. A service that speaks gRPC therefore gets
+no request/response payloads at all — which is most of a typical microservice estate, and all
+but two services in our own OpenTelemetry demo.
+
+The trigger for this work: instrumenting the demo's `payment` service required hand-writing a
+gRPC interceptor inside the demo repo. That code worked, but it is the wrong home — every user
+with a gRPC service would have to write the same thing, and each copy would drift from the
+contract independently. **The capability belongs in the SDKs.**
+
+## The contract being reproduced
+
+Server-side (`OtlpServer.hs` `isOurSdkSpan`, `Telemetry.hs`), payloads are lifted into the
+`body` column — which is what the Req/Resp Body tabs read — only when:
+
+- the span is **named** `monoscope.http` (or legacy `apitoolkit-http-span`), and
+- `http.request.body` / `http.response.body` are **base64**.
+
+Raw JSON on the ambient span is searchable but leaves the tabs empty, which reads as the
+feature being broken rather than as instrumentation that missed the contract.
+
+### The contract is HTTP-shaped, and that is a real cost
+
+A gRPC call has no status line, no URL, and no method in the HTTP sense, so an interceptor has
+to describe itself in HTTP terms: `POST`, the RPC path as `http.route`, and 200/500 synthesised
+from whether the handler errored. That mapping is lossy — a gRPC status code carries more than
+"ok or not" (`NOT_FOUND`, `PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`, …).
+
+**Open question to settle before the work fans out past the first SDK:** do we (a) keep
+synthesising HTTP fields, accepting the loss; or (b) extend the server to accept
+`rpc.system` / `rpc.grpc.status_code` on an SDK span and render gRPC natively in the UI?
+
+(b) is more work but stops every language from repeating the same lossy mapping, and gRPC
+status is exactly the field an on-call engineer filters by. **Decide (a) vs (b) first** — it
+changes the attribute set every SDK below emits, and retrofitting it across seven languages
+afterwards is the expensive order.
+
+## Per-language tasks
+
+Ordered by how much gRPC is actually used in that ecosystem. The shared core in each language
+already does base64 + redaction (`setAttributes` in JS, the equivalent in the others), so each
+interceptor should be thin — if one is getting large, it is duplicating the core.
+
+### Tier 1 — gRPC is common here
+
+- [ ] **Go** (`monoscope-go`) — no gRPC support at all today, and Go is the language where
+      gRPC is most likely to be a service's *only* protocol. Ship both a
+      `grpc.UnaryServerInterceptor` and a `grpc.UnaryClientInterceptor`, plus a note on
+      streaming (see below). Highest value of the set.
+- [ ] **Node** (`monoscope-js`, `packages/common`) — export a `grpcInterceptor` over the
+      existing `setAttributes`. Needs a new `sdkType` member (`JsGrpc`); the union in
+      `packages/common/src/apitoolkit.ts` is closed, so adding it is a compile error until
+      updated. A working reference implementation already exists in the demo at
+      `src/payment/monoscope.js` — port it rather than starting over, including its two
+      non-obvious bits: protobuf `Long` (`{low, high, unsigned}`) must be collapsed or amounts
+      render as objects, and capture must be best-effort so it can never fail a request.
+- [ ] **Java** (`apitoolkit-java` / `apitoolkit-springboot`) — a `ServerInterceptor`. gRPC is
+      heavily used in Java shops and the SDK is already a filter-style integration, so the
+      shape is familiar.
+- [ ] **.NET** (`apitoolkit-dotnet`) — an `Interceptor` subclass; ASP.NET Core hosts gRPC
+      first-class, so this is a natural fit.
+
+### Tier 2 — gRPC exists but is less common
+
+- [ ] **Python** (`monoscope-python`, `common`) — `grpc.ServerInterceptor`. Note the sync and
+      `grpc.aio` APIs differ; cover both or state plainly which is supported.
+- [ ] **Elixir** (`apitoolkit-phoenix`) — only if a user asks. gRPC in Elixir usually means
+      the `grpc` hex package, not Phoenix, so this may want its own package rather than
+      living in the Phoenix SDK.
+
+### Tier 3 — probably not worth it
+
+- [ ] **PHP** (`monoscope-slim`, `monoscope-laravel`, `apitoolkit-symfony`) — PHP gRPC
+      *servers* are rare; the ext-grpc client is the common case. Consider client-side
+      interception only, and only on request.
+
+## Cross-cutting, decide once and apply everywhere
+
+- [ ] **Streaming RPCs.** Unary maps cleanly onto request/response. Client-, server-, and
+      bidi-streaming do not — there is no single request body. Decide: skip streaming
+      entirely (capture metadata only), or capture first-N messages with an explicit cap.
+      Whatever is chosen, it must be the same in every language, and **documented rather than
+      silently doing nothing** — a user whose streaming RPCs show no bodies must be able to
+      find out why.
+- [ ] **Redaction must work on decoded protobuf objects, not JSON strings.** This is where the
+      JS SDK has been bitten before: `redactFields` did `JSON.parse` on a value that was
+      already an object, threw, and returned it **unredacted**. A gRPC request arrives already
+      decoded in every language, so it hits exactly that path. Each implementation needs a test
+      that a sensitive field in a decoded message is redacted — the demo's `payment` service
+      passes a full credit card through this path.
+- [ ] **Body size cap.** No SDK has one today. A gRPC message can be megabytes, and it lands
+      base64-encoded on a span attribute. Pick a limit, truncate with a marker.
+- [ ] **Docs.** Each SDK's page under `monoscope.tech/docs/sdks/...` needs a gRPC section, and
+      the `instrument` skill's detection table needs a gRPC row — it currently routes every
+      detected framework to an HTTP middleware.
+
+## Verification bar for each language
+
+Not "it compiles". For each SDK, before calling it done:
+
+1. A real gRPC call through the interceptor returns its response **unchanged** — capture is
+   never allowed to alter or fail the RPC.
+2. The span reaches a collector named `monoscope.http`, with `http.request.body` /
+   `http.response.body` that **base64-decode to the expected JSON**.
+3. A sensitive field in the decoded request is `[REDACTED]` in that decoded body.
+4. The error path is captured too, with the RPC's error surfaced rather than swallowed.
+
+The demo's `payment` service is a ready-made end-to-end test bed for the Node one: it is on
+the checkout path, it carries a credit card, and it exercises both the success and error paths
+under continuous load.
+
+**One process lesson from building the reference implementation, worth applying to each SDK's
+own demo integration:** the module was unit-tested and correct, and the deployment still
+crash-looped, because the service's Dockerfile copies source files by name and the new file was
+not listed. Unit tests cannot catch that. **Boot the built image before deploying it.**
