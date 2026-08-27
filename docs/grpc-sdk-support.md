@@ -103,6 +103,11 @@ interceptor should be thin — if one is getting large, it is duplicating the co
       decoded in every language, so it hits exactly that path. Each implementation needs a test
       that a sensitive field in a decoded message is redacted — the demo's `payment` service
       passes a full credit card through this path.
+- [x] **Capture must be opt-in, and identically so in every language.** It shipped
+      inconsistent on the first two: Go required `CaptureRequestBody`, Node captured
+      unconditionally. Fixed in JS 1.3.2. This is not tidiness — bodies are the expensive part
+      of a span and the part most likely to hold something the operator did not intend to
+      store, so with no flag the only way to stop capturing is to remove the wrapper.
 - [ ] **Body size cap.** No SDK has one today. A gRPC message can be megabytes, and it lands
       base64-encoded on a span attribute. Pick a limit, truncate with a marker.
 - [ ] **Docs.** Each SDK's page under `monoscope.tech/docs/sdks/...` needs a gRPC section, and
