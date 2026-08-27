@@ -44,10 +44,18 @@ interceptor should be thin — if one is getting large, it is duplicating the co
 
 ### Tier 1 — gRPC is common here
 
-- [ ] **Go** (`monoscope-go`) — no gRPC support at all today, and Go is the language where
-      gRPC is most likely to be a service's *only* protocol. Ship both a
-      `grpc.UnaryServerInterceptor` and a `grpc.UnaryClientInterceptor`, plus a note on
-      streaming (see below). Highest value of the set.
+- [x] **Go** (`monoscope-go`) — **done, released as v1.2.0**: `monoscopegrpc.UnaryServerInterceptor`.
+      `google.golang.org/grpc` was already an indirect dependency, so promoting it cost nothing.
+
+      Marshalling goes through **protojson**, not `encoding/json`: protojson applies the field
+      names declared in the `.proto` and renders 64-bit fields as strings, whereas
+      `encoding/json` on a generated struct leaks the generator's internal state and produces
+      names that would not match a redaction path the user wrote against their schema. This is
+      the same trap as the JS `Long`, in a different disguise — **expect it in every language
+      with generated protobuf types**.
+
+      Not yet done here: a **client** interceptor for outgoing RPCs. The server side was the
+      gap worth closing first.
 - [x] **Node** (`monoscope-js`, `packages/common`) — **done, published in 1.3.1** as
       `observeGrpc`. Needs no gRPC dependency: a unary handler is just `(call, callback)`, so
       wrapping one requires nothing beyond the OpenTelemetry API the package already uses.
@@ -100,6 +108,22 @@ interceptor should be thin — if one is getting large, it is duplicating the co
 - [ ] **Docs.** Each SDK's page under `monoscope.tech/docs/sdks/...` needs a gRPC section, and
       the `instrument` skill's detection table needs a gRPC row — it currently routes every
       detected framework to an HTTP middleware.
+
+## What the first two implementations taught
+
+Both Node and Go hit the same three things, so assume the remaining languages will too:
+
+1. **Generated protobuf types do not serialise to the JSON the user expects.** Node renders
+   int64 as `{low, high, unsigned}`; Go's `encoding/json` on a generated struct emits the
+   generator's internal fields. Both defeat readability *and* any JSONPath redaction rule
+   written against the `.proto`'s field names. Use the language's protobuf-aware JSON encoder
+   (`protojson` in Go), or normalise before serialising.
+2. **The failure paths need their own tests.** Go's test for an unmarshalable message caught
+   that `RedactJSON(nil, …)` returns the literal `null`, which would have been captured as a
+   body reading `"null"` — indistinguishable from a message that genuinely was null.
+3. **The interceptor must be transparent.** Every test should assert the handler's own response
+   *and* error object reach the caller unchanged. Capture is never allowed to be the reason an
+   RPC fails.
 
 ## Verification bar for each language
 
