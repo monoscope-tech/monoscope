@@ -48,13 +48,19 @@ interceptor should be thin — if one is getting large, it is duplicating the co
       gRPC is most likely to be a service's *only* protocol. Ship both a
       `grpc.UnaryServerInterceptor` and a `grpc.UnaryClientInterceptor`, plus a note on
       streaming (see below). Highest value of the set.
-- [ ] **Node** (`monoscope-js`, `packages/common`) — export a `grpcInterceptor` over the
-      existing `setAttributes`. Needs a new `sdkType` member (`JsGrpc`); the union in
-      `packages/common/src/apitoolkit.ts` is closed, so adding it is a compile error until
-      updated. A working reference implementation already exists in the demo at
-      `src/payment/monoscope.js` — port it rather than starting over, including its two
-      non-obvious bits: protobuf `Long` (`{low, high, unsigned}`) must be collapsed or amounts
-      render as objects, and capture must be best-effort so it can never fail a request.
+- [x] **Node** (`monoscope-js`, `packages/common`) — **done, published in 1.3.1** as
+      `observeGrpc`. Needs no gRPC dependency: a unary handler is just `(call, callback)`, so
+      wrapping one requires nothing beyond the OpenTelemetry API the package already uses.
+      Routes through `setAttributes`, so redaction comes from the caller's own JSONPath
+      config. Deployed in the demo's `payment` service.
+
+      Three things that turned out to matter, and will matter in every other language:
+      protobuf decodes int64 as a `Long` (`{low, high, unsigned}`), which JSON.stringify
+      renders verbatim — that defeats readability *and* any JSONPath rule written against the
+      expected value; a handler that throws synchronously never reaches its callback, so
+      without a guard the span leaks and the caller hangs; and capture must be best-effort so
+      an unserialisable message degrades to no body rather than to an exception on the request
+      path.
 - [ ] **Java** (`apitoolkit-java` / `apitoolkit-springboot`) — a `ServerInterceptor`. gRPC is
       heavily used in Java shops and the SDK is already a filter-style integration, so the
       shape is familiar.
