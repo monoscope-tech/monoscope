@@ -35,7 +35,6 @@ module Models.Telemetry.Containers (
   swarmService,
   dropShadowed,
   containersInWindow,
-  containerListWindow,
 ) where
 
 import Data.Char (isAlpha, isAsciiLower, isDigit)
@@ -43,7 +42,7 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
@@ -186,13 +185,6 @@ metricNameInList :: Text
 metricNameInList = "(" <> T.intercalate "," (map (\n -> "'" <> n <> "'") containerMetricNames) <> ")"
 
 
--- | How far back the list looks. A container list answers "what is running right now", so it
--- deliberately does not accept a user-supplied range: a wide window over @otel_metrics@ is the
--- query shape that has repeatedly OOM-killed TimeFusion in production.
-containerListWindow :: NominalDiffTime
-containerListWindow = 900
-
-
 -- | Cap on rows returned. Filtering and faceting happen in Haskell over this set, so one
 -- bounded query serves the table, its facet menus and its counts.
 containerListLimit :: Int
@@ -323,8 +315,8 @@ normalizeRow r = withWorkload $ case r.imageTag of
 -- arbitrary core and the pivot would read a core's idle time as the node's CPU usage.
 containersInWindow
   :: (DB es, Labeled "timefusion" Hasql :> es)
-  => Bool -> Projects.ProjectId -> UTCTime -> Eff es (V.Vector ContainerRow)
-containersInWindow useTimefusion pid now =
+  => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
+containersInWindow useTimefusion pid fromTime toTime =
   Hasql.withHasqlTimefusion useTimefusion
     $ V.fromList
     . dropShadowed
@@ -425,7 +417,8 @@ containersInWindow useTimefusion pid now =
           <> [HI.sql| AS group_key
         FROM otel_metrics
         WHERE project_id = #{pid.toText}
-          AND timestamp > #{since}
+          AND timestamp >= #{fromTime}
+          AND timestamp <= #{toTime}
           AND metric_name IN |]
           <> raw metricNameInList
           <> [HI.sql|
@@ -480,7 +473,6 @@ containersInWindow useTimefusion pid now =
       LIMIT #{containerListLimit}|]
       )
   where
-    since = addUTCTime (negate containerListWindow) now
     raw = fromString . toString
     isHost = "metric_name LIKE 'system.%'"
     isPod = "metric_name LIKE 'k8s.pod.%'"

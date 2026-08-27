@@ -97,4 +97,16 @@ The products converge on one interaction model rather than several unrelated pag
 - [x] Implement a Host Map with hexagonal host cells, metric fill, grouping, legend, tooltips, keyboard activation, and host inspection.
 - [x] Add regression and integration tests before each behavior change, then verify through the live test watcher.
 - [x] Run formatter, linter, Impeccable detector, Haskell constraint/distillation reviews, and large-object review; fix findings.
-- [x] Verify the complete desktop interaction model in Chrome and responsive classes/overflow behavior in code; commit and push.
+- [x] Verify the complete desktop interaction model in Chrome and responsive classes/overflow behavior in code.
+
+## Reference-alignment follow-up
+
+- [x] Add a shared 15-minute default time picker and Datadog-style LIVE/paused transport to every infrastructure page and all existing picker call sites, including Explorer.
+- [x] Make inventory queries honor explicit relative or absolute time windows and preserve them across sibling navigation and filters.
+- [x] Add visible desktop facet rails, result counts, CSV export, and broader resource controls without fabricating unavailable telemetry.
+- [x] Add Kubernetes Clusters and Namespaces views alongside Pods, Workloads, and Nodes.
+- [x] Deepen host inspection with metadata, signal coverage, summary values, section navigation, charts, and pivots.
+- [x] Improve small-data Host Map composition and expose its provider/region filters.
+- [x] Implement last: make every inventory row open a consistent, useful drawer for Hosts, Containers, Images, Kubernetes resources, and Host Map cells.
+- [x] Re-run the Impeccable detector, integration tests, format/lint, responsive-code review, desktop browser checks, and final Haskell reviews.
+- [x] Verify time transport, CSV export, light/dark themes, responsive layouts, drawers, and empty states before release.

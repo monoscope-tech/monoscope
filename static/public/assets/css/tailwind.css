@@ -113,6 +113,7 @@
   --color-fillHover: oklch(29.2% 0.174 264 / 0.04);
   --color-fillInformation-strong: oklch(49.3% 0.088 241);
   --color-fillInformation-weak: rgba(38 176 255 / 0.05);
+  --color-fillNeutral-strong: oklch(65% 0.012 247);
   --color-fillInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-fillInverse-hover: oklch(100% 0 0 / 0.06);
   --color-fillInverse-press: oklch(100% 0 0 / 0.12);
@@ -1901,6 +1902,7 @@ code, pre, .code, .monospace {
     --color-fillHover: rgba(255 255 255 / 0.07);
     --color-fillInformation-strong: oklch(75.5% 0.098 241);
     --color-fillInformation-weak: rgba(126 192 229 / 0.08);
+    --color-fillNeutral-strong: oklch(47% 0.008 260);
     --color-fillInverseDisabled: rgba(15 15 20 / 0.1);
     --color-fillInverse-hover: rgba(15 15 20 / 0.04);
     --color-fillInverse-press: rgba(15 15 20 / 0.1);

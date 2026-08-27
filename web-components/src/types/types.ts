@@ -17,7 +17,12 @@ declare global {
     logListTable?: Element | null;
     collectionResults: any[] | undefined;
     dashboardRefreshInterval: number;
-    dashboardRefreshTimer: NodeJS.Timeout | null;
+    dashboardRefreshTimer: ReturnType<typeof setInterval> | null;
+    initTimeTransport: (transport: HTMLElement) => void;
+    setTimeRefreshInterval: (transport: HTMLElement | null, interval: number) => void;
+    toggleLiveRefresh: (transport: HTMLElement | null) => void;
+    shiftTimeRange: (direction: -1 | 1) => void;
+    exportTableCsv: (selector: string, filename: string) => void;
     updateStepsWithErrors: (errors: any[]) => void;
     updateCollectionResults: (results: any[]) => void;
     updateEditorVal: () => void;

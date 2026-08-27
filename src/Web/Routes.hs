@@ -135,6 +135,8 @@ type GetRedirect = Verb 'GET 302
 
 -- Query parameter types
 type QPT a = QueryParam a Text
+
+
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
 type QPD a = QueryParam a PageDirection
@@ -612,15 +614,17 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
-  , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
+  , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> Get '[HTML] (RespHeaders Infrastructure.HostDetailGet)
-  , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+  , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
   , infrastructureContainerDetailGetH :: mode :- "infrastructure" :> "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
-  , imagesGetH :: mode :- "infrastructure" :> "images" :> QPT "runtime" :> QPT "registry" :> Get '[HTML] (RespHeaders Infrastructure.ImagesGet)
-  , kubernetesGetH :: mode :- "infrastructure" :> "kubernetes" :> QPT "resource" :> QPT "cluster" :> QPT "namespace" :> QPT "status" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesGet)
-  , hostMapGetH :: mode :- "infrastructure" :> "host-map" :> QPT "fill" :> QPT "group" :> QPT "provider" :> QPT "region" :> QPT "os" :> Get '[HTML] (RespHeaders Infrastructure.HostMapGet)
+  , imagesGetH :: mode :- "infrastructure" :> "images" :> QPT "runtime" :> QPT "registry" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.ImagesGet)
+  , imageDetailGetH :: mode :- "infrastructure" :> "images" :> "detail" :> QPT "image" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.ImageDetailGet)
+  , kubernetesGetH :: mode :- "infrastructure" :> "kubernetes" :> QPT "resource" :> QPT "cluster" :> QPT "namespace" :> QPT "status" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesGet)
+  , kubernetesDetailGetH :: mode :- "infrastructure" :> "kubernetes" :> "detail" :> QPT "resource" :> QPT "name" :> QPT "cluster" :> QPT "namespace" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesDetailGet)
+  , hostMapGetH :: mode :- "infrastructure" :> "host-map" :> QPT "fill" :> QPT "group" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.HostMapGet)
   , -- Legacy compatibility route. Navigation and generated links use /infrastructure/containers.
-    containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
+    containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
   , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
@@ -1035,7 +1039,9 @@ telemetryServer pid =
     , infrastructureContainersGetH = Containers.containersGetH pid
     , infrastructureContainerDetailGetH = Containers.containerDetailGetH pid
     , imagesGetH = Infrastructure.imagesGetH pid
+    , imageDetailGetH = Infrastructure.imageDetailGetH pid
     , kubernetesGetH = Infrastructure.kubernetesGetH pid
+    , kubernetesDetailGetH = Infrastructure.kubernetesDetailGetH pid
     , hostMapGetH = Infrastructure.hostMapGetH pid
     , containersGetH = Containers.containersGetH pid
     , containerDetailGetH = Containers.containerDetailGetH pid

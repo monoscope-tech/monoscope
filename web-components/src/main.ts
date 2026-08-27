@@ -198,6 +198,100 @@ window.updateTimePicker = function (
   return displayLabel;
 };
 
+window.dashboardRefreshInterval = 0;
+window.dashboardRefreshTimer = null;
+
+const syncTimeTransports = () => {
+  const running = window.dashboardRefreshInterval > 0;
+  document.querySelectorAll<HTMLElement>('[data-time-transport]').forEach((transport) => {
+    const liveRange = transport.dataset.live === 'true';
+    transport.querySelector<HTMLElement>('[data-pause-icon]')?.classList.toggle('hidden', !running);
+    transport.querySelector<HTMLElement>('[data-play-icon]')?.classList.toggle('hidden', running);
+    const toggle = transport.querySelector<HTMLButtonElement>('[data-live-toggle]');
+    if (toggle) {
+      toggle.ariaLabel = running ? 'Pause live updates' : liveRange ? 'Resume live updates' : 'Return to live';
+      toggle.dataset.tippyContent = toggle.ariaLabel;
+      toggle.ariaPressed = String(running);
+    }
+    const next = transport.querySelector<HTMLButtonElement>('[data-next-window]');
+    if (next) next.disabled = liveRange;
+  });
+  document.querySelectorAll<HTMLElement>('[data-live-badge]').forEach((badge) => {
+    badge.textContent = running ? 'LIVE' : 'PAUSED';
+    badge.classList.toggle('bg-fillSuccess-strong', running);
+    badge.classList.toggle('bg-fillWarning-strong', !running);
+  });
+};
+
+window.setTimeRefreshInterval = (_transport, interval) => {
+  if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
+  const running = interval > 0;
+  window.dashboardRefreshInterval = running ? interval : 0;
+  window.dashboardRefreshTimer = running
+    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval)
+    : null;
+  syncTimeTransports();
+};
+
+window.initTimeTransport = (transport) => {
+  const live = transport.parentElement?.querySelector('[data-live-range="true"]') != null;
+  transport.dataset.live = String(live);
+  if (!live) window.setTimeRefreshInterval(transport, 0);
+  else if (!window.dashboardRefreshTimer) window.setTimeRefreshInterval(transport, 15000);
+  else syncTimeTransports();
+};
+
+window.toggleLiveRefresh = (transport) => {
+  if (!transport) return;
+  if (transport.dataset.live !== 'true') {
+    window.setParams({ since: '15M', from: '', to: '' }, true);
+    return;
+  }
+  window.setTimeRefreshInterval(transport, window.dashboardRefreshInterval > 0 ? 0 : 15000);
+};
+
+window.shiftTimeRange = (direction) => {
+  const params = new URLSearchParams(window.location.search);
+  const now = Date.now();
+  const fromParam = Date.parse(params.get('from') || '');
+  const toParam = Date.parse(params.get('to') || '');
+  const since = params.get('since') || '15M';
+  const match = since.match(/^(\d+)\s*([SMHD])$/i);
+  const unitMs: Record<string, number> = { S: 1000, M: 60000, H: 3600000, D: 86400000 };
+  const relativeMs = match ? Number(match[1]) * unitMs[match[2].toUpperCase()] : 900000;
+  const from = Number.isFinite(fromParam) ? fromParam : now - relativeMs;
+  const to = Number.isFinite(toParam) ? toParam : now;
+  const duration = to - from;
+  const shiftedFrom = from + direction * duration;
+  const shiftedTo = to + direction * duration;
+  if (direction > 0 && shiftedTo >= now) window.setParams({ since, from: '', to: '' }, true);
+  else window.setParams({ since: '', from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() }, true);
+};
+
+window.addEventListener('setRefreshInterval', (event) => {
+  const interval = Number((event as CustomEvent<{ interval?: number | string }>).detail?.interval);
+  if (Number.isFinite(interval)) window.setTimeRefreshInterval(null, interval);
+});
+
+window.exportTableCsv = (selector, filename) => {
+  const table = document.querySelector<HTMLTableElement>(selector);
+  if (!table) return;
+  const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+  const csv = Array.from(table.querySelectorAll('tr'))
+    .filter((row) => getComputedStyle(row).display !== 'none')
+    .map((row) =>
+      Array.from(row.querySelectorAll<HTMLElement>('th,td'))
+        .filter((cell) => getComputedStyle(cell).display !== 'none')
+        .map((cell) => quote(cell.innerText.trim().replaceAll(/\s+/g, ' ')))
+        .join(',')
+    )
+    .join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: filename });
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
 // Convert CSS color (including oklch) to hex via pixel rendering
 const _maCanvas = document.createElement('canvas');
 _maCanvas.width = 1; _maCanvas.height = 1;

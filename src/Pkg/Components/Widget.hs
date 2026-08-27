@@ -142,6 +142,7 @@ data Widget = Widget
   , title :: Maybe Text -- Widget title
   , subtitle :: Maybe Text
   , hideSubtitle :: Maybe Bool
+  , hideValue :: Maybe Bool
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
@@ -510,6 +511,7 @@ widgetHeightForWidth width widget = case widget.wType of
   WTGroup ->
     let requiredHeight = 1 + max 1 (layoutRows $ fromMaybe [] widget.children)
      in if width == 12 then requiredHeight else maybe requiredHeight (max requiredHeight) (widget.layout >>= (.h))
+  WTTimeseriesLine -> max 3 $ fromMaybe 1 $ widget.layout >>= (.h)
   _ -> max 1 $ fromMaybe 1 $ widget.layout >>= (.h)
 
 
@@ -567,7 +569,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM && not (isTrue widget.hideValue) then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
     span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
@@ -931,6 +933,7 @@ renderChart widget = do
                 widgetUnit = maybeToMonoid widget.unit
                 alertThresholdJS = maybe "null" show widget.alertThreshold
                 warningThresholdJS = maybe "null" show widget.warningThreshold
+                hideValueJS = bool "false" "true" $ isTrue widget.hideValue
                 -- Mirrors chartWidget's `!opt.dataset.source` test: a widget with eager
                 -- server data never calls /chart_data, so prefetching one would be a
                 -- wasted request. See prefetchChartData in web-components/src/widgets.ts.
@@ -964,6 +967,7 @@ renderChart widget = do
                   unit: "${widgetUnit}",
                   alertThreshold: ${alertThresholdJS},
                   warningThreshold: ${warningThresholdJS},
+                  hideValue: ${hideValueJS},
                   timeFrom: ${timeFromJS},
                   timeTo: ${timeToJS},
                   highlightFrom: ${highlightFromJS},

@@ -87,7 +87,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, localTimeFmt_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resizer_)
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
@@ -535,36 +535,27 @@ renderFacets facetSummary =
 -- includes its fields immediately; every closed group fetches and replaces
 -- its shell with the server-rendered Lucid fragment on first open.
 renderFacetGroup :: Bool -> FacetGroup -> FacetSummary -> Html ()
-renderFacetGroup loaded facetGroup facetSummary
-  | loaded =
-      collapsible_
-        [class_ "facet-section-group"]
-        True
-        [class_ "p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
-        (facetGroupTitle_ facetGroup)
-        (div_ [class_ "facets-container mt-1"] $ renderFacetFields facetGroup facetSummary)
-  | otherwise =
-      details_
-        [ class_ "facet-section-group block [&[open]>summary_.chev]:rotate-0"
-        , hxGet_ url
-        , hxTrigger_ "toggle[target.open] once"
-        , hxTarget_ "this"
-        , hxSwap_ "outerHTML"
-        , hxIndicator_ "find .facet-group-loader"
-        ]
-        $ do
-          summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
-            $ facetGroupTitle_ facetGroup
-          div_ [class_ "facet-group-loader htmx-indicator h-8 flex items-center justify-center"]
-            $ loadingIndicator_ LdXS LdSpinner
+renderFacetGroup loaded facetGroup facetSummary =
+  facetSection_ loaded "facet-section-group" attrs (facetGroupTitle_ facetGroup) body
   where
+    attrs =
+      if loaded
+        then []
+        else
+          [ hxGet_ url
+          , hxTrigger_ "toggle[target.open] once"
+          , hxTarget_ "this"
+          , hxSwap_ "outerHTML"
+          , hxIndicator_ "find .facet-group-loader"
+          ]
+    body
+      | loaded = div_ [class_ "facets-container"] $ renderFacetFields facetGroup facetSummary
+      | otherwise = div_ [class_ "facet-group-loader htmx-indicator flex h-8 items-center justify-center"] $ loadingIndicator_ LdXS LdSpinner
     url = "/p/" <> facetSummary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
 
 
 facetGroupTitle_ :: FacetGroup -> Html ()
-facetGroupTitle_ facetGroup = do
-  facetChevron_ "w-3 h-3"
-  span_ [class_ "font-medium text-sm"] $ toHtml $ facetGroupLabel facetGroup
+facetGroupTitle_ = span_ [class_ "font-medium text-sm"] . toHtml . facetGroupLabel
 
 
 renderFacetFields :: FacetGroup -> FacetSummary -> Html ()
@@ -578,21 +569,20 @@ renderFacetFields facetGroup facetSummary = do
         open = facetGroup == FGCommon && idx < 5 && not (null values)
         (visibleValues, hiddenValues) = splitAt 5 values
         hiddenCount = length hiddenValues
-    collapsible_
-      [class_ "facet-section border-t border-strokeWeak"]
+    facetSection_
       open
-      [class_ "flex items-center justify-between hover:bg-fillWeak rounded"]
-      do
-        div_
-          [class_ "p-2 flex items-center gap-2 flex-1"]
-          (facetChevron_ "w-2.5 h-2.5" >> span_ [class_ "text-sm", term "data-tippy-content" facet.path] (toHtml facet.label))
-        -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
-        div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
-          button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify facet.path))
-            $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-          ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" facet.path] <> fieldMenuPanel_ (slugify facet.path))
-            $ fieldContextMenuItems_ (StaticField facet.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
-      $ div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1"] do
+      ""
+      []
+      ( div_ [class_ "flex items-center justify-between gap-2"] do
+          span_ [class_ "truncate text-sm font-normal", term "data-tippy-content" facet.path] $ toHtml facet.label
+          -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
+          div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
+            button_ ([type_ "button", class_ "cursor-pointer rounded p-1 hover:bg-fillWeak", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify facet.path))
+              $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+            ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" facet.path] <> fieldMenuPanel_ (slugify facet.path))
+              $ fieldContextMenuItems_ (StaticField facet.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
+      )
+      $ div_ [class_ "facet-values pl-5 pr-1 mb-1 space-y-1"] do
         if null values
           then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
           else forM_ visibleValues (renderFacetValue facet)
@@ -611,40 +601,28 @@ renderFacetFields facetGroup facetSummary = do
           <> ")"
 
 
--- Native details/summary owns open state and keyboard/AT behavior. No `contain`:
--- it would trap the fixed-position field-action popover inside the section.
-collapsible_ :: [Attribute] -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
-collapsible_ wrapAttrs open summaryAttrs header body =
-  details_ (wrapAttrs <> [class_ " block [&[open]>summary_.chev]:rotate-0 "] <> [open_ "" | open]) do
-    summary_ (summaryAttrs <> [class_ " cursor-pointer list-none [&::-webkit-details-marker]:hidden "]) header
-    body
-
-
-facetChevron_ :: Text -> Html ()
-facetChevron_ size = faSprite_ "chevron-down" "regular" $ "chev shrink-0 transition-transform -rotate-90 " <> size
-
-
 renderFacetValue :: Facet -> FacetValue -> Html ()
 renderFacetValue f (FacetValue val count) =
-  -- py-1, not py-0.5: with a 16px checkbox the tighter padding made the row a
-  -- 20px pointer target, under the 24px WCAG 2.5.8 minimum.
-  label_ [class_ "facet-item flex items-center justify-between py-1 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
-    div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
-      input_
-        [ type_ "checkbox"
-        , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-        , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
-          -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
-          [__|on click js(me) window.queryEditorCall('toggleSubQuery', me.dataset.field + ' == "' + me.dataset.value + '"') end|]
-        , Aria.label_ (f.path <> " equals " <> val)
-        , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
-        , term "data-field" f.path
-        , term "data-value" val
-        ]
-      let colorClass = f.color val
-      unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
-      span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
-    span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
+  facetOption_
+    "facet-item max-md:min-h-9"
+    []
+    ( do
+        input_
+          [ type_ "checkbox"
+          , class_ "checkbox checkbox-xs max-md:checkbox-sm"
+          , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
+            -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
+            [__|on click js(me) window.queryEditorCall('toggleSubQuery', me.dataset.field + ' == "' + me.dataset.value + '"') end|]
+          , Aria.label_ (f.path <> " equals " <> val)
+          , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+          , term "data-field" f.path
+          , term "data-value" val
+          ]
+        let colorClass = f.color val
+        unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+        span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] $ toHtml val
+    )
+    (span_ [class_ "facet-count shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ prettyPrintCount count)
 
 
 renderFacetTail :: Text -> FacetSummary -> Html ()
@@ -1690,28 +1668,16 @@ apiLogsPage page = do
     -- No `contain:layout` here: it makes this a containing block for fixed/anchored
     -- descendants, which clips the facet action popover (top layer) to the sidebar.
     facetsPanel =
-      div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
-        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
-          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
-            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
-          input_
-            [ placeholder_ "Search filters..."
-            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
-            , term "data-filterParent" "facets-container"
-            , [__| on keyup debounced at 200ms
-                    if the event's key is 'Escape'
-                      set my value to '' then trigger keyup
-                    else
-                      show <details.facet-section-group, details.facet-section, .facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                  |]
-            ]
-        -- Common filters are above the fold and arrive with the page. renderFacets
-        -- emits their values plus cheap shells whose bodies load on first open.
-        div_ [id_ "facets-list"]
-          $ maybe
-            (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
-            renderFacets
-            page.facetSummary
+      facetRail_
+        (Just "facets-container")
+        "w-68 will-change-[width] text-sm text-textWeak shrink-0 h-full overflow-y-scroll max-md:w-full max-md:shrink max-md:max-h-[55vh] max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0"
+        "Search filters"
+        Nothing
+        $ div_ [id_ "facets-list"]
+        $ maybe
+          (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
+          renderFacets
+          page.facetSummary
 
     logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader

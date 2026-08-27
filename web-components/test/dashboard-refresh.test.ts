@@ -5,9 +5,23 @@
 // doubles the query load on every panel silently, and a timer that never starts leaves
 // a dashboard the user believes is live showing stale numbers.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import '../src/widgets';
+import '../src/main';
 
 const selectInterval = (interval: unknown) => window.dispatchEvent(new CustomEvent('setRefreshInterval', { detail: { interval } }));
+const mountTransport = (live: boolean) => {
+  document.body.innerHTML = `
+    <div>
+      ${live ? '<span data-live-range="true"></span>' : ''}
+      <div data-time-transport>
+        <button data-live-toggle></button>
+        <button data-next-window></button>
+        <span data-pause-icon></span>
+        <span data-play-icon></span>
+      </div>
+      <span data-live-badge></span>
+    </div>`;
+  return document.querySelector<HTMLElement>('[data-time-transport]')!;
+};
 
 let refreshes: number;
 const countRefreshes = () => refreshes++;
@@ -15,6 +29,8 @@ const countRefreshes = () => refreshes++;
 beforeEach(() => {
   vi.useFakeTimers();
   refreshes = 0;
+  document.body.innerHTML = '';
+  window.history.replaceState({}, '', '/p/proj/log_explorer?since=15M');
   window.addEventListener('update-query', countRefreshes);
 });
 
@@ -81,5 +97,46 @@ describe('auto-refresh interval', () => {
     selectInterval(0);
     expect(window.dashboardRefreshInterval).toBe(0);
     expect(window.dashboardRefreshTimer).toBeNull();
+  });
+
+  test('entering a historical window stops the live timer and updates its controls', () => {
+    window.initTimeTransport(mountTransport(true));
+    vi.advanceTimersByTime(15_000);
+    expect(refreshes).toBe(1);
+
+    const historical = mountTransport(false);
+    window.initTimeTransport(historical);
+    vi.advanceTimersByTime(60_000);
+
+    expect(refreshes).toBe(1);
+    expect(window.dashboardRefreshInterval).toBe(0);
+    expect(window.dashboardRefreshTimer).toBeNull();
+    expect(historical.querySelector<HTMLButtonElement>('[data-live-toggle]')!.ariaLabel).toBe('Return to live');
+    expect(historical.querySelector<HTMLButtonElement>('[data-next-window]')!.disabled).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-live-badge]')!.textContent).toBe('PAUSED');
+  });
+
+  test('pause and resume keep a live range on the selected cadence', () => {
+    const transport = mountTransport(true);
+    window.initTimeTransport(transport);
+
+    window.toggleLiveRefresh(transport);
+    expect(window.dashboardRefreshInterval).toBe(0);
+    expect(transport.querySelector<HTMLButtonElement>('[data-live-toggle]')!.ariaLabel).toBe('Resume live updates');
+
+    window.toggleLiveRefresh(transport);
+    vi.advanceTimersByTime(30_000);
+    expect(window.dashboardRefreshInterval).toBe(15_000);
+    expect(refreshes).toBe(2);
+  });
+
+  test('return to live replaces the absolute range without dropping other URL state', () => {
+    window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?from=2024-01-01T00:00:00Z&to=2024-01-01T01:00:00Z&provider=aws&cols=cpu,memory');
+    const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
+
+    window.toggleLiveRefresh(mountTransport(false));
+
+    expect(setParams).toHaveBeenCalledWith({ since: '15M', from: '', to: '' }, true);
+    setParams.mockRestore();
   });
 });

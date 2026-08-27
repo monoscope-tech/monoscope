@@ -47,6 +47,8 @@ module Utils (
   sanitizeBackendError,
   extractMessageFromLog,
   nonEmptyT,
+  timeScopedUrl,
+  kqlQuoted,
   -- Fill color helpers
   statusFillColorText,
   methodFillColor,
@@ -64,6 +66,7 @@ module Utils (
   popoverPanel_,
   fieldMenuPanel_,
   drawerLoadAttrs_,
+  drawerRowAttrs_,
   renderMarkdown,
   jsonToMap,
   fieldContextMenuItems_,
@@ -146,6 +149,34 @@ escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
 -- | Drop empty text so \"\" and Nothing collapse to one absent case.
 nonEmptyT :: Maybe Text -> Maybe Text
 nonEmptyT = mfilter (not . T.null)
+
+
+-- | A KQL string literal. Escaping matters: a container, pod, or host name carrying a @"@
+-- would otherwise close the literal early and hand the store a malformed query.
+--
+-- >>> kqlQuoted "say \"hi\""
+-- "\"say \\\"hi\\\"\""
+kqlQuoted :: Text -> Text
+kqlQuoted value = "\"" <> T.replace "\"" "\\\"" value <> "\""
+
+
+-- | Append the time-range params (and any extras) to @base@, deciding @?@ vs @&@ once so
+-- callers never hand-concatenate a separator onto a URL that may or may not have a query.
+-- Empty values are dropped, so \"\" and Nothing behave identically.
+--
+-- >>> timeScopedUrl "/p/1/hosts" [] (Just "") Nothing (Just "15M")
+-- "/p/1/hosts?since=15M"
+-- >>> timeScopedUrl "/p/1/hosts" [("group", "region")] Nothing Nothing Nothing
+-- "/p/1/hosts?group=region"
+-- >>> timeScopedUrl "/p/1/hosts" [] Nothing Nothing Nothing
+-- "/p/1/hosts"
+timeScopedUrl :: Text -> [(Text, Text)] -> Maybe Text -> Maybe Text -> Maybe Text -> Text
+timeScopedUrl base extras fromM toM sinceM =
+  case mapMaybe pair ([("from", fromM), ("to", toM), ("since", sinceM)] <> map (second Just) extras) of
+    [] -> base
+    params -> base <> "?" <> T.intercalate "&" params
+  where
+    pair (key, valueM) = (\value -> key <> "=" <> toUriStr value) <$> nonEmptyT valueM
 
 
 data DBField = forall a. (Show a, ToField a) => MkDBField a
@@ -1496,6 +1527,7 @@ explorerNavTabs_ pid active =
               , term "aria-selected" (bool "false" "true" isActive)
               ]
                 <> [term "aria-current" "page" | isActive]
+                <> preserveTimeRangeAttrs
                 <> navTabAttrs
             )
             (toHtml label)
@@ -1511,13 +1543,13 @@ explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metr
 
 -- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
 -- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
-infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Html ()
-infrastructureNavTabs_ pid active =
+infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
+infrastructureNavTabs_ pid active fromM toM sinceM =
   nav_ [class_ "tabs tabs-box tabs-outline items-center max-md:overflow-x-auto max-md:flex-nowrap", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
     $ forM_ infrastructureTabs
     $ \(label, path) ->
       a_
-        ( [ href_ $ "/p/" <> pid.toText <> path
+        ( [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM
           , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active text-textStrong" (label == active)
           , term "aria-current" $ bool "false" "page" (label == active)
           ]
@@ -1528,6 +1560,12 @@ infrastructureNavTabs_ pid active =
 
 infrastructureTabs :: [(Text, Text)]
 infrastructureTabs = [("Hosts", "/infrastructure/hosts"), ("Containers", "/infrastructure/containers"), ("Images", "/infrastructure/images"), ("Kubernetes", "/infrastructure/kubernetes"), ("Host Map", "/infrastructure/host-map")]
+
+
+preserveTimeRangeAttrs :: [Attribute]
+preserveTimeRangeAttrs = [onmouseover_ preserve, onfocus_ preserve, onpointerdown_ preserve, onkeydown_ $ "if(event.key==='Enter'||event.key===' '){" <> preserve <> "}"]
+  where
+    preserve = "const next=new URL(this.href);const current=new URLSearchParams(location.search);['from','to','since'].forEach((key)=>{const value=current.get(key);if(value)next.searchParams.set(key,value)});this.href=next.toString()"
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.
@@ -1547,6 +1585,17 @@ popoverPanel_ pid = [id_ pid, term "popover" "auto", style_ $ "position-try:flip
 -- enclosing @<label for>@ (e.g. the facet-section collapse header) and toggle it.
 fieldMenuPanel_ :: Text -> [Attribute]
 fieldMenuPanel_ pid = popoverPanel_ pid <> [[__|on click call me.hidePopover() then halt|]]
+
+
+-- | Makes a whole table row open the drawer: clickable, focusable, and Enter/Space activated.
+drawerRowAttrs_ :: Text -> [Attribute]
+drawerRowAttrs_ url =
+  [ role_ "button"
+  , tabindex_ "0"
+  , style_ "cursor:pointer"
+  , onkeydown_ "if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}"
+  ]
+    <> drawerLoadAttrs_ url
 
 
 -- | HTMX attrs that open the global data drawer and load @url@ into it.

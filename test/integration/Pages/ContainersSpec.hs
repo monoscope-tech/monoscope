@@ -6,6 +6,7 @@ module Pages.ContainersSpec (spec) where
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
+import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
@@ -13,10 +14,31 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Containers qualified as Containers
 import Pages.Infrastructure qualified as Infrastructure
 import Pkg.Components.Table (Table (..))
+import Pkg.Icons qualified as Icons
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Relude
+import System.Types (ATAuthCtx, RespHeaders)
 import Test.Hspec
+
+
+-- | The containers handler's facets, so a test names only the one it varies and a new
+-- query param does not have to be threaded through every call site as another @Nothing@.
+data ContainerQuery = ContainerQuery
+  { runtime :: Maybe Text
+  , namespace :: Maybe Text
+  , node :: Maybe Text
+  , image :: Maybe Text
+  , cluster :: Maybe Text
+  }
+
+
+noContainerFilters :: ContainerQuery
+noContainerFilters = ContainerQuery Nothing Nothing Nothing Nothing Nothing
+
+
+containersPage :: ContainerQuery -> ATAuthCtx (RespHeaders Containers.ContainersGet)
+containersPage q = Containers.containersGetH testPid q.runtime q.namespace q.node q.image q.cluster Nothing Nothing Nothing
 
 
 -- | A pod from the OpenTelemetry demo, as kubeletstats + k8s_cluster describe it: usage in
@@ -169,10 +191,10 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Containers page" do
     it "emptyProject_rendersZeroStateRatherThanAnEmptyTable" \tr -> do
-      rows <- runTestBg frozenTime tr $ containersInWindow False testPid frozenTime
+      rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
       V.toList rows `shouldBe` []
 
-      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ containersPage noContainerFilters
       let Containers.ContainersPage (PageCtx conf table) = page
       conf.pageTitle `shouldBe` "Containers"
       V.length table.rows `shouldBe` 0
@@ -182,7 +204,7 @@ spec = sequential $ aroundAll withTestResources do
     it "kubernetesAndDockerContainers_landInOneListWithNormalisedCpuAndMemory" \tr -> do
       key <- createTestAPIKey tr testPid "containers-key"
       ingestFixture tr key
-      rows <- runTestBg frozenTime tr $ containersInWindow False testPid frozenTime
+      rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
       let byName = rowsByName rows
 
       -- The noise metric carries no container identity, so it must not become a row.
@@ -274,12 +296,14 @@ spec = sequential $ aroundAll withTestResources do
       cpuPctOfLimit noLimit `shouldBe` Nothing
 
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
-      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ containersPage noContainerFilters
       let Containers.ContainersPage (PageCtx _ table) = page
       V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\""]
+      T.isInfixOf "<details open=\"\" class=\"group/summary" html `shouldBe` False
+      T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
       -- column, crossing the badge border. The label is one indivisible status.
       html `shouldContainAll` ["Not ready", "class=\"badge badge-sm badge-error whitespace-nowrap\""]
@@ -290,38 +314,49 @@ spec = sequential $ aroundAll withTestResources do
             (_, p) <- testServant tr f
             let Containers.ContainersPage (PageCtx _ t) = p
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
-      listWith (Containers.containersGetH testPid Nothing (Just "default") Nothing Nothing Nothing) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
-      listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing Nothing) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid Nothing (Just "no-such-namespace") Nothing Nothing Nothing) >>= (`shouldBe` [])
+      listWith (containersPage noContainerFilters{namespace = Just "default"}) >>= (`shouldBe` ["checkout"])
+      listWith (containersPage noContainerFilters{runtime = Just "docker"}) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (containersPage noContainerFilters{runtime = Just "kubernetes"}) >>= (`shouldMatchList` ["checkout", "coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
+      listWith (containersPage noContainerFilters{node = Just "0ce201583b04"}) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (containersPage noContainerFilters{namespace = Just "no-such-namespace"}) >>= (`shouldBe` [])
       -- Cluster prefers the name where the collector set one, and falls back to the uid
       -- where it did not, so the facet is usable before anyone edits a collector config.
-      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just "otel-demo")) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldMatchList` ["coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
+      listWith (containersPage noContainerFilters{cluster = Just "otel-demo"}) >>= (`shouldBe` ["checkout"])
+      listWith (containersPage noContainerFilters{cluster = Just clusterUid}) >>= (`shouldMatchList` ["coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
       -- A bare node is its own runtime, so it is reachable and does not pollute the others.
-      listWith (Containers.containersGetH testPid (Just "host") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["vps-bare-01"])
+      listWith (containersPage noContainerFilters{runtime = Just "host"}) >>= (`shouldBe` ["vps-bare-01"])
 
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
-      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing
+      Icons.lookupIcon "regular" "download" `shouldSatisfy` isJust
+      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
-        `shouldContainAll` ["Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Group by", "Columns"]
+        `shouldContainAll` ["Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Group by", "Customize", "LIVE", "Last 15 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts"]
 
-      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing
+      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
-        `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable"]
+        `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
-      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing
+      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
-        `shouldContainAll` ["Pods", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "whitespace-nowrap"]
+        `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail"]
 
-      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "cpu") Nothing Nothing Nothing Nothing
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostMap)
-        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon"]
+      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
+      hostMapHtml
+        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\""]
+      hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hostDetail)
-        `shouldContainAll` ["CPU usage", "Memory used", "Max storage usage", "Load average", "View logs"]
+        `shouldContainAll` ["Host summary", "CPU usage", "Memory used", "Max storage usage", "Load average", "View logs", "View metrics", "Signal coverage"]
+
+      (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml imageDetail)
+        `shouldContainAll` ["Image summary", "Running containers", "Security coverage", "View containers"]
+
+      (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml kubeDetail)
+        `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")

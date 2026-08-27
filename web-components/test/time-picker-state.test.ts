@@ -5,7 +5,7 @@
 // widens the window. Getting the label wrong is cosmetic; leaving a stale `since` next to
 // a new `from`/`to` is not, because the server reads both and the reader gets a window
 // they did not ask for.
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import '../src/main';
 
 const updateTimePicker = (...args: Parameters<typeof window.updateTimePicker>) => window.updateTimePicker(...args);
@@ -109,12 +109,14 @@ describe('URL state', () => {
   // and column selection the reader had just made, including from a link they then shared.
   test('params written after page load survive a range change', () => {
     mountPicker();
-    window.history.replaceState({}, '', '/p/proj/log_explorer?query=status%3D%3D500&cols=a,b');
+    window.history.replaceState({}, '', '/p/proj/log_explorer?query=status%3D%3D500&cols=a,b&runtime=kubernetes&namespace=prod');
 
     updateTimePicker({ since: '1H' });
 
     expect(params().get('query')).toBe('status==500');
     expect(params().get('cols')).toBe('a,b');
+    expect(params().get('runtime')).toBe('kubernetes');
+    expect(params().get('namespace')).toBe('prod');
   });
 
   test('two range changes in a row do not resurrect a param the second removed', () => {
@@ -125,6 +127,35 @@ describe('URL state', () => {
     expect(params().get('since')).toBe('1H');
     expect(params().get('from')).toBe('');
     expect(params().get('to')).toBe('');
+  });
+});
+
+describe('time-window transport', () => {
+  test('previous converts the live range to the preceding absolute window', () => {
+    window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=15M&provider=aws');
+    const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2024-01-01T01:00:00Z'));
+
+    window.shiftTimeRange(-1);
+
+    expect(setParams).toHaveBeenCalledWith(
+      { since: '', from: '2024-01-01T00:30:00.000Z', to: '2024-01-01T00:45:00.000Z' },
+      true
+    );
+    setParams.mockRestore();
+    now.mockRestore();
+  });
+
+  test('next advances a historical window and returns to live at the present', () => {
+    window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=&from=2024-01-01T00:45:00Z&to=2024-01-01T01:00:00Z');
+    const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2024-01-01T01:15:00Z'));
+
+    window.shiftTimeRange(1);
+
+    expect(setParams).toHaveBeenCalledWith({ since: '15M', from: '', to: '' }, true);
+    setParams.mockRestore();
+    now.mockRestore();
   });
 });
 

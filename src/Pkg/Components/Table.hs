@@ -19,6 +19,9 @@ module Pkg.Components.Table (
   TableHeaderActions (..),
   FilterMenu (..),
   FilterOption (..),
+  facetValues,
+  singleSelectFilter,
+  facetActions,
   -- Sorting types and utilities
   SortOrder (..),
   SortField (..),
@@ -38,9 +41,10 @@ import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
 import GHC.Records (HasField (getField))
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, facetOption_, facetRail_, facetSection_)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
 
@@ -110,6 +114,7 @@ data Features a = Features
   , selectRow :: Maybe (a -> Bool)
   , bulkActions :: [BulkAction]
   , search :: Maybe SearchMode
+  , searchPlaceholder :: Maybe Text
   , tabs :: Maybe TabFilter
   , sort :: Maybe SortConfig
   , sortableColumns :: Maybe SortableConfig -- HTMX-powered column sorting
@@ -118,6 +123,9 @@ data Features a = Features
   , zeroState :: Maybe ZeroState
   , header :: Maybe (Html ())
   , treeConfig :: Maybe (TreeConfig a)
+  , showFilterRail :: Bool
+  , resultSummary :: Maybe Text
+  , exportName :: Maybe Text
   }
 
 
@@ -224,7 +232,6 @@ data TableHeaderActions = TableHeaderActions
   , currentSort :: Text
   , filterMenus :: [FilterMenu]
   , activeFilters :: [(Text, [Text])] -- (category, [values])
-  , headerExtra :: Maybe (Html ()) -- Custom content before sort/filter
   }
 
 
@@ -245,6 +252,39 @@ data FilterOption = FilterOption
   deriving stock (Eq, Show)
 
 
+-- | Sorted distinct values from the unfiltered result, so choosing one facet does
+-- not empty the menus of the others.
+--
+-- >>> facetValues snd (V.fromList [("a", Just "b"), ("c", Just "a"), ("d", Nothing)])
+-- ["a","b"]
+facetValues :: (a -> Maybe Text) -> V.Vector a -> [Text]
+facetValues getter = Relude.sort . ordNub . filter (not . T.null) . mapMaybe getter . V.toList
+
+
+singleSelectFilter :: Text -> Text -> Maybe Text -> [Text] -> FilterMenu
+singleSelectFilter label paramName selected values =
+  FilterMenu
+    { label
+    , paramName
+    , options = [FilterOption value value (Just value == selected) | value <- values]
+    , multiSelect = False
+    }
+
+
+-- | Header actions for a filter-only inventory table. The active-filter chips are read back
+-- off the menus, so a facet's label and selected value are written exactly once.
+facetActions :: Text -> Text -> [FilterMenu] -> TableHeaderActions
+facetActions baseUrl targetId filterMenus =
+  TableHeaderActions
+    { baseUrl
+    , targetId
+    , sortOptions = []
+    , currentSort = ""
+    , filterMenus
+    , activeFilters = [(menu.label, selected) | menu <- filterMenus, selected <- [[o.value | o <- menu.options, o.isActive]], not $ null selected]
+    }
+
+
 -- Default Instances
 
 instance Default (Features a) where
@@ -256,6 +296,7 @@ instance Default (Features a) where
       , selectRow = Nothing
       , bulkActions = []
       , search = Nothing
+      , searchPlaceholder = Nothing
       , tabs = Nothing
       , sort = Nothing
       , sortableColumns = Nothing
@@ -264,6 +305,9 @@ instance Default (Features a) where
       , zeroState = Nothing
       , header = Nothing
       , treeConfig = Nothing
+      , showFilterRail = False
+      , resultSummary = Nothing
+      , exportName = Nothing
       }
 
 
@@ -407,9 +451,9 @@ sortDropdown_ popId panelAttrs opts current fallbackLabel optAttrs = do
 renderTable :: Table a -> Html ()
 renderTable tbl =
   let isEmpty = V.null tbl.rows && isJust tbl.features.zeroState
-      tableContent = div_ [class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] do
-        unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID
+      tableMain = do
         whenJust tbl.features.header id
+        when (isJust tbl.features.resultSummary || isJust tbl.features.exportName) $ renderResultToolbar tbl
         div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
@@ -420,6 +464,13 @@ renderTable tbl =
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
                 div_ [id_ "rowsContainer", class_ divCls] do
                   renderRows tbl
+      tableContent = div_ [class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] do
+        unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID (fromMaybe "Search" tbl.features.searchPlaceholder)
+        if tbl.features.showFilterRail
+          then div_ [class_ "flex items-start gap-4 max-lg:flex-col"] do
+            whenJust tbl.features.tableHeaderActions renderFilterRail
+            div_ [class_ "min-w-0 flex-1 space-y-3"] tableMain
+          else tableMain
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
@@ -456,7 +507,7 @@ renderRows tbl
                     thAttrs = [class_ $ " " <> tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
                     sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
-                th_ (c.attrs <> thAttrs <> sortAttrs) do
+                th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-index" $ show idx]) do
                   span_ [class_ "flex items-center gap-2 min-w-0"] do
                     span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                     whenJust c.headerExtra id
@@ -516,7 +567,7 @@ renderTableRow tbl row =
   tr_ ([class_ rowClass] <> treeAttrs <> rowAttrs <> linkHandler) do
     whenJust tbl.features.rowId \getId ->
       td_ [class_ "w-8 align-top pt-4 max-md:hidden"] $ selectRowCheckbox_ (maybe False ($ row) tbl.features.selectRow) (getId row)
-    forM_ tbl.columns \c -> td_ (c.attrs <> (class_ <$> maybeToList c.align)) $ c.render row
+    forM_ (zip [0 :: Int ..] tbl.columns) \(idx, c) -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-index" $ show idx]) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
@@ -541,9 +592,24 @@ bulkActionBtn_ btnSize iconSize blkA =
 
 renderHeaderTableActions :: TableHeaderActions -> Html ()
 renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
-  whenJust actions.headerExtra id
   unless (null actions.sortOptions) $ renderSortDropdown actions
   unless (null actions.filterMenus) $ renderFilterDropdown actions
+
+
+renderFilterRail :: TableHeaderActions -> Html ()
+renderFilterRail actions =
+  details_ [open_ "", class_ "w-60 shrink-0 rounded-lg border border-strokeWeak bg-bgBase max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
+    summary_ [class_ "cursor-pointer border-b border-strokeWeak px-3 py-2 text-sm font-semibold text-textStrong"] "Filters"
+    facetRail_ Nothing "p-2" "Search filters" (Just clearAll) $ forM_ (zip [0 :: Int ..] actions.filterMenus) \(index, menu) ->
+      facetSection_ (index == 0 || any (.isActive) menu.options) "" [] (toHtml menu.label)
+        $ div_ [class_ "max-h-48 overflow-y-auto"]
+        $ forM_ menu.options (renderFilterOption actions menu)
+  where
+    clearAll =
+      a_
+        ([class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId actions.baseUrl)
+        $ "Clear all"
+        >> faSprite_ "xmark" "regular" "h-3 w-3"
 
 
 renderSortDropdown :: TableHeaderActions -> Html ()
@@ -590,23 +656,25 @@ renderFilterMenuItem actions menu = div_ [class_ "relative"] do
 
 
 renderFilterOption :: TableHeaderActions -> FilterMenu -> FilterOption -> Html ()
-renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-fillWeak"] do
-  let paramVal = menu.paramName <> "=" <> toUriStr opt.value
-      -- For multi-select: toggle this value; for single-select: replace all with this value
-      url
-        | menu.multiSelect && opt.isActive = deleteParamValue menu.paramName opt.value actions.baseUrl
-        | menu.multiSelect = withQuery actions.baseUrl paramVal
-        | otherwise = withQuery (deleteParam menu.paramName actions.baseUrl) paramVal
-  input_
-    $ [ type_ $ bool "radio" "checkbox" menu.multiSelect
-      , class_ $ bool "radio radio-xs" "checkbox checkbox-xs" menu.multiSelect
-      , value_ opt.value
-      , name_ $ "filter_" <> menu.paramName -- group radios by param name
-      , hxTrigger_ "change"
-      ]
-    <> swapTarget_ actions.targetId url
-    <> [checked_ | opt.isActive]
-  span_ [class_ "text-sm"] $ toHtml opt.label
+renderFilterOption actions menu opt = facetOption_ "" [] optionBody pass
+  where
+    paramVal = menu.paramName <> "=" <> toUriStr opt.value
+    -- For multi-select: toggle this value; for single-select: replace all with this value
+    url
+      | menu.multiSelect && opt.isActive = deleteParamValue menu.paramName opt.value actions.baseUrl
+      | menu.multiSelect = withQuery actions.baseUrl paramVal
+      | otherwise = withQuery (deleteParam menu.paramName actions.baseUrl) paramVal
+    optionBody = do
+      input_
+        $ [ type_ $ bool "radio" "checkbox" menu.multiSelect
+          , class_ $ bool "radio radio-xs" "checkbox checkbox-xs" menu.multiSelect
+          , value_ opt.value
+          , name_ $ "filter_" <> menu.paramName -- group radios by param name
+          , hxTrigger_ "change"
+          ]
+        <> swapTarget_ actions.targetId url
+        <> [checked_ | opt.isActive]
+      span_ [class_ "truncate text-sm"] $ toHtml opt.label
 
 
 -- | Remove a specific param=value pair from a URL (for multi-select filter toggle)
@@ -632,12 +700,12 @@ renderToolbar tbl =
       whenJust tbl.features.sort renderSortMenu
 
 
-renderSearch :: Text -> SearchMode -> Html ()
-renderSearch elemID searchMode =
+renderSearch :: Text -> Text -> SearchMode -> Html ()
+renderSearch elemID searchPlaceholder searchMode =
   label_ [class_ "input input-sm max-md:hidden flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
     input_
-      $ [type_ "text", class_ "grow", placeholder_ "Search"]
+      $ [type_ "text", class_ "grow", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
       <> case searchMode of
         ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
         ClientSide -> [term "_" $ "on input show .itemsListItem in #" <> elemID <> "_page when its textContent.toLowerCase() contains my value.toLowerCase()"]
@@ -651,7 +719,28 @@ renderSortMenu sortCfg = do
   sortLoader_
 
 
--- Pagination footer with per-page selector and navigation
+renderResultToolbar :: Table a -> Html ()
+renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center justify-between gap-2"] do
+  whenJust tbl.features.resultSummary $ \summary -> span_ [class_ "text-sm text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml summary
+  whenJust tbl.features.exportName $ \name -> div_ [class_ "flex items-center gap-2"] do
+    button_
+      [ type_ "button"
+      , class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"
+      , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
+      ]
+      do
+        faSprite_ "download" "regular" "h-3 w-3"
+        "Export"
+    button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
+      faSprite_ "table-columns" "regular" "h-3 w-3"
+      "Customize"
+    div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
+      span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
+      forM_ (zip [0 :: Int ..] tbl.columns) \(idx, column) -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
+        input_ [type_ "checkbox", checked_, class_ "checkbox checkbox-xs", onchange_ $ "document.querySelectorAll('#" <> tbl.config.elemID <> "_grid [data-column-index=\"" <> show idx <> "\"]').forEach((element)=>element.classList.toggle('hidden',!this.checked))"]
+        toHtml column.name
+
+
 renderPaginationFooter :: Pagination -> Html ()
 renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-md:flex-wrap max-md:gap-2 px-4 py-3"] do
   div_ [class_ "flex items-center gap-4"] do

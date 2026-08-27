@@ -320,6 +320,11 @@ const NO_DATA_VALUE = '—';
 const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: number) => {
   const value = $(`${widgetData.chartId}Value`);
   if (!value) return;
+  if (widgetData.hideValue) {
+    value.textContent = '';
+    value.classList.add('hidden');
+    return;
+  }
   if (stats == null) {
     // Fetch error: clear the spinner, but leave the chart's error overlay as the
     // sole failure signal rather than revealing a redundant "—" badge above it.
@@ -546,6 +551,7 @@ type WidGetData = {
   unit?: string;
   alertThreshold?: number | null;
   warningThreshold?: number | null;
+  hideValue?: boolean;
   // Pins the widget's own query window instead of inheriting the page's, and shades
   // the subject's extent inside it. Both are ISO-8601; absent on ordinary widgets.
   timeFrom?: string | null;
@@ -916,37 +922,6 @@ function debounce(func: any, wait: number) {
   };
 }
 (window as any).debounce = debounce;
-
-/**
- * Auto-refresh functionality for dashboards and widgets
- */
-const DEFAULT_REFRESH_INTERVAL = 0; // Default to Off
-
-// Global variable to store the refresh timer
-window.dashboardRefreshTimer = null;
-window.dashboardRefreshInterval = DEFAULT_REFRESH_INTERVAL;
-
-function setRefreshInterval(detail: { interval: string }) {
-  if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
-  const interval = parseInt(detail.interval);
-  const running = interval > 0;
-  // Both handles are public state on window and have to describe what is actually
-  // running: the interval was set once at load and never updated, so anything reading
-  // it saw "paused" regardless of the user's selection, and the stale timer id made a
-  // cleared timer look live.
-  window.dashboardRefreshInterval = running ? interval : DEFAULT_REFRESH_INTERVAL;
-  window.dashboardRefreshTimer = running
-    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval)
-    : null;
-}
-
-// Custom event handler for setting the refresh interval programmatically
-window.addEventListener('setRefreshInterval', function (e: any) {
-  // A CustomEvent constructed without detail carries `null`, not `undefined`, so the
-  // original `!== undefined` guard let it through and setRefreshInterval threw reading
-  // `.interval` off it — an uncaught listener error on a plain `send setRefreshInterval`.
-  if (e.detail != null) setRefreshInterval(e.detail);
-});
 
 function bindFunctionsToObjects(rootObj: any, obj: any) {
   if (!obj || typeof obj !== 'object') return;

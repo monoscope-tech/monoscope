@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -65,6 +65,74 @@ emptyState_ cfg title subTxt =
       ESCompact -> ("max-w-sm my-2 p-4", "h-6 w-6 text-iconNeutral", "text-sm text-textWeak")
 
 
+-- | Shared shell for searchable facet trees. The content decides how filters change
+-- (query-editor operations in Explorer, URL parameters in inventories); search,
+-- accessibility, and disclosure markers stay identical.
+facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
+facetRail_ elemId extraClass searchLabel actions content =
+  div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
+    label_ [class_ "input input-sm sticky top-0 z-10 flex w-full items-center gap-2 border-strokeWeak bg-bgBase"] do
+      faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
+      input_
+        [ type_ "search"
+        , placeholder_ searchLabel
+        , Aria.label_ searchLabel
+        , oninput_ "const root=this.closest('[data-component=\"facet-rail\"]'),q=this.value.toLowerCase();root.querySelectorAll('[data-component=\"facet-option\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)));root.querySelectorAll('[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
+        , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
+        ]
+    whenJust actions id
+    content
+
+
+-- | Native details/summary facet disclosure shared by Explorer's lazy hierarchy
+-- and inventory filter menus. Extra attributes must not include @class@.
+facetSection_ :: Bool -> Text -> [Attribute] -> Html () -> Html () -> Html ()
+facetSection_ startOpen extraClass attrs title content =
+  details_
+    ( [ class_ $ "facet-section block border-t border-strokeWeak [&[open]>summary_.facet-chevron]:rotate-0 " <> extraClass
+      , data_ "component" "facet-section"
+      ]
+        <> attrs
+        <> [open_ "" | startOpen]
+    )
+    do
+      summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] do
+        faSprite_ "chevron-down" "regular" "facet-chevron h-2.5 w-2.5 shrink-0 -rotate-90 transition-transform"
+        div_ [class_ "min-w-0 flex-1"] title
+      content
+
+
+-- | Shared option row. Callers provide the control/label body and optional count.
+facetOption_ :: Text -> [Attribute] -> Html () -> Html () -> Html ()
+facetOption_ extraClass attrs body trailing =
+  label_
+    ( [ class_ $ "flex min-h-7 cursor-pointer items-center justify-between gap-2 rounded px-2 py-1 hover:bg-fillWeak " <> extraClass
+      , data_ "component" "facet-option"
+      ]
+        <> attrs
+    )
+    do
+      div_ [class_ "flex min-w-0 flex-1 items-center gap-2"] body
+      trailing
+
+
+-- | A row of labelled figures in a detail panel. @cols@ carries the responsive grid
+-- utilities, since how many facts fit is the caller's decision, not the component's.
+factGrid_ :: Text -> [(Text, Text)] -> Html ()
+factGrid_ cols facts =
+  dl_ [class_ $ "grid divide-x divide-strokeWeak rounded-lg border border-strokeWeak " <> cols] $ forM_ facts \(label, value) ->
+    div_ [class_ "min-w-0 px-3 py-3"] do
+      dt_ [class_ "text-xs text-textWeak"] $ toHtml label
+      dd_ [class_ "mt-1 truncate font-semibold tabular-nums text-textStrong", term "data-tippy-content" value] $ toHtml value
+
+
+-- | @label: value@ chip for the identity strip at the top of a detail panel.
+metaChip_ :: Text -> Text -> Html ()
+metaChip_ label value = span_ [class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1 text-xs text-textWeak"] do
+  strong_ [class_ "font-medium text-textStrong"] $ toHtml $ label <> ":"
+  toHtml value
+
+
 getTargetPage :: Text -> Text
 getTargetPage p = fromMaybe "" $ lookup p [("Requests", "/log_explorer"), ("Issues", "/issues"), ("Endpoints", "/endpoints")]
 
@@ -110,6 +178,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full relative"] do
+      label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "btn btn-sm btn-circle btn-ghost sticky top-3 float-right z-30 mr-3 mt-3 bg-bgRaised shadow-sm"] $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
       div_
         [ id_ $ drawerId <> "-content"
         , class_ "pb-4 px-8 h-full flex flex-col gap-8"

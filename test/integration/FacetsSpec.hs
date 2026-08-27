@@ -338,6 +338,9 @@ spec = around withTestResources
         -- hyperscript pseudo-command reads them off the element at click time
         -- (no inline interpolation to escape).
         T.isInfixOf "data-value=\"GET\"" html `shouldBe` True
+        -- Explorer and inventory tables share the facet section/option contract.
+        T.isInfixOf "data-component=\"facet-section\"" html `shouldBe` True
+        T.isInfixOf "data-component=\"facet-option\"" html `shouldBe` True
         -- Routed through window.queryEditorCall, never straight at the element: Monaco loads
         -- lazily, so on a fresh page <query-editor> is un-upgraded and calling .toggleSubQuery
         -- on it threw "not a function" and dropped the filter. The shim loads it, then calls.

@@ -2,7 +2,11 @@ module Pkg.Components.TimePicker (
   parseTimeRange,
   timepicker_,
   refreshButton_,
+  timeHiddenInputs_,
   TimePicker (..),
+  TimeWindow (..),
+  mkTimeWindow,
+  windowUrl,
 ) where
 
 import Data.Aeson qualified as AE
@@ -22,7 +26,7 @@ import Relude hiding (some)
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_)
+import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, timeScopedUrl)
 
 
 -- $setup
@@ -129,6 +133,8 @@ timePickerItems =
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
 timepicker_ submitForm currentRange targetIdM = do
   let targetPr = fromMaybe "n" targetIdM
+      isLive = maybe True (T.null . snd) currentRange
+      displayRange = maybe "Last hour" (\(start, end) -> if T.null end then fromMaybe start (lookup start timePickerItems) else start <> " – " <> end) currentRange
       -- with a form we submit it; without one the caller-supplied fallback reloads/updates params
       submitVia noForm = maybe noForm (\fm -> [text|htmx.trigger("#${fm}", "submit")|]) submitForm
   -- read/written by window.updateTimePicker + window.getTimeRange (main.ts)
@@ -138,13 +144,15 @@ timepicker_ submitForm currentRange targetIdM = do
     , style_ $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
     , onclick_ "event.stopPropagation()"
-    , class_ "flex items-center gap-2 max-md:gap-1.5 py-2 max-md:py-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
+    , class_ $ "flex min-h-9 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer" <> bool "" " bg-fillSuccess-weak/40" isLive
+    , data_ "live-range" $ bool "false" "true" isLive
     ]
     do
-      faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
+      when isLive $ span_ [class_ "rounded bg-fillSuccess-strong px-1.5 py-0.5 text-xs font-semibold leading-none text-textInverse-strong", data_ "live-badge" ""] "LIVE"
+      faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral max-md:hidden"
       let attrs = maybe [] (\(s, e) -> [data_ "start" s, data_ "end" e]) currentRange
-      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe defaultSince (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
-      span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-2xs text-textWeak max-md:hidden"] "UTC+00"
+      span_ (attrs ++ [class_ "inline-block leading-none whitespace-nowrap", id_ $ targetPr <> "-currentRange"]) $ toHtml displayRange
+      span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   div_ [class_ "relative w-max"] do
@@ -159,13 +167,12 @@ timepicker_ submitForm currentRange targetIdM = do
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
           let action = submitVia "window.setQueryParamAndReload('since', my @data-value)"
-              onClickHandler =
-                [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-value}) then $action then call #${targetPr}-timepicker-popover.hidePopover()|]
           forM_ timePickerItems \(val, title) ->
             li_ $ button_
               [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
               , data_ "value" val
-              , termRaw "_" onClickHandler
+              , data_ "label" title
+              , termRaw "_" [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-label}) then $action then call #${targetPr}-timepicker-popover.hidePopover()|]
               ]
               do
                 span_ [class_ "text-sm"] $ toHtml title
@@ -230,9 +237,50 @@ timepicker_ submitForm currentRange targetIdM = do
     |]
 
 
+-- | A resolved time range plus the query params it came from, so a page can query the store
+-- and rebuild its own links from one value. Absent params default to the last 15 minutes.
+data TimeWindow = TimeWindow
+  { fromTime :: UTCTime
+  , toTime :: UTCTime
+  , currentRange :: Maybe (Text, Text)
+  , fromQuery :: Maybe Text
+  , toQuery :: Maybe Text
+  , sinceQuery :: Maybe Text
+  }
+
+
+defaultWindow :: Text
+defaultWindow = "15M"
+
+
+mkTimeWindow :: UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> TimeWindow
+mkTimeWindow now fromQuery toQuery sinceParam =
+  let sinceQuery = nonEmptyT sinceParam <|> (defaultWindow <$ guard (all (isNothing . nonEmptyT) [fromQuery, toQuery]))
+      (fromM, toM, currentRange) = parseTimeRange now $ TimePicker sinceQuery fromQuery toQuery
+      (defaultFrom, _, _) = parseSince now defaultWindow
+   in TimeWindow
+        { fromTime = fromMaybe (fromMaybe now defaultFrom) fromM
+        , toTime = fromMaybe now toM
+        , currentRange
+        , fromQuery
+        , toQuery
+        , sinceQuery
+        }
+
+
+-- | A URL under @base@ that carries this window's params forward, plus any extras.
+windowUrl :: Text -> [(Text, Text)] -> TimeWindow -> Text
+windowUrl base extras window = timeScopedUrl base extras window.fromQuery window.toQuery window.sinceQuery
+
+
+timeHiddenInputs_ :: Maybe Text -> Maybe Text -> Maybe Text -> Html ()
+timeHiddenInputs_ fromM toM sinceM = forM_ ([("from", fromM), ("to", toM), ("since", sinceM)] :: [(Text, Maybe Text)]) \(name, valueM) ->
+  whenJust (nonEmptyT valueM) \value -> input_ [type_ "hidden", name_ name, value_ value]
+
+
 refreshOptions :: [(Text, Text, Text)]
 refreshOptions =
-  [ ("paused", "Paused", "0")
+  [ ("Paused", "Pause live updates", "0")
   , ("15s", "15 seconds", "15000")
   , ("30s", "30 seconds", "30000")
   , ("1m", "1 minute", "60000")
@@ -245,36 +293,43 @@ refreshOptions =
   ]
 
 
--- | Refresh button with auto-refresh dropdown. Driven entirely by the global
--- @setRefreshInterval@ / @update-query@ event system, so it takes no arguments.
+-- | Datadog-style time transport shared by Explorer, Metrics, dashboards, and infrastructure.
+-- A relative range starts live at 15 seconds. Stepping backward converts it to an absolute
+-- range; stepping forward is disabled while live and resumes once the range is historical.
 refreshButton_ :: Html ()
-refreshButton_ = do
-  div_ [class_ "join"] do
-    label_
-      [ class_ "cursor-pointer px-3 max-md:px-2 flex items-center border border-strokeWeak rounded-l-lg shadow-xs leading-none join-item"
-      , data_ "tippy-content" "Refresh"
-      , Aria.label_ "Refresh"
-      , [__| on click trigger 'update-query' on document then
-          add .animate-spin to the first <svg/> in me then wait 1 seconds then
-          remove .animate-spin from the first <svg/> in me |]
-      ]
-      $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
-    div_ [class_ "leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
-      button_ ([type_ "button", class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", data_ "tippy-content" "Auto-refresh interval"] <> popoverTrigger_ "auto-refresh-pop") do
-        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden", Aria.label_ "Auto-refresh interval"] "Paused"
-        faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-
-      ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak mt-2 min-w-40"] <> popoverPanel_ "auto-refresh-pop") do
-        li_ [class_ "menu-title"] "Auto-refresh"
+refreshButton_ =
+  div_
+    [ class_ "join min-h-9"
+    , data_ "time-transport" ""
+    , [__|on load call window.initTimeTransport(me)|]
+    ]
+    do
+      transportBtn "Previous time window" "" [onclick_ "window.shiftTimeRange(-1)"]
+        $ faSprite_ "chevron-left" "regular" "h-3.5 w-3.5 text-iconNeutral"
+      transportBtn "Pause live updates" "" [data_ "live-toggle" "", onclick_ "window.toggleLiveRefresh(this.closest('[data-time-transport]'))"] do
+        span_ [data_ "pause-icon" ""] $ faSprite_ "pause" "solid" "h-3.5 w-3.5 text-iconBrand"
+        span_ [data_ "play-icon" "", class_ "hidden"] $ faSprite_ "play" "solid" "h-3.5 w-3.5 text-iconNeutral"
+      transportBtn "Next time window" " disabled:bg-bgSunken disabled:text-textDisabled" [data_ "next-window" "", onclick_ "window.shiftTimeRange(1)"]
+        $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5 text-iconNeutral"
+      transportBtn "Live update interval" "" (popoverTrigger_ "auto-refresh-pop")
+        $ faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral"
+      ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak mt-2 min-w-44"] <> popoverPanel_ "auto-refresh-pop") do
+        li_ [class_ "menu-title"] "Live update interval"
         forM_ refreshOptions \(label, title, ms) ->
           li_
-            $ a_
-              [ data_ "value" ms
+            $ button_
+              [ type_ "button"
+              , data_ "value" ms
               , data_ "tippy-content" title
-              , [__| on click
-                  set .auto-refresh-span.innerText to my.textContent then
-                  send setRefreshInterval(interval: parseInt(@data-value)) to window then
-                  call (closest <[popover]/>).hidePopover()
-              |]
+              , onclick_ "window.setTimeRefreshInterval(this.closest('[data-time-transport]'), Number(this.dataset.value)); this.closest('[popover]').hidePopover()"
               ]
             $ toHtml label
+  where
+    transportBtn label extraClass attrs =
+      button_
+        $ [ type_ "button"
+          , class_ $ "btn btn-sm join-item min-h-9 border-strokeWeak bg-bgBase px-2 shadow-xs" <> extraClass
+          , Aria.label_ label
+          , data_ "tippy-content" label
+          ]
+        <> attrs

@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, facetValues, runtimeLabel, formatBytes, showFFloat') where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, showFFloat') where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -21,13 +21,15 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pkg.Components.Table (Column, Config (..), Features (..), FilterMenu (..), FilterOption (..), SearchMode (..), Table (..), TableHeaderActions (..), ZeroState (..), col, withAttrs)
+import Pages.Components (factGrid_, metaChip_)
+import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -79,34 +81,20 @@ applyFilters f = V.filter \r ->
     matches selected actual = maybe True (\s -> T.null s || Just s == actual) selected
 
 
--- | The distinct values a facet offers, sorted, drawn from the unfiltered result so selecting
--- one facet never empties the menus of the others.
---
--- >>> facetValues (.namespace) (V.fromList [r "a" (Just "b"), r "c" (Just "a"), r "d" Nothing])
--- ["a","b"]
-facetValues :: (ContainerRow -> Maybe Text) -> V.Vector ContainerRow -> [Text]
-facetValues f = Relude.sort . ordNub . filter (not . T.null) . mapMaybe f . V.toList
-
-
-containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
-containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
+containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
+containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam sinceParam = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
-  allRows <- containersInWindow appCtx.env.enableTimefusionReads pid now
+  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
+  allRows <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
-      baseUrl = "/p/" <> pid.toText <> "/infrastructure/containers"
+      baseUrl = TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
-      menu label param selected fromRow =
-        FilterMenu
-          { label
-          , paramName = param
-          , multiSelect = False
-          , options = [FilterOption{label = v, value = v, isActive = Just v == selected} | v <- facetValues fromRow allRows]
-          }
+      menu label param selected fromRow = singleSelectFilter label param selected $ facetValues fromRow allRows
       table =
         Table
           { -- bulkActionsInHeader is what puts the header action group — and with it the whole
@@ -118,27 +106,25 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
           , features =
               def
                 { search = Just ClientSide
-                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                , searchPlaceholder = Just "Search containers"
+                , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
                 , tableHeaderActions =
                     Just
-                      TableHeaderActions
-                        { baseUrl
-                        , targetId = "containersContainer"
-                        , sortOptions = []
-                        , currentSort = ""
-                        , headerExtra = Nothing
-                        , filterMenus =
-                            [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
-                            , -- Falls back to k8s.cluster.uid, so the menu is populated even
-                              -- before a collector sets the human-readable cluster name.
-                              menu "Cluster" "cluster" filters.cluster (.cluster)
-                            , menu "Namespace" "namespace" filters.namespace (.namespace)
-                            , menu "Node" "node" filters.node (.nodeName)
-                            , menu "Image" "image" filters.image (.image)
-                            ]
-                        , activeFilters = activeFilterChips filters
-                        }
+                      $ facetActions
+                        baseUrl
+                        "containersContainer"
+                        [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
+                        , -- Falls back to k8s.cluster.uid, so the menu is populated even
+                          -- before a collector sets the human-readable cluster name.
+                          menu "Cluster" "cluster" filters.cluster (.cluster)
+                        , menu "Namespace" "namespace" filters.namespace (.namespace)
+                        , menu "Node" "node" filters.node (.nodeName)
+                        , menu "Image" "image" filters.image (.image)
+                        ]
                 , header = Just $ containerSummary_ pid
+                , showFilterRail = True
+                , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers"
+                , exportName = Just "containers"
                 , zeroState =
                     Just
                       ZeroState
@@ -155,18 +141,13 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
           { prePageTitle = Just "Infrastructure"
           , pageTitle = "Containers"
           , menuItem = Just "Infrastructure"
-          , navTabs = Just $ infrastructureNavTabs_ pid "Containers"
+          , navTabs = Just $ infrastructureNavTabs_ pid "Containers" window.fromQuery window.toQuery window.sinceQuery
+          , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2"] do
+              TimePicker.timepicker_ Nothing window.currentRange Nothing
+              TimePicker.refreshButton_
+          , needsGridStack = True
           }
   addRespHeaders $ ContainersPage $ PageCtx bwconf table
-
-
-activeFilterChips :: ContainerFilters -> [(Text, [Text])]
-activeFilterChips f =
-  [ (label, [v])
-  | (label, sel) <- [("Runtime", f.runtime), ("Namespace", f.namespace), ("Node", f.node), ("Image", f.image)]
-  , v <- maybeToList sel
-  , not (T.null v)
-  ]
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Table ContainerVM))
@@ -234,7 +215,7 @@ renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
     span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ runtimeLabel $ runtimeOf vm.row]
       $ faSprite_ (case runtimeOf vm.row of Kubernetes -> "cube"; Docker -> "layer-group"; Host -> "server") "solid" "w-3.5 h-3.5 fill-iconNeutral"
     button_
-      ( [class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0 text-left cursor-pointer", type_ "button"]
+      ( [class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0 text-left cursor-pointer", type_ "button", onclick_ "event.stopPropagation()"]
           <> drawerLoadAttrs_ (detailUrl vm)
       )
       $ toHtml vm.row.containerName
@@ -269,44 +250,60 @@ containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthC
 containerDetailGetH pid containerM podM = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
-  rows <- containersInWindow appCtx.env.enableTimefusionReads pid now
+  let window = TimePicker.mkTimeWindow now Nothing Nothing Nothing
+  rows <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
   addRespHeaders $ maybe (div_ [class_ "p-4 text-textWeak"] "This container is no longer reporting.") (containerDetail_ pid) found
 
 
 containerDetail_ :: Projects.ProjectId -> ContainerRow -> Html ()
-containerDetail_ pid r = div_ [class_ "flex flex-col gap-4 p-4"] do
-  div_ [class_ "flex flex-col gap-1"] do
-    h2_ [class_ "text-lg font-semibold text-textStrong break-all"] $ toHtml r.containerName
-    div_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe "" r.image <> maybe "" (":" <>) r.imageTag
-
-  dl_ [class_ "grid grid-cols-2 gap-x-4 gap-y-2 text-sm"] $ forM_ facts \(k, v) -> do
-    dt_ [class_ "text-textWeak"] $ toHtml k
-    dd_ [class_ "text-textStrong tabular-nums break-all"] $ toHtml v
-
-  -- Requests and limits get their own block: they are the denominators the list's percentage
-  -- columns use, so when a cell reads "—" this is where you see why.
-  div_ [class_ "flex flex-col gap-1"] do
-    h3_ [class_ "text-xs font-semibold uppercase text-textWeak"] "Requests and limits"
-    table_ [class_ "table table-xs"] do
-      thead_ $ tr_ $ mapM_ (th_ . toHtml) (["", "Request", "Limit"] :: [Text])
-      tbody_ do
-        tr_ $ mapM_ (td_ . toHtml) ["CPU (cores)", dash (showFFloat' 3 <$> r.cpuRequest), dash (showFFloat' 3 <$> r.cpuLimit)]
-        tr_ $ mapM_ (td_ . toHtml) ["Memory", dash (formatBytes <$> r.memRequest), dash (formatBytes <$> r.memLimit)]
-
-  div_ [class_ "flex flex-wrap gap-2"] $ forM_ pivots \(label, url) ->
-    a_ ([href_ url, class_ "btn btn-sm btn-outline"] <> navTabAttrs) $ toHtml label
+containerDetail_ pid r = div_ [class_ "min-h-full"] do
+  header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
+    div_ [class_ "flex flex-wrap items-center gap-2"] do
+      faSprite_ (case runtimeOf r of Kubernetes -> "cube"; Docker -> "layer-group"; Host -> "server") "solid" "h-4 w-4 text-iconNeutral"
+      h2_ [class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml r.containerName
+      readyCell $ ContainerVM pid r
+    whenJust r.image \image -> div_ [class_ "mt-1 break-all text-xs text-textWeak"] $ toHtml $ image <> maybe "" (":" <>) r.imageTag
+    div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ metadata $ uncurry metaChip_
+  main_ [class_ "space-y-5 p-5"] do
+    section_ [class_ "space-y-3"] do
+      div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
+        h3_ [class_ "font-semibold text-textStrong"] "Container summary"
+        span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4"
+      factGrid_
+        "grid-cols-4 max-sm:grid-cols-2"
+        [ ("CPU used", maybe "—" (\value -> showFFloat' 3 value <> " cores") r.cpuCores)
+        , ("CPU / limit", pct $ cpuPctOfLimit r)
+        , ("Memory used", maybe "—" formatBytes r.memBytes)
+        , ("Memory / limit", pct $ memPctOfLimit r)
+        ]
+      when (availableSignals < 4) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage or limit telemetry is missing in this time range. A dash means the collector did not report that signal; it is never treated as zero."
+    section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
+      h3_ [class_ "font-semibold text-textStrong"] "Requests and limits"
+      table_ [class_ "table table-xs rounded-lg border border-strokeWeak"] do
+        thead_ $ tr_ $ mapM_ (th_ . toHtml) (["", "Request", "Limit"] :: [Text])
+        tbody_ do
+          tr_ $ mapM_ (td_ . toHtml) ["CPU (cores)", dash (showFFloat' 3 <$> r.cpuRequest), dash (showFFloat' 3 <$> r.cpuLimit)]
+          tr_ $ mapM_ (td_ . toHtml) ["Memory", dash (formatBytes <$> r.memRequest), dash (formatBytes <$> r.memLimit)]
+    section_ [class_ "space-y-3 border-t border-strokeWeak pt-4"] do
+      h3_ [class_ "font-semibold text-textStrong"] "Metrics"
+      div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] do
+        div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid "container-detail-cpu" "CPU usage" "cores" (metricQuery "container.cpu.usage")
+        div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid "container-detail-memory" "Memory working set" "bytes" (metricQuery "container.memory.working_set")
+    div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] $ forM_ pivots \(label, url) ->
+      a_ ([href_ url, class_ "btn btn-sm btn-outline"] <> navTabAttrs) $ toHtml label
   where
     dash = fromMaybe "—"
-    facts =
-      [(k, v) | (k, Just v) <- [("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]]
-        <> [("Restarts", showFFloat' 0 v) | Just v <- [r.restarts]]
-    -- The list query names flattened columns directly; KQL on the metrics source lowers
-    -- resource.* to a JSON probe instead, which is the form the shipped container dashboards
-    -- already use — so these pivots are written the KQL way, not the column way.
-    kqlSubject = maybe ("resource.container.name==\"" <> r.containerName <> "\"") (\p -> "resource.k8s.pod.name==\"" <> p <> "\"") r.podName
+    pct = maybe "—" (\value -> showFFloat' 0 (value * 100) <> "%")
+    metadata = [(key, value) | (key, Just value) <- [("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]]
+    availableSignals = length $ catMaybes [r.cpuCores, r.cpuLimit, r.memBytes, r.memLimit]
+    -- Quotes are escaped: a container or pod name carrying a @"@ would otherwise close the
+    -- literal early and hand the store a malformed query.
+    quoted value = "\"" <> T.replace "\"" "\\\"" value <> "\""
+    subject = maybe ("resource.container.name == " <> quoted r.containerName) (\pod -> "resource.k8s.pod.name == " <> quoted pod) r.podName
+    metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
     pivots =
-      [ ("View logs", "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr kqlSubject)
+      [ ("View logs", "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr subject)
       , ("View metrics", "/p/" <> pid.toText <> "/metrics?metric_prefix=" <> toUriStr (maybe "container." (const "k8s.") r.podName))
       ]
 
@@ -341,14 +338,14 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 
 containerSummary_ :: Projects.ProjectId -> Html ()
 containerSummary_ pid =
-  details_ [class_ "group/summary border-b border-strokeWeak", open_ ""] do
+  details_ [class_ "group/summary border-b border-strokeWeak"] do
     summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2"] do
       faSprite_ "chart-simple" "regular" "h-3.5 w-3.5 text-iconNeutral"
-      "Summary graphs"
+      "Usage over time"
       faSprite_ "chevron-down" "regular" "ml-auto h-3 w-3 text-iconNeutral transition-transform group-open/summary:rotate-180"
-    div_ [class_ "grid grid-cols-2 gap-3 border-t border-strokeWeak p-3 max-lg:grid-cols-1", style_ "min-height:176px"] do
-      Widget.widget_ $ infrastructureWidget pid "containers-cpu" "CPU by container" "cores" "metrics | where metric_name == \"container.cpu.usage\" | summarize avg(value) by bin_auto(timestamp), resource.k8s.container.name"
-      Widget.widget_ $ infrastructureWidget pid "containers-memory" "Memory by container" "bytes" "metrics | where metric_name == \"container.memory.working_set\" | summarize avg(value) by bin_auto(timestamp), resource.k8s.container.name"
+    div_ [class_ "grid grid-cols-2 gap-3 border-t border-strokeWeak p-3 max-lg:grid-cols-1", style_ "min-height:260px"] do
+      Widget.widget_ $ infrastructureWidget pid "containers-cpu" "CPU by container" "cores" "metrics | where metric_name == \"container.cpu.usage\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
+      Widget.widget_ $ infrastructureWidget pid "containers-memory" "Memory by container" "bytes" "metrics | where metric_name == \"container.memory.working_set\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
 
 
 infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget
@@ -362,6 +359,11 @@ infrastructureWidget pid wid title unit query =
     , Widget._projectId = Just pid
     , Widget.standalone = Just True
     , Widget.hideSubtitle = Just True
+    , Widget.hideValue = Just True
+    , Widget.description = Just $ case unit of
+        "cores" -> "Average CPU usage reported for each container in every time bucket."
+        "bytes" -> "Average working-set memory reported for each container in every time bucket."
+        _ -> "Average value reported for each container in every time bucket."
     , Widget.legendPosition = Just "top-right"
     , Widget.legendSize = Just "xs"
     , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
