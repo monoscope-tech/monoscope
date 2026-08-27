@@ -35,6 +35,10 @@ test("issue investigation tabs swap between trace and logs", async ({ page }) =>
 
   // Reached from the list rather than a fixed id: issues age out of the demo data.
   await page.goto(`/p/${DEMO_PROJECT}/issues`);
+  // Same reason as metric-exemplars: an empty demo project has no issue to open.
+  await page.waitForLoadState("networkidle").catch(() => {});
+  test.skip((await page.locator('a[href*="/issues/"]').count()) === 0, "no issues — environment has no telemetry");
+
   await page.locator('a[href*="/issues/"]').first().click({ timeout: 30000 });
   await page.locator("#error-details-container").waitFor({ timeout: 30000 });
 
