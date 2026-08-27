@@ -395,15 +395,17 @@ widgets:
     query: "| summarize count() by bin(timestamp, 1h)"
 ```
 
-### 4. Set Up Webhook (Optional)
+### 4. Set Up Webhook (Required)
 
-For automatic syncing when you push changes, add a webhook in your repository settings:
+A push webhook is the only thing that pulls changes from your repository, so without one
+nothing you commit will reach Monoscope. Add it in your repository settings:
 
 1. Set the payload URL to: `${webhookUrl}`
 2. Set the content type to: `application/json`
 3. Send push events only, signed with the webhook secret you pasted above
 
-*Without a webhook, syncing happens on a schedule or can be triggered manually.*
+*Pushing a dashboard from Monoscope to your repository works without the webhook — it is only
+the pull direction that depends on it.*
 |]
 
 
