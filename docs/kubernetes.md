@@ -180,6 +180,16 @@ data:
             - k8s.deployment.name
             - k8s.pod.name
             - k8s.node.name
+            - k8s.cluster.uid
+
+      # No receiver can emit k8s.cluster.name — a cluster does not know its own name
+      # through the Kubernetes API. Without this the Cluster facet in Explorer falls
+      # back to the opaque cluster uid. Set it once here, per cluster.
+      resource:
+        attributes:
+          - key: k8s.cluster.name
+            value: "my-cluster"
+            action: upsert
 
     exporters:
       otlp:
@@ -191,15 +201,15 @@ data:
       pipelines:
         metrics:
           receivers: [k8s_cluster, kubeletstats]
-          processors: [batch, k8sattributes]
+          processors: [batch, k8sattributes, resource]
           exporters: [otlp]
         traces:
           receivers: [otlp]
-          processors: [batch, k8sattributes]
+          processors: [batch, k8sattributes, resource]
           exporters: [otlp]
         logs:
           receivers: [otlp]
-          processors: [batch, k8sattributes]
+          processors: [batch, k8sattributes, resource]
           exporters: [otlp]
 ```
 

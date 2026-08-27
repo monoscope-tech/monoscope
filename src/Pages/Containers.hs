@@ -44,6 +44,7 @@ data ContainerFilters = ContainerFilters
   , namespace :: Maybe Text
   , node :: Maybe Text
   , image :: Maybe Text
+  , cluster :: Maybe Text
   }
   deriving stock (Eq, Show)
 
@@ -70,6 +71,7 @@ applyFilters f = V.filter \r ->
     , matches f.namespace r.namespace
     , matches f.node r.nodeName
     , matches f.image r.image
+    , matches f.cluster r.cluster
     ]
   where
     matches selected actual = maybe True (\s -> T.null s || Just s == actual) selected
@@ -84,13 +86,13 @@ facetValues :: (ContainerRow -> Maybe Text) -> V.Vector ContainerRow -> [Text]
 facetValues f = Relude.sort . ordNub . filter (not . T.null) . mapMaybe f . V.toList
 
 
-containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
-containersGetH pid runtimeM namespaceM nodeM imageM = do
+containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
+containersGetH pid runtimeM namespaceM nodeM imageM clusterM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   allRows <- containersInWindow appCtx.env.enableTimefusionReads pid now
-  let filters = ContainerFilters runtimeM namespaceM nodeM imageM
+  let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
       baseUrl = "/p/" <> pid.toText <> "/containers"
@@ -125,6 +127,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM = do
                         , headerExtra = Nothing
                         , filterMenus =
                             [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
+                            , -- Falls back to k8s.cluster.uid, so the menu is populated even
+                              -- before a collector sets the human-readable cluster name.
+                              menu "Cluster" "cluster" filters.cluster (.cluster)
                             , menu "Namespace" "namespace" filters.namespace (.namespace)
                             , menu "Node" "node" filters.node (.nodeName)
                             , menu "Image" "image" filters.image (.image)
@@ -338,6 +343,6 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
 -- >>> import Models.Telemetry.Containers (ContainerRow (..))
--- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
--- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing
--- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
+-- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing

@@ -30,7 +30,15 @@ k8sResource ns pod container =
   , mkAttr "k8s.deployment.name" container
   , mkAttr "container.image.name" "ghcr.io/open-telemetry/demo"
   , mkAttr "container.image.tag" "2.2.0"
+  , -- k8sattributes can supply the uid; nothing can supply the cluster's name, which is
+    -- why the query coalesces one to the other. Only the checked pod gets a name below,
+    -- so both sides of that fallback are exercised.
+    mkAttr "k8s.cluster.uid" clusterUid
   ]
+
+
+clusterUid :: Text
+clusterUid = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
 
 -- | A Swarm task as docker_stats describes it: no pod, no namespace, the host in
@@ -49,7 +57,7 @@ ingestFixture :: TestResources -> Text -> IO ()
 ingestFixture tr key = do
   let emit :: [PC.KeyValue] -> (Text, Double) -> IO ()
       emit res (name, value) = ingestMetric tr key res name value frozenTime
-      k8sChecked = k8sResource "default" "checkout-7fb5b4f859-nlcjs" "checkout"
+      k8sChecked = mkAttr "k8s.cluster.name" "otel-demo" : k8sResource "default" "checkout-7fb5b4f859-nlcjs" "checkout"
       k8sOther = k8sResource "kube-system" "coredns-c6d9fc49c-bj5sw" "coredns"
 
   -- 0.5 cores against a 2-core limit and 512 MiB against 1 GiB: both percentages land on
@@ -122,7 +130,7 @@ spec = sequential $ aroundAll withTestResources do
       rows <- runTestBg frozenTime tr $ containersInWindow False testPid frozenTime
       V.toList rows `shouldBe` []
 
-      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
       let Containers.ContainersPage (PageCtx conf table) = page
       conf.pageTitle `shouldBe` "Containers"
       V.length table.rows `shouldBe` 0
@@ -173,12 +181,12 @@ spec = sequential $ aroundAll withTestResources do
       cpuPctOfLimit noLimit `shouldBe` Nothing
 
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
-      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
       let Containers.ContainersPage (PageCtx _ table) = page
       V.length table.rows `shouldBe` 3
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime="]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo"]
 
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
@@ -186,11 +194,15 @@ spec = sequential $ aroundAll withTestResources do
             (_, p) <- testServant tr f
             let Containers.ContainersPage (PageCtx _ t) = p
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
-      listWith (Containers.containersGetH testPid Nothing (Just "default") Nothing Nothing) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns"])
-      listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid Nothing (Just "no-such-namespace") Nothing Nothing) >>= (`shouldBe` [])
+      listWith (Containers.containersGetH testPid Nothing (Just "default") Nothing Nothing Nothing) >>= (`shouldBe` ["checkout"])
+      listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns"])
+      listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (Containers.containersGetH testPid Nothing (Just "no-such-namespace") Nothing Nothing Nothing) >>= (`shouldBe` [])
+      -- Cluster prefers the name where the collector set one, and falls back to the uid
+      -- where it did not, so the facet is usable before anyone edits a collector config.
+      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just "otel-demo")) >>= (`shouldBe` ["checkout"])
+      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldBe` ["coredns"])
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")

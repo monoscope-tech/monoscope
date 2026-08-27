@@ -45,6 +45,7 @@ data ContainerRow = ContainerRow
   , podName :: Maybe Text
   , namespace :: Maybe Text
   , nodeName :: Maybe Text
+  , cluster :: Maybe Text
   , image :: Maybe Text
   , imageTag :: Maybe Text
   , workload :: Maybe Text
@@ -179,6 +180,14 @@ containersInWindow useTimefusion pid now =
           COALESCE(|]
           <> raw (resourcePath useTimefusion ["k8s", "node", "name"])
           <> [HI.sql|, resource___host___name) AS node_name,
+          -- No receiver emits k8s.cluster.name: a cluster has no name in the API, so it
+          -- only exists if the collector's resource processor sets it. Fall back to the
+          -- uid, which k8sattributes does supply, so the facet is populated either way.
+          COALESCE(|]
+          <> raw (resourcePath useTimefusion ["k8s", "cluster", "name"])
+          <> [HI.sql|, |]
+          <> raw (resourcePath useTimefusion ["k8s", "cluster", "uid"])
+          <> [HI.sql|) AS cluster,
           |]
           <> raw (resourcePath useTimefusion ["container", "image", "name"])
           <> [HI.sql| AS image,
@@ -205,7 +214,7 @@ containersInWindow useTimefusion pid now =
       )
       SELECT
         container_name,
-        MAX(pod_name), MAX(namespace), MAX(node_name),
+        MAX(pod_name), MAX(namespace), MAX(node_name), MAX(cluster),
         MAX(image), MAX(image_tag), MAX(workload),
         -- Docker reports CPU with Docker's own formula, percent-of-a-single-core, so 200 means
         -- two full cores. Dividing by 100 puts it on the same cores axis as Kubernetes.
@@ -237,4 +246,4 @@ containersInWindow useTimefusion pid now =
 
 -- $setup
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
--- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

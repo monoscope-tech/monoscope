@@ -59,12 +59,14 @@ processors:
         - k8s.pod.start_time
         - k8s.deployment.name
         - k8s.node.name
+        - k8s.cluster.uid
         - container.id
         - container.image.name
         - container.image.tag
   resource:
     attributes:
-      # No receiver emits this. Set it so the cluster is nameable in queries and filters.
+      # No receiver emits this. Set it so the cluster is nameable in queries and filters —
+      # without it the Cluster facet falls back to the opaque k8s.cluster.uid above.
       - key: k8s.cluster.name
         value: "my-cluster"
         action: upsert
