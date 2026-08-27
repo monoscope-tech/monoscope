@@ -1696,7 +1696,13 @@ dashboardsGet_ dg = do
                       Just (widgetId, sourceDashIdM) ->
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
                         , hxSwap_ "none"
-                        , [__| on htmx:after:request set #dashboards-modal.checked to false |]
+                        , data_ "success-message" $ bool "Widget added to " "Widget copied to " (isJust sourceDashIdM) <> dash.title
+                        , [__|on htmx:after:request
+                            if event.detail.ctx.response.status >= 200 and event.detail.ctx.response.status < 300
+                              set #dashboards-modal.checked to false
+                              send successToast(value:[my.dataset.successMessage]) to <body/>
+                            end
+                          |]
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
@@ -1822,7 +1828,6 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
                 , currentSort
                 , filterMenus = [tagFilterMenu | not (null availableTags)]
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
-                , headerExtra = Nothing
                 }
       addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, copyMode, dashTemplates = templates, showNew = isJust newM})
 

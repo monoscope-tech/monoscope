@@ -85,7 +85,6 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
           , currentSort
           , filterMenus = []
           , activeFilters = []
-          , headerExtra = Nothing
           }
       catalogTable =
         Table
@@ -293,7 +292,6 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           , currentSort
           , filterMenus = []
           , activeFilters = []
-          , headerExtra = Nothing
           }
       endpointsTable =
         Table

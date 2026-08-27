@@ -1518,7 +1518,6 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
           , currentSort
           , filterMenus = [serviceMenu | not (null availableServices)] <> [typeMenu | not (null availableTypes)]
           , activeFilters = [("Service", serviceFilters) | not (null serviceFilters)] <> [("Type", typeFilters) | not (null typeFilters)]
-          , headerExtra = Nothing
           }
       issuesTable =
         Table
