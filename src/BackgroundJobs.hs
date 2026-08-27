@@ -528,7 +528,18 @@ processBackgroundJob authCtx bgJob =
                   -- Both paid providers chunk identically. LS's 1M POST cap forces
                   -- splitting; Stripe has no documented cap but N meter-events with
                   -- the same meter+customer aggregate identically to one big event.
-                  _ -> pure $ Projects.splitUsageIntoChunks kind qty
+                  --
+                  -- The quantity is converted to the target's units BEFORE chunking, so
+                  -- the stored quantity is the number actually sent and the 1M cap is
+                  -- applied to the value the cap is about. Raw counts stay in
+                  -- apis.daily_usage, which is what a reconciliation reads.
+                  Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
+                    -- Only the shared events item needs restating; a dimension with an
+                    -- item of its own is already priced for it.
+                    Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
+                    Projects.LemonSqueezyMeter _ -> qty
+                    Projects.StripeMeter _ _ -> qty
+                  Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
             Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
             Projects.recordUsageWindow pid wStart nowU totals chunks
 
@@ -569,6 +580,7 @@ processBackgroundJob authCtx bgJob =
                     res <- tryAny $ case target of
                       Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
                       Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
                       -- Not a transient error: throw so the Left branch below marks
                       -- the chunk failed, rather than no-oping into a 'submitted'.
                       Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason

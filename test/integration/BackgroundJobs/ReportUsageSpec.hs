@@ -303,51 +303,45 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "submitted")])
 
     -- Dormancy must be a decision not to submit, not a backlog that fires all at
-    -- once the day a meter is switched on.
-    -- Dormancy is now purely a question of addressability — there is no enable
-    -- list — and Lemon Squeezy replays are the case that still has one: LS
-    -- addresses a usage record only by subscription item and cannot carry a second,
-    -- so replays have nowhere to bill until an item is recorded.
+    -- once the day a meter becomes billable. With no enable list, the remaining
+    -- dormant case is a Lemon Squeezy project with no subscription item at all —
+    -- nothing on it has anywhere to bill.
     it "cuts no chunks for a dormant meter, so making it billable later cannot charge the dormant window" \(tr0, pid) -> do
       seedReplays tr0 pid 3 (addUTCTime (-3600) frozenTime)
-      setBilling tr0 pid "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
+      setBilling tr0 pid "GraduatedPricing" Nothing (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
 
       void $ runReportRecording tr0 pid
-      -- Events rode its own item and metrics rode the events item; replays did not,
-      -- and crucially left no chunk behind to be drained later.
-      rows <- meteredSubmissions tr0 pid
-      map (\(k, _, _) -> k) rows `shouldNotSatisfy` elem "session_replays"
+      meteredSubmissions tr0 pid >>= (`shouldBe` [])
 
-      -- Now give replays an item. The window that was dormant stays unbilled: only
-      -- usage after the watermark can be charged. Buffering the dormant period and
-      -- draining it on the day a meter goes live is the backlog leak we have hit.
+      -- Now give it an item. The window that was dormant stays unbilled: only usage
+      -- after the watermark can be charged. Buffering the dormant period and draining
+      -- it the day a meter goes live is the backlog leak we have already hit.
       void $ runTestBg frozenTime tr0 $ Projects.setMeterSubItemId pid Projects.SessionReplays "912999"
       void $ runReportRecording tr0 pid
       after <- meteredSubmissions tr0 pid
-      map (\(k, _, _) -> k) after `shouldNotSatisfy` elem "session_replays"
+      map (\(_, q, _) -> q) after `shouldNotSatisfy` elem 3000
 
-    -- Lemon Squeezy addresses a usage record only by subscription item, so a
-    -- second and third metered variant must exist before those meters can bill —
-    -- enabling them in config alone must not POST anything.
-    -- An LS subscription carries exactly one item and the API cannot add another, so
-    -- the two extra dimensions cannot both be priced there. They are treated
-    -- differently on purpose, because the error is asymmetric.
-    it "rides metric datapoints on a Lemon Squeezy events item, but never replays" \(tr0, pid) -> do
+    -- An LS subscription carries one item billed at the events rate, so every
+    -- dimension rides it restated in that meter's units. The arithmetic IS the price:
+    -- get the factor wrong and the customer is charged 10x or a 1000th of the right
+    -- amount, silently, which is why these are exact rather than "greater than zero".
+    it "restates every Lemon Squeezy dimension in events units on the one item" \(tr0, pid) -> do
       let tr = tr0
       seedUsage tr pid
-      seedMetrics tr pid 4
+      seedMetrics tr pid 40
       seedReplays tr pid 3 (addUTCTime (-3600) frozenTime)
       -- A numeric sub_id is what marks the project as Lemon Squeezy.
       setBilling tr pid "GraduatedPricing" (Just "912345") (Just "812345") (addUTCTime (-86400 * 3) frozenTime)
 
       reqs <- runReportRecording tr pid
 
-      -- Metrics bill at the events rate against the events item — 10x what a Stripe
-      -- customer pays per datapoint, and the only way to bill them at all here.
-      -- Replays stay dormant: the events rate would undercharge them 1000-fold.
+      -- 40 datapoints at $1/10M is 4 events-units at $1/1M; 3 replays at $1/1,000 is
+      -- 3,000. Events are already in the meter's own unit and pass through: seedUsage
+      -- ingests 3 logs.
       rows <- meteredSubmissions tr pid
-      map (\(k, _, _) -> k) rows `shouldBe` ["events", "metric_datapoints"]
-      postsTo "lemonsqueezy.com" reqs `shouldSatisfy` \bs -> length bs == 2 && all (T.isInfixOf "912345") bs
+      map (\(k, q, _) -> (k, q)) rows `shouldMatchList` [("events", 3), ("metric_datapoints", 4), ("session_replays", 3000)]
+      -- All three against the one item, because there is only one.
+      postsTo "lemonsqueezy.com" reqs `shouldSatisfy` \bs -> length bs == 3 && all (T.isInfixOf "912345") bs
 
     it "bills a Lemon Squeezy meter once its subscription item is recorded" \(tr0, pid) -> do
       let tr = tr0
@@ -357,6 +351,8 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
       reqs <- runReportRecording tr pid
 
+      -- A per-meter item is priced for its own dimension, so the raw count goes over
+      -- the wire — no restating into events units, which is only for the shared item.
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "submitted")])
       -- Billed against the replays subscription item, NOT the events item that
       -- first_sub_item_id falls back to — a fallback that leaked past its own

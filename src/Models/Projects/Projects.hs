@@ -80,6 +80,7 @@ module Models.Projects.Projects (
   MeterKind (..),
   meterQuantity,
   stripeMeterEventName,
+  lemonSqueezyEventsEquivalent,
   MeterTarget (..),
   DormantReason (..),
   ProjectMeterConfig (..),
@@ -1087,13 +1088,50 @@ stripeMeterEventName = \case
   SessionReplays -> "session_replays_usage"
 
 
+-- | Restate a dimension's raw count in units of the **events** meter.
+--
+-- Lemon Squeezy bills a subscription item at one rate and cannot carry a second
+-- item, so a dimension priced differently from events has to be expressed in
+-- events units to be billed at all. The factor is just the ratio of the two
+-- rates, and it makes the customer pay the intended price:
+--
+--   * events          \$1/1M    — already the meter's own unit, so unchanged
+--   * metric datapoints \$1/10M — ten per unit, so 10M datapoints bill as 1M units = \$1
+--   * session replays  \$1/1k    — a thousandth per unit, so 1k replays bill as 1M units = \$1
+--
+-- Stripe needs none of this: it prices each meter separately, so it submits raw
+-- counts and this function is never reached.
+--
+-- >>> map (\k -> lemonSqueezyEventsEquivalent k 10_000_000) [minBound .. maxBound]
+-- [10000000,1000000,10000000000]
+--
+-- Division floors, so a partial ten of datapoints is dropped rather than rounded
+-- up — at \$1 per 10M that is worth a ten-millionth of a dollar, and erring
+-- towards the customer is the right direction for a rounding nobody will audit.
+--
+-- >>> map (lemonSqueezyEventsEquivalent MetricDatapoints) [0, 9, 10, 19]
+-- [0,0,1,1]
+lemonSqueezyEventsEquivalent :: MeterKind -> Int -> Int
+lemonSqueezyEventsEquivalent = \case
+  Events -> Relude.id
+  MetricDatapoints -> (`div` 10)
+  SessionReplays -> (* 1000)
+
+
 -- | Where one meter's usage is submitted. The two providers address a meter
 -- completely differently: Stripe by customer + meter event name, Lemon Squeezy
 -- by subscription item. Carrying the resolved address in the type means the
 -- submit path cannot be reached without one.
 data MeterTarget
   = StripeMeter {customerId :: Text, eventName :: Text}
-  | LemonSqueezyMeter {subItemId :: Text}
+  | -- | A subscription item of this dimension's own, priced for it. Submit the raw
+    -- count. No LS subscription has one today — the API cannot add a second item —
+    -- but 'setMeterSubItemId' can record one, so the case is reachable.
+    LemonSqueezyMeter {subItemId :: Text}
+  | -- | The shared events item, which is all an LS subscription can offer. The count
+    -- must be restated in that meter's units first ('lemonSqueezyEventsEquivalent'),
+    -- or the customer is billed at the events rate for something priced differently.
+    LemonSqueezyEventsItem {subItemId :: Text}
   deriving stock (Eq, Generic, Show)
 
 
@@ -1166,17 +1204,13 @@ projectMeterConfig p subItemIds =
 -- many events it receives.
 --
 -- >>> let ls n = ProjectMeterConfig LemonSqueezyProvider Nothing (Just "si_1") n
+-- Every Lemon Squeezy dimension falls back to the shared events item, which is the
+-- only one a subscription has; a dimension with an item of its own takes it instead.
+--
 -- >>> resolveMeterTarget (ls mempty) Events
--- Right (LemonSqueezyMeter {subItemId = "si_1"})
---
--- Metric datapoints ride the events item on Lemon Squeezy, where a subscription
--- cannot carry a second one; replays do not, because the events rate would
--- undercharge them a thousandfold.
---
--- >>> resolveMeterTarget (ls mempty) MetricDatapoints
--- Right (LemonSqueezyMeter {subItemId = "si_1"})
+-- Right (LemonSqueezyEventsItem {subItemId = "si_1"})
 -- >>> resolveMeterTarget (ls mempty) SessionReplays
--- Left NoSubscriptionItem
+-- Right (LemonSqueezyEventsItem {subItemId = "si_1"})
 -- >>> resolveMeterTarget (ls (fromList [(SessionReplays, "si_9")])) SessionReplays
 -- Right (LemonSqueezyMeter {subItemId = "si_9"})
 -- >>> resolveMeterTarget (ProjectMeterConfig StripeProvider (Just "cus_1") Nothing mempty) MetricDatapoints
@@ -1192,20 +1226,13 @@ resolveMeterTarget cfg kind = case cfg.provider of
   -- id is not part of the call, so no per-meter item is needed.
   StripeProvider -> maybe (Left NoStripeCustomer) (Right . (`StripeMeter` stripeMeterEventName kind)) cfg.stripeCustomerId
   -- LS usage records are addressed ONLY by subscription item, and an LS
-  -- subscription carries exactly one — the API cannot add a second. So a
-  -- per-dimension price is not expressible there the way it is on Stripe.
-  --
-  -- Metric datapoints therefore ride the events item, billing at the events
-  -- rate. That is a deliberate pricing decision, not a fallback: it charges an
-  -- LS customer ~10x per datapoint what a Stripe customer pays (\$1/1M rather
-  -- than \$1/10M), and it is the only way to bill them for metrics at all.
-  --
-  -- Session replays do NOT ride it. The error is asymmetric: replays are priced
-  -- \$1/1,000, so billing them at the events rate would undercharge by a factor
-  -- of a thousand. They stay dormant until a per-meter item exists.
-  LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds <|> (guard (kind `elem` [Events, MetricDatapoints]) >> cfg.eventsSubItemId) of
+  -- subscription carries exactly one — the API cannot add a second. So every
+  -- dimension rides the events item, converted into that meter's units first by
+  -- 'lemonSqueezyEventsEquivalent'. The price the customer pays is the intended
+  -- one; only the unit it is expressed in differs.
+  LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds of
     Just sid -> Right (LemonSqueezyMeter sid)
-    Nothing -> Left NoSubscriptionItem
+    Nothing -> maybe (Left NoSubscriptionItem) (Right . LemonSqueezyEventsItem) cfg.eventsSubItemId
 
 
 -- | Per-meter Lemon Squeezy subscription items. Empty for every project until
