@@ -57,7 +57,34 @@ data ReplayPost = ReplayPost
   , userName :: Maybe Text
   }
   deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON, ToSchema)
+  deriving anyclass (ToSchema)
+
+
+-- | Hand-written because the wire format has two shapes and deriving can only express one.
+--
+-- The browser SDK sends @user@ (and @tenant@) as nested objects, while this endpoint was
+-- written expecting flat @userId@ / @userEmail@ / @userName@. Nothing ever errored — the flat
+-- keys were simply absent, so all three decoded as 'Nothing' on every single upload and every
+-- recording in the product showed no user. A silent mismatch, invisible precisely because both
+-- sides were individually valid.
+--
+-- Flat is read first and wins: only older SDK builds send it, they never send the nested form,
+-- and they are already deployed, so dropping it would break them. @name@ then @full_name@,
+-- because 'MonoscopeUser' carries both and callers use either.
+--
+-- @tenant@ is accepted and ignored — @projects.replay_sessions@ has no column to put it in, so
+-- persisting it needs a migration and somewhere in the UI to show it.
+instance AE.FromJSON ReplayPost where
+  parseJSON = AE.withObject "ReplayPost" \o -> do
+    events <- o AE..: "events"
+    sessionId <- o AE..: "sessionId"
+    timestamp <- o AE..: "timestamp"
+    user <- o AE..:? "user"
+    let nested k = user >>= KM.lookup k >>= \case AE.String s -> Just s; _ -> Nothing
+    userId <- (<|> nested "id") <$> o AE..:? "userId"
+    userEmail <- (<|> nested "email") <$> o AE..:? "userEmail"
+    userName <- (\flat -> flat <|> nested "name" <|> nested "full_name") <$> o AE..:? "userName"
+    pure ReplayPost{..}
 
 
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value

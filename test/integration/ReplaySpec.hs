@@ -17,7 +17,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
@@ -74,6 +74,40 @@ decodeArrayLen bs = case AE.eitherDecodeStrict bs of
 
 spec :: Spec
 spec = around withTestResources do
+  -- The browser SDK sends user and tenant as nested objects, while this endpoint was written
+  -- expecting flat userId/userEmail/userName. Nothing errored — the fields simply decoded as
+  -- Nothing on every upload, so every recording in the product showed no user, permanently and
+  -- silently. These pin both shapes so the wire contract cannot drift apart again unnoticed.
+  describe "ReplayPost user metadata" do
+    let postWith extra =
+          AE.eitherDecodeStrict @ReplayPost
+            $ "{\"events\":[],\"sessionId\":\"00000000-0000-0000-0000-00000000002a\",\"timestamp\":\"2026-05-08T00:00:00Z\""
+            <> extra
+            <> "}"
+
+    it "reads the nested user object the browser SDK actually sends" $ \_ ->
+      case postWith ",\"user\":{\"id\":\"u-1\",\"email\":\"a@b.c\",\"name\":\"Ada\"},\"tenant\":{\"id\":\"t-1\"}" of
+        Left err -> expectationFailure $ "decode failed: " <> err
+        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Just "u-1", Just "a@b.c", Just "Ada")
+
+    -- MonoscopeUser carries both `name` and `full_name`; SDKs and callers use either.
+    it "falls back to full_name when the user has no name" $ \_ ->
+      case postWith ",\"user\":{\"id\":\"u-2\",\"full_name\":\"Ada Lovelace\"}" of
+        Left err -> expectationFailure $ "decode failed: " <> err
+        Right p -> p.userName `shouldBe` Just "Ada Lovelace"
+
+    -- Older SDK builds send the flat shape and are already deployed in the wild, so it has to
+    -- keep working rather than being replaced.
+    it "still reads the flat fields older SDKs send" $ \_ ->
+      case postWith ",\"userId\":\"u-3\",\"userEmail\":\"c@d.e\",\"userName\":\"Grace\"" of
+        Left err -> expectationFailure $ "decode failed: " <> err
+        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Just "u-3", Just "c@d.e", Just "Grace")
+
+    it "decodes an upload carrying no user at all" $ \_ ->
+      case postWith "" of
+        Left err -> expectationFailure $ "decode failed: " <> err
+        Right p -> (p.userId, p.userEmail, p.userName) `shouldBe` (Nothing, Nothing, Nothing)
+
   describe "replay object layout" do
     let at = UTCTime (fromGregorian 2026 5 8) 0
         sid = UUID.fromWords 0 0 0 42
