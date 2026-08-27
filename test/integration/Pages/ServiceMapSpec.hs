@@ -368,10 +368,21 @@ spec = around withTestResources do
       (_, page) <- testServant tr $ Trace.traceH testPid trId (Just frozenTime) Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
 
-      -- The tab sits beside the existing three and drives the same navigatable() mechanism
-      -- the timeline depends on — converting this strip to CSS radios has broken it before.
-      -- Lucid escapes attribute values, so assert the form the browser actually receives.
-      html `shouldContainAll` ["navigatable(this, &#39;#service_map&#39;", "Waterfall", "Timeline", "Services", ">Map<"]
+      -- The tab sits beside the existing three and must stay wired to the panel it reveals.
+      -- That wiring has broken before, so assert both ends of it rather than just the label:
+      -- the radio that carries the tab state, and the CSS variant on #service_map that reads
+      -- it. The variant is a literal class — if Tailwind ever fails to compile it the panel
+      -- silently never shows, which no smoke test would otherwise catch.
+      html
+        `shouldContainAll` [ "id=\"tab-map\""
+                           , "name=\"trace-tabs\""
+                           , "group-has-[#tab-map:checked]/tt:block"
+                           , "id=\"service_map\""
+                           , "Waterfall"
+                           , "Timeline"
+                           , "Services"
+                           , ">Map<"
+                           ]
 
       -- The graph is serialised into the page, so a shared trace link needs no fetch. It
       -- must carry both instrumented services, the inferred database nobody instruments,
