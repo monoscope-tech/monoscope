@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -30,7 +30,7 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (..), ZonedTime, addDays, addUTCTime, dayOfWeek, formatTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
@@ -375,6 +375,14 @@ processBackgroundJob authCtx bgJob =
           Log.logInfo "Running daily job" ()
           currentDay <- utctDay <$> Time.currentTime
           currentTime <- Time.currentTime
+          -- Book tomorrow before doing any work. odd-jobs deletes this job's own row on
+          -- success, so without a future-dated DailyJob the 30-minute backstop in
+          -- 'jobsWorkerInit' would re-insert one every half hour. Booking it at the start
+          -- rather than the end means a crash mid-scheduling still leaves tomorrow covered;
+          -- the backstop stays as the net for a crash before this line.
+          liftIO $ withResource authCtx.jobsPool \conn -> do
+            let tomorrow = UTCTime (addDays 1 currentDay) 0
+            void $ scheduleJob conn "background_jobs" BackgroundJobs.DailyJob tomorrow
           -- Check if app-wide jobs already scheduled for today (idempotent check)
           hourlyJobsExist <-
             (>= (24 :: Int64))
@@ -2925,6 +2933,19 @@ jobsWorkerInit logger appCtx tp = do
 
 -- | Ensure a DailyJob is queued for today. Safe to call from multiple pods —
 -- uses INSERT ... WHERE NOT EXISTS to atomically skip if one already exists.
+--
+-- The guard counts only @DailyJob@. It used to accept an @HourlyJob@ as evidence that today
+-- had been scheduled, which held while a run's hourly jobs stayed inside its own day — but
+-- 'runDailyJobScheduling' seeds them from @now()@, so a run at 17:43 leaves rows dated up to
+-- 16:43 /tomorrow/, and tomorrow's DailyJob is then suppressed by yesterday's spill. Each
+-- run drifted later and the suppression repeated: in production DailyJob fired on 08-24 and
+-- 08-26 and not at all on 08-25 or 08-27, which stopped @ReportUsage@ and with it all
+-- billing. Nothing announced it, because a suppressed job logs nothing.
+--
+-- Dropping @HourlyJob@ alone would swap the bug for a storm: odd-jobs deletes a job row on
+-- success, so the 30-minute backstop would re-insert a DailyJob half an hour after every run.
+-- 'runDailyJobScheduling' therefore books tomorrow's DailyJob itself, and that future-dated
+-- row is what holds this guard shut for the rest of the day.
 ensureDailyJobScheduled :: Config.AuthContext -> IO ()
 ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
   [Only (inserted :: Int)] <-
@@ -2935,7 +2956,7 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
              SELECT now(), 'queued', jsonb_build_object('tag', 'DailyJob')
              WHERE NOT EXISTS (
                SELECT 1 FROM background_jobs
-               WHERE payload->>'tag' IN ('DailyJob', 'HourlyJob')
+               WHERE payload->>'tag' = 'DailyJob'
                  AND status IN ('queued', 'locked')
                  AND run_at >= date_trunc('day', now())
              )
