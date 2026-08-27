@@ -50,7 +50,7 @@ data ContainerFilters = ContainerFilters
 
 
 runtimeLabel :: Runtime -> Text
-runtimeLabel = \case Kubernetes -> "kubernetes"; Docker -> "docker"
+runtimeLabel = \case Kubernetes -> "kubernetes"; Docker -> "docker"; Host -> "host"
 
 
 -- | Narrow the list to the selected facets. An absent or empty facet matches everything, so
@@ -229,7 +229,7 @@ renderNameCol :: ContainerVM -> Html ()
 renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
   div_ [class_ "flex items-center gap-2 min-w-0"] do
     span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ runtimeLabel $ runtimeOf vm.row]
-      $ faSprite_ (case runtimeOf vm.row of Kubernetes -> "cube"; Docker -> "layer-group") "solid" "w-3.5 h-3.5 fill-iconNeutral"
+      $ faSprite_ (case runtimeOf vm.row of Kubernetes -> "cube"; Docker -> "layer-group"; Host -> "server") "solid" "w-3.5 h-3.5 fill-iconNeutral"
     button_
       ( [class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0 text-left cursor-pointer", type_ "button"]
           <> drawerLoadAttrs_ (detailUrl vm)
@@ -342,7 +342,7 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 -- positionally rather than by update.
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
 -- >>> import Data.Vector qualified as V
--- >>> import Models.Telemetry.Containers (ContainerRow (..))
--- >>> let emptyRow n = ContainerRow n Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> import Models.Telemetry.Containers (ContainerRow (..), Scope (..))
+-- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 -- >>> let noFilters = ContainerFilters Nothing Nothing Nothing Nothing Nothing
 -- >>> let nsFilter ns = ContainerFilters Nothing ns Nothing Nothing Nothing

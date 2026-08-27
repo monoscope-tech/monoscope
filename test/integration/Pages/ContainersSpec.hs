@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Vector qualified as V
 import Lucid qualified
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Containers qualified as Containers
 import Pkg.Components.Table (Table (..))
@@ -61,7 +61,10 @@ dockerResource name =
 ingestFixture :: TestResources -> Text -> IO ()
 ingestFixture tr key = do
   let emit :: [PC.KeyValue] -> (Text, Double) -> IO ()
-      emit res (name, value) = ingestMetric tr key res name value frozenTime
+      emit res (name, value) = ingestMetric tr key res [] name value frozenTime
+      -- Dimensioned datapoints: hostmetrics reports CPU per logical core per mode and memory
+      -- per state, so these are many series under one metric name, not one value.
+      emitDim res dp (name, value) = ingestMetric tr key res dp name value frozenTime
       k8sChecked = mkAttr "k8s.cluster.name" "otel-demo" : k8sResource "default" "checkout-7fb5b4f859-nlcjs" "checkout"
       k8sOther = k8sResource "kube-system" "coredns-c6d9fc49c-bj5sw" "coredns"
       k8sStateful = mkAttr "k8s.statefulset.name" "postgres" : k8sPodResource "data" "postgres-0" "postgres"
@@ -108,8 +111,36 @@ ingestFixture tr key = do
   -- working_set: neither the workload nor the memory reading survives without a fallback.
   forM_ ([("container.cpu.usage", 0.1), ("container.memory.usage", 16777216)] :: [(Text, Double)]) (emit k8sStateful)
 
+  -- A pod whose collector runs kubeletstats without the container metric group: only
+  -- k8s.pod.* arrives, so the pod itself has to stand in for its containers.
+  forM_
+    ([("k8s.pod.cpu.usage", 0.75), ("k8s.pod.memory.working_set", 268435456)] :: [(Text, Double)])
+    (emit $ mkAttr "k8s.deployment.name" "frontend" : k8sPodResource "shop" "frontend-544d9b6f4-2xk7z" "frontend")
+
+  -- The same pod metrics for a pod that DOES report container metrics: the rollup must lose
+  -- to its containers rather than appear beside them.
+  forM_
+    ([("k8s.pod.cpu.usage", 9.9), ("k8s.pod.memory.working_set", 9999999)] :: [(Text, Double)])
+    (emit $ k8sPodResource "default" "checkout-7fb5b4f859-nlcjs" "checkout")
+
+  -- A bare node. Four logical cores, each reporting idle and user; 0.25 busy on each of two
+  -- of them is 0.5 cores of a 4-core box. Memory is per state and the limit is their sum.
+  let host = [mkAttr "host.name" "vps-bare-01"]
+      cpuDp core mode = [mkAttr "cpu.logical_number" core, mkAttr "cpu.mode" mode]
+  forM_ (["cpu0", "cpu1", "cpu2", "cpu3"] :: [Text]) \core -> do
+    emitDim host (cpuDp core "idle") ("system.cpu.utilization", 0.875)
+    emitDim host (cpuDp core "user") ("system.cpu.utilization", 0.125)
+  forM_ ([("used", 2147483648), ("free", 1073741824), ("cached", 1073741824)] :: [(Text, Double)]) \(st, v) ->
+    emitDim host [mkAttr "system.memory.state" st] ("system.memory.usage", v)
+
+  -- A Docker Swarm task. docker_stats reports the task name and no service attribute, so the
+  -- service has to be read back out of the name.
+  forM_
+    ([("container.cpu.utilization", 40), ("container.memory.usage.total", 1073741824)] :: [(Text, Double)])
+    (emit $ dockerResource "srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c")
+
   -- Noise the inventory must ignore: a metric with no container identity at all.
-  ingestMetric tr key [] "http.server.duration" 12 frozenTime
+  ingestMetric tr key [] [] "http.server.duration" 12 frozenTime
 
 
 rowsByName :: V.Vector ContainerRow -> [(Text, ContainerRow)]
@@ -154,7 +185,16 @@ spec = sequential $ aroundAll withTestResources do
       let byName = rowsByName rows
 
       -- The noise metric carries no container identity, so it must not become a row.
-      map fst byName `shouldMatchList` ["checkout", "coredns", "postgres", "srv-captain--redpanda-0.1.tt13bkp5"]
+      -- checkout also reports k8s.pod.* metrics; the pod rollup must not appear beside it.
+      map fst byName
+        `shouldMatchList` [ "checkout"
+                          , "coredns"
+                          , "postgres"
+                          , "frontend-544d9b6f4-2xk7z"
+                          , "vps-bare-01"
+                          , "srv-captain--redpanda-0.1.tt13bkp5"
+                          , "srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c"
+                          ]
 
       k8s <- containerNamed byName "checkout"
       runtimeOf k8s `shouldBe` Kubernetes
@@ -195,6 +235,38 @@ spec = sequential $ aroundAll withTestResources do
       stateful.workload `shouldBe` Just "postgres"
       stateful.memBytes `shouldBe` Just 16777216
 
+      -- kubeletstats without the container metric group: the pod stands in for containers we
+      -- cannot see, and reads as Kubernetes with no image of its own.
+      podOnly <- containerNamed byName "frontend-544d9b6f4-2xk7z"
+      runtimeOf podOnly `shouldBe` Kubernetes
+      podOnly.scope `shouldBe` ScopePod
+      podOnly.cpuCores `shouldBe` Just 0.75
+      podOnly.memBytes `shouldBe` Just 268435456
+      podOnly.workload `shouldBe` Just "frontend"
+      podOnly.image `shouldBe` Nothing
+
+      -- A bare node: 0.125 busy on each of four cores is 0.5 cores of a 4-core box, and the
+      -- node's capacity is its limit. Reading MAX over the per-core series instead would pick
+      -- up a core's 0.875 idle and call the machine busy.
+      node <- containerNamed byName "vps-bare-01"
+      runtimeOf node `shouldBe` Host
+      node.cpuCores `shouldBe` Just 0.5
+      node.cpuLimit `shouldBe` Just 4
+      cpuPctOfLimit node `shouldBe` Just 0.125
+      node.memBytes `shouldBe` Just 2147483648
+      node.memLimit `shouldBe` Just 4294967296
+      memPctOfLimit node `shouldBe` Just 0.5
+      -- The collector's own pod must never be stamped on the node it is measuring.
+      node.podName `shouldBe` Nothing
+      node.namespace `shouldBe` Nothing
+      node.nodeName `shouldBe` Just "vps-bare-01"
+
+      -- Swarm names a task <service>.<slot>.<taskid> and sends no service attribute, so every
+      -- replica looked like an unrelated container with no workload.
+      swarm <- containerNamed byName "srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c"
+      runtimeOf swarm `shouldBe` Docker
+      swarm.workload `shouldBe` Just "srv-captain--api"
+
       -- A container with no CPU limit yields no percentage — never a fabricated 0%.
       noLimit <- containerNamed byName "coredns"
       noLimit.cpuLimit `shouldBe` Nothing
@@ -203,10 +275,10 @@ spec = sequential $ aroundAll withTestResources do
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
       (_, page) <- testServant tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing
       let Containers.ContainersPage (PageCtx _ table) = page
-      V.length table.rows `shouldBe` 4
+      V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01"]
 
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
@@ -215,14 +287,16 @@ spec = sequential $ aroundAll withTestResources do
             let Containers.ContainersPage (PageCtx _ t) = p
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
       listWith (Containers.containersGetH testPid Nothing (Just "default") Nothing Nothing Nothing) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
-      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns", "postgres"])
-      listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing Nothing) >>= (`shouldBe` ["srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (Containers.containersGetH testPid (Just "docker") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
+      listWith (Containers.containersGetH testPid (Just "kubernetes") Nothing Nothing Nothing Nothing) >>= (`shouldMatchList` ["checkout", "coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
+      listWith (Containers.containersGetH testPid Nothing Nothing (Just "0ce201583b04") Nothing Nothing) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
       listWith (Containers.containersGetH testPid Nothing (Just "no-such-namespace") Nothing Nothing Nothing) >>= (`shouldBe` [])
       -- Cluster prefers the name where the collector set one, and falls back to the uid
       -- where it did not, so the facet is usable before anyone edits a collector config.
       listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just "otel-demo")) >>= (`shouldBe` ["checkout"])
-      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldMatchList` ["coredns", "postgres"])
+      listWith (Containers.containersGetH testPid Nothing Nothing Nothing Nothing (Just clusterUid)) >>= (`shouldMatchList` ["coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
+      -- A bare node is its own runtime, so it is reachable and does not pollute the others.
+      listWith (Containers.containersGetH testPid (Just "host") Nothing Nothing Nothing Nothing) >>= (`shouldBe` ["vps-bare-01"])
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")

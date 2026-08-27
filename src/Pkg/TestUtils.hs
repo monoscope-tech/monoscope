@@ -1471,11 +1471,11 @@ withSpanStatus c = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PT
 -- | @resAttrs@ are extra resource attributes on the emitted metric — the only way to produce
 -- rows carrying @k8s.pod.name@, @container.name@ and friends, which the container inventory
 -- keys on. Pass @[]@ for a plain @service.name@-only metric.
-ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> [PC.KeyValue] -> Text -> Double -> UTCTime -> IO ()
-ingestMetric tr apiKey resAttrs metricName value timestamp =
-  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey resAttrs metricName value timestamp)
-ingestMetricWithHeader tr apiKey resAttrs metricName value timestamp =
-  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" resAttrs metricName value timestamp)
+ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> [PC.KeyValue] -> [PC.KeyValue] -> Text -> Double -> UTCTime -> IO ()
+ingestMetric tr apiKey resAttrs dpAttrs metricName value timestamp =
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey resAttrs dpAttrs metricName value timestamp)
+ingestMetricWithHeader tr apiKey resAttrs dpAttrs metricName value timestamp =
+  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" resAttrs dpAttrs metricName value timestamp)
 
 
 extractParams :: W.Options -> [(Text, Text)]
@@ -1783,9 +1783,12 @@ createOtelTraceAtTime apiKey spanName timestamp = do
   pure $ createOtelSpanAtTime apiKey trIdText spanIdText Nothing spanName timestamp
 
 
-createGaugeMetricAtTime :: Text -> [PC.KeyValue] -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
-createGaugeMetricAtTime apiKey resAttrs metricName value timestamp =
-  let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value
+-- | @dpAttrs@ are datapoint attributes, not resource ones: hostmetrics dimensions a series
+-- by logical core, mode or memory state there, and a helper that could not express that made
+-- a whole class of aggregation bug untestable.
+createGaugeMetricAtTime :: Text -> [PC.KeyValue] -> [PC.KeyValue] -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
+createGaugeMetricAtTime apiKey resAttrs dpAttrs metricName value timestamp =
+  let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value & PMF.attributes .~ dpAttrs
       gauge = defMessage & PMF.dataPoints .~ [dataPoint]
       metric = defMessage & PMF.name .~ metricName & PMF.description .~ ("Test gauge metric: " <> metricName) & PMF.unit .~ "1" & PMF.gauge .~ gauge
       scopeMetric = defMessage & PMF.metrics .~ [metric]

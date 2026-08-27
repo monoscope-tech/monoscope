@@ -99,7 +99,7 @@ seedReplays tr pid n at = withResource tr.trPool \conn ->
 seedMetrics :: TestResources -> Projects.ProjectId -> Int -> IO ()
 seedMetrics tr pid n = do
   apiKey <- createTestAPIKey tr pid "report-usage-metrics-key"
-  for_ [1 .. n] \(i :: Int) -> ingestMetric tr apiKey [] ("usage.metric." <> show i) (fromIntegral i) frozenTime
+  for_ [1 .. n] \(i :: Int) -> ingestMetric tr apiKey [] [] ("usage.metric." <> show i) (fromIntegral i) frozenTime
 
 
 -- | Run the job with provider calls recorded instead of sent, so the drain path
