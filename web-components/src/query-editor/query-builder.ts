@@ -694,10 +694,11 @@ export class QueryBuilderComponent extends LitElement {
     if (!queryEditor?.editor) return;
 
     // First ensure we're using a timeseries visualization type
-    const vizType = (window as any).currentVisualizationType;
+    const vizType = queryEditor.closest('form')?.querySelector('#visualizationTabs input:checked')?.value
+      || (window as any).currentVisualizationType;
     if (!['timeseries', 'timeseries_line'].includes(vizType)) {
       // Set visualization type to timeseries if it's not already a timeseries type
-      (window as any).handleVisualizationUpdate('timeseries');
+      (window as any).handleVisualizationUpdate('timeseries', queryEditor.getAttribute('target-widget-preview') || undefined);
     }
 
     // Normalize field names for comparison (handle bin functions)

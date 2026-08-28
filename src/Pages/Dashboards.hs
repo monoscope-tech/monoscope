@@ -1233,6 +1233,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     , term
         "_"
         [text| on htmx:before:request 
+            set widgetJSON.type to document.getElementById('${widgetPreviewId}').closest('[class~="group/wgtexp"]').querySelector('#visualizationTabs input:checked').value then
             set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
@@ -1295,12 +1296,12 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
       -- it the preview is free to paint over the numbered steps below, which is what the
       -- logs preview did — it renders about 540px of table into a 280px box.
       div_ [class_ "w-full aspect-4/1 group-has-[#viz-logs:checked]/wgtexp:aspect-[2/1] overflow-hidden p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
-        script_ [text| var widgetJSON = ${widgetJSON}; |]
         div_
           [ id_ widgetPreviewId
           , class_ "h-full w-full overflow-hidden"
           , hxPost_ ("/p/" <> pid.toText <> "/widget")
           , hxTrigger_ "intersect once, update-widget"
+          , term "hx-sync" "this:replace"
           , hxTarget_ "this"
           , hxSwap_ "innerHTML"
           , hxVals_ "js:{...widgetJSON}"
@@ -1308,11 +1309,15 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
           , term
               "_"
               [text| on 'update-widget-query'
+                   set widgetJSON.type to me.closest('[class~="group/wgtexp"]').querySelector('#visualizationTabs input:checked').value then
                    set widgetJSON.query to event.detail.value then
                    set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
                    trigger 'update-widget' on me |]
           ]
           Components.chartSkeleton_
+        script_
+          [text| var widgetJSON = ${widgetJSON};
+                 widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type; |]
 
   div_ [class_ $ if isNewWidget then "block mt-6" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block mt-6"] do
     div_ [class_ "space-y-8"] do

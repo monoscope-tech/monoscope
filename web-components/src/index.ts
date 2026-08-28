@@ -72,13 +72,15 @@ const deferredComponents: Array<[string, () => Promise<unknown>]> = [
 // a function" — the click silently did nothing. Route them all through here: load the chunk if
 // needed, wait for firstUpdated to create the Monaco instance every one of those methods bails
 // without, then invoke.
-(window as any).queryEditorCall = async (method: string, ...args: unknown[]) => {
-  const el = document.getElementById('filterElement') as (HTMLElement & Record<string, any>) | null;
+const queryEditorCallFor = async (el: (HTMLElement & Record<string, any>) | null, method: string, ...args: unknown[]) => {
   if (!el) return; // no query editor on this page (e.g. shared/standalone item views)
   if (typeof el[method] !== 'function') await loadQueryEditor();
   await el.updateComplete;
   el[method]?.(...args);
 };
+(window as any).queryEditorCallFor = queryEditorCallFor;
+(window as any).queryEditorCall = (method: string, ...args: unknown[]) =>
+  queryEditorCallFor(document.getElementById('filterElement') as HTMLElement & Record<string, any>, method, ...args);
 
 // The trace page's inline initTraceCharts and the map's filter input can call these before
 // the lazy module has loaded, so forward through shims; service-map.ts replaces them on load.

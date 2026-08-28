@@ -37,6 +37,20 @@ describe('queryEditorCall', () => {
     expect(spy).toHaveBeenCalledWith('level == "error"');
   });
 
+  test('targets a specific editor when multiple drawers are mounted', async () => {
+    await import('../src/index');
+    mountEditor();
+    const target = document.createElement('query-editor') as any;
+    target.updateComplete = Promise.resolve(true);
+    target.toggleSubQuery = vi.fn();
+    document.body.appendChild(target);
+
+    await (window as any).queryEditorCallFor(target, 'toggleSubQuery', 'level == "ERROR"');
+
+    expect(target.toggleSubQuery).toHaveBeenCalledWith('level == "ERROR"');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   test('is a no-op on pages with no query editor, and when the method stays undefined', async () => {
     await import('../src/index');
     await expect(call('toggleSubQuery', 'a == "b"')).resolves.toBeUndefined();

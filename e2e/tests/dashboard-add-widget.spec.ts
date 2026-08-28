@@ -119,6 +119,41 @@ test.describe("adding widgets to a dashboard", () => {
     expect(checked).not.toBe("logs");
   });
 
+  test("AI search preserves the widget visualization and programmatic changes stay in sync", async ({ page }) => {
+    await page.route("**/log_explorer/ai_search", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ query: 'level == "ERROR"', visualization_type: "timeseries" }),
+      }),
+    );
+    await openFixture(page);
+    await openWidgetDrawer(page);
+
+    const tabs = page.locator("#visualizationTabs").last();
+    await tabs.locator('label[data-value="logs"]').click();
+    await expect.poll(() => page.evaluate(() => (window as any).widgetJSON.type)).toBe("logs");
+    await page.locator("#ai-search-input").fill("level is error");
+    await page.locator("#ai-search-input").press("Enter");
+    await expect
+      .poll(() => page.locator("#filterElement").last().evaluate((el: any) => el.editor?.getValue()))
+      .toBe('level == "ERROR"');
+
+    await expect(tabs.locator('input[value="logs"]')).toBeChecked();
+    expect(await page.evaluate(() => (window as any).widgetJSON.type)).toBe("logs");
+
+    const previewId = await page.locator("#ai-search-input").getAttribute("data-container-id");
+    await page.evaluate((id) => {
+      const decoy = document.createElement("div");
+      decoy.id = "visualizationTabs";
+      decoy.innerHTML = '<input type="radio" value="timeseries">';
+      document.body.prepend(decoy);
+      (window as any).handleVisualizationUpdate("timeseries", id);
+    }, previewId);
+
+    await expect(tabs.locator('input[value="timeseries"]')).toBeChecked();
+    expect(await page.evaluate(() => (window as any).widgetJSON.type)).toBe("timeseries");
+  });
+
   test("the logs preview stays inside the preview frame", async ({ page }) => {
     await openFixture(page);
     await openWidgetDrawer(page);

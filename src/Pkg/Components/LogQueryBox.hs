@@ -319,7 +319,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
               -- sessions renders a different server region than other viz types.
               [__| on change if my.checked
                           set prevViz to window.currentVisualizationType
-                          call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                          call updateVizTypeInUrl(my.value, @data-update-url === 'true', me.closest('form').querySelector('query-editor'))
                           if window.widgetJSON
                             set widgetJSON.type to my.value
                             send 'update-widget' to #{@data-container-id}
@@ -577,12 +577,11 @@ queryEditorInitializationCode vizTypeM pid = do
     window.currentVisualizationType = "$vizType";
     
     // Function to update viz type in URL without reloading the page
-    window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true) {
+    window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true, editor = document.getElementById('filterElement')) {
       // Update the current visualization type
       window.currentVisualizationType = vizType;
       requestAnimationFrame(() => {
         // Only update URL if we're not in widget mode and shouldUpdateUrl is true
-        const editor = document.getElementById('filterElement');
         const isWidgetMode = editor && editor.hasAttribute('target-widget-preview');
         
         if (shouldUpdateUrl && !isWidgetMode) {
@@ -593,17 +592,19 @@ queryEditorInitializationCode vizTypeM pid = do
         
         // Call the query editor's handleVisualizationChange method to update the query
         const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-        window.queryEditorCall('handleVisualizationChange', vizTypeMap[vizType] || vizType);
+        window.queryEditorCallFor(editor, 'handleVisualizationChange', vizTypeMap[vizType] || vizType);
       });
     };
 
     // Called by the AI-search response handler and query-builder.ts to switch viz type.
+    // Click the owning editor's radio so its change handler remains the single owner of
+    // query, widget and preview state; document-global lookup can target a hidden drawer.
     window.handleVisualizationUpdate = function(vizType, widgetId) {
       window.requestAnimationFrame(() => {
-        updateVizTypeInUrl(vizType);
-        document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
-        window.widgetJSON.type = vizType;
-        document.getElementById(widgetId || 'visualization-widget-container').dispatchEvent(new Event('update-widget'));
+        const preview = document.getElementById(widgetId || 'visualization-widget-container');
+        const root = preview?.closest('[class~="group/wgtexp"]') || document;
+        const radio = root.querySelector(`#visualizationTabs input[value='$${vizType}']`);
+        if (radio && !radio.checked) radio.click();
       });
     };
 
@@ -611,10 +612,10 @@ queryEditorInitializationCode vizTypeM pid = do
     // on the way out (picking a saved query ends the AI interaction), but an AI response
     // keeps the panel and its prompt on screen so the phrasing can be refined and re-run —
     // collapsing it there reads as the app having thrown the question away.
-    window.applyQuery = function(q, replace = true, closeAiSearch = true) {
-      const chk = document.getElementById('ai-search-chkbox');
+    window.applyQuery = function(q, replace = true, closeAiSearch = true, editor = document.getElementById('filterElement')) {
+      const chk = editor?.closest('form')?.querySelector('.ai-search');
       if (chk && closeAiSearch) chk.checked = false;
-      window.queryEditorCall('handleAddQuery', q, replace);
+      window.queryEditorCallFor(editor, 'handleAddQuery', q, replace);
     };
 
     // Routes one /ai_search response into the subsystems it can touch. Lives here, not
@@ -633,11 +634,14 @@ queryEditorInitializationCode vizTypeM pid = do
       let result;
       try { result = JSON.parse(text); } catch (e) { return; }
       if (result.time_range) window.updateTimePicker(result.time_range);
-      if (result.query) window.applyQuery(result.query, true, false);
+      const editor = el.closest('form')?.querySelector('query-editor');
+      if (result.query) window.applyQuery(result.query, true, false, editor);
       // Native dispatch, not htmx.trigger: both listeners (log-list.ts, widgets.ts) are
       // plain addEventListener('submit'), so this needs no htmx API surface.
-      else if (result.time_range) document.getElementById('log_explorer_form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      if (result.visualization_type) {
+      else if (result.time_range) el.closest('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      // A widget editor has an explicit visualization control beside the query. AI search
+      // edits its query only; otherwise a filter-only prompt can silently replace that choice.
+      if (result.visualization_type && !el.closest('form')?.querySelector('query-editor[target-widget-preview]')) {
         window.handleVisualizationUpdate(result.visualization_type, el.dataset.containerId || 'visualization-widget-container');
       }
     };
