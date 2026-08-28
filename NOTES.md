@@ -88,11 +88,17 @@ Not merged — review and merge when the other session's work settles.
 
 - `ProcessMessage.hs` — **no findings**. Dense but genuinely well-built: doctests on every
   pure helper, rationale comments, idiomatic combinators. Forcing changes would be churn.
-- `BackgroundJobs.hs` — `processBackgroundJob` was 657 lines. ~40 arms correctly delegate
-  to named functions; five did not. `ReportUsage` (133 lines), `TrialEndingReminder`,
-  `CleanupDemoProject`, `ErrorAssigned` and `SendDiscordData` now delegate too, so the
-  rule the file already follows holds everywhere. Payoff beyond tidiness: the billing
-  gate became reachable from a spec.
+- `BackgroundJobs.hs` — `processBackgroundJob` went from **657 lines to 88**, 45 arms.
+  Most already delegated to named functions; nine did not. Now extracted, each with a
+  signature: `reportUsageForProject`, `monoscopeAdminDaily` (172 lines inline!),
+  `usageAuditReport` (75), `runDailyJobScheduling` + `withAdvisoryLock` (124 via a
+  case-alternative `where`), `trialEndingReminder`, `cleanupDemoProject`,
+  `errorAssignedNotification`, `sendDiscordDataJob`.
+  **Residual, stated honestly:** the rule is now "an arm delegates or is ≤7 lines" —
+  seven arms are still 3–7 lines inline (`InviteUserToProject` is the longest at 7).
+  Those read fine at the call site; extracting them would be ceremony.
+  Payoff beyond tidiness: `reportUsageForProject` and `runDailyJobScheduling` — the two
+  functions tonight's billing investigation centred on — are now top-level and testable.
 - `Data/Effectful/Notify.hs` — a **file-wide** `-Wno-redundant-constraints` was hiding
   exactly one thing: `sendSlack` declared `Reader AuthContext` and never read it. An
   effect row is a capability claim, so that is a false claim. Constraint and pragma both
@@ -142,6 +148,16 @@ by the other session, so it wants a deliberate decision rather than a 5am sweep.
 **4. `ratio` and `plainCell` are true duplicates** between `Models/Telemetry/Containers.hs`
 and `Pages/Infrastructure.hs` (identical signatures; Infrastructure already imports
 Containers). Left alone only because both files are open in the other session.
+
+### Two things I owe you plainly
+
+- **The ReportUsageSpec extension pins behaviour; it is not proof of a fix.** It passes
+  against both the old and the new code, because the code always skipped an empty sub
+  item — what was missing was the *log line*. Its value is stopping someone "fixing" the
+  gate by treating `""` as a valid subscription item.
+- **I may have killed your other session's `live-reload`.** My `pkill` pattern for the
+  worktree watcher (`cabal repl monoscope --no-semaphore`) matches the main checkout's
+  command verbatim. If that pane is dead, `make tmux-live-reload` in the main tree.
 
 ### Notes for whoever continues
 
