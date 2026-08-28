@@ -92,6 +92,7 @@ type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' 
 // `index` is the row's position in virtualListItems, so a reader whose anchor row is cut
 // by the retention window can still be put back near where they were.
 type ScrollAnchor = { id: string; offset: number; index: number; scrollTop: number };
+type RecentDelivery = 'manual' | 'auto-refresh';
 
 /**
  * Identity of a virtual row. Without it the virtualizer keys rows by index, so a live-tail
@@ -181,6 +182,7 @@ export class LogList extends LitElement {
   // fetch/refresh; extended on child-expand splices and tree merges.
   private seenIds = new Set<string>();
   @state() private recentDataToBeAdded: EventLine[] = [];
+  private resumeBufferedRecentAtEdge = false;
   @state() private view: 'tree' | 'list' = 'tree';
   @state() private shouldScrollToBottom: boolean = false;
   @state() private logsColumns: string[] = [];
@@ -329,7 +331,7 @@ export class LogList extends LitElement {
     const source = (e as CustomEvent).detail?.source || 'default';
     if (source === 'expand-timerange') return;
     if (source === 'auto-refresh' && !this.initialFetchUrl && !this.isAggregate) {
-      void this.fetchData(this.buildRecentFetchUrl(), false, true);
+      void this.fetchData(this.buildRecentFetchUrl(), false, true, false, false, 'auto-refresh');
       return;
     }
     this.debouncedRefetchLogs();
@@ -1671,7 +1673,14 @@ export class LogList extends LitElement {
     }
   }
 
-  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false, revealRecent = false) => {
+  fetchData = async (
+    url: string,
+    isRefresh = false,
+    isRecentFetch = false,
+    isLoadMore = false,
+    revealRecent = false,
+    recentDelivery: RecentDelivery = 'manual'
+  ) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
 
@@ -1723,6 +1732,7 @@ export class LogList extends LitElement {
         this.expandedAggregates = {};
         this.hasNewer = false;
         this.recentDataToBeAdded = [];
+        this.resumeBufferedRecentAtEdge = false;
         this.liveDropped = 0;
         this.cachedServerTraces = [];
       }
@@ -1804,8 +1814,10 @@ export class LogList extends LitElement {
           const scrollHeight = container.scrollHeight;
           const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
           if (this.flipDirection && scrolledToBottom) this.shouldScrollToBottom = true;
-          if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
+          const bufferWhenAway = !revealRecent && (this.isLiveStreaming || recentDelivery === 'auto-refresh');
+          if (shouldBufferRecent(bufferWhenAway, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
+            if (recentDelivery === 'auto-refresh') this.resumeBufferedRecentAtEdge = true;
           } else {
             const anchor =
               revealRecent || atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? null : this.captureScrollAnchor();
@@ -2397,11 +2409,11 @@ export class LogList extends LitElement {
     this.shouldScrollToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
   }
 
-  // Flush the live-tail buffer if the viewport is parked at the edge new rows arrive at.
+  // Flush buffered background rows if the viewport returns to their insertion edge.
   // Public so the visibility handler and any future scroll source share one rule.
   resumeLiveTailAtEdge() {
     const container = this.logsContainer;
-    if (!container || !this.isLiveStreaming || this.recentDataToBeAdded.length === 0) return;
+    if (!container || (!this.isLiveStreaming && !this.resumeBufferedRecentAtEdge) || this.recentDataToBeAdded.length === 0) return;
     const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
     if (atInsertionEdge(container.scrollTop, scrolledToBottom, this.flipDirection)) this.handleRecentConcatenation();
   }
@@ -2410,6 +2422,7 @@ export class LogList extends LitElement {
     if (this.recentDataToBeAdded.length === 0) return;
     this.spanListTree = this.mergeIntoTree(this.recentDataToBeAdded, true);
     this.recentDataToBeAdded = [];
+    this.resumeBufferedRecentAtEdge = false;
     this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
   }
@@ -2696,9 +2709,9 @@ export class LogList extends LitElement {
             </div>`
           : nothing}
         ${!isAggregate && this.recentCount > 0 && !this.flipDirection
-          ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
+          ? html` <div class="pointer-events-none sticky top-[30px] z-50 flex h-0 justify-center" role="status" aria-live="polite">
               <button
-                class="cbadge-sm cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
+                class="cbadge-sm pointer-events-auto cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
                 @click=${this.handleRecentClick}
                 aria-label="${this.recentCount} new events, click to load"
               >
@@ -3982,6 +3995,7 @@ export class LogList extends LitElement {
               if (this.recentDataToBeAdded.length > 0) {
                 this.spanListTree = this.mergeIntoTree(this.recentDataToBeAdded, true);
                 this.recentDataToBeAdded = [];
+                this.resumeBufferedRecentAtEdge = false;
               }
               this.requestUpdate();
             })}

@@ -726,6 +726,12 @@ describe('LogList — live tail resumes when scrolled back to the edge', () => {
     expect(ids(el)).toEqual(expect.arrayContaining(['n1', 'n2']));
   });
 
+  test('also flushes a timed-refresh buffer without enabling the SSE stream', async () => {
+    const el = await withBuffer(0, { isLiveStreaming: false, resumeBufferedRecentAtEdge: true });
+    (el as any).resumeLiveTailAtEdge();
+    expect((el as any).recentDataToBeAdded).toHaveLength(0);
+  });
+
   test('a sub-pixel offset counts as the edge, so live tail is never stranded 1px down', async () => {
     const el = await withBuffer(0.5);
     (el as any).resumeLiveTailAtEdge();

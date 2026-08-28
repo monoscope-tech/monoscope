@@ -274,15 +274,15 @@ export const dedupeById = <T extends { id: string | null | undefined }>(items: T
 export const atInsertionEdge = (scrollTop: number, scrolledToBottom: boolean, flipDirection: boolean): boolean =>
   flipDirection ? scrolledToBottom : scrollTop <= 2;
 
-// Whether a live-stream batch should be buffered ("N new" pill) instead of inserted
+// Whether a background batch should be buffered ("N new" pill) instead of inserted
 // immediately. Buffer whenever the user has scrolled away from that edge, so their reading
 // position never jumps under them.
 export const shouldBufferRecent = (
-  isLiveStreaming: boolean,
+  backgroundDelivery: boolean,
   scrollTop: number,
   scrolledToBottom: boolean,
   flipDirection: boolean,
-): boolean => isLiveStreaming && !atInsertionEdge(scrollTop, scrolledToBottom, flipDirection);
+): boolean => backgroundDelivery && !atInsertionEdge(scrollTop, scrolledToBottom, flipDirection);
 
 // Pagination cursor (ISO) from a row timestamp ± offset. Tolerates ISO strings and
 // numeric epochs in ns/µs/ms — `new Date(epochNs)` otherwise reads ns as ms and

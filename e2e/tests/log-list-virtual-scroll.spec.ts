@@ -69,12 +69,17 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       }
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     };
-    const topRow = () => {
+    const topRowElement = () => {
       const container = list.querySelector("#logs_list_container_inner") as HTMLElement;
       const top = container.getBoundingClientRect().top;
       return [...container.querySelectorAll<HTMLElement>("[data-row-id]")]
         .filter((row) => row.getBoundingClientRect().bottom > top)
-        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0]?.dataset.rowId;
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+    };
+    const topRow = () => topRowElement()?.dataset.rowId;
+    const topRowOffset = () => {
+      const container = list.querySelector("#logs_list_container_inner") as HTMLElement;
+      return (topRowElement()?.getBoundingClientRect().top ?? 0) - container.getBoundingClientRect().top;
     };
 
     list.colIdxMap = colIdxMap;
@@ -127,6 +132,7 @@ test("deep paging and live delivery preserve the row under the reader", async ({
 
     const refreshAnchor = topRow();
     const refreshScrollTop = container.scrollTop;
+    const refreshRowOffset = topRowOffset();
     list.transport = async (url: string) => {
       calls.push(url);
       return {
@@ -142,7 +148,9 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     }
     const afterRefreshAnchor = topRow();
     const afterRefreshScrollTop = container.scrollTop;
+    const afterRefreshRowOffset = topRowOffset();
     const refreshRowsVisible = list.spanListTree.some((row: any) => row.id.startsWith("refresh-"));
+    const bufferedAfterRefresh = list.recentDataToBeAdded.length;
 
     const liveAnchor = topRow();
     const liveScrollTop = container.scrollTop;
@@ -178,7 +186,10 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       afterRefreshAnchor,
       refreshScrollTop,
       afterRefreshScrollTop,
+      refreshRowOffset,
+      afterRefreshRowOffset,
       refreshRowsVisible,
+      bufferedAfterRefresh,
       refreshUrl: calls[6],
       liveAnchor,
       afterLiveAnchor: topRow(),
@@ -198,10 +209,12 @@ test("deep paging and live delivery preserve the row under the reader", async ({
   expect(result.calls.slice(0, 6)).toEqual(["older-0", "older-1", "older-2", "older-3", "older-4", "older-5"]);
   expect(new URL(result.refreshUrl).searchParams.get("direction")).toBe("newer");
   expect(result.afterRefreshAnchor).toBe(result.refreshAnchor);
-  expect(result.afterRefreshScrollTop).toBeGreaterThan(result.refreshScrollTop);
-  expect(result.refreshRowsVisible).toBe(true);
+  expect(result.afterRefreshScrollTop).toBe(result.refreshScrollTop);
+  expect(result.afterRefreshRowOffset).toBe(result.refreshRowOffset);
+  expect(result.refreshRowsVisible).toBe(false);
+  expect(result.bufferedAfterRefresh).toBe(200);
   expect(result.afterLiveAnchor).toBe(result.liveAnchor);
   expect(result.afterLiveScrollTop).toBe(result.liveScrollTop);
-  expect(result.buffered).toBe(200);
+  expect(result.buffered).toBe(400);
   expect(result.liveRowsVisible).toBe(false);
 });

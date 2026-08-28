@@ -136,20 +136,21 @@ describe('LogList — the reader keeps their place across a load-more', () => {
 });
 
 describe('LogList — newer rows arriving above the viewport', () => {
-  test('the 15-second live-range refresh merges new rows without replacing a deep reader', async () => {
+  test('the 15-second live-range refresh queues new rows without touching a deep reader', async () => {
     const el = await seeded(1_200);
     const sim = scrollHarness(el);
     sim.scrollTo(800 * ROW_H);
-    const anchorId = topRowId(el, sim);
+    const before = { id: topRowId(el, sim), scrollTop: sim.scrollTop };
     el.transport = serverTransport(logPage(['live-new']));
 
     window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
     await vi.waitFor(() => expect((el.transport as any).urls).toHaveLength(1));
     await flushFrames();
 
-    expect(ids(el)[0]).toBe('live-new');
-    expect(ids(el)).toContain(anchorId);
-    expect(topRowId(el, sim)).toBe(anchorId);
+    expect(ids(el)).not.toContain('live-new');
+    expect((el as any).recentDataToBeAdded.map((row: any) => row.id)).toEqual(['live-new']);
+    expect(topRowId(el, sim)).toBe(before.id);
+    expect(sim.scrollTop).toBe(before.scrollTop);
   });
 
   test('a recent fetch merged mid-list keeps the reader on the same row', async () => {
