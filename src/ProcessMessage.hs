@@ -1,9 +1,9 @@
 {-# LANGUAGE StrictData #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
--- processMessages uses @pure $!@ to force the (ackId, raw, span) tuple to
--- WHNF immediately, preventing thunk accumulation across forM. hlint flags
--- it as "Redundant $!" but it's load-bearing here.
+-- 'classify' in processMessages uses @Right $!@ to force the (ackId, raw, span) tuple to
+-- WHNF as the batch is partitioned, so a whole batch of thunks cannot accumulate on the
+-- ingestion path. hlint flags it as "Redundant $!"; it is load-bearing here.
 {-# HLINT ignore "Redundant $!" #-}
 
 module ProcessMessage (
@@ -141,10 +141,14 @@ processMessages msgs attrs =
                              in Right $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
               (dropReasons, paired) = partitionWith classify rMsgs
               dropped n = length $ filter (== n) dropReasons
-          unless (null dropReasons)
-            $ Log.logAttention
-              "Messages acked without producing a span"
-              (AE.object ["over_free_tier_quota" AE..= dropped OverFreeTierQuota, "no_project_cache" AE..= dropped NoProjectCache, "batch_size" AE..= length rMsgs])
+          -- Severity follows the reason, not the count. A free-tier project over its cap
+          -- keeps sending all day, so logging that at attention would page on every batch
+          -- and bury the real signal; a missing cache is the one a human must look at.
+          unless (null dropReasons) do
+            let counts = AE.object ["over_free_tier_quota" AE..= dropped OverFreeTierQuota, "no_project_cache" AE..= dropped NoProjectCache, "batch_size" AE..= length rMsgs]
+            if dropped NoProjectCache > 0
+              then Log.logAttention "Messages acked without producing a span" counts
+              else Log.logInfo "Messages acked without producing a span (over quota)" counts
 
           pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList paired))
 

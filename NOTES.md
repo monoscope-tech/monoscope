@@ -104,6 +104,12 @@ the other session's uncommitted spec edits, not something lost here: `ReportUsag
 Library compiles clean (125 modules, 2 pre-existing warnings); fourmolu + hlint clean.
 Not merged — review and merge when the other session's work settles.
 
+A later run in this worktree reported **766 examples, 10 failures** — all ten are
+`Pages.GitSync / GitHub Sync E2E (Real API)`, which are gated on `GH_TEST_PAT` /
+`GH_TEST_OWNER` / `GH_TEST_REPO`. `make worktree` copied `.env` in, so they *activate*
+here and then 404 against a repo this machine cannot reach. They are pending (skipped) in
+the main checkout, which is why its count is lower. Nothing I touched goes near GitSync.
+
 ### Reviewed
 
 - `ProcessMessage.hs` — **no findings**. Dense but genuinely well-built: doctests on every
@@ -133,6 +139,19 @@ Not merged — review and merge when the other session's work settles.
   project cache (a bug that loses data) — into one invisible number; it now uses `Either`
   with a `SpanDrop` reason. Note this is the *same file* the distill lens called clean:
   different lens, different find.
+  Two caveats on that change, so the morning read is accurate: `NoProjectCache` is
+  **defensive and unreachable today** — `projectCaches` is built over `ordNub` of every pid
+  in the batch with a `defaultProjectCache` fallback, so the map is total; it exists to make
+  the attention log meaningful if that construction ever changes. And severity follows the
+  reason, not the count: quota drops log at `info` (a free-tier project over its cap sends
+  all day, and paging on every batch is the same failure as saying nothing), only a missing
+  cache is `logAttention`.
+- `Opentelemetry/OtlpServer.hs` — **looked at, deliberately left.** `convertMetricToMetricRecords`
+  drops histogram datapoints via `mapMaybe` when `len(bucket_counts) /= len(explicit_bounds)+1`.
+  That rejection is *correct* — the datapoint violates the OTLP spec and cannot be stored — but
+  it is silent, and the function is pure and on the hot path, so signalling it means threading
+  an effect or returning a reject count through the conversion. Worth doing; not worth doing
+  blind at 04:30.
 - **No findings** (reviewed, nothing worth changing): `Web/ApiHandlers.hs` (103 small
   functions, already has `withRefetchNoContent`/`notFoundOr` helpers), `Pkg/LiveTail.hs`,
   `Pages/Replay.hs`, `Models/Apis/Issues.hs`, `Pkg/EmailTemplates.hs`. Their `_ ->`
