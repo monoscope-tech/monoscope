@@ -91,7 +91,7 @@ const noopRef: RefOrCallback = () => {};
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
 // `index` is the row's position in virtualListItems, so a reader whose anchor row is cut
 // by the retention window can still be put back near where they were.
-type ScrollAnchor = { id: string; offset: number; index: number };
+type ScrollAnchor = { id: string; offset: number; index: number; scrollTop: number };
 
 /**
  * Identity of a virtual row. Without it the virtualizer keys rows by index, so a live-tail
@@ -123,10 +123,11 @@ const UPDATE_QUERY_TARGETS: EventTarget[] = [window, document];
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
 // initial estimate inflated the virtual scroll range roughly 3.5×.
+const DENSE_ROW_HEIGHT = 28;
 export class DenseRowFlowLayout extends FlowLayout {
   constructor(...args: ConstructorParameters<typeof FlowLayout>) {
     super(...args);
-    this._itemSize.height = 28;
+    this._itemSize.height = DENSE_ROW_HEIGHT;
     // The 1000px default renders ~36 offscreen rows per side. Dense fixed-height
     // rows need only a short runway, keeping style/paint work near the viewport.
     this._overhang = 200;
@@ -313,7 +314,7 @@ export class LogList extends LitElement {
   private isNewResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Debounced functions
-  private debouncedFetchData: any;
+  private debouncedLoadMore: ReturnType<typeof debounce>;
   private debouncedUpdateChartMarkArea: ReturnType<typeof debounce>;
 
   // Bound functions for event listeners
@@ -382,7 +383,21 @@ export class LogList extends LitElement {
 
   constructor() {
     super();
-    this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
+    // The range prefetch and the sentinel can observe the same scroll. Delay the sentinel as
+    // a fallback, but discard it if the history edge changed while it waited — otherwise a
+    // fast range response completes before this fires and one gesture consumes two pages.
+    this.debouncedLoadMore = debounce((historyWindow: string) => {
+      if (
+        historyWindow === this.historyWindowKey() &&
+        this.hasMore &&
+        !this.isLoading &&
+        !this.isLoadingMore &&
+        !this.isRepositioning &&
+        this.isConnected
+      ) {
+        void this.fetchData(this.buildLoadMoreUrl(), false, false, true);
+      }
+    }, 300);
     this.debouncedUpdateChartMarkArea = debounce(this.updateChartMarkArea.bind(this), 100);
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
@@ -780,6 +795,10 @@ export class LogList extends LitElement {
   private edgeCursor(by: typeof oldestRowTimestamp, offsetMs: number): string | null {
     const ms = by(this.spanListTree, this.colIdxMap);
     return ms == null ? null : new Date(ms + offsetMs).toISOString();
+  }
+
+  private historyWindowKey(): string {
+    return `${this.fetchGeneration}:${this.spanListTree.length}:${this.spanListTree[0]?.id ?? ''}:${this.spanListTree.at(-1)?.id ?? ''}`;
   }
 
   private buildLoadMoreUrl(): string {
@@ -1259,6 +1278,7 @@ export class LogList extends LitElement {
       clearTimeout(this.initChartsTimer);
       this.initChartsTimer = null;
     }
+    this.debouncedLoadMore.cancel();
 
     // Clean up event listeners
     window.removeEventListener('pointermove', this.boundHandleResize);
@@ -1803,7 +1823,14 @@ export class LogList extends LitElement {
         // on the top the remount clamped them to, with nothing else on the way to move them
         // off it. The last rendered range is where they were — restore through the same
         // anchor-lost path, which shifts it by what the cut dropped.
-        else if (remountedAfterEviction) void this.restoreScrollAnchor({ id: '', offset: 0, index: this.lastVisibilityRange?.first ?? 0 });
+        else if (remountedAfterEviction) {
+          void this.restoreScrollAnchor({
+            id: '',
+            offset: 0,
+            index: this.lastVisibilityRange?.first ?? 0,
+            scrollTop: this.logsContainer?.scrollTop ?? 0,
+          });
+        }
       }
       // Count what's actually visible. queryResultCount over-counts because the
       // dedup-dropped boundary row is re-reported on every paginated page.
@@ -2115,14 +2142,24 @@ export class LogList extends LitElement {
     const row = [...container.querySelectorAll<HTMLElement>('[data-row-id]')].find((el) => el.getBoundingClientRect().bottom > top);
     if (row) {
       const id = row.dataset.rowId!;
-      return { id, offset: row.getBoundingClientRect().top - top, index: this.virtualListItems.findIndex((i) => 'id' in i && i.id === id) };
+      return {
+        id,
+        offset: row.getBoundingClientRect().top - top,
+        index: this.virtualListItems.findIndex((i) => 'id' in i && i.id === id),
+        scrollTop: container.scrollTop,
+      };
     }
 
     const range = this.lastVisibilityRange;
     const index = range ? this.virtualListItems.slice(range.first, range.last + 1).findIndex((entry) => 'id' in entry) : -1;
     if (index < 0) return null;
     const item = this.virtualListItems[range!.first + index] as EventLine;
-    return { id: item.id, offset: 0, index: range!.first + index };
+    return {
+      id: item.id,
+      offset: 0,
+      index: range!.first + index,
+      scrollTop: container.scrollTop,
+    };
   }
 
   // Holds the auto-fetch suspension for its whole duration: until the anchor row is back
@@ -2131,27 +2168,35 @@ export class LogList extends LitElement {
     this.scrollSettling++;
     try {
       await this.updateComplete;
-      const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
+      // keyed() updates the child after the host update can already have resolved. Let that
+      // replacement render and lay out before writing scrollTop; writing earlier is simply
+      // clamped back to zero when the new virtualizer installs its initially empty runway.
+      if (this.evictedEdge !== null) {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }
       const virtualizer = this.querySelector('lit-virtualizer');
+      const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
       // The anchor row is gone, which means the retention cut took it. Which end the reader
       // belongs on is decided by which end was cut — and neither answer is the top the
       // remount clamped them to. Leaving them there is what threw a reader paging history
       // back to the newest edge, where the (now armed) load-newer sentinel fired on arrival.
       if (index < 0) {
-        // Wait for the remounted virtualizer to lay out: until it does, its scroll range
-        // is zero and every index still maps to the top.
-        await this.afterLayout(virtualizer);
         // 'end': live tail trimmed history out from under a reader deep in it — leave them
         // on the oldest retained row. 'start': a load-more dropped the newest rows, so the
         // reader's place is their pre-merge index less what was dropped. Rows, not virtual
         // items, so an expanded trace inside the cut lands them a few rows off — close, and
         // still their place, where the top is neither.
         const container = this.logsContainer;
+        if (!container) return;
         if (this.evictedEdge === 'end') {
-          if (container) container.scrollTop = container.scrollHeight;
+          container.scrollTop = container.scrollHeight;
         } else if (this.evictedEdge === 'start') {
-          virtualizer?.scrollToIndex(Math.max(0, anchor.index - this.evictedCount), 'start');
+          const target = Math.max(0, anchor.index - this.evictedCount);
+          container.scrollTop = this.wrapsLines
+            ? (target * container.scrollHeight) / Math.max(1, this.virtualListItems.length)
+            : target * DENSE_ROW_HEIGHT;
         }
+        await this.afterLayout(virtualizer);
         return;
       }
       if (!virtualizer) return;
@@ -2159,23 +2204,22 @@ export class LogList extends LitElement {
       // The normal pagination case keeps the anchor inside the virtualizer's runway. Correct
       // that row in place: scrollToIndex('start') would first snap it to the top, then the
       // offset correction below would move it back a frame later — the visible load-more jump.
-      if (this.alignAnchor(anchor)) return;
+      // After an eviction, however, Lit can leave the old row mounted for this host update;
+      // trusting that stale rectangle returns just before the keyed remount blanks the runway.
+      if (this.evictedEdge === null && this.alignAnchor(anchor)) return;
 
-      // scrollToIndex, not element(index).scrollIntoView: element() only resolves rows the
-      // virtualizer has already rendered. This fallback is needed after retention-window eviction
-      // remounts the virtualizer and recycles the anchor row out of the DOM.
-      virtualizer.scrollToIndex(index, 'start');
-      if (!(await this.afterLayout(virtualizer)) || this.alignAnchor(anchor)) return;
-
-      // With an external scroll container lit-virtualizer 2.1 can accept scrollToIndex yet
-      // leave the old range pinned after a keyed remount. The jsdom simulator used to grant
-      // that call a perfect scroll, hiding the production jump. Move to the index's estimated
-      // runway ourselves, then use real row geometry for the exact offset correction.
+      // Move the external scroller to the target's estimated runway immediately. For an
+      // ordinary update scrollToIndex helps; after a keyed remount it can remain pending or
+      // replay a stale pin, so an eviction uses the deterministic old/new index delta instead.
+      if (this.evictedEdge === null) virtualizer.scrollToIndex(index, 'start');
       const container = this.logsContainer;
       if (!container) return;
-      container.scrollTop = (index * container.scrollHeight) / Math.max(1, this.virtualListItems.length);
+      container.scrollTop = this.wrapsLines
+        ? (index * container.scrollHeight) / Math.max(1, this.virtualListItems.length)
+        : anchor.scrollTop + (index - anchor.index) * DENSE_ROW_HEIGHT;
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      if (await this.afterLayout(virtualizer)) this.alignAnchor(anchor);
+      if (this.evictedEdge === null && this.alignAnchor(anchor)) return;
+      if (await this.afterLayout(virtualizer)) this.alignAnchor(anchor, virtualizer);
     } catch (error) {
       // Every caller is fire-and-forget (`void this.restoreScrollAnchor(...)`), so a throw
       // here would escape as an unhandled rejection rather than as anything actionable —
@@ -2191,7 +2235,17 @@ export class LogList extends LitElement {
   // afterwards is the geometry the reader sees. False once the component is gone.
   private async afterLayout(virtualizer: { layoutComplete?: Promise<void> } | null): Promise<boolean> {
     try {
-      await virtualizer?.layoutComplete;
+      const layoutComplete = virtualizer?.layoutComplete;
+      if (layoutComplete) {
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        try {
+          // lit-virtualizer can leave this promise pending after an external-scroller remount.
+          // Never let one lost layout disable both pagination edges for the rest of the page.
+          await Promise.race([layoutComplete, new Promise<void>((resolve) => (timeout = setTimeout(resolve, 250)))]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      }
     } catch (error) {
       if (this.isConnected) throw error;
       return false;
@@ -2202,9 +2256,9 @@ export class LogList extends LitElement {
 
   // Put the anchor row back at its captured offset. False when it is not mounted.
   // Targets the row by id rather than materialising every rendered row to scan it.
-  private alignAnchor(anchor: ScrollAnchor): boolean {
+  private alignAnchor(anchor: ScrollAnchor, scope?: ParentNode): boolean {
     const container = this.logsContainer;
-    const row = container?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
+    const row = (scope ?? container)?.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(anchor.id)}"]`);
     if (!container || !row) return false;
     container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
     return true;
@@ -3331,7 +3385,7 @@ export class LogList extends LitElement {
         const observer = new IntersectionObserver(
           ([entry]) => {
             if (entry.isIntersecting && !this.isLoadingMore && !this.isLoading && !this.isRepositioning) {
-              this.debouncedFetchData(this.buildLoadMoreUrl(), false, false, true);
+              this.debouncedLoadMore(this.historyWindowKey());
               observer.disconnect();
             }
           },

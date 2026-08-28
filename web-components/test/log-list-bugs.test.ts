@@ -314,7 +314,7 @@ describe('LogList — MED correctness', () => {
 
     // index is carried too: it is what puts the reader back when the retention window
     // cuts the anchor row itself out of the list.
-    expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0, index: 1 });
+    expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0, index: 1, scrollTop: 0 });
   });
 
   test('anchor restoration adjusts a rendered row in place without first snapping it to the top', async () => {
@@ -326,7 +326,7 @@ describe('LogList — MED correctness', () => {
     (el as any).virtualListItems = [row('visible')];
     vi.spyOn(el, 'querySelector').mockReturnValue(stubVirtualizer({ scrollToIndex }) as any);
 
-    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
+    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2, index: 0, scrollTop: 0 });
 
     expect(scrollToIndex).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(10);
@@ -341,7 +341,7 @@ describe('LogList — MED correctness', () => {
     (el as any).virtualListItems = [row('visible')];
     vi.spyOn(el, 'querySelector').mockReturnValue(stubVirtualizer({ scrollToIndex }) as any);
 
-    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
+    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2, index: 0, scrollTop: 0 });
     await new Promise((resolve) => requestAnimationFrame(resolve));
 
     expect(scrollToIndex).toHaveBeenCalledWith(0, 'start');

@@ -81,6 +81,24 @@ describe('LogList — the reader keeps their place across a load-more', () => {
     expect(sim.atTop).toBe(false);
   });
 
+  test('does not trust stale pre-remount row geometry', async () => {
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    const anchorId = topRowId(el, sim);
+    const align = (el as any).alignAnchor.bind(el);
+    vi.spyOn(el as any, 'alignAnchor').mockImplementation((anchor) => (sim.atTop ? true : align(anchor)));
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames(6);
+
+    // During a keyed child update the old <tr> can survive one host update. Its rectangle
+    // looks valid even though the new virtualizer is about to replace it with an empty range.
+    expect(topRowId(el, sim)).toBe(anchorId);
+    expect(sim.atTop).toBe(false);
+  });
+
   test('"Show earlier events" continues the list instead of jumping to the top', async () => {
     // hasMore=false is what swaps the load-more row for "Show earlier events".
     const el = await seeded(MAX_RETAINED_ROWS);
@@ -305,6 +323,24 @@ describe('LogList — automatic fetches stand down while the list is repositioni
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  test('the remount recovery range is not mistaken for another page of user scrolling', async () => {
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    sim.emitVisibility();
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    const fetchSpy = vi.spyOn(el, 'fetchData');
+    // A real keyed remount reports its collapsed range and then its restored deep range.
+    // Neither event came from the reader moving toward history.
+    el.handleVisibilityChange({ first: 0, last: 0 });
+    await flushFrames();
+    sim.emitVisibility();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   test('once the list has settled, the top sentinel loads newer events again', async () => {
     const el = await seeded(MAX_RETAINED_ROWS);
     const sim = scrollHarness(el);
@@ -336,6 +372,23 @@ describe('LogList — automatic fetches stand down while the list is repositioni
     await flushFrames();
 
     expect((el.transport as any).urls.length).toBeGreaterThan(1);
+  });
+
+  test('range prefetch and the bottom sentinel do not load two pages for one scroll', async () => {
+    const el = await seeded(300);
+    const sim = scrollHarness(el);
+    el.transport = serverTransport(olderPage(0, 100), olderPage(100, 100));
+    const sentinels = await sim.mountSentinels();
+
+    // The sentinel queues its debounced fallback just before the visibility-range prefetch
+    // starts. A fast response can finish before that 300ms timer fires; the stale timer must
+    // not interpret the same scroll as a request for another page.
+    fireSentinel(sentinels.loadMore);
+    await el.fetchData('range-prefetch', false, false, true);
+    await new Promise((r) => setTimeout(r, 350));
+    await flushFrames();
+
+    expect((el.transport as any).urls).toEqual(['range-prefetch']);
   });
 });
 
@@ -416,6 +469,21 @@ describe('LogList — the repositioning guard always releases', () => {
 
     expect(settling(el)).toBe(0);
     expect(reported).toHaveBeenCalledWith('[log-list] scroll restore failed', expect.any(Error));
+  });
+
+  test('releases when the virtualizer never resolves layoutComplete', async () => {
+    const el = await seeded(300, { flipDirection: true });
+    const sim = scrollHarness(el);
+    Object.defineProperty(sim.virtualizer, 'layoutComplete', { get: () => new Promise<void>(() => {}) });
+    el.transport = serverTransportFlipped(olderPage(0, 100));
+
+    await el.fetchData('older', false, false, true);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await flushFrames();
+
+    // A permanently pending layout promise used to leave scrollSettling > 0 forever,
+    // silently disabling both edge observers and proximity pagination for this list.
+    expect(settling(el)).toBe(0);
   });
 });
 

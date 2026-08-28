@@ -197,6 +197,7 @@ export const scrollHarness = (el: LogList, { viewportHeight = 560, virtualizerSc
       if (virtualizerScrollToIndexWorks) container.scrollTop = i * ROW_H;
     },
     get layoutComplete() { settle(); return Promise.resolve(); },
+    querySelector: (sel: string) => container.querySelector(sel),
     querySelectorAll: (sel: string) => container.querySelectorAll(sel),
   };
   const origQuery = el.querySelector.bind(el);
@@ -292,7 +293,7 @@ export const stubQuery = (el: LogList, stubs: Record<string, unknown>) => {
 export const fireSentinel = (el?: Element | null) => (globalThis as any).triggerIntersection(el ?? undefined);
 
 // Let queued rAF callbacks and microtasks run — anchor restoration is async.
-export const flushFrames = async (n = 3) => {
+export const flushFrames = async (n = 6) => {
   for (let i = 0; i < n; i++) await new Promise((r) => requestAnimationFrame(r));
 };
 
