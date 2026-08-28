@@ -97,7 +97,10 @@ data QueryMonitor = QueryMonitor
   , warningThreshold :: Maybe Double
   , logQuery :: Text
   , logQueryAsSql :: Text
-  , lastEvaluated :: UTCTime
+  , -- Nothing until the first evaluation. The column is nullable, so the decoder must be
+    -- too: Hasql fails the whole row set on one unexpected NULL, which is how a single
+    -- never-evaluated monitor stopped every monitor being checked.
+    lastEvaluated :: Maybe UTCTime
   , warningLastTriggered :: Maybe UTCTime
   , alertLastTriggered :: Maybe UTCTime
   , triggerLessThan :: Bool

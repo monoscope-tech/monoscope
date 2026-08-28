@@ -218,7 +218,7 @@ monitorFromInput pid now mid existingM inp =
               $ (.finalAlertQuery)
               . snd
               =<< rightToMaybe (Parser.parseQueryToComponents cfg inp.query)
-    , lastEvaluated = now
+    , lastEvaluated = Just now
     , warningLastTriggered = existingM >>= (.warningLastTriggered)
     , alertLastTriggered = existingM >>= (.alertLastTriggered)
     , triggerLessThan = inp.triggerLessThan

@@ -488,121 +488,132 @@ processBackgroundJob authCtx bgJob =
         Just project -> do
           let provider = Projects.projectProvider project
           Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
-          when (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan)) $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
-            -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
-            --    always advances; daily_usage + usage_report_submissions rows are
-            --    inserted in the same tx only when totalUsage > 0. See
-            --    'splitUsageIntoChunks' for the per-provider quantity policy.
-            nowU <- Time.currentTime
-            let
-              -- Cap wStart to the cycle start (never charge for a previous cycle —
-              -- that's our fault) AND to the retention horizon (telemetry older than
-              -- that is deleted, so asking for it times out and the watermark can
-              -- never advance). See 'usageWindowStart'.
-              wStart =
-                usageWindowStart
-                  project.usageLastReported
-                  (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
-                  nowU
-            totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-            subItems <- Projects.meterSubItemIds pid
-            let meterCfg = Projects.projectMeterConfig project subItems
-            -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
-            -- all. A dormant meter records its total and nothing else: draining
-            -- months of buffered backlog the day a meter goes live is the
-            -- backlog-leak failure we have already hit on a provider switch. A
-            -- misconfigured one cuts chunks anyway, so the drain leaves an
-            -- auditable, retriable failed row for money we are actually owed.
-            chunks <-
-              concat <$> forM [minBound .. maxBound] \kind -> do
-                let qty = Projects.meterQuantity kind totals
-                case Projects.resolveMeterTarget meterCfg kind of
-                  Left reason
-                    | Projects.meterIsDormant reason -> do
-                        -- Events dormant on a paid project is a silent revenue-off
-                        -- switch — the exact shape of the 5-week zero-usage incident.
-                        let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
-                        when (qty > 0 || kind == Projects.Events)
-                          $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
-                        pure []
-                  -- Both paid providers chunk identically. LS's 1M POST cap forces
-                  -- splitting; Stripe has no documented cap but N meter-events with
-                  -- the same meter+customer aggregate identically to one big event.
-                  --
-                  -- The quantity is converted to the target's units BEFORE chunking, so
-                  -- the stored quantity is the number actually sent and the 1M cap is
-                  -- applied to the value the cap is about. Raw counts stay in
-                  -- apis.daily_usage, which is what a reconciliation reads.
-                  Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
-                    -- Only the shared events item needs restating; a dimension with an
-                    -- item of its own is already priced for it.
-                    Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
-                    Projects.LemonSqueezyMeter _ -> qty
-                    Projects.StripeMeter _ _ -> qty
-                  Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
-            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
-            Projects.recordUsageWindow pid wStart nowU totals chunks
+          -- Both arms used to be a silent `when`/`whenJust`, so a paid project that could not
+          -- be billed produced no line at all: DSI-APP and TestCorp sat unbilled for 41 days
+          -- behind a first_sub_item_id of "" (empty, not NULL — an `IS NOT NULL` audit passes).
+          -- A skip on a paid plan is revenue going missing and has to be page-worthy.
+          case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), mfilter (not . T.null) project.firstSubItemId) of
+            (False, _) -> Log.logInfo "Usage reporting skipped: plan is not billable" ("project_id", pid.toText, "plan", project.paymentPlan)
+            (True, Nothing) -> Log.logAttention "Usage reporting skipped: paid plan has no subscription item" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
+            (True, Just fSubId) -> do
+              -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
+              --    always advances; daily_usage + usage_report_submissions rows are
+              --    inserted in the same tx only when totalUsage > 0. See
+              --    'splitUsageIntoChunks' for the per-provider quantity policy.
+              nowU <- Time.currentTime
+              let
+                -- Cap wStart to the cycle start (never charge for a previous cycle —
+                -- that's our fault) AND to the retention horizon (telemetry older than
+                -- that is deleted, so asking for it times out and the watermark can
+                -- never advance). See 'usageWindowStart'.
+                wStart =
+                  usageWindowStart
+                    project.usageLastReported
+                    (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
+                    nowU
+              -- Bracketing the count is what separates "skipped the gate" from "never came back
+              -- from the store": both look identical from the outside — one "Reporting usage"
+              -- line and no "Usage to report" line — and they need opposite fixes.
+              Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
+              totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
+              subItems <- Projects.meterSubItemIds pid
+              let meterCfg = Projects.projectMeterConfig project subItems
+              -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
+              -- all. A dormant meter records its total and nothing else: draining
+              -- months of buffered backlog the day a meter goes live is the
+              -- backlog-leak failure we have already hit on a provider switch. A
+              -- misconfigured one cuts chunks anyway, so the drain leaves an
+              -- auditable, retriable failed row for money we are actually owed.
+              chunks <-
+                concat <$> forM [minBound .. maxBound] \kind -> do
+                  let qty = Projects.meterQuantity kind totals
+                  case Projects.resolveMeterTarget meterCfg kind of
+                    Left reason
+                      | Projects.meterIsDormant reason -> do
+                          -- Events dormant on a paid project is a silent revenue-off
+                          -- switch — the exact shape of the 5-week zero-usage incident.
+                          let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
+                          when (qty > 0 || kind == Projects.Events)
+                            $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                          pure []
+                    -- Both paid providers chunk identically. LS's 1M POST cap forces
+                    -- splitting; Stripe has no documented cap but N meter-events with
+                    -- the same meter+customer aggregate identically to one big event.
+                    --
+                    -- The quantity is converted to the target's units BEFORE chunking, so
+                    -- the stored quantity is the number actually sent and the 1M cap is
+                    -- applied to the value the cap is about. Raw counts stay in
+                    -- apis.daily_usage, which is what a reconciliation reads.
+                    Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
+                      -- Only the shared events item needs restating; a dimension with an
+                      -- item of its own is already priced for it.
+                      Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
+                      Projects.LemonSqueezyMeter _ -> qty
+                      Projects.StripeMeter _ _ -> qty
+                    Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
+              Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
+              Projects.recordUsageWindow pid wStart nowU totals chunks
 
-            -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
-            --    Provider failures are logged + recorded per-row; we never throw, so
-            --    odd-jobs does not retry the whole job and we never double-submit a
-            --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
-            pending <- Projects.pendingUsageSubmissions pid
-            unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
-            case provider of
-              -- Paid plan with no usable provider: mark every pending chunk 'failed'
-              -- once so it persists in pendingUsageSubmissions as an audit signal
-              -- (rather than being quietly marked 'submitted' by the happy path).
-              Projects.NoBillingProvider -> do
-                Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
-                for_ pending \row -> do
-                  mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
-                  whenLeft_ mr \e ->
-                    Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
-              _ -> for_ pending \row -> do
-                let chunkId = show row.id :: Text
-                    qty = Projects.chunkQuantityInt row.quantity
-                    -- window_end + sub_id surface in logs so on-call can pivot to
-                    -- the provider UI, which is not indexed by our chunk UUIDs.
-                    logFields extra =
-                      ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                -- A chunk is only ever cut while its meter is live, so a dormant
-                -- reason here means the meter was switched off (or its LS item
-                -- removed) between record and drain. Leave the row pending rather
-                -- than failed: the backlog is bounded and drains cleanly on
-                -- re-enable, whereas 'failed' would re-log it every tick forever.
-                -- A misconfig reason falls through and is marked failed as before.
-                case Projects.resolveMeterTarget meterCfg row.meter of
-                  Left reason
-                    | Projects.meterIsDormant reason ->
-                        Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                  target -> do
-                    res <- tryAny $ case target of
-                      Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                      Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                      Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                      -- Not a transient error: throw so the Left branch below marks
-                      -- the chunk failed, rather than no-oping into a 'submitted'.
-                      Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
-                    -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                    -- and the status UPDATE would re-select this row next tick and
-                    -- double-submit. Emit a loud manual-reconcile signal on that path.
-                    either
-                      ( \e -> do
-                          let errText = toText (displayException e)
-                          Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                          markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
-                          whenLeft_ markRes \e2 ->
-                            Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                      )
-                      ( \() -> do
-                          markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                          case markRes of
-                            Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                            Left e2 ->
-                              Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                      )
-                      res
+              -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
+              --    Provider failures are logged + recorded per-row; we never throw, so
+              --    odd-jobs does not retry the whole job and we never double-submit a
+              --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
+              pending <- Projects.pendingUsageSubmissions pid
+              unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
+              case provider of
+                -- Paid plan with no usable provider: mark every pending chunk 'failed'
+                -- once so it persists in pendingUsageSubmissions as an audit signal
+                -- (rather than being quietly marked 'submitted' by the happy path).
+                Projects.NoBillingProvider -> do
+                  Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
+                  for_ pending \row -> do
+                    mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
+                    whenLeft_ mr \e ->
+                      Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
+                _ -> for_ pending \row -> do
+                  let chunkId = show row.id :: Text
+                      qty = Projects.chunkQuantityInt row.quantity
+                      -- window_end + sub_id surface in logs so on-call can pivot to
+                      -- the provider UI, which is not indexed by our chunk UUIDs.
+                      logFields extra =
+                        ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+                  -- A chunk is only ever cut while its meter is live, so a dormant
+                  -- reason here means the meter was switched off (or its LS item
+                  -- removed) between record and drain. Leave the row pending rather
+                  -- than failed: the backlog is bounded and drains cleanly on
+                  -- re-enable, whereas 'failed' would re-log it every tick forever.
+                  -- A misconfig reason falls through and is marked failed as before.
+                  case Projects.resolveMeterTarget meterCfg row.meter of
+                    Left reason
+                      | Projects.meterIsDormant reason ->
+                          Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
+                    target -> do
+                      res <- tryAny $ case target of
+                        Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                        Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                        Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                        -- Not a transient error: throw so the Left branch below marks
+                        -- the chunk failed, rather than no-oping into a 'submitted'.
+                        Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
+                      -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                      -- and the status UPDATE would re-select this row next tick and
+                      -- double-submit. Emit a loud manual-reconcile signal on that path.
+                      either
+                        ( \e -> do
+                            let errText = toText (displayException e)
+                            Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                            markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
+                            whenLeft_ markRes \e2 ->
+                              Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                        )
+                        ( \() -> do
+                            markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                            case markRes of
+                              Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                              Left e2 ->
+                                Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                        )
+                        res
     TrialEndingReminder pid scheduledDaysLeft -> do
       projectM <- Projects.projectById pid
       case projectM of
@@ -4412,8 +4423,9 @@ checkTriggeredQueryMonitors = do
   monitors <- Monitors.getActiveQueryMonitors
   forM_ monitors \monitor -> do
     startWall <- Time.currentTime
-    let evalInterval = startWall `diffUTCTime` monitor.lastEvaluated
-    when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
+    -- Never evaluated means due now, not "wait one interval".
+    let due = maybe True (\t -> startWall `diffUTCTime` t >= fromIntegral monitor.checkIntervalMins * 60) monitor.lastEvaluated
+    when due $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
       -- Catch ANY synchronous exception: updateLastEvaluatedAt MUST run on failure
       -- to prevent an infinite re-evaluation loop hammering a failing backend.

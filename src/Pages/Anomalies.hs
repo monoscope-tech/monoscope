@@ -1232,7 +1232,7 @@ buildSystemPromptForIssue pid issue now = do
           , Just "### Execution Schedule"
           , monitorM <&> \m -> "- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes"
           , monitorM <&> \m -> "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)"
-          , monitorM <&> \m -> "- **Last Evaluated**: " <> formatUTC m.lastEvaluated
+          , monitorM <&> \m -> "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated
           , Just ""
           , Just "### Trigger Conditions"
           , monitorM <&> \m -> "- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan

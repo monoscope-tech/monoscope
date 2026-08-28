@@ -149,7 +149,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
         , logQuery = alertForm.query
         , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
-        , lastEvaluated = now
+        , lastEvaluated = Just now
         , warningLastTriggered = Nothing
         , alertLastTriggered = Nothing
         , triggerLessThan = alertForm.direction == "below"
@@ -648,7 +648,7 @@ toUnifiedMonitorItem teamMap pid currTime alert =
     , currentStatus = alert.currentStatus
     , mutedUntil = mfilter (> currTime) alert.mutedUntil
     , schedule = "every " <> show alert.checkIntervalMins <> " min"
-    , lastRun = Just alert.lastEvaluated
+    , lastRun = alert.lastEvaluated
     , now = currTime
     , details =
         AlertDetails
@@ -849,7 +849,7 @@ alertSidebar_ displayName alert currTime = do
         input_ [type_ "checkbox", class_ "peer sr-only"]
         span_ [class_ "text-xs text-textWeak"] "Query \x203a"
         pre_ [class_ "text-xs font-mono text-textStrong/70 whitespace-pre-wrap break-all line-clamp-1 peer-checked:line-clamp-none"] $ toHtml alert.logQuery
-      mobileRow_ "Last eval" $ span_ [] $ toHtml $ toText (prettyTimeAuto currTime alert.lastEvaluated)
+      mobileRow_ "Last eval" $ span_ [] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.lastEvaluated
       mobileRow_ "Last triggered" $ span_ [class_ "text-textWeak"] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
     div_ [class_ "max-md:hidden divide-y divide-strokeWeak"] do
       sidebarItem_ "Status" $ statusBadge_ True displayName
@@ -860,7 +860,7 @@ alertSidebar_ displayName alert currTime = do
         whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
         whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
       sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
-        span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> toText (prettyTimeAuto currTime alert.lastEvaluated)
+        span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> maybe "Never" (toText . prettyTimeAuto currTime) alert.lastEvaluated
         span_ [class_ "text-textWeak"] $ toHtml $ "Last Triggered: " <> maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
       sidebarItem_ "Notifications" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
         span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Sent: " <> show @Text alert.notificationCount

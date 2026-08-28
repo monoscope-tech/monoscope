@@ -2,9 +2,9 @@ module MonitoringSpec (spec) where
 
 import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue)
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
-import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -17,9 +17,9 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Bots.BotTestHelpers (setupDiscordData, setupSlackData)
 import Pages.Dashboards qualified as Dashboards
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
-import Pages.Bots.BotTestHelpers (setupDiscordData, setupSlackData)
 import Pages.Projects qualified as ProjectPages
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -95,8 +95,11 @@ spec = sequential $ aroundAll withTestResources do
 
   describe "Widget Monitor Lifecycle" do
     it "creates a monitor for the saved widget, alerts, recovers after an edit, and disappears with the widget" \tr -> do
-      void $ testServant tr $ Dashboards.dashboardsPostH testPid
-        Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+      void
+        $ testServant tr
+        $ Dashboards.dashboardsPostH
+          testPid
+          Dashboards.DashboardForm{Dashboards.title = "Widget Monitor Lifecycle", Dashboards.file = "widget-monitor.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
       (_, dashboardsPage) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashboardId <- case dashboardsPage of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
@@ -105,8 +108,14 @@ spec = sequential $ aroundAll withTestResources do
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       isNothing <$> runTestBgNoReset tr (DashboardModel.getDashboardByProjectId otherPid dashboardId) `shouldReturn` True
 
-      (_, savedWidget) <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId Nothing Nothing
-        def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
+      (_, savedWidget) <-
+        testServant tr
+          $ Dashboards.dashboardWidgetPutH
+            testPid
+            dashboardId
+            Nothing
+            Nothing
+            def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let alertForm =
             Dashboards.WidgetAlertForm
@@ -133,7 +142,8 @@ spec = sequential $ aroundAll withTestResources do
       setupSlackData tr testPid "T_MONITOR_SIM"
       setupDiscordData tr testPid "G_MONITOR_SIM"
       void $ withResource tr.trPool \conn ->
-        PGS.execute conn
+        PGS.execute
+          conn
           [sql|UPDATE projects.teams
                 SET notify_emails = ARRAY['alerts@example.com'],
                     discord_channels = ARRAY['C_MONITOR'],
@@ -152,13 +162,13 @@ spec = sequential $ aroundAll withTestResources do
       fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
       ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
-      deliverySummary fired `shouldBe`
-        [ "discord:C_MONITOR"
-        , "email:alerts@example.com"
-        , "pagerduty:widget-monitor-test:PDTrigger"
-        , "slack:C_NOTIF_CHANNEL"
-        , "whatsapp:+15550001111"
-        ]
+      deliverySummary fired
+        `shouldBe` [ "discord:C_MONITOR"
+                   , "email:alerts@example.com"
+                   , "pagerduty:widget-monitor-test:PDTrigger"
+                   , "slack:C_NOTIF_CHANNEL"
+                   , "whatsapp:+15550001111"
+                   ]
 
       advanceMinutes tr 1
       duplicate <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
@@ -172,23 +182,23 @@ spec = sequential $ aroundAll withTestResources do
 
       advanceMinutes tr 1
       recovered <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
-      deliverySummary recovered `shouldBe`
-        [ "discord:C_MONITOR"
-        , "email:alerts@example.com"
-        , "pagerduty:widget-monitor-test:PDResolve"
-        , "slack:C_NOTIF_CHANNEL"
-        , "whatsapp:+15550001111"
-        ]
+      deliverySummary recovered
+        `shouldBe` [ "discord:C_MONITOR"
+                   , "email:alerts@example.com"
+                   , "pagerduty:widget-monitor-test:PDResolve"
+                   , "slack:C_NOTIF_CHANNEL"
+                   , "whatsapp:+15550001111"
+                   ]
 
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] []
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget
       advanceMinutes tr 1
       gated <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
-      deliverySummary gated `shouldBe`
-        [ "discord:C_MONITOR"
-        , "email:alerts@example.com"
-        , "pagerduty:widget-monitor-test:PDTrigger"
-        ]
+      deliverySummary gated
+        `shouldBe` [ "discord:C_MONITOR"
+                   , "email:alerts@example.com"
+                   , "pagerduty:widget-monitor-test:PDTrigger"
+                   ]
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] []
 
       currentMonitor <- maybe (fail "the widget monitor disappeared before deletion") pure firedMonitor
@@ -270,7 +280,6 @@ spec = sequential $ aroundAll withTestResources do
           m.currentValue `shouldBe` 110
         Nothing -> error "Monitor not found after status update"
 
-
   describe "Query Monitor Pipeline" do
     let pipelineMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "22222222-2222-2222-2222-222222222222"
         t0 = Unsafe.read "2025-06-01 12:00:00 UTC" :: UTCTime
@@ -329,7 +338,9 @@ spec = sequential $ aroundAll withTestResources do
       let skipMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "44444444-4444-4444-4444-444444444444"
       insertPipelineMonitor tr skipMonId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
       void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 60, last_evaluated = ? WHERE id = ?|]
+        PGS.execute
+          conn
+          [sql|UPDATE monitors.query_monitors SET check_interval_mins = 60, last_evaluated = ? WHERE id = ?|]
           (addUTCTime (-1800) t0, skipMonId)
       evalMonitorsAt t0 tr
       m <- fetchMonitor tr skipMonId
@@ -347,7 +358,7 @@ spec = sequential $ aroundAll withTestResources do
       evalMonitorsAt t0 tr
 
       m <- fetchMonitor tr brokenMonId
-      m.lastEvaluated `shouldSatisfy` (> addUTCTime (-86400) t0)
+      m.lastEvaluated `shouldSatisfy` maybe False (> addUTCTime (-86400) t0)
       -- Pins that this went down the failure branch rather than quietly succeeding: a query
       -- that cannot run must not also produce an alert.
       m.currentStatus `shouldBe` Monitors.MSNormal
@@ -365,6 +376,30 @@ spec = sequential $ aroundAll withTestResources do
 
       healthy <- fetchMonitor tr healthyId
       healthy.currentStatus `shouldBe` Monitors.MSAlerting
+
+    -- Regression: a monitor that has never been evaluated has last_evaluated NULL, which the
+    -- decoder rejected as a non-nullable UTCTime. Hasql fails the whole row set, not one row,
+    -- so a single never-evaluated monitor silently stopped every monitor in the deployment
+    -- from being checked — 10,384 failed QueryMonitorsCheck jobs from 2026-08-07 onward.
+    it "neverEvaluatedMonitor_isDueImmediatelyAndDoesNotBlindTheOthers" \tr -> do
+      let neverId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "99999999-9999-9999-9999-999999999999"
+          siblingId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "aaaaaaaa-9999-4999-8999-999999999999"
+      insertPipelineMonitor tr neverId "" 0 Nothing "above" Nothing Nothing
+      insertPipelineMonitor tr siblingId "" 0 Nothing "above" Nothing Nothing
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn [sql|UPDATE monitors.query_monitors SET last_evaluated = NULL WHERE id = ?|] (PGS.Only neverId)
+
+      -- The read itself is what used to throw, taking every monitor down with it.
+      actives <- runTestBg t0 tr Monitors.getActiveQueryMonitors
+      let activeIds = map (.id) actives
+      (neverId `elem` activeIds, siblingId `elem` activeIds) `shouldBe` (True, True)
+      (find ((== neverId) . (.id)) actives >>= (.lastEvaluated)) `shouldBe` Nothing
+
+      -- Never evaluated means due now, not "wait one interval".
+      evalMonitorsAt t0 tr
+      never <- fetchMonitor tr neverId
+      never.currentStatus `shouldBe` Monitors.MSAlerting
+      never.lastEvaluated `shouldSatisfy` isJust
 
     describe "Renotify and Stop-After" do
       let renotifyMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "55555555-5555-5555-5555-555555555555"
@@ -434,7 +469,9 @@ spec = sequential $ aroundAll withTestResources do
         length notifs0 `shouldSatisfy` (> 0)
 
         void $ withResource tr.trPool \conn ->
-          PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
+          PGS.execute
+            conn
+            [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
             (addUTCTime 3600 evalT, muteMonId)
 
         resetLastEvaluated tr muteMonId
@@ -451,13 +488,13 @@ spec = sequential $ aroundAll withTestResources do
 
 
 deliverySummary :: [Notification] -> [Text]
-deliverySummary = sort . map \case
-  EmailNotification d -> "email:" <> d.receiver
-  SlackNotification d -> "slack:" <> d.channelId
-  DiscordNotification d -> "discord:" <> d.channelId
-  WhatsAppNotification d -> "whatsapp:" <> Notify.to d
-  PagerdutyNotification d -> "pagerduty:" <> Notify.integrationKey d <> ":" <> show (Notify.eventAction d)
-
+deliverySummary =
+  sort . map \case
+    EmailNotification d -> "email:" <> d.receiver
+    SlackNotification d -> "slack:" <> d.channelId
+    DiscordNotification d -> "discord:" <> d.channelId
+    WhatsAppNotification d -> "whatsapp:" <> Notify.to d
+    PagerdutyNotification d -> "pagerduty:" <> Notify.integrationKey d <> ":" <> show (Notify.eventAction d)
 
 
 -- | Insert a monitor for deterministic state-machine simulation.
@@ -532,7 +569,9 @@ evalMonitorValueWithNotifs t tr monId value = do
 -- | Set renotify config columns via direct SQL
 setMonitorRenotifyConfig :: TestResources -> Monitors.QueryMonitorId -> Maybe Int -> Maybe Int -> Int -> IO ()
 setMonitorRenotifyConfig tr monId renotifyMins stopAfter notifCount = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE monitors.query_monitors SET renotify_interval_mins = ?, stop_after_count = ?, notification_count = ? WHERE id = ?|]
+  PGS.execute
+    conn
+    [sql|UPDATE monitors.query_monitors SET renotify_interval_mins = ?, stop_after_count = ?, notification_count = ? WHERE id = ?|]
     (renotifyMins, stopAfter, notifCount, monId)
 
 
