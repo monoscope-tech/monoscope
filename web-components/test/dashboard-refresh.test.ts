@@ -8,9 +8,9 @@ import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import '../src/main';
 
 const selectInterval = (interval: unknown) => window.dispatchEvent(new CustomEvent('setRefreshInterval', { detail: { interval } }));
-const mountTransport = (live: boolean) => {
+const mountTransport = (live: boolean, defaultWindow?: string) => {
   document.body.innerHTML = `
-    <div>
+    <div ${defaultWindow ? `data-default-window="${defaultWindow}"` : ''}>
       ${live ? '<span data-live-range="true"></span>' : ''}
       <div data-time-transport>
         <button data-live-toggle></button>
@@ -134,9 +134,9 @@ describe('auto-refresh interval', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?from=2024-01-01T00:00:00Z&to=2024-01-01T01:00:00Z&provider=aws&cols=cpu,memory');
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
 
-    window.toggleLiveRefresh(mountTransport(false));
+    window.toggleLiveRefresh(mountTransport(false, '5M'));
 
-    expect(setParams).toHaveBeenCalledWith({ since: '15M', from: '', to: '' }, true);
+    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' }, true);
     setParams.mockRestore();
   });
 });

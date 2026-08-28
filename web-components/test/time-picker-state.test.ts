@@ -146,14 +146,19 @@ describe('time-window transport', () => {
     now.mockRestore();
   });
 
-  test('next advances a historical window and returns to live at the present', () => {
-    window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=&from=2024-01-01T00:45:00Z&to=2024-01-01T01:00:00Z');
+  test('next advances a historical infrastructure window and returns to its five-minute live default', () => {
+    window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=&from=2024-01-01T01:05:00Z&to=2024-01-01T01:10:00Z');
+    const scope = document.createElement('div');
+    const transport = document.createElement('div');
+    scope.dataset.defaultWindow = '5M';
+    scope.append(transport);
+    document.body.append(scope);
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2024-01-01T01:15:00Z'));
 
-    window.shiftTimeRange(1);
+    window.shiftTimeRange(1, transport);
 
-    expect(setParams).toHaveBeenCalledWith({ since: '15M', from: '', to: '' }, true);
+    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' }, true);
     setParams.mockRestore();
     now.mockRestore();
   });

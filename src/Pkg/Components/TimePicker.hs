@@ -250,7 +250,7 @@ data TimeWindow = TimeWindow
 
 
 defaultWindow :: Text
-defaultWindow = "15M"
+defaultWindow = "5M"
 
 
 mkTimeWindow :: UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> TimeWindow
@@ -304,12 +304,12 @@ refreshButton_ =
     , [__|on load call window.initTimeTransport(me)|]
     ]
     do
-      transportBtn "Previous time window" "" [onclick_ "window.shiftTimeRange(-1)"]
+      transportBtn "Previous time window" "" [onclick_ "window.shiftTimeRange(-1, this.closest('[data-time-transport]'))"]
         $ faSprite_ "chevron-left" "regular" "h-3.5 w-3.5 text-iconNeutral"
       transportBtn "Pause live updates" "" [data_ "live-toggle" "", onclick_ "window.toggleLiveRefresh(this.closest('[data-time-transport]'))"] do
         span_ [data_ "pause-icon" ""] $ faSprite_ "pause" "solid" "h-3.5 w-3.5 text-iconBrand"
         span_ [data_ "play-icon" "", class_ "hidden"] $ faSprite_ "play" "solid" "h-3.5 w-3.5 text-iconNeutral"
-      transportBtn "Next time window" " disabled:bg-bgSunken disabled:text-textDisabled" [data_ "next-window" "", onclick_ "window.shiftTimeRange(1)"]
+      transportBtn "Next time window" " disabled:bg-bgSunken disabled:text-textDisabled" [data_ "next-window" "", onclick_ "window.shiftTimeRange(1, this.closest('[data-time-transport]'))"]
         $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5 text-iconNeutral"
       transportBtn "Live update interval" "" (popoverTrigger_ "auto-refresh-pop")
         $ faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral"

@@ -21,7 +21,7 @@ declare global {
     initTimeTransport: (transport: HTMLElement) => void;
     setTimeRefreshInterval: (transport: HTMLElement | null, interval: number) => void;
     toggleLiveRefresh: (transport: HTMLElement | null) => void;
-    shiftTimeRange: (direction: -1 | 1) => void;
+    shiftTimeRange: (direction: -1 | 1, transport?: HTMLElement | null) => void;
     exportTableCsv: (selector: string, filename: string) => void;
     updateStepsWithErrors: (errors: any[]) => void;
     updateCollectionResults: (results: any[]) => void;

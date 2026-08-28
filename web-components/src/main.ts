@@ -237,21 +237,24 @@ window.initTimeTransport = (transport) => {
   else syncTimeTransports();
 };
 
+const defaultTimeWindow = (transport?: HTMLElement | null) =>
+  transport?.closest<HTMLElement>('[data-default-window]')?.dataset.defaultWindow || '15M';
+
 window.toggleLiveRefresh = (transport) => {
   if (!transport) return;
   if (transport.dataset.live !== 'true') {
-    window.setParams({ since: '15M', from: '', to: '' }, true);
+    window.setParams({ since: defaultTimeWindow(transport), from: '', to: '' }, true);
     return;
   }
   window.setTimeRefreshInterval(transport, window.dashboardRefreshInterval > 0 ? 0 : 15000);
 };
 
-window.shiftTimeRange = (direction) => {
+window.shiftTimeRange = (direction, transport) => {
   const params = new URLSearchParams(window.location.search);
   const now = Date.now();
   const fromParam = Date.parse(params.get('from') || '');
   const toParam = Date.parse(params.get('to') || '');
-  const since = params.get('since') || '15M';
+  const since = params.get('since') || defaultTimeWindow(transport);
   const match = since.match(/^(\d+)\s*([SMHD])$/i);
   const unitMs: Record<string, number> = { S: 1000, M: 60000, H: 3600000, D: 86400000 };
   const relativeMs = match ? Number(match[1]) * unitMs[match[2].toUpperCase()] : 900000;
