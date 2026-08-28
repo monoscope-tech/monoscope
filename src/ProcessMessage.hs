@@ -89,6 +89,12 @@ import Text.RE.TDFA (RE, re, (?=~))
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
+-- | Why a decoded message produced no span. Both outcomes still ack the message, so both
+-- have to be countable: one is policy, the other is a project cache we failed to load.
+data SpanDrop = OverFreeTierQuota | NoProjectCache
+  deriving stock (Eq, Show)
+
+
 processMessages
   :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
   => [(Text, ByteString)]
@@ -117,17 +123,30 @@ processMessages msgs attrs =
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.
-          paired <- forM rMsgs \(ackId, raw, msg) -> runMaybeT do
-            let pid = UUIDId msg.projectId
-                !msgSize = fromIntegral (BS.length raw)
-            cache <- hoistMaybe $ HM.lookup pid projectCaches
-            let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                !isFreeTier = Projects.isFreeTier cache.paymentPlan
-            guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
-            let (spanId, trId) = requestEventIds msg
-            pure $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
+          --
+          -- Either, not Maybe: every message that produces no span is still acked, so the
+          -- two reasons must be told apart. Over quota is policy and expected; no project
+          -- cache is a bug that loses the message. Collapsing both into Nothing and
+          -- catMaybes made them one invisible number.
+          let classify (ackId, raw, msg) =
+                let !msgSize = fromIntegral (BS.length raw)
+                 in case HM.lookup (UUIDId msg.projectId) projectCaches of
+                      Nothing -> Left NoProjectCache
+                      Just cache
+                        | let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+                        , Projects.isFreeTier cache.paymentPlan && totalDailyEvents >= freeTierDailyMaxEvents ->
+                            Left OverFreeTierQuota
+                        | otherwise ->
+                            let (spanId, trId) = requestEventIds msg
+                             in Right $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
+              (dropReasons, paired) = partitionWith classify rMsgs
+              dropped n = length $ filter (== n) dropReasons
+          unless (null dropReasons)
+            $ Log.logAttention
+              "Messages acked without producing a span"
+              (AE.object ["over_free_tier_quota" AE..= dropped OverFreeTierQuota, "no_project_cache" AE..= dropped NoProjectCache, "batch_size" AE..= length rMsgs])
 
-          pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList (catMaybes paired)))
+          pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList paired))
 
     writeRes <- case mWrite of
       Nothing -> pure (Right ())
