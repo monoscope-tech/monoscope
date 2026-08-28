@@ -92,7 +92,7 @@ tabs:
         children:
           - type: 'timeseries_stat'
             title: 'Traffic'
-            description: 'Incoming request rate. Measures system load and usage patterns.'
+            description: 'Request rate across inbound requests AND SDK-instrumented outbound calls. Measures system load and usage patterns.'
             icon: activity
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
@@ -103,7 +103,7 @@ tabs:
 
           - type: 'timeseries_stat'
             title: 'P95 Latency'
-            description: '95th percentile response time. 95% of requests complete faster than this.'
+            description: '95th percentile response time across inbound requests AND SDK-instrumented outbound calls. 95% complete faster than this.'
             icon: clock
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
@@ -114,10 +114,10 @@ tabs:
 
           - type: 'timeseries_stat'
             title: 'Error Rate'
-            description: 'Percentage of failed requests (5xx errors). Lower is better.'
+            description: 'Percentage of failed requests (5xx errors) across inbound requests AND SDK-instrumented outbound calls. A failing third-party dependency raises this. Lower is better.'
             icon: alert-triangle
             query: |
-              (kind == "server" or name == "apitoolkit-http-span")
+              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
               | summarize round(countif(status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
             unit: '%'
             summarize_by: mean
