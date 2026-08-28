@@ -67,6 +67,20 @@ describe('LogList — the reader keeps their place across a load-more', () => {
     expect(sim.atTop).toBe(false);
   });
 
+  test('restores after the real virtualizer leaves scrollToIndex a no-op', async () => {
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el, { virtualizerScrollToIndexWorks: false });
+    sim.scrollToBottom();
+    const anchorId = topRowId(el, sim);
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames(6);
+
+    expect(topRowId(el, sim)).toBe(anchorId);
+    expect(sim.atTop).toBe(false);
+  });
+
   test('"Show earlier events" continues the list instead of jumping to the top', async () => {
     // hasMore=false is what swaps the load-more row for "Show earlier events".
     const el = await seeded(MAX_RETAINED_ROWS);

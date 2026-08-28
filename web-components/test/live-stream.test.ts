@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { LiveStream, tableRowToArray } from '../src/live-stream';
-import { mountList, COLS, ids, row, fakeLiveTransport, stubContainer } from './log-list-harness';
+import { mountList, COLS, ids, row, fakeLiveTransport, stubContainer, serverTransport, logPage } from './log-list-harness';
 
 // Live mode is a server push, not a poll — polling could never beat TimeFusion's
 // write-visibility latency, since a row has to clear its ingest batch and land before any
@@ -191,6 +191,26 @@ describe('LiveStream lifecycle', () => {
     s.stop();
   });
 
+  test('stopping during registration cannot reopen the obsolete stream', async () => {
+    withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
+    const immediateFetch = globalThis.fetch;
+    let release!: (response: any) => void;
+    globalThis.fetch = ((url: string, init?: any) =>
+      init?.method === 'POST' && url.endsWith('/subscriptions')
+        ? new Promise((resolve) => (release = resolve))
+        : immediateFetch(url, init)) as any;
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: () => {} });
+
+    const starting = s.start();
+    await Promise.resolve();
+    s.stop();
+    release({ ok: true, status: 200, json: async () => ({ subscription_id: 's1', stream_url: '/stream/s1' }) });
+    await starting;
+
+    expect(s.isRunning).toBe(false);
+    expect(live.openCount()).toBe(0);
+  });
+
   test('stopping releases the lease instead of leaving it to expire on the ingest pods', async () => {
     const calls = withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
     const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: () => {} });
@@ -202,6 +222,32 @@ describe('LiveStream lifecycle', () => {
 });
 
 describe('pushed Events rows', () => {
+  test('changing the query replaces the live subscription before old-query rows can leak in', async () => {
+    window.history.replaceState({}, '', '/log_explorer?query=service%3D%3D%22old%22');
+    const el = await mountList();
+    el.transport = serverTransport(logPage(['old-row']));
+    await el.fetchData('old', true);
+    live = fakeLiveTransport();
+
+    try {
+      (el as any).isLiveStreaming = true;
+      await (el as any).startLiveStream();
+      expect(live.calls.filter((c) => c.method === 'POST').map((c) => c.body.query)).toEqual(['service=="old"']);
+
+      window.history.replaceState({}, '', '/log_explorer?query=service%3D%3D%22new%22');
+      el.transport = serverTransport(logPage(['new-row']));
+      await el.fetchData('new', true);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(live.openCount()).toBe(1);
+      expect(live.calls.filter((c) => c.method === 'POST').map((c) => c.body.query)).toEqual(['service=="old"', 'service=="new"']);
+      expect(live.sources[0].closed).toBe(true);
+    } finally {
+      el.remove();
+    }
+  });
+
   test('positions columns by name and leaves unresolvable ones empty', () => {
     // The server sends only what it could resolve from the in-memory record; a column that
     // only SQL could compute is absent and must render blank, not shift the other columns.

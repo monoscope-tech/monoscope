@@ -41,6 +41,9 @@ export class LiveStream {
   private reconnectTimer: number | null = null;
   private attempt = 0;
   private stopped = true;
+  // Invalidates registrations that are still awaiting fetch/json when the stream is stopped
+  // or replaced. EventSource.close cannot cancel a connection that has not been created yet.
+  private generation = 0;
 
   constructor(private readonly opts: LiveStreamOptions) {}
 
@@ -50,6 +53,7 @@ export class LiveStream {
 
   async start(): Promise<void> {
     this.stop();
+    const generation = ++this.generation;
     this.stopped = false;
     this.opts.onState('connecting');
 
@@ -61,20 +65,32 @@ export class LiveStream {
         body: JSON.stringify(this.opts.body()),
       });
       if (!res.ok) {
+        if (generation !== this.generation) return;
         // The server's message names the actual cause — service gate, bad filter, limit hit.
         // Substituting our own would hide which.
         const msg = await res.json().then(j => j.error).catch(() => 'Could not start live mode.');
+        if (generation !== this.generation) return;
         this.stopped = true;
         this.opts.onState('error', msg);
         return;
       }
       reg = await res.json();
     } catch {
+      if (generation !== this.generation) return;
       this.stopped = true;
       this.opts.onState('error', 'Could not reach the server.');
       return;
     }
 
+    if (generation !== this.generation || this.stopped) {
+      // Registration won the network race after its owner was stopped/replaced. Release the
+      // server lease without ever opening an EventSource for obsolete query results.
+      void fetch(`/p/${this.opts.projectId}/live_tail/subscriptions/${reg.subscription_id}`, {
+        method: 'DELETE',
+        keepalive: true,
+      }).catch(() => {});
+      return;
+    }
     this.subscriptionId = reg.subscription_id;
     this.open(reg.stream_url);
     this.scheduleRenew(reg.expires_at);
@@ -179,6 +195,7 @@ export class LiveStream {
   }
 
   stop(): void {
+    this.generation++;
     this.stopped = true;
     this.source?.close();
     this.source = null;

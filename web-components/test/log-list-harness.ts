@@ -146,7 +146,7 @@ const OVERHANG = 200; // DenseRowFlowLayout._overhang
 
 export type ScrollSim = ReturnType<typeof scrollHarness>;
 
-export const scrollHarness = (el: LogList, { viewportHeight = 560 } = {}) => {
+export const scrollHarness = (el: LogList, { viewportHeight = 560, virtualizerScrollToIndexWorks = true } = {}) => {
   let scrollTop = 0;
   let sentinelHost: HTMLElement | null = null;
   // A keyed remount swaps in a virtualizer that has not laid out yet: no rows
@@ -189,7 +189,13 @@ export const scrollHarness = (el: LogList, { viewportHeight = 560 } = {}) => {
 
   const settle = () => { remounting = false; };
   const virtualizer = {
-    scrollToIndex: (i: number, _pos: string) => { settle(); container.scrollTop = i * ROW_H; },
+    // lit-virtualizer 2.1 can leave scrollToIndex as a no-op after an external-scroller
+    // remount. Tests can reproduce that real-browser failure instead of granting the
+    // component a perfect API that hid the jump-to-edge bug.
+    scrollToIndex: (i: number, _pos: string) => {
+      settle();
+      if (virtualizerScrollToIndexWorks) container.scrollTop = i * ROW_H;
+    },
     get layoutComplete() { settle(); return Promise.resolve(); },
     querySelectorAll: (sel: string) => container.querySelectorAll(sel),
   };
@@ -296,7 +302,7 @@ export const flushFrames = async (n = 3) => {
 // is answered by open connections, not by timers — tests assert on `openCount()`.
 export const fakeLiveTransport = (registerBody: any = { subscription_id: 's1', stream_url: '/stream/s1' }, status = 200) => {
   const sources: FakeEventSource[] = [];
-  const calls: { url: string; method?: string }[] = [];
+  const calls: { url: string; method?: string; body?: any }[] = [];
   class FakeEventSource {
     listeners: Record<string, ((e: any) => void)[]> = {};
     onerror: (() => void) | null = null;
@@ -318,7 +324,7 @@ export const fakeLiveTransport = (registerBody: any = { subscription_id: 's1', s
   const install = () => {
     (globalThis as any).EventSource = FakeEventSource;
     (globalThis as any).fetch = async (url: string, init?: any) => {
-      calls.push({ url, method: init?.method });
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : undefined });
       return { ok: status < 400, status, json: async () => registerBody };
     };
   };

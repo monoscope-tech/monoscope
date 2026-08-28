@@ -23,9 +23,9 @@ const seeded = async (flip: boolean, n = 400) => {
 };
 
 // A batch pushed down the live connection, in the wire shape handleLiveRows parses.
-const pushed = (id: string) => ({
+const pushed = (id: string, timestamp = new Date().toISOString()) => ({
   shape: 'table',
-  cols: { id, latency_breakdown: id, trace_id: id, parent_id: '', kind: 'log', timestamp: new Date().toISOString() },
+  cols: { id, latency_breakdown: id, trace_id: id, parent_id: '', kind: 'log', timestamp },
 });
 
 describe.each(DIRECTIONS)('live tail: $name', ({ flip }) => {
@@ -131,6 +131,50 @@ describe.each(DIRECTIONS)('live tail: $name', ({ flip }) => {
     expect(ids(el)).toContain('o1');
   });
 
+  test('many history pages followed by a live batch keep the row being read', async () => {
+    const el = await seeded(flip);
+    const sim = scrollHarness(el);
+    parkAway(sim);
+
+    for (let page = 0; page < 6; page++) {
+      const t = flip ? serverTransportFlipped : serverTransport;
+      el.transport = t(logPage(Array.from({ length: 500 }, (_, i) => `old-${page}-${i}`)));
+      await el.fetchData(`older-${page}`, false, false, true);
+      await flushFrames();
+    }
+
+    parkAway(sim);
+    const anchor = (el as any).virtualListItems[sim.firstVisibleIndex]?.id;
+    const before = sim.scrollTop;
+    const retained = ids(el);
+    (el as any).handleLiveRows(Array.from({ length: 200 }, (_, i) => pushed(`live-${i}`)));
+    await flushFrames();
+
+    expect(sim.scrollTop).toBe(before);
+    expect(ids(el)).toEqual(retained);
+    expect((el as any).virtualListItems[sim.firstVisibleIndex]?.id).toBe(anchor);
+    expect(el.recentCount).toBe(200);
+  });
+
+  test('a delayed live row is inserted at its timestamp, not at the latest edge', async () => {
+    const el = await mountList({ flipDirection: flip, isLiveStreaming: true } as any);
+    const t = flip ? serverTransportFlipped : serverTransport;
+    el.transport = t(
+      logPage([
+        ['newest', '2026-06-01T00:00:03.000Z'],
+        ['oldest', '2026-06-01T00:00:01.000Z'],
+      ]),
+    );
+    await el.fetchData('first', true);
+    const sim = scrollHarness(el);
+    parkAtEdge(sim);
+
+    (el as any).handleLiveRows([pushed('middle', '2026-06-01T00:00:02.000Z')]);
+    await flushFrames();
+
+    expect(ids(el)).toEqual(flip ? ['oldest', 'middle', 'newest'] : ['newest', 'middle', 'oldest']);
+  });
+
   test('changing the query drops rows buffered from the previous one', async () => {
     const el = await seeded(flip);
     const sim = scrollHarness(el);
@@ -150,6 +194,21 @@ describe.each(DIRECTIONS)('live tail: $name', ({ flip }) => {
     expect((el as any).recentDataToBeAdded).toHaveLength(0);
     (el as any).handleRecentConcatenation();
     expect(ids(el)).not.toContain('from-old-query');
+  });
+
+  test('an empty replacement query also drops the previous live buffer', async () => {
+    const el = await seeded(flip);
+    const sim = scrollHarness(el);
+    parkAway(sim);
+    (el as any).handleLiveRows([pushed('from-old-query')]);
+    expect(el.recentCount).toBe(1);
+
+    const t = flip ? serverTransportFlipped : serverTransport;
+    el.transport = t(logPage([]));
+    await el.fetchData('empty-new-query', true);
+
+    expect(el.recentCount).toBe(0);
+    expect((el as any).recentDataToBeAdded).toHaveLength(0);
   });
 
   test('the dropped-rows warning resets with the query it described', async () => {

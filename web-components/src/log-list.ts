@@ -279,6 +279,10 @@ export class LogList extends LitElement {
   // server drops the oldest queued rows rather than buffering without bound — Events has no
   // service gate to bound it up front, so it is bounded here instead, with a visible count.
   private liveStream: LiveStream | null = null;
+  // Fingerprint of the query/columns the active stream was registered for. A full fetch can
+  // change either while the toggle stays on; rows from the old subscription must never leak
+  // into the replacement result set.
+  private liveStreamKey: string | null = null;
   @state() private liveDropped = 0;
   // Phone-width layout is a different table, not a scaled one — see displayColumns.
   @state() private isNarrow = window.matchMedia(NARROW_VIEWPORT).matches;
@@ -341,6 +345,7 @@ export class LogList extends LitElement {
   private stopLiveStream(message?: string) {
     this.liveStream?.stop();
     this.liveStream = null;
+    this.liveStreamKey = null;
     this.isLiveStreaming = false;
     if (this.liveBtn) this.liveBtn.checked = false;
     if (message) this.showErrorToast(message);
@@ -351,6 +356,7 @@ export class LogList extends LitElement {
     // waiting out its expiry.
     this.liveStream?.stop();
     this.liveStream = null;
+    this.liveStreamKey = null;
   };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
@@ -643,29 +649,57 @@ export class LogList extends LitElement {
    * a query's final columns may be SQL expressions only the database can evaluate — so ingest
    * resolves each name it can against the in-memory record and omits the rest.
    */
-  private async startLiveStream() {
+  private liveSubscriptionBody() {
     const url = new URL(window.location.href);
+    return {
+      // No service gate on Events: it streams whatever the query says, bounded by the
+      // server's per-connection queue rather than refused up front.
+      all_signals: true,
+      query: url.searchParams.get('query') || null,
+      columns: Object.keys(this.colIdxMap ?? {}),
+    };
+  }
+
+  private liveSubscriptionKey() {
+    return JSON.stringify(this.liveSubscriptionBody());
+  }
+
+  private async startLiveStream() {
+    const body = this.liveSubscriptionBody();
+    const key = JSON.stringify(body);
+    this.liveStream?.stop();
     this.liveDropped = 0;
-    this.liveStream = new LiveStream({
+    let stream: LiveStream;
+    stream = new LiveStream({
       projectId: this.projectId,
       leaseSecs: 45,
-      body: () => ({
-        // No service gate on Events: it streams whatever the query says, bounded by the
-        // server's per-connection queue rather than refused up front.
-        all_signals: true,
-        query: url.searchParams.get('query') || null,
-        columns: Object.keys(this.colIdxMap ?? {}),
-      }),
-      onRows: (rows) => this.handleLiveRows(rows),
+      body: () => body,
+      onRows: (rows) => {
+        if (this.liveStream === stream) this.handleLiveRows(rows);
+      },
       onDropped: (total) => {
+        if (this.liveStream !== stream) return;
         this.liveDropped = total;
         this.requestUpdate();
       },
       onState: (state, detail) => {
-        if (state === 'expired' || state === 'error') this.stopLiveStream(detail);
+        if (this.liveStream === stream && (state === 'expired' || state === 'error')) this.stopLiveStream(detail);
       },
     });
-    await this.liveStream.start();
+    this.liveStream = stream;
+    this.liveStreamKey = key;
+    await stream.start();
+    // A query change can replace this stream while registration is in flight. The old
+    // registration owns no UI and must not reopen beside its replacement.
+    if (this.liveStream !== stream) stream.stop();
+  }
+
+  private syncLiveSubscription() {
+    if (!this.isLiveStreaming || this.isAggregate || this.liveSubscriptionKey() === this.liveStreamKey) return;
+    this.liveStream?.stop();
+    this.liveStream = null;
+    this.liveStreamKey = null;
+    void this.startLiveStream();
   }
 
   /**
@@ -1144,6 +1178,7 @@ export class LogList extends LitElement {
     if (changedProperties.has('mode') && this.isAggregate && this.liveStream) {
       this.liveStream.stop();
       this.liveStream = null; // else handleLiveToggle's isRunning guard skips restart on switch-back
+      this.liveStreamKey = null;
       this.isLiveStreaming = false;
     }
 
@@ -1214,6 +1249,7 @@ export class LogList extends LitElement {
     if (this.liveStream) {
       this.liveStream.stop();
       this.liveStream = null;
+      this.liveStreamKey = null;
     }
     if (this.scrollEndTimer) {
       clearTimeout(this.scrollEndTimer);
@@ -1630,6 +1666,17 @@ export class LogList extends LitElement {
     if (isFullFetch) this.fetchGeneration++;
     const gen = this.fetchGeneration;
 
+    // The URL changes before its replacement fetch starts. Stop the old subscription now,
+    // rather than letting old-query rows arrive during the request and briefly contaminate
+    // the list. `finally` starts the correctly scoped stream once metadata/columns settle.
+    const resubscribeLive =
+      isFullFetch && this.isLiveStreaming && this.liveStreamKey !== null && this.liveStreamKey !== this.liveSubscriptionKey();
+    if (resubscribeLive) {
+      this.liveStream?.stop();
+      this.liveStream = null;
+      this.liveStreamKey = null;
+    }
+
     if (isFullFetch) {
       this.hasChartCount = false;
     }
@@ -1644,6 +1691,17 @@ export class LogList extends LitElement {
       // rows for the URL the charts have already adopted.
       if (gen !== this.fetchGeneration) return;
       this.fetchError = null;
+
+      // A replacement query owns all query-scoped state even when it returns no rows. Doing
+      // this only in the non-empty branch left the old live buffer/pill available on an empty
+      // result page, ready to inject rows that did not match the new query.
+      if (isRefresh) {
+        this.expandedAggregates = {};
+        this.hasNewer = false;
+        this.recentDataToBeAdded = [];
+        this.liveDropped = 0;
+        this.cachedServerTraces = [];
+      }
 
       // Handle results
       if (tree.length === 0) {
@@ -1663,6 +1721,8 @@ export class LogList extends LitElement {
           this.seenIds.clear();
           this.loadedCount = 0;
           this.hasNewer = false;
+          if (meta.cols) this.logsColumns = meta.cols;
+          if (meta.colIdxMap) this.colIdxMap = meta.colIdxMap;
           if (meta.count !== undefined) this.totalCount = meta.count;
           this.updateVisibleItems();
           this.updateRowCountDisplay();
@@ -1697,15 +1757,6 @@ export class LogList extends LitElement {
       }
 
       if (isRefresh) {
-        // New query/filter/time-range: drop inline-expanded aggregate children so
-        // they don't render stale rows from the previous query under a surviving key.
-        this.expandedAggregates = {};
-        this.hasNewer = false;
-        // The live-tail buffer holds rows matched against the PREVIOUS query. Carrying it
-        // over leaves the "N new" pill offering to insert rows the new query excludes —
-        // and the drop warning describing a stream that no longer exists.
-        this.recentDataToBeAdded = [];
-        this.liveDropped = 0;
         this.spanListTree = dedupeById(tree);
         this.seenIds = new Set(this.spanListTree.map((r) => r.id));
         this.updateVisibleItems();
@@ -1789,6 +1840,7 @@ export class LogList extends LitElement {
       else if (isLoadMore) this.isLoadingMore = false;
       else if (gen === this.fetchGeneration) this.isLoading = false;
       if (!isFullFetch || gen === this.fetchGeneration) this.showLoadingSpinner(false);
+      if (isFullFetch && gen === this.fetchGeneration && (resubscribeLive || this.liveStream !== null)) this.syncLiveSubscription();
       this.requestUpdate();
     }
   };
@@ -1971,6 +2023,29 @@ export class LogList extends LitElement {
         : [...current, ...newData];
   }
 
+  /**
+   * Merge independently grouped pages by trace time.
+   *
+   * Ingest delivery is not timestamp delivery: an SDK retry or a slow service can send an
+   * older event after newer rows are already visible. Concatenating every live batch at the
+   * latest edge puts that row in the wrong place. Sorting individual rows would split expanded
+   * traces, so contiguous trace groups move as one unit, keyed by the trace start used by the
+   * worker's own ordering.
+   */
+  private mergeInTimeOrder(current: EventLine[], newData: EventLine[], isRecentFetch: boolean): EventLine[] {
+    const groups: { rows: EventLine[]; time: number; position: number }[] = [];
+    for (const row of this.orderMerge(current, newData, isRecentFetch)) {
+      const previous = groups.at(-1);
+      if (previous && previous.rows[0].traceId === row.traceId) previous.rows.push(row);
+      else groups.push({ rows: [row], time: row.traceStart || row.startNs || 0, position: groups.length });
+    }
+    groups.sort((a, b) => {
+      if (!a.time || !b.time || a.time === b.time) return a.position - b.position;
+      return this.flipDirection ? a.time - b.time : b.time - a.time;
+    });
+    return groups.flatMap((group) => group.rows);
+  }
+
   // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
   // tail paused for hours while inspecting an older row.
   private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
@@ -1990,7 +2065,12 @@ export class LogList extends LitElement {
       this.seenIds.add(r.id);
       return true;
     });
-    const merged = this.orderMerge(this.spanListTree, fresh, isRecentFetch);
+    // Cursor pagination is guaranteed to return the next history edge and can append without
+    // touching visible geometry. Recent/live delivery is not timestamp-ordered, so only that
+    // path pays to place delayed trace groups chronologically.
+    const merged = isRecentFetch
+      ? this.mergeInTimeOrder(this.spanListTree, fresh, true)
+      : this.orderMerge(this.spanListTree, fresh, false);
     if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) {
       this.evictedEdge = null;
       this.evictedCount = 0;
@@ -2085,6 +2165,16 @@ export class LogList extends LitElement {
       // virtualizer has already rendered. This fallback is needed after retention-window eviction
       // remounts the virtualizer and recycles the anchor row out of the DOM.
       virtualizer.scrollToIndex(index, 'start');
+      if (!(await this.afterLayout(virtualizer)) || this.alignAnchor(anchor)) return;
+
+      // With an external scroll container lit-virtualizer 2.1 can accept scrollToIndex yet
+      // leave the old range pinned after a keyed remount. The jsdom simulator used to grant
+      // that call a perfect scroll, hiding the production jump. Move to the index's estimated
+      // runway ourselves, then use real row geometry for the exact offset correction.
+      const container = this.logsContainer;
+      if (!container) return;
+      container.scrollTop = (index * container.scrollHeight) / Math.max(1, this.virtualListItems.length);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
       if (await this.afterLayout(virtualizer)) this.alignAnchor(anchor);
     } catch (error) {
       // Every caller is fire-and-forget (`void this.restoreScrollAnchor(...)`), so a throw
