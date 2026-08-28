@@ -125,6 +125,14 @@ Not merged — review and merge when the other session's work settles.
   gone; the file is clean under `-Werror=redundant-constraints`.
 - `Pages/CodeContext.hs` — `nonBlank` was `Utils.nonEmptyT` re-implemented with `guarded`
   instead of `mfilter`. Deleted; 8 call sites use the shared one.
+- `Pkg/Queue.hs` + `ProcessMessage.hs` — the **silent-drop lens** found two places ingest
+  loses messages without saying so; both now log. Pub/Sub's pull loop dropped any message
+  with no ackId or no decodable payload (and never acked it either, so it redelivers
+  forever). `processMessages` dropped messages via `runMaybeT`/`catMaybes` while acking
+  them anyway, collapsing two different causes — free-tier quota (policy) and a missing
+  project cache (a bug that loses data) — into one invisible number; it now uses `Either`
+  with a `SpanDrop` reason. Note this is the *same file* the distill lens called clean:
+  different lens, different find.
 - **No findings** (reviewed, nothing worth changing): `Web/ApiHandlers.hs` (103 small
   functions, already has `withRefetchNoContent`/`notFoundOr` helpers), `Pkg/LiveTail.hs`,
   `Pages/Replay.hs`, `Models/Apis/Issues.hs`, `Pkg/EmailTemplates.hs`. Their `_ ->`
