@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-redundant-constraints #-}
-
 module Data.Effectful.Notify (
   -- * Effect
   Notify,
@@ -298,7 +296,7 @@ runNotifyProduction = interpret $ \_ -> \case
     PagerdutyNotification _ -> pure Nothing
   GetNotifications -> pure [] -- Production doesn't store notifications
   where
-    sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
+    sendSlack :: (IOE :> es, Log :> es) => SlackData -> Eff es (Maybe Text)
     sendSlack sd = case sd.webhookUrl of
       Just url -> sendSlackWebhook sd url
       Nothing -> sendSlackChatApi sd

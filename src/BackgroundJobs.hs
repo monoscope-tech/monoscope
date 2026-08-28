@@ -309,25 +309,7 @@ processBackgroundJob authCtx bgJob =
         let enc = decodeUtf8 . urlEncode True . encodeUtf8
             inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc ("/p/" <> projectId.toText)
         renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
-    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
-      users <- Projects.usersByProjectId projectId
-      let stackString = intercalate ", " $ map toString stack
-      forM_ users \user -> do
-        let userEmail = CI.original user.email
-        let project_url = projectUrl authCtx projectId
-        let project_title = project.title
-        let msg =
-              [fmtTrim|
-  🎉 New project created on monoscope.tech! 🎉
-  - **User Full Name**: {fullName}
-  - **User Email**: {userEmail}
-  - **Project Title**: [{project_title}]({project_url})
-  - **User ID**: {userId.toText}
-  - **Payment Plan**: {project.paymentPlan}
-  - **Stack**: {stackString}
-  - **Found us from**: {foundUsFrom}
-  |]
-        sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+    SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordDataJob authCtx userId projectId fullName stack foundUsFrom
     CreatedProjectSuccessfully userId projectId reciever projectTitle ->
       whenJustM (Projects.userById userId) \user ->
         renderAndSend reciever (ET.projectCreatedEmail user.firstName projectTitle (projectUrl authCtx projectId))
@@ -335,21 +317,7 @@ processBackgroundJob authCtx bgJob =
       users <- Projects.usersByProjectId pid
       forM_ users \user ->
         renderAndSend (CI.original user.email) (ET.projectDeletedEmail user.firstName pr.title)
-    ErrorAssigned pid errId assigneeId -> do
-      errM <- ErrorPatterns.getErrorPatternById errId
-      userM <- Projects.userById assigneeId
-      projectM <- Projects.projectById pid
-      case (projectM, errM, userM) of
-        (Just project, Just err, Just user) | err.projectId == pid -> do
-          let userEmail = CI.original user.email
-              userName = if T.null user.firstName then userEmail else user.firstName
-          issueM <- Issues.selectIssueByHash pid err.hash
-          let (issueTitle, issuePath) = case issueM of
-                Just issue -> (issue.title, issue.id.toText)
-                Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
-              issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
-          renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
-        _ -> pass
+    ErrorAssigned pid errId assigneeId -> errorAssignedNotification authCtx pid errId assigneeId
     DailyJob ->
       if authCtx.config.enableDailyJobScheduling
         then withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling
@@ -482,47 +450,8 @@ processBackgroundJob authCtx bgJob =
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> reportUsageForProject authCtx pid
-    TrialEndingReminder pid scheduledDaysLeft -> do
-      projectM <- Projects.projectById pid
-      case projectM of
-        Nothing -> Log.logAttention "TrialEndingReminder: project not found" (pid.toText, scheduledDaysLeft :: Int)
-        Just project -> case project.subId of
-          Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft :: Int)
-          Just subId
-            | Projects.projectProvider project /= Projects.StripeProvider ->
-                Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
-            | otherwise -> do
-                details <- getStripeSubDetails authCtx.config.stripeSecretKey subId
-                case details of
-                  Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft :: Int, subId)
-                  Just StripeSubDetails{status, trialEnd} -> case status of
-                    "past_due" -> Log.logAttention "TrialEndingReminder: sub past_due at reminder time" (pid.toText, scheduledDaysLeft :: Int, subId)
-                    "trialing" -> do
-                      -- Re-derive days left from Stripe's current trial_end so email copy
-                      -- reflects any mid-trial extension rather than the scheduled value.
-                      now <- liftIO getCurrentTime
-                      let actualDaysLeft = case trialEnd of
-                            Just epoch ->
-                              let secs = fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime
-                               in max 0 (ceiling (secs / 86400))
-                            Nothing -> scheduledDaysLeft
-                      users <- Projects.usersByProjectId pid
-                      let billingUrl = projectUrl authCtx pid <> "/manage_billing"
-                          (subj, html) = ET.trialEndingEmail project.title actualDaysLeft billingUrl
-                      forM_ users \u -> do
-                        sendRes <- tryAny $ sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-                        whenLeft_ sendRes \e ->
-                          Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
-                    _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft :: Int, subId, status)
-    CleanupDemoProject ->
-      -- ReadCommitted is sufficient: we need atomicity across the three deletes,
-      -- not Serializable's anti-conflict guarantees (which would surface as opaque
-      -- retryable errors that the current Hasql retry path does not handle).
-      Hasql.transaction TxS.ReadCommitted TxS.Write $ do
-        let pid = UUID.nil
-        Tx.statement pid [resultlessStatement|DELETE FROM projects.project_members WHERE project_id = $1 :: uuid|]
-        Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
-        Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
+    TrialEndingReminder pid scheduledDaysLeft -> trialEndingReminder authCtx pid scheduledDaysLeft
+    CleanupDemoProject -> cleanupDemoProject
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
@@ -819,6 +748,94 @@ processBackgroundJob authCtx bgJob =
         send heading
         send $ "```\n" <> hdr <> "\n" <> unlines (map fmtRow top) <> "```"
       Log.logInfo "Usage audit complete" ("mismatch_count", length sorted)
+
+
+sendDiscordDataJob :: Config.AuthContext -> Projects.UserId -> Projects.ProjectId -> Text -> [Text] -> Text -> ATBackgroundCtx ()
+sendDiscordDataJob authCtx userId projectId fullName stack foundUsFrom =
+  whenJustM (Projects.projectById projectId) \project -> do
+    users <- Projects.usersByProjectId projectId
+    let stackString = intercalate ", " $ map toString stack
+    forM_ users \user -> do
+      let userEmail = CI.original user.email
+      let project_url = projectUrl authCtx projectId
+      let project_title = project.title
+      let msg =
+            [fmtTrim|
+    🎉 New project created on monoscope.tech! 🎉
+    - **User Full Name**: {fullName}
+    - **User Email**: {userEmail}
+    - **Project Title**: [{project_title}]({project_url})
+    - **User ID**: {userId.toText}
+    - **Payment Plan**: {project.paymentPlan}
+    - **Stack**: {stackString}
+    - **Found us from**: {foundUsFrom}
+    |]
+      sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+
+
+errorAssignedNotification :: Config.AuthContext -> Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> Projects.UserId -> ATBackgroundCtx ()
+errorAssignedNotification authCtx pid errId assigneeId = do
+  errM <- ErrorPatterns.getErrorPatternById errId
+  userM <- Projects.userById assigneeId
+  projectM <- Projects.projectById pid
+  case (projectM, errM, userM) of
+    (Just project, Just err, Just user) | err.projectId == pid -> do
+      let userEmail = CI.original user.email
+          userName = if T.null user.firstName then userEmail else user.firstName
+      issueM <- Issues.selectIssueByHash pid err.hash
+      let (issueTitle, issuePath) = case issueM of
+            Just issue -> (issue.title, issue.id.toText)
+            Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
+          issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
+      renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
+    _ -> pass
+
+
+trialEndingReminder :: Config.AuthContext -> Projects.ProjectId -> Int -> ATBackgroundCtx ()
+trialEndingReminder authCtx pid scheduledDaysLeft = do
+  projectM <- Projects.projectById pid
+  case projectM of
+    Nothing -> Log.logAttention "TrialEndingReminder: project not found" (pid.toText, scheduledDaysLeft :: Int)
+    Just project -> case project.subId of
+      Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft :: Int)
+      Just subId
+        | Projects.projectProvider project /= Projects.StripeProvider ->
+            Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
+        | otherwise -> do
+            details <- getStripeSubDetails authCtx.config.stripeSecretKey subId
+            case details of
+              Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft :: Int, subId)
+              Just StripeSubDetails{status, trialEnd} -> case status of
+                "past_due" -> Log.logAttention "TrialEndingReminder: sub past_due at reminder time" (pid.toText, scheduledDaysLeft :: Int, subId)
+                "trialing" -> do
+                  -- Re-derive days left from Stripe's current trial_end so email copy
+                  -- reflects any mid-trial extension rather than the scheduled value.
+                  now <- liftIO getCurrentTime
+                  let actualDaysLeft = case trialEnd of
+                        Just epoch ->
+                          let secs = fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime
+                           in max 0 (ceiling (secs / 86400))
+                        Nothing -> scheduledDaysLeft
+                  users <- Projects.usersByProjectId pid
+                  let billingUrl = projectUrl authCtx pid <> "/manage_billing"
+                      (subj, html) = ET.trialEndingEmail project.title actualDaysLeft billingUrl
+                  forM_ users \u -> do
+                    sendRes <- tryAny $ sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                    whenLeft_ sendRes \e ->
+                      Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
+                _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft :: Int, subId, status)
+
+
+cleanupDemoProject :: ATBackgroundCtx ()
+cleanupDemoProject =
+  -- ReadCommitted is sufficient: we need atomicity across the three deletes,
+  -- not Serializable's anti-conflict guarantees (which would surface as opaque
+  -- retryable errors that the current Hasql retry path does not handle).
+  Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+    let pid = UUID.nil
+    Tx.statement pid [resultlessStatement|DELETE FROM projects.project_members WHERE project_id = $1 :: uuid|]
+    Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
+    Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
 
 
 -- | Meter one project's usage for the current window and drain its submission backlog.
