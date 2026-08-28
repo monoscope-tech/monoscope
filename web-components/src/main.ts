@@ -182,15 +182,13 @@ window.updateTimePicker = function (
     } else {
       const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
       const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
-      displayLabel = m
-        ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}`
-        : 'Last ' + timeRange.since;
+      displayLabel = m ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}` : 'Last ' + timeRange.since;
     }
     if (rangeEl) rangeEl.innerText = displayLabel;
   } else if (timeRange.from && timeRange.to) {
     if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
     if (!opts?.skipSetParams) window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
-    displayLabel = opts?.label ?? (formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to));
+    displayLabel = opts?.label ?? formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to);
     if (rangeEl) rangeEl.innerText = displayLabel;
   } else {
     console.warn('updateTimePicker: malformed timeRange — expected "since" or "from"+"to"', timeRange);
@@ -227,9 +225,7 @@ window.setTimeRefreshInterval = (_transport, interval) => {
   if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
   const running = interval > 0;
   window.dashboardRefreshInterval = running ? interval : 0;
-  window.dashboardRefreshTimer = running
-    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval)
-    : null;
+  window.dashboardRefreshTimer = running ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval) : null;
   syncTimeTransports();
 };
 
@@ -320,7 +316,8 @@ window.exportTableCsv = (selector, filename) => {
 
 // Convert CSS color (including oklch) to hex via pixel rendering
 const _maCanvas = document.createElement('canvas');
-_maCanvas.width = 1; _maCanvas.height = 1;
+_maCanvas.width = 1;
+_maCanvas.height = 1;
 const _maCtx = _maCanvas.getContext('2d', { willReadFrequently: true })!;
 const cssToHex = (token: string, fallback: string): string => {
   const val = getComputedStyle(document.body).getPropertyValue(token).trim() || fallback;
@@ -328,7 +325,7 @@ const cssToHex = (token: string, fallback: string): string => {
   _maCtx.fillStyle = val;
   _maCtx.fillRect(0, 0, 1, 1);
   const [r, g, b] = _maCtx.getImageData(0, 0, 1, 1).data;
-  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
 };
 
 window.updateMarkAreas = function (chartId: string, warningVal: string, incidentVal: string) {
@@ -460,7 +457,9 @@ function initTagifyElement(el: HTMLElement) {
     const options: any = {};
     const wl = el.getAttribute('data-tagify-whitelist');
     if (wl) {
-      try { options.whitelist = JSON.parse(wl); } catch (e) {
+      try {
+        options.whitelist = JSON.parse(wl);
+      } catch (e) {
         console.error('[Tagify auto-init] Failed to parse whitelist:', el.id, e);
       }
     }
@@ -489,7 +488,11 @@ function initTagifyElement(el: HTMLElement) {
     // vars skip the render-time scan). Fetch the whitelist the first time the
     // dropdown opens, so opening the picker is what pays the query cost, not the
     // page load. Guarded so it only fetches once per instance.
-    if (el.classList.contains('dash-variable-input') && !options.whitelist?.length && (el.getAttribute('data-tagify-query-sql') || el.getAttribute('data-tagify-query'))) {
+    if (
+      el.classList.contains('dash-variable-input') &&
+      !options.whitelist?.length &&
+      (el.getAttribute('data-tagify-query-sql') || el.getAttribute('data-tagify-query'))
+    ) {
       let fetched = false;
       tagify.on('dropdown:show', () => {
         if (fetched) return;
@@ -514,16 +517,23 @@ function initTagifyElement(el: HTMLElement) {
 }
 
 // Interpolate {{var-*}} placeholders in elements with data-var-template
-let _cachedSearch = '', _cachedParams: URLSearchParams | null = null, _interpolatePending = false;
+let _cachedSearch = '',
+  _cachedParams: URLSearchParams | null = null,
+  _interpolatePending = false;
 (window as any).interpolateVarTemplates = function () {
   if (_interpolatePending) return;
   _interpolatePending = true;
   requestAnimationFrame(() => {
     _interpolatePending = false;
-    if (window.location.search !== _cachedSearch) { _cachedSearch = window.location.search; _cachedParams = new URLSearchParams(_cachedSearch); }
+    if (window.location.search !== _cachedSearch) {
+      _cachedSearch = window.location.search;
+      _cachedParams = new URLSearchParams(_cachedSearch);
+    }
     document.querySelectorAll('[data-var-template]').forEach((el: any) => {
       let text = el.dataset.varTemplate;
-      _cachedParams!.forEach((value, key) => { if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || ''); });
+      _cachedParams!.forEach((value, key) => {
+        if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+      });
       el.textContent = text;
     });
   });
@@ -541,10 +551,20 @@ async function reloadVarWhitelist(input: HTMLElement) {
   const tgfy = (input as any)._tagifyInstance;
   try {
     tgfy?.loading(true);
-    const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql: querySql, data_type: 'text' });
-    const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
-    if (tgfy) { tgfy.settings.whitelist = data_text.map((i: any) => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
-  } catch (e) { console.error(`Error fetching data for ${(input as any).name}:`, e); }
+    const params = new URLSearchParams({
+      ...Object.fromEntries(new URLSearchParams(location.search)),
+      query,
+      query_sql: querySql,
+      data_type: 'text',
+    });
+    const { data_text } = await fetch(`/chart_data?${params}`).then((res) => res.json());
+    if (tgfy) {
+      tgfy.settings.whitelist = data_text.map((i: any) => (i.length === 1 ? i[0] : { value: i[0], name: i[1] }));
+      tgfy.loading(false);
+    }
+  } catch (e) {
+    console.error(`Error fetching data for ${(input as any).name}:`, e);
+  }
 }
 (window as any).reloadVarWhitelist = reloadVarWhitelist;
 
@@ -571,7 +591,7 @@ function syncFacetCheckboxes(root: Document | Element = document) {
   // rendered into the element — otherwise a reload with facet filters active shows them all off.
   const el = document.getElementById('filterElement') as any;
   const query = el?.editor?.getValue() ?? el?.getAttribute('default-value') ?? '';
-  root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-field][data-value]').forEach(cb => {
+  root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-field][data-value]').forEach((cb) => {
     cb.checked = fragmentInQuery(query, `${cb.dataset.field} == "${cb.dataset.value}"`);
   });
 }
@@ -590,7 +610,10 @@ window.getTagValues = (selector: string): string[] => {
 initAllTagifyInputs();
 (window as any).interpolateVarTemplates();
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => { initAllTagifyInputs(); (window as any).interpolateVarTemplates(); });
+  document.addEventListener('DOMContentLoaded', () => {
+    initAllTagifyInputs();
+    (window as any).interpolateVarTemplates();
+  });
 }
 document.addEventListener('htmx:after:swap', (e: any) => {
   initAllTagifyInputs(e.detail?.elt || document);
