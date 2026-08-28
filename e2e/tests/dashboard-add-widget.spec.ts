@@ -100,6 +100,7 @@ test.describe("adding widgets to a dashboard", () => {
 
     const tabs = page.locator("#visualizationTabs label[data-value]");
     await expect(tabs.first()).toBeVisible();
+    await expect(page.locator("#page-data-drawer-panel").locator('[aria-label="Close drawer"]')).toHaveCount(1);
 
     // A dashboard widget is a chart. Logs is a full log table — the most expensive thing
     // on a dashboard and the wrong thing to offer first — so it must not lead the strip.

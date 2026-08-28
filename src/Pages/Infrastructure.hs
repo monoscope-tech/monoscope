@@ -552,8 +552,8 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
 
 
 imageDetail_ :: Projects.ProjectId -> ImageRow -> Html ()
-imageDetail_ pid image = div_ [class_ "min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
+imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
     div_ [class_ "flex items-center gap-2"] $ faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral" >> h2_ [class_ "break-words text-lg font-semibold text-textStrong"] (toHtml image.image)
     div_ [class_ "mt-2 flex flex-wrap gap-1.5"] do
       span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
@@ -776,8 +776,8 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
 
 
 kubernetesDetail_ :: Projects.ProjectId -> KubeResource -> KubeRow -> Html ()
-kubernetesDetail_ pid resource row = div_ [class_ "min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
+kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
     div_ [class_ "flex flex-wrap items-center gap-2"] do
       faSprite_ (if resource `elem` [KubeClusters, KubeNodes] then "server" else "cube") "solid" "h-4 w-4 text-iconNeutral"
       h2_ [class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml row.name

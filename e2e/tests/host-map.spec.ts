@@ -16,6 +16,11 @@ test.describe("Host map", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute("aria-modal", "true");
     await expect(dialog).toHaveAccessibleName(/vps-|host/i);
+    const header = dialog.locator("header");
+    await expect(header).toBeVisible();
+    const closeBox = (await dialog.getByRole("button", { name: "Close drawer" }).boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width - 12);
     await expect
       .poll(() => page.locator("#main-content").evaluate((element) => (element as HTMLElement).inert))
       .toBe(true);

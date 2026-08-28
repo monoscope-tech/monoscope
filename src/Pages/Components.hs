@@ -184,12 +184,13 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
       , Aria.label_ "Details"
       ]
       do
-        button_
-          [ type_ "button"
-          , Aria.label_ "Close drawer"
-          , class_ "btn btn-sm btn-circle btn-ghost sticky top-3 float-right z-30 mr-3 mt-3 bg-bgRaised shadow-sm max-sm:size-11"
-          , term "_" $ "on click set #" <> drawerId <> ".checked to false then trigger change on #" <> drawerId
-          ]
+        div_ [class_ "sticky top-3 z-30 h-0 flex justify-end"]
+          $ button_
+            [ type_ "button"
+            , Aria.label_ "Close drawer"
+            , class_ "btn btn-sm btn-circle btn-ghost mr-3 text-iconNeutral hover:bg-fillWeak hover:text-iconBrand max-sm:size-11"
+            , term "_" $ "on click set #" <> drawerId <> ".checked to false then trigger change on #" <> drawerId
+            ]
           $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
         div_
           [ id_ $ drawerId <> "-content"

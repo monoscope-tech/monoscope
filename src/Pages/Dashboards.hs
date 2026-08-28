@@ -1265,7 +1265,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     , term "_" [text|on load js(me) { window.setupStickyObserver('${stickySentinelId}', '${stickyContainerId}') } end|]
     ]
     do
-      div_ [class_ "flex justify-between items-center mb-4"] do
+      div_ [class_ "flex justify-between items-center mb-4 pr-12"] do
         div_ [class_ "flex justify-between"] do
           unless isNewWidget
             $ div_ [class_ "tabs tabs-box tabs-outline"] do
@@ -1288,7 +1288,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
           TimePicker.refreshButton_
           div_ [class_ "w-px h-5 bg-strokeWeak"] ""
           button_ [class_ $ "btn btn-primary btn-sm shadow-sm" <> memptyIfFalse (not isNewWidget) " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
       -- 4:1 is a chart's shape. A log table is a header plus rows and wants roughly twice
       -- that height, so it gets its own aspect off the checked viz radio (both live under
