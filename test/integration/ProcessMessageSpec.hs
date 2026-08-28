@@ -1,6 +1,8 @@
 module ProcessMessageSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Cache qualified as Cache
+import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -17,7 +19,7 @@ import Pkg.TestUtils
 import ProcessMessage (emptyPathClassifier, processMessages, processSpanToEntities)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotBe)
 import Utils (toXXHash)
 
 
@@ -88,6 +90,25 @@ spec = around withTestResources do
       case resp of
         Right (ids, _poison) -> ids `shouldBe` ["m1", "m2"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
+
+    -- Ingest silently declines to store anything for a free-tier project that is over its
+    -- daily cap, while still acking every message. That is deliberate policy, but it is
+    -- indistinguishable from data loss unless something pins it, so: the batch is acked in
+    -- full and no span reaches the store. Seeded through the project cache because the real
+    -- count is a live COUNT(*) and 10,000 rows is not a unit of test setup.
+    it "freeTierOverDailyCap_acksTheBatchAndStoresNothing" \tr -> do
+      let overCap = def{Projects.paymentPlan = "Free", Projects.dailyEventCount = 10001} :: Projects.ProjectCache
+      liftIO $ Cache.insert tr.trProjectCache pid overCap
+      nowTxt <- toText . formatTime defaultTimeLocale "%FT%T%QZ" <$> getCurrentTime
+      let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+          msgs = [("over-cap", toStrict $ AE.encode reqMsg)]
+      let spanCount = withPool tr.trPool (DBT.query [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)) :: IO (V.Vector (Only Int64))
+      before' <- spanCount
+      runTestBg frozenTime tr (processMessages msgs HashMap.empty) >>= \case
+        Right (ids, poison) -> (ids, poison) `shouldBe` (["over-cap"], [])
+        Left _ -> expectationFailure "processMessages returned Left WriteFailure"
+      spanCount >>= (`shouldBe` before')
+      liftIO $ Cache.delete tr.trProjectCache pid
 
     -- Regression: hashes used to arrive only via the extraction worker's hash-merge
     -- UPDATE, which minted a duplicate row version per span in TimeFusion's
