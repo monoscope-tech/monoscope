@@ -4,6 +4,8 @@ import { DEMO_PROJECT } from "./helpers";
 const HOST_MAP_URL = `/p/${DEMO_PROJECT}/infrastructure/host-map?since=5M`;
 
 test.describe("Host map", () => {
+  test.describe.configure({ mode: "serial" });
+
   test("the host inspector is a labelled modal that isolates and restores the map", async ({ page }) => {
     await page.goto(HOST_MAP_URL, { waitUntil: "domcontentloaded" });
     const host = page.getByRole("button", { name: /vps-d6d7e318, CPU usage:/ });
@@ -30,7 +32,9 @@ test.describe("Host map", () => {
     await expect(dialog.getByText("Signal coverage: 0 of 4")).toBeVisible();
     await expect(dialog.getByRole("heading", { name: "No host metrics in this time range" })).toBeVisible();
     await expect(dialog.getByRole("link", { name: "Try last 1 hour" })).toBeVisible();
-    await expect(dialog.getByRole("link", { name: "Set up host metrics" })).toBeVisible();
+    const setup = dialog.getByRole("link", { name: "Set up host metrics" });
+    await expect(setup).toBeVisible();
+    await expect(setup).toHaveCSS("background-color", "oklch(0.52 0.22 261)");
     await expect(dialog.getByText("No data for the selected time range")).toHaveCount(0);
   });
 

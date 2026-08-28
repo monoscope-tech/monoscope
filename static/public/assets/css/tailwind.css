@@ -1992,7 +1992,7 @@ code, pre, .code, .monospace {
     --fallback-bc: rgba(255 255 255 / 0.55);
   }
   .btn-primary {
-    @apply bg-fillBrand-strong hover:bg-fillBrand-strong text-white;
+    @apply bg-fillBrand-action hover:bg-fillBrand-action text-white;
   }
   
   [data-theme="dark"] .btn-primary {
