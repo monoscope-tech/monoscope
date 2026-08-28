@@ -1,5 +1,22 @@
 # Overnight session notes — 2026-08-27/28
 
+## TL;DR
+
+1. **Alerting was dark for three weeks and is now fixed and verified live** — 13/13 monitors
+   evaluating, zero `QueryMonitorsCheck` failures since the 00:55 UTC deploy.
+2. **New bug found, not fixed:** the daily-scheduling advisory lock leaks on every run and
+   is held in prod right now. When it doesn't clear, a whole day of job scheduling
+   (including all usage metering) is silently skipped. Written up in full below — the fix
+   is a billing-adjacent decision, so it waits for you.
+3. **Two billing decisions waiting on you:** DSI-APP and TestCorp have
+   `first_sub_item_id = ''` and have gone unbilled since 2026-07-17. Populating either
+   starts real invoicing, so I left both alone.
+4. **Deadline: ~08-31.** After that the 7-day retention clamp makes the 08-23/08-24 gap
+   permanently unbillable.
+5. **Talstack Prod is still unexplained**; the diagnostic log I shipped lands at the next
+   00:00 UTC run.
+6. **`refactor-sweep` branch pushed, green** (757 examples, 0 failures) — not merged.
+
 ## Shipped to master (main checkout, deployed)
 
 | Commit | What |
@@ -80,7 +97,10 @@ Working in a worktree because the other session is editing `Dashboards`, `Anomal
 `LogSpec:784` assert `aria-label`s whose source changes have not landed yet.
 Full suite otherwise: 758 examples, 2 failures, 28 pending.
 
-**Branch state:** full integration suite **757 examples, 0 failures, 28 pending**;
+**Branch state:** full integration suite **757 examples, 0 failures, 28 pending**.
+(The main checkout reports 758 with 2 failures — the extra example and both failures are
+the other session's uncommitted spec edits, not something lost here: `ReportUsageSpec` has
+16 `it` blocks before and after my change.)
 library compiles clean (125 modules, 2 pre-existing warnings); fourmolu + hlint clean.
 Not merged — review and merge when the other session's work settles.
 
@@ -122,6 +142,51 @@ are mostly long *type definitions*, not long bodies. The real finds tonight were
 narrow ones, all now fixed. What the codebase is short of is not tidiness but **tests on
 the revenue path** — before tonight the billing gate had coverage that tested `NULL`
 where production failed on `""`.
+
+## ⚠ NEW BUG FOUND (confirmed in prod) — the daily advisory lock leaks every run
+
+Found by hoisting `withAdvisoryLock` out of `DailyJob`'s `where` and asking whether it was
+safe to reuse. It is not, and the existing use is already broken.
+
+`Hasql.statement` goes through `OHasql.useStatement pool` — **a connection is checked out
+of the pool per statement**. `pg_try_advisory_lock` is *session*-level, so the lock is taken
+on connection A and the unlock runs on connection B, which does not hold it. Prod logs show
+the pair on every single daily run:
+
+```
+2026-08-28 00:00:02  "Running daily job"
+2026-08-28 00:00:39  "Advisory unlock returned FALSE (lock was not held by this session)"
+2026-08-27 14:43:08  "Running daily job"
+2026-08-27 14:43:22  "Advisory unlock returned FALSE (lock was not held by this session)"
+```
+
+The unlock never succeeds. The lock stays held on connection A until the pool recycles it.
+**It is held right now** — `pg_locks` has advisory objid `2654377941`, which is
+`hashtext('daily_job_scheduling')` = `-1640589355` read unsigned, on pid 1573144 (backend
+started 2026-08-27 23:35).
+
+**Consequence:** if the acquiring connection is still in the pool at the next 00:00 UTC,
+`pg_try_advisory_lock` returns false and the run logs *"Daily job already running in another
+pod, skipping"* — and the **entire day's scheduling silently does not happen**: no
+`ReportUsage`, no per-project job seeding. That is an intermittent, self-clearing failure
+that depends on pool recycling, which fits both the erratic metering coverage investigated
+tonight and the older "per-project jobs were never seeded" incident.
+
+**Deliberately not fixed unattended.** Getting a distributed lock wrong in the *other*
+direction lets two pods schedule the same day concurrently, which means duplicate
+`ReportUsage` jobs — double metering. That is a worse failure than a skipped day and it is
+billing, so it wants review.
+
+**Fix sketch:** acquire, run and release on one explicitly checked-out connection — the
+`liftIO $ withResource authCtx.jobsPool \conn -> …` pattern this file already uses
+elsewhere — which needs an unlift (`withEffToIO`) to run the `Eff` action inside. Or drop
+advisory locks for a row in a table with an owner and a TTL. Either way it deserves a test
+that asserts the lock is *released* after `withAdvisoryLock` returns (query `pg_locks`),
+because the current bug is precisely a missing release.
+
+**Operational note for this morning:** if the lock is still held (query above), tonight's
+00:00 UTC run will skip. Clearing it means terminating that backend, which is a live pooled
+connection — your call.
 
 ### Identified, deliberately NOT done
 
