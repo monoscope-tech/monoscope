@@ -2709,9 +2709,9 @@ export class LogList extends LitElement {
             </div>`
           : nothing}
         ${!isAggregate && this.recentCount > 0 && !this.flipDirection
-          ? html` <div class="pointer-events-none sticky top-[30px] z-50 flex h-0 justify-center" role="status" aria-live="polite">
+          ? html` <div class="pointer-events-none sticky top-[30px] z-50 flex h-0 items-start justify-center" role="status" aria-live="polite">
               <button
-                class="cbadge-sm pointer-events-auto cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
+                class="cbadge-sm pointer-events-auto inline-flex min-h-6 items-center whitespace-nowrap cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
                 @click=${this.handleRecentClick}
                 aria-label="${this.recentCount} new events, click to load"
               >

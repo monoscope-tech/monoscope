@@ -151,6 +151,8 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     const afterRefreshRowOffset = topRowOffset();
     const refreshRowsVisible = list.spanListTree.some((row: any) => row.id.startsWith("refresh-"));
     const bufferedAfterRefresh = list.recentDataToBeAdded.length;
+    const recentButton = list.querySelector('button[aria-label$="new events, click to load"]') as HTMLButtonElement;
+    const recentButtonRect = recentButton.getBoundingClientRect();
 
     const liveAnchor = topRow();
     const liveScrollTop = container.scrollTop;
@@ -190,6 +192,9 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       afterRefreshRowOffset,
       refreshRowsVisible,
       bufferedAfterRefresh,
+      recentButtonHeight: recentButtonRect.height,
+      recentButtonWidth: recentButtonRect.width,
+      recentButtonScrollWidth: recentButton.scrollWidth,
       refreshUrl: calls[6],
       liveAnchor,
       afterLiveAnchor: topRow(),
@@ -213,6 +218,8 @@ test("deep paging and live delivery preserve the row under the reader", async ({
   expect(result.afterRefreshRowOffset).toBe(result.refreshRowOffset);
   expect(result.refreshRowsVisible).toBe(false);
   expect(result.bufferedAfterRefresh).toBe(200);
+  expect(result.recentButtonHeight).toBeGreaterThanOrEqual(24);
+  expect(result.recentButtonWidth).toBeGreaterThanOrEqual(result.recentButtonScrollWidth);
   expect(result.afterLiveAnchor).toBe(result.liveAnchor);
   expect(result.afterLiveScrollTop).toBe(result.liveScrollTop);
   expect(result.buffered).toBe(400);
