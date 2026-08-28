@@ -347,9 +347,9 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 -- into its light DOM), so nothing here needs to be interactive.
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
-  div_ [class_ "relative w-full h-full pl-2 flex border rounded-md border-strokeStrong"] do
+  div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong"] do
     div_ [class_ "relative overflow-x-hidden w-full flex-1"]
-      $ div_ [class_ "w-full text-sm leading-[18px] pt-2 truncate font-mono"]
+      $ div_ [class_ "w-full text-sm leading-5 py-2 truncate font-mono"]
       $ case query of
         Just q | not (T.null q) -> toHtml q
         -- No opacity dimming on top of the token: at 14px that lands under the contrast

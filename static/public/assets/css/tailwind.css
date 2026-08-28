@@ -358,11 +358,13 @@
     position: fixed;
     top: 0;
     left: 0;
-    width: 0;
+    width: 100%;
     height: 2px;
     background: var(--color-strokeWeak);
     z-index: 99999;
     opacity: 0;
+    transform: scaleX(0);
+    transform-origin: left;
     transition: opacity 150ms ease-out;
   }
   .htmx-progress.htmx-request {
@@ -370,15 +372,15 @@
     animation: htmxProgress 2s ease-out forwards;
   }
   @keyframes htmxProgress {
-    0% { width: 0; }
-    20% { width: 30%; }
-    50% { width: 60%; }
-    80% { width: 85%; }
-    100% { width: 95%; }
+    0% { transform: scaleX(0); }
+    20% { transform: scaleX(0.3); }
+    50% { transform: scaleX(0.6); }
+    80% { transform: scaleX(0.85); }
+    100% { transform: scaleX(0.95); }
   }
   .htmx-progress.htmx-settling {
-    width: 100%;
-    transition: width 100ms ease-out, opacity 200ms ease-out 100ms;
+    transform: scaleX(1);
+    transition: transform 100ms ease-out, opacity 200ms ease-out 100ms;
     opacity: 0;
   }
 

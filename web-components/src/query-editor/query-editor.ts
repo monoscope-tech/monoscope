@@ -1125,6 +1125,7 @@ export class QueryEditorComponent extends LitElement {
       cursorStyle: 'line',
       fontLigatures: false,
       fontSize: 14,
+      lineHeight: 20,
       'semanticHighlighting.enabled': false,
       // Completions are ours (see ./completion); Monaco contributes highlighting only.
       quickSuggestions: false,
@@ -1142,7 +1143,7 @@ export class QueryEditorComponent extends LitElement {
       wordWrapOverride2: 'on',
       glyphMargin: false,
       folding: false,
-      padding: { top: 8, bottom: 4 },
+      padding: { top: 8, bottom: 8 },
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
@@ -1811,12 +1812,12 @@ export class QueryEditorComponent extends LitElement {
 
     return html`
       <div
-        class="relative w-full h-full pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
+        class="relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-[18px] pt-1.5 pl-0 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-5 py-2 pl-0 hidden cursor-text"
           >
             <span class="opacity-60">level == "ERROR"</span>
             <span class="mx-1 opacity-30">·</span>

@@ -201,6 +201,10 @@ spec = sequential $ aroundAll withTestResources do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["No containers reporting"]
 
+      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml hostMap)
+        `shouldContainAll` ["No hosts reporting", "Set up host monitoring"]
+
     it "kubernetesAndDockerContainers_landInOneListWithNormalisedCpuAndMemory" \tr -> do
       key <- createTestAPIKey tr testPid "containers-key"
       ingestFixture tr key
@@ -385,7 +389,7 @@ spec = sequential $ aroundAll withTestResources do
                            , "initialFetchUrl=\"/p/00000000-0000-0000-0000-000000000000/log_explorer/data?"
                            , "resource.host.name%3D%3D%22vps-bare-01%22"
                            , "View in Metrics"
-                           , "Signal coverage: 2 of 4"
+                           , "Metrics coverage: 2 of 4"
                            ]
 
       (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
@@ -399,7 +403,7 @@ spec = sequential $ aroundAll withTestResources do
     it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
       (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-d6d7e318")
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostWithoutMetrics
-      html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Signal coverage: 0 of 4"]
+      html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Metrics coverage: 0 of 4"]
       html `shouldNotSatisfy` T.isInfixOf "host-cpu"
 
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do

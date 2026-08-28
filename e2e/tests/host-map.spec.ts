@@ -8,6 +8,7 @@ test.describe("Host map", () => {
 
   test("the host inspector is a labelled modal that isolates and restores the map", async ({ page }) => {
     await page.goto(HOST_MAP_URL, { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-visible-host-label="vps-d6d7e318"]')).toBeVisible();
     const host = page.getByRole("button", { name: /vps-d6d7e318, CPU usage:/ });
     await host.click();
 
@@ -29,7 +30,7 @@ test.describe("Host map", () => {
     await page.getByRole("button", { name: /vps-d6d7e318, CPU usage:/ }).click();
 
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText("Signal coverage: 0 of 4")).toBeVisible();
+    await expect(dialog.getByText("Metrics coverage: 0 of 4")).toBeVisible();
     await expect(dialog.getByRole("heading", { name: "No host metrics in this time range" })).toBeVisible();
     await expect(dialog.getByRole("link", { name: "Try last 1 hour" })).toBeVisible();
     const setup = dialog.getByRole("link", { name: "Set up host metrics" });
@@ -41,12 +42,33 @@ test.describe("Host map", () => {
   test("the mobile inspector uses the full viewport and replaces the log table", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(HOST_MAP_URL, { waitUntil: "domcontentloaded" });
+    for (const select of await page.locator("main form select").all()) {
+      expect((await select.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
     await page.getByRole("button", { name: /vps-d6d7e318, CPU usage:/ }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveCSS("width", "390px");
-    await expect(dialog.getByText("Open this host in Explorer to inspect its logs on a smaller screen.")).toBeVisible();
+    await expect(dialog.getByText("Open this host in Explorer to search, filter, and inspect its logs.")).toBeVisible();
     await expect(dialog.locator("log-list")).toBeHidden();
+    const title = dialog.locator("#host-detail-title");
+    await title.evaluate((element) => {
+      element.textContent = "خادم الإنتاج الرئيسي — äußerst-langer-hostname-mit-emoji-🚀-und-mehrsprachigen-zeichen.example.internal".repeat(2);
+      element.setAttribute("dir", "auto");
+    });
+    await expect(title).toHaveCSS("overflow-wrap", "break-word");
+    for (const control of [
+      dialog.getByRole("button", { name: "Close drawer" }),
+      dialog.getByRole("link", { name: "View containers", exact: true }),
+      dialog.getByRole("link", { name: "Summary", exact: true }),
+      dialog.getByRole("link", { name: "Recent logs", exact: true }),
+      dialog.getByRole("link", { name: "Metrics", exact: true }),
+      dialog.getByRole("link", { name: "Open logs in Explorer", exact: true }),
+      dialog.getByRole("link", { name: "Try last 1 hour", exact: true }),
+      dialog.getByRole("link", { name: "Set up host metrics", exact: true }),
+    ]) {
+      expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth === window.innerWidth))
       .toBe(true);

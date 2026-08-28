@@ -38,6 +38,23 @@ const labels = (items: { label: string }[]) => items.map(({ label }) => label);
 test.describe("Query editor", () => {
   test.beforeEach(async ({ page }) => waitForEditor(page));
 
+  test("matches the query controls' height and centers its text", async ({ page }) => {
+    const geometry = await page.locator("#filterElement").evaluate((el) => {
+      const shell = el.firstElementChild!.getBoundingClientRect();
+      const line = el.querySelector(".view-line")!.getBoundingClientRect();
+      const select = document.getElementById("spans-toggle")!.getBoundingClientRect();
+      return {
+        editorHeight: shell.height,
+        controlHeight: select.height,
+        topInset: line.top - shell.top,
+        bottomInset: shell.bottom - line.bottom,
+      };
+    });
+
+    expect(geometry.editorHeight).toBe(geometry.controlHeight);
+    expect(Math.abs(geometry.topInset - geometry.bottomInset)).toBeLessThanOrEqual(1);
+  });
+
   test("offers the grammar from fields through chained conditions", async ({ page }) => {
     const fields = labels(await suggestions(page, ""));
     expect(fields.slice(0, 8)).toEqual([

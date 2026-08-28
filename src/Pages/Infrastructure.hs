@@ -325,11 +325,11 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
       div_ [class_ "min-w-0"] do
         div_ [class_ "flex items-center gap-2"] do
           faSprite_ "server" "solid" "h-4 w-4 text-iconBrand"
-          h2_ [id_ "host-detail-title", data_ "drawer-title" "true", class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml host.name
+          h2_ [id_ "host-detail-title", data_ "drawer-title" "true", class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml host.name
         div_ [class_ "mt-1.5 flex flex-wrap gap-1.5"] do
           forM_ metadata $ uncurry metaChip_
           forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
-      a_ ([href_ containersUrl, class_ "btn btn-xs gap-1.5 text-textBrand"] <> navTabAttrs) do
+      a_ ([href_ containersUrl, class_ "btn btn-xs gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
         faSprite_ "cube" "regular" "h-3.5 w-3.5"
         "View containers"
   nav_ [class_ "sticky top-0 z-20 border-b border-strokeWeak bg-bgRaised px-4 py-2", Aria.label_ "Host detail sections"] do
@@ -343,7 +343,7 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         h3_ [class_ "font-semibold text-textStrong"] "Host summary"
         span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> coverageClass] do
           span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillSuccess-strong" (availableSignals == 4), Aria.hidden_ "true"] ""
-          toHtml $ "Signal coverage: " <> show availableSignals <> " of 4"
+          toHtml $ "Metrics coverage: " <> show availableSignals <> " of 4"
       factGrid_
         (bool "grid-cols-2 bg-bgBase max-sm:grid-cols-1" "grid-cols-6 bg-bgBase max-xl:grid-cols-3 max-sm:grid-cols-2" (availableSignals > 0))
         summaryFacts
@@ -360,8 +360,8 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer"
       div_ [class_ "h-64 min-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logDataUrl) Nothing
       div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
-        p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to inspect its logs on a smaller screen."
-        a_ ([href_ logExplorerUrl, class_ "btn btn-sm btn-outline"] <> navTabAttrs) "Open logs in Explorer"
+        p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to search, filter, and inspect its logs."
+        a_ ([href_ logExplorerUrl, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"
     section_ [id_ "host-metrics", class_ "space-y-3 border-t border-strokeWeak pt-4"] do
       div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
         h3_ [class_ "font-semibold text-textStrong"] "Metrics"
@@ -374,15 +374,15 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
               h4_ [class_ "font-semibold text-textStrong"] "No host metrics in this time range"
               p_ [class_ "max-w-xl text-sm text-textWeak"] "Monoscope found no CPU, memory, filesystem, or load samples for this host. Expand the time range or check the collector setup."
           div_ [class_ "mt-4 flex flex-wrap gap-2"] do
-            a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm"] "Try last 1 hour"
-            a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary"] "Set up host metrics"
+            a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm max-sm:h-11"] "Try last 1 hour"
+            a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
         else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host) $ div_ [class_ "min-h-56"] . Widget.widget_
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
     availableSignals = length $ catMaybes [host.cpuPct, host.memoryPct, host.storagePct, host.load1]
     coverageClass = bool "bg-fillWarning-weak text-textWarning" "bg-fillSuccess-weak text-textSuccess" (availableSignals == 4)
     summaryFacts
-      | availableSignals == 0 = [("Containers", show host.containers), ("Host metrics", "No samples")]
+      | availableSignals == 0 = [("Containers", show host.containers)]
       | otherwise =
           [ ("CPU usage", pct host.cpuPct)
           , ("Memory usage", pct host.memoryPct)
@@ -398,7 +398,7 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
     logDataUrl = path <> "/log_explorer/data?query=" <> toUriStr query <> "&since=15M&source=logs"
     metricsUrl = path <> "/metrics?metric_prefix=system."
     containersUrl = path <> "/infrastructure/containers?node=" <> toUriStr host.name
-    sectionClass = "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand"
+    sectionClass = "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"
     sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ sectionClass] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
 
 
@@ -554,7 +554,7 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
 imageDetail_ :: Projects.ProjectId -> ImageRow -> Html ()
 imageDetail_ pid image = div_ [class_ "min-h-full"] do
   header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
-    div_ [class_ "flex items-center gap-2"] $ faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral" >> h2_ [class_ "break-all text-lg font-semibold text-textStrong"] (toHtml image.image)
+    div_ [class_ "flex items-center gap-2"] $ faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral" >> h2_ [class_ "break-words text-lg font-semibold text-textStrong"] (toHtml image.image)
     div_ [class_ "mt-2 flex flex-wrap gap-1.5"] do
       span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
       forM_ image.runtimes $ \runtime -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ Containers.runtimeLabel runtime
@@ -780,7 +780,7 @@ kubernetesDetail_ pid resource row = div_ [class_ "min-h-full"] do
   header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
     div_ [class_ "flex flex-wrap items-center gap-2"] do
       faSprite_ (if resource `elem` [KubeClusters, KubeNodes] then "server" else "cube") "solid" "h-4 w-4 text-iconNeutral"
-      h2_ [class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml row.name
+      h2_ [class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml row.name
       statusBadge row.status
     div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ metadata $ uncurry metaChip_
   main_ [class_ "space-y-5 p-5"] do
@@ -863,7 +863,9 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
 
 
 hostMapGroups :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
-hostMapGroups GroupNone hosts = [("All hosts", V.toList hosts)]
+hostMapGroups GroupNone hosts
+  | V.null hosts = []
+  | otherwise = [("All hosts", V.toList hosts)]
 hostMapGroups grouping hosts = M.toAscList $ V.foldl' (\acc host -> M.insertWith (<>) (groupValue host) [host] acc) M.empty hosts
   where
     groupValue host = case grouping of
@@ -887,10 +889,14 @@ hostMap_ page = div_ [class_ "flex min-h-full flex-col bg-bgSunken"] do
       legend "bg-fillError-strong" "Above 85%"
       legend "bg-fillNeutral-strong" "No data"
   if null page.groups
-    then div_ [class_ "m-auto flex max-w-md flex-col items-center gap-2 p-8 text-center"] $ faSprite_ "server" "regular" "h-8 w-8 text-iconNeutral" >> h2_ [class_ "font-semibold text-textStrong"] "No hosts reporting" >> p_ [class_ "text-sm text-textWeak"] "Enable hostmetrics or Kubernetes node telemetry to populate the map."
-    else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
-      h2_ [class_ "mb-3 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "text-xs font-normal text-textWeak"] (toHtml $ show (length hosts) <> " hosts")
-      div_ [class_ "flex flex-wrap gap-1"] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.fill (length hosts <= 12)
+    then div_ [class_ "m-auto flex max-w-md flex-col items-center gap-2 p-8 text-center"] do
+      div_ [class_ "mb-1 flex h-12 w-12 items-center justify-center rounded-lg bg-fillBrand-weak text-iconBrand"] $ faSprite_ "server" "regular" "h-5 w-5"
+      h2_ [class_ "font-semibold text-textStrong"] "No hosts reporting"
+      p_ [class_ "text-sm text-textWeak"] "Enable host metrics or Kubernetes node telemetry to populate the map."
+      a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary mt-2"] "Set up host monitoring"
+    else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
+      h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium text-textStrong"] (toHtml $ show (length hosts) <> " hosts")
+      div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" (length hosts <= 12)] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.fill (length hosts <= 12)
   where
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"] mempty >> toHtml label
 
@@ -898,11 +904,11 @@ hostMap_ page = div_ [class_ "flex min-h-full flex-col bg-bgSunken"] do
 mapSelect :: Text -> Text -> Text -> [(Text, Text)] -> Html ()
 mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
   toHtml label
-  select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
+  select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
 
 
 hostHex :: Projects.ProjectId -> HostMapFill -> Bool -> HostRow -> Html ()
-hostHex pid fill enlarged host =
+hostHex pid fill enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
   button_
     ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
       , type_ "button"
@@ -914,6 +920,7 @@ hostHex pid fill enlarged host =
     )
     $ faSprite_ "server" "solid"
     $ bool "h-3 w-3" "h-4 w-4" enlarged
+  when enlarged $ span_ [data_ "visible-host-label" host.name, class_ "w-full truncate text-center text-xs text-textWeak", Aria.hidden_ "true"] $ toHtml host.name
   where
     value = case fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
 

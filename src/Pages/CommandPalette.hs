@@ -107,7 +107,7 @@ paletteShell_ pid = do
     do
       -- Header
       div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
-        span_ [class_ "text-2xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] "Quick Search"
+        span_ [class_ "text-xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] "Quick Search"
         span_ [class_ "cmd-palette-count text-xs text-white/80 dark:text-white/50"] ""
       -- Panel
       div_ [class_ "cmd-palette w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", data_ "pid" pidTxt, data_ "current-category" "", [__|on click halt the event's bubbling|]] do
