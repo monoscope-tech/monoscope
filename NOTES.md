@@ -148,18 +148,38 @@ the main checkout, which is why its count is lower. Nothing I touched goes near 
   reason, not the count: quota drops log at `info` (a free-tier project over its cap sends
   all day, and paging on every batch is the same failure as saying nothing), only a missing
   cache is `logAttention`.
+- **Tests added** (two, both on paths where being wrong costs money or data):
+  `ReportUsageSpec` now covers `first_sub_item_id = ""` as well as NULL and asserts the
+  watermark does not move; `ProcessMessageSpec` pins that a free-tier project over its daily
+  cap has its batch **acked in full with nothing stored** — deliberate policy that is
+  otherwise indistinguishable from data loss.
 - `Opentelemetry/OtlpServer.hs` — **looked at, deliberately left.** `convertMetricToMetricRecords`
   drops histogram datapoints via `mapMaybe` when `len(bucket_counts) /= len(explicit_bounds)+1`.
   That rejection is *correct* — the datapoint violates the OTLP spec and cannot be stored — but
   it is silent, and the function is pure and on the hot path, so signalling it means threading
   an effect or returning a reject count through the conversion. Worth doing; not worth doing
   blind at 04:30.
+- **No findings**: `Pkg/Parser.hs`, `Models/Projects/Projects.hs`, `Pages/Telemetry.hs`,
+  `Pages/Onboarding.hs`, `Pkg/SchemaLearning/Worker.hs`, `Models/Apis/LogPatterns.hs`,
+  `Pkg/Drain.hs`, `Models/Apis/ErrorPatterns.hs`. Every `mapMaybe` on these paths was
+  checked against the silent-drop lens and each is correct — the one that matters most,
+  `splitUsageIntoChunks` (billing), drops only zero-quantity chunks via a smart constructor
+  and is precisely doctested for it.
 - **No findings** (reviewed, nothing worth changing): `Web/ApiHandlers.hs` (103 small
   functions, already has `withRefetchNoContent`/`notFoundOr` helpers), `Pkg/LiveTail.hs`,
   `Pages/Replay.hs`, `Models/Apis/Issues.hs`, `Pkg/EmailTemplates.hs`. Their `_ ->`
   catch-alls are all on `Text` or on byte/char parsing — open domains, which the
   guidelines explicitly allow — and their `String`s are `Either String` from aeson/Minio
   at the boundary.
+
+### One type-safety change I checked and rejected
+
+`LemonSub.projectId :: Text` looks like primitive obsession next to the `ProjectId`
+newtype — but `apis.subscriptions.project_id` is a **`text`** column, so typing the field
+as `ProjectId` (a `UUIDId` over `UUID`) would fail to decode at runtime. That is precisely
+tonight's `last_evaluated` bug pointed the other way: the Haskell type has to match what
+the column actually holds. A real fix is a migration on a billing table for the Lemon
+Squeezy path we are migrating off, which is not worth it. Left as `Text`, deliberately.
 
 ### Honest assessment of "we shipped with no regard for code quality"
 
