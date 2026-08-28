@@ -112,8 +112,10 @@ the main checkout, which is why its count is lower. Nothing I touched goes near 
 
 ### Reviewed
 
-- `ProcessMessage.hs` — **no findings**. Dense but genuinely well-built: doctests on every
-  pure helper, rationale comments, idiomatic combinators. Forcing changes would be churn.
+- `ProcessMessage.hs` — **no distill findings**; dense but genuinely well-built (doctests on
+  every pure helper, rationale comments, idiomatic combinators) and forcing changes there
+  would be churn. The *silent-drop* lens did find something in it later — see below. Worth
+  remembering: "clean" is per-lens, not per-file.
 - `BackgroundJobs.hs` — `processBackgroundJob` went from **657 lines to 88**, 45 arms.
   Most already delegated to named functions; nine did not. Now extracted, each with a
   signature: `reportUsageForProject`, `monoscopeAdminDaily` (172 lines inline!),
@@ -165,10 +167,14 @@ The evidence does not support that. Across the whole tree: no `fromJust`/`head` 
 `Devel.hs`, every remaining manual `ToJSON`/`FromJSON`/`FromField` instance is an orphan
 for a foreign type that *cannot* be derived (`Either`, `CI Text`, `ByteString`, `Map`),
 only eight warning suppressions exist and seven were justified, and the long functions
-are mostly long *type definitions*, not long bodies. The real finds tonight were three
-narrow ones, all now fixed. What the codebase is short of is not tidiness but **tests on
-the revenue path** — before tonight the billing gate had coverage that tested `NULL`
-where production failed on `""`.
+are mostly long *type definitions*, not long bodies.
+
+What it *is* short of is **observability on the paths where being wrong costs money or
+data**, and that is where every real find of the night came from: alerting silently dead
+for three weeks, two ingestion paths dropping messages without a word, a billing gate that
+skipped without logging, and an advisory lock that leaks on every daily run. None of those
+are tidiness problems, and none would have been found by a distill pass. Related: before
+tonight the billing gate's only spec tested `NULL` where production failed on `""`.
 
 ## ⚠ NEW BUG FOUND (confirmed in prod) — the daily advisory lock leaks every run
 
