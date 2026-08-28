@@ -33,11 +33,15 @@ const MAX_CONCURRENT_FETCHES = 4;
 let activeFetches = 0;
 const fetchQueue: Array<() => void> = [];
 
-const limitedFetch = (url: string): Promise<Response> => {
+const limitedFetch = (url: string, signal?: AbortSignal): Promise<Response> => {
   return new Promise((resolve, reject) => {
     const run = () => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       activeFetches++;
-      fetch(url).then(resolve, reject).finally(() => {
+      fetch(url, { signal }).then(resolve, reject).finally(() => {
         activeFetches--;
         if (fetchQueue.length > 0) fetchQueue.shift()!();
       });
@@ -344,7 +348,14 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
-const chartDataUrl = ({ query, querySQL, pid, chartType, timeFrom, timeTo }: WidGetData): string => {
+export const chartDataUrl = ({
+  query,
+  querySQL,
+  pid,
+  chartType,
+  timeFrom,
+  timeTo,
+}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'timeFrom' | 'timeTo'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   // A widget carrying its own window is about that window, not the page's. `since`
@@ -354,6 +365,11 @@ const chartDataUrl = ({ query, querySQL, pid, chartType, timeFrom, timeTo }: Wid
     params.delete('since');
     params.set('from', timeFrom);
     params.set('to', timeTo);
+  } else if (!['since', 'from', 'to'].some((key) => params.get(key))) {
+    // Infrastructure pages resolve an absent range to their local default server-side.
+    // Carry that same default into /chart_data instead of falling back to its one-hour range.
+    const defaultWindow = document.querySelector<HTMLElement>('[data-default-window]')?.dataset.defaultWindow;
+    if (defaultWindow) params.set('since', defaultWindow);
   }
   // Lets the server size bin_auto buckets for how this widget renders: a line
   // chart carries twice the points a bar chart can show legibly.
@@ -420,8 +436,8 @@ const takePrefetched = async (chartId: string, url: string): Promise<any> => {
 ((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
 (window as any).__chartPrefetch = { push: prefetchChartData };
 
-const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData) => {
-  if (!shouldFetch) return;
+const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal) => {
+  if (!shouldFetch || signal.aborted) return;
 
   const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
@@ -437,8 +453,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   try {
     const url = chartDataUrl(widgetData);
     const { from, to, headers, dataset, rows_per_min, stats, error } =
-      (await takePrefetched(chartId, url)) ?? (await limitedFetch(url).then((res) => res.json()));
-    if (isStale()) return; // a newer fetch already won; don't overwrite its state
+      (await takePrefetched(chartId, url)) ?? (await limitedFetch(url, signal).then((res) => res.json()));
+    if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
       // so the user can distinguish a broken widget from an empty range.
@@ -490,6 +506,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
     window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId, total: sumTimeseriesValues(dataset) } }));
   } catch (e) {
+    if (signal.aborted) return;
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
     if (!isStale()) {
@@ -650,16 +667,23 @@ const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => 
 const chartDisposers = new Map<string, () => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 
+const disposeChart = (chartId: string) => {
+  const dispose = chartDisposers.get(chartId);
+  if (!dispose) return;
+  chartDisposers.delete(chartId);
+  dispose();
+};
+
 // Registers (and takes over) teardown for a chart container id. Any previously
 // registered disposer for the id runs first, so re-rendering is idempotent.
 export const registerChartDisposer = (chartId: string, dispose: () => void) => {
-  chartDisposers.get(chartId)?.();
+  disposeChart(chartId);
   chartDisposers.set(chartId, dispose);
 };
 
 const disposeChartsIn = (root: Element) => {
   const charts = root.matches(DISPOSABLE_CHARTS) ? [root] : [...root.querySelectorAll(DISPOSABLE_CHARTS)];
-  charts.forEach((chart) => chartDisposers.get((chart as HTMLElement).id)?.());
+  charts.forEach((chart) => disposeChart((chart as HTMLElement).id));
 };
 
 // htmx 4's beforeSwap detail has no `target` (htmx 2 did), and the compat shim re-fires
@@ -669,6 +693,14 @@ document.addEventListener('htmx:before:swap', (event) => {
   const e = event as CustomEvent<any>;
   const target = e.detail?.target ?? e.detail?.ctx?.target ?? (e.target instanceof Element ? e.target : null);
   if (target instanceof Element) disposeChartsIn(target);
+});
+
+// Morph navigation can replace the target without exposing it in before:swap. Sweep only
+// registrations whose container is now gone; same-id replacements are taken over by chartWidget.
+document.addEventListener('htmx:after:swap', () => {
+  [...chartDisposers.keys()].forEach((chartId) => {
+    if (!document.getElementById(chartId)?.matches(DISPOSABLE_CHARTS)) disposeChart(chartId);
+  });
 });
 
 // Global resize queue to batch chart resize operations
@@ -765,7 +797,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   liveStreamCheckbox?.addEventListener('change', () => {
     if (liveStreamCheckbox.checked) {
-      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), INITIAL_FETCH_INTERVAL);
+      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal), INITIAL_FETCH_INTERVAL);
     } else if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;
@@ -782,7 +814,8 @@ const chartWidget = (widgetData: WidGetData) => {
       zlevel: 0,
     });
     dataObserver = new IntersectionObserver(
-      (entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect())
+      (entries, observer) =>
+        entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData, controller.signal), observer.disconnect())
     );
     dataObserver.observe(chartEl);
   }
@@ -797,7 +830,7 @@ const chartWidget = (widgetData: WidGetData) => {
     document.querySelector(selector)?.addEventListener(event, (e: any) => {
       updateQuery();
       if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
-      updateChartData(chart, opt, true, widgetData);
+      updateChartData(chart, opt, true, widgetData, controller.signal);
     }, { signal: controller.signal });
   });
 
@@ -806,7 +839,7 @@ const chartWidget = (widgetData: WidGetData) => {
     if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
     if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
       (window.logListTable as any).refetchLogs();
-    updateChartData(chart, opt, true, widgetData);
+    updateChartData(chart, opt, true, widgetData, controller.signal);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
@@ -838,6 +871,7 @@ const chartWidget = (widgetData: WidGetData) => {
     if (chartEl) sharedResizeObserver.unobserve(chartEl);
     themeCallbacks.delete(onThemeChange);
     if (!chart.isDisposed()) chart.dispose();
+    if ((window as any)[`${chartType}Chart`] === chart) delete (window as any)[`${chartType}Chart`];
     chartDisposers.delete(chartId);
   });
 };

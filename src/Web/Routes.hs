@@ -73,6 +73,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Parser (PageDirection)
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
@@ -556,6 +557,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
+  , liveTailRecordGet :: mode :- "live_tail" :> "records" :> Capture "recordId" UUID.UUID :> Capture "timestamp" UTCTime :> Get '[JSON] (RespHeaders Telemetry.OtelLogsAndSpans)
   , liveTailRegisterPost :: mode :- "live_tail" :> "subscriptions" :> ReqBody '[JSON] LT.NewSubscription :> Post '[JSON] (RespHeaders LiveTail.RegisterResponse)
   , -- Streams for as long as the browser holds it open, so it is the one route here that is
     -- not a plain request/response — see 'LiveTail.EventStream'.
@@ -992,6 +994,7 @@ logExplorerServer pid =
     , aiSearchPost = Log.aiSearchH pid
     , codeContextGet = PageCodeContext.codeContextH pid
     , liveTailGet = LiveTail.liveTailGetH pid
+    , liveTailRecordGet = LiveTail.liveTailRecordH pid
     , liveTailRegisterPost = LiveTail.liveTailRegisterH pid
     , liveTailStreamGet = LiveTail.liveTailStreamH pid
     , liveTailRenewPost = LiveTail.liveTailRenewH pid

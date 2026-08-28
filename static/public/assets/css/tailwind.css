@@ -105,6 +105,7 @@
 
   /* Fill colors */
   --color-fillBrand-strong: oklch(56.7% 0.239 261);
+  --color-fillBrand-action: oklch(52% 0.22 261);
   --color-fillBrand-weak: oklch(56.7% 0.239 261 / 0.05);
   --color-fillDisabled: oklch(25.2% 0.146 264 / 0.1);
   --color-fillStrong: oklch(14.4% 0.069 263 / 0.9);
@@ -677,12 +678,12 @@
     --color-fg-selected: var(--color-textInverse-strong);
     --color-border-default: var(--color-strokeWeak);
     --color-border-locked: var(--color-strokeWeak);
-    --color-btn-primary-bg: var(--color-fillBrand-strong);
+    --color-btn-primary-bg: var(--color-fillBrand-action);
     --color-btn-primary-fg: var(--color-textInverse-strong);
-    --color-btn-primary-border: var(--color-fillBrand-strong);
-    --color-btn-primary-hover-bg: var(--color-fillBrand-strong);
+    --color-btn-primary-border: var(--color-fillBrand-action);
+    --color-btn-primary-hover-bg: color-mix(in oklch, var(--color-fillBrand-action) 90%, black);
     --color-btn-primary-hover-fg: var(--color-textInverse-strong);
-    --color-btn-primary-hover-border: var(--color-strokeBrand-strong);
+    --color-btn-primary-hover-border: color-mix(in oklch, var(--color-fillBrand-action) 90%, black);
     --color-btn-primary-disabled-bg: var(--color-fillDisabled);
     --color-btn-primary-disabled-fg: var(--color-textDisabled);
     --color-btn-primary-disabled-border: var(--color-strokeDisabled);
@@ -945,7 +946,7 @@
   --color-base-200: oklch(29.2% 0.174 264 / 0.04);
   --color-base-300: oklch(29.2% 0.174 264 / 0.04);
   --color-base-content: oklch(14.4% 0.069 263 / 0.9);
-  --color-primary: oklch(56.7% 0.239 261);
+  --color-primary: var(--color-fillBrand-action);
   --color-primary-content: oklch(100% 0 0);
   --color-secondary: var(--color-textBrand);
   --color-secondary-content: oklch(16.7% 0.086 263 / 0.65);
@@ -982,7 +983,7 @@
   --color-base-200: oklch(18% 0.004 260);
   --color-base-300: oklch(22% 0.004 260);
   --color-base-content: oklch(90% 0.005 260);
-  --color-primary: oklch(60% 0.18 265);
+  --color-primary: var(--color-fillBrand-action);
   --color-primary-content: oklch(92% 0.005 260);
   --color-secondary: var(--color-textBrand);
   --color-secondary-content: oklch(72% 0.005 260);
@@ -1322,6 +1323,17 @@ body, :host {
   /* Prevent iOS zoom on input focus (must be 16px+) */
   input, textarea, select {
     font-size: max(16px, 1rem);
+  }
+
+  /* Interactive controls use the same pointer affordance app-wide. Explicit
+     resize, drag, disabled and read-only cursor utilities still win in the
+     utilities layer. */
+  button:not(:disabled):not([aria-disabled="true"]):not(.cursor-default),
+  select:not(:disabled),
+  summary,
+  [role="button"]:not([aria-disabled="true"]):not(.cursor-default),
+  input:is([type="checkbox"], [type="radio"], [type="range"]):not(:disabled) {
+    @apply cursor-pointer;
   }
 
   /* Touch device optimizations */
@@ -1894,6 +1906,7 @@ code, pre, .code, .monospace {
 
     /* Fill colors — dark theme */
     --color-fillBrand-strong: oklch(60% 0.18 265);
+    --color-fillBrand-action: oklch(52% 0.18 265);
     --color-fillBrand-weak: oklch(60% 0.18 265 / 0.15);
     --color-fillDisabled: rgba(255 255 255 / 0.12);
     --color-fillStrong: rgb(255 255 255);
@@ -2636,4 +2649,22 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
    panel's own toggle is the only one that should be visible then. */
 #facets_and_loglist:has(#trace_expanded_view:not(.hidden)) #log_details_container .fs-details-toggle {
   display: none;
+}
+
+.container-usage-chart {
+  min-width: 0;
+  aspect-ratio: 4 / 1;
+}
+.container-usage-chart > .grid-stack-item {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+@media (max-width: 1023px) {
+  .container-usage-chart { aspect-ratio: 3 / 1; }
+}
+@media (min-width: 1536px) {
+  .container-usage-chart { aspect-ratio: 5 / 1; }
+}
+@media (min-width: 2400px) {
+  .container-usage-chart { aspect-ratio: 6 / 1; }
 }

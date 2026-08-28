@@ -741,7 +741,7 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
       , onclick_ $ "window.exportTableCsv('#" <> tbl.config.elemID <> "_grid table','" <> name <> ".csv')"
       ]
       do
-        faSprite_ "download" "regular" "h-3 w-3"
+        faSprite_ "download" "solid" "h-3 w-3"
         "Export"
     button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
       faSprite_ "table-columns" "regular" "h-3 w-3"

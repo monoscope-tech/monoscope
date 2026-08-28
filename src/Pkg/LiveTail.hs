@@ -78,6 +78,7 @@ module Pkg.LiveTail (
   LiveRow (..),
   LogRowFields (..),
   envelopeVersion,
+  storageTimestamp,
   maxRowFieldChars,
   maxEnvelopeBytes,
   maxEvalsPerBatch,
@@ -124,7 +125,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime (..), addDays, diffTimeToPicoseconds, picosecondsToDiffTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -789,6 +790,10 @@ noticeBrokenFilters rt bad = liftIO $ Safe.handleAny (const pass) $ forM_ bad \(
 -- refuse: "the shape changed" and "the payload is corrupt" would once again arrive as the same
 -- signal. The cost of bumping is one rolling-deploy window in which tails go dark, and they go
 -- dark in that window anyway because the web pods holding the connections are restarting.
+--
+-- Requested field projection stayed on v3 deliberately: the field is optional on the wire.
+-- New consumers read pre-projection rows as @Nothing@, while old consumers ignore the extra
+-- key. That keeps local development and rolling deploys streaming while producers catch up.
 envelopeVersion :: Int
 envelopeVersion = 3
 
@@ -864,10 +869,39 @@ data LogRowFields = LogRowFields
   , spanId :: Maybe Text
   , name :: Maybe Text
   , body :: Text
+  , fields :: Map Text AE.Value
   , truncated :: Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRowFields
+  deriving (AE.ToJSON) via DAE.Snake LogRowFields
+
+
+-- The wire field is optional only at this boundary: v3 producers deployed before projection
+-- omit it. Normalising to an empty map keeps that rollout detail out of the domain type.
+instance AE.FromJSON LogRowFields where
+  parseJSON = AE.withObject "LogRowFields" \o ->
+    LogRowFields
+      <$> o
+      AE..: "id"
+      <*> o
+      AE..: "timestamp"
+      <*> o
+      AE..: "level"
+      <*> o
+      AE..: "service"
+      <*> o
+      AE..: "trace_id"
+      <*> o
+      AE..: "span_id"
+      <*> o
+      AE..: "name"
+      <*> o
+      AE..: "body"
+      <*> o
+      AE..:? "fields"
+      AE..!= mempty
+      <*> o
+      AE..: "truncated"
 
 
 -- | One matched record, shaped for whichever surface asked for it.
@@ -976,7 +1010,7 @@ envelopeFromValue value = case AET.parseMaybe (AE.withObject "LiveEnvelope" (AE.
 -- | Project a record into the shape this subscription's surface renders.
 toLiveRow :: Scope -> [Text] -> Telemetry.OtelLogsAndSpans -> LiveRow
 toLiveRow scope cols r = case scope of
-  LogTail _ _ -> LogRow (toLogRowFields r)
+  LogTail _ _ -> LogRow (toLogRowFields cols r)
   AllSignals -> TableRow (toTableCols cols r)
 
 
@@ -1009,17 +1043,31 @@ dottedSubject path = case T.splitOn "." path of
   [] -> Subject path path []
 
 
-toLogRowFields :: Telemetry.OtelLogsAndSpans -> LogRowFields
-toLogRowFields r =
+-- | Match PostgreSQL/TimeFusion's microsecond timestamp precision before the row becomes a
+-- durable-record lookup key. Incoming OTLP timestamps can carry nanoseconds; sending those
+-- unchanged makes an exact lookup miss the row the database just rounded and stored.
+storageTimestamp :: UTCTime -> UTCTime
+storageTimestamp ts = UTCTime (addDays dayCarry ts.utctDay) (picosecondsToDiffTime dayPicoseconds)
+  where
+    rounded =
+      ((diffTimeToPicoseconds ts.utctDayTime + picosecondsPerMicrosecond `div` 2) `div` picosecondsPerMicrosecond)
+        * picosecondsPerMicrosecond
+    (dayCarry, dayPicoseconds) = rounded `divMod` (86_400 * 1_000_000_000_000)
+    picosecondsPerMicrosecond = 1_000_000
+
+
+toLogRowFields :: [Text] -> Telemetry.OtelLogsAndSpans -> LogRowFields
+toLogRowFields cols r =
   LogRowFields
     { id = r.id
-    , timestamp = r.timestamp
+    , timestamp = storageTimestamp r.timestamp
     , level = r.level
     , service = lookupText serviceSubject
     , traceId = r.context >>= (.trace_id) >>= nonEmptyText
     , spanId = r.context >>= (.span_id) >>= nonEmptyText
     , name = r.name
     , body = bodyText
+    , fields = toTableCols cols r
     , truncated = T.length rawBody > maxRowFieldChars
     }
   where

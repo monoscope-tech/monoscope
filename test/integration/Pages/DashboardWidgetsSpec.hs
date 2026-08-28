@@ -114,6 +114,16 @@ spec = sequential $ aroundAll withTestResources do
           Left _ -> False
 
   describe "Adding widgets to a dashboard" do
+    it "widthless widgets default to four per row" \tr -> do
+      dashId <- newDashboard tr "Widget Default Width"
+      addWidgets tr dashId [w{Widget.layout = Nothing} | w <- numberedWidgets 5]
+
+      stored <- storedWidgets tr dashId
+      for_ stored \widget -> toStrict (renderText $ Widget.widget_ widget) `shouldSatisfy` T.isInfixOf "gs-w=\"3\""
+      let widgets = Widget.normalizeWidgetLayouts stored
+      map (\w -> (w.layout >>= (.x), w.layout >>= (.y), w.layout >>= (.w))) widgets
+        `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
+
     it "edits a widget in place and retains an omitted query" \tr -> do
       dashId <- newDashboard tr "Widget Edit"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")

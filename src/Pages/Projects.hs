@@ -518,7 +518,7 @@ renderInlineTestButton pid channel teamIdM =
     input_ [type_ "hidden", name_ "channel", value_ channel]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
-    button_ [type_ "submit", class_ "btn btn-xs btn-outline gap-1", testSentAttr_] do
+    button_ [type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
@@ -534,7 +534,7 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
       div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"] do
         if isActive
           then renderInlineTestButton pid value teamIdM
-          else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-outline btn-neutral gap-1 cursor-not-allowed opacity-40", Aria.label_ "Enable first"] do
+          else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-neutral gap-1 cursor-not-allowed opacity-40", Aria.label_ "Enable first"] do
             faSprite_ "flask-vial" "regular" "h-3 w-3"
             "Test"
       label_ [class_ "relative inline-flex items-center cursor-pointer tap-target", Aria.label_ $ if isChecked then "Disable " <> title else "Enable " <> title] do
@@ -577,17 +577,17 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
       div_ [class_ "mb-3"] $ formField_ FieldSm def "Slack channels" "slack-channels-input" False $ Just $ tagInput_ "slack-channels-input" "Add Slack channels" [data_ "tagify-whitelist" slackWhitelist, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" existingJSON, data_ "tagify-resolve" ""]
 
       div_ [class_ "flex items-center gap-2"] do
-        a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Reconnect"
+        a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Reconnect"
         form_ ([hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTrigger_ "submit"] <> integrationsSwapAttrs_) do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
-      a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Connect to Slack"
+      a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect to Slack"
 
 
 renderDiscordIntegration :: EnvConfig -> Text -> Html ()
 renderDiscordIntegration envCfg pid = do
   let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
-  a_ [target_ "_blank", class_ "btn btn-xs btn-outline gap-1.5", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
+  a_ [target_ "_blank", class_ "btn btn-xs gap-1.5", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
     faSprite_ "discord" "solid" "h-3.5 w-3.5"
     "Add to Discord"
 
@@ -602,7 +602,7 @@ renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . bool disco
     disconnectedUI = form_ ([class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|]] <> integrationsSwapAttrs_) do
       formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
       p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
-      button_ [class_ "btn btn-sm btn-outline w-max", type_ "submit"] "Connect"
+      button_ [class_ "btn btn-sm w-max", type_ "submit"] "Connect"
 
 
 --------------------------------------------------------------------------------
@@ -895,7 +895,7 @@ teamGetH pid handle layoutM = do
               , pageActions =
                   if team.is_everyone
                     then Nothing
-                    else Just $ label_ [class_ "btn btn-sm btn-outline gap-2", Lucid.for_ $ team.handle <> "-new-team-modal"] do
+                    else Just $ label_ [class_ "btn btn-sm gap-2", Lucid.for_ $ team.handle <> "-new-team-modal"] do
                       faSprite_ "pen-to-square" "regular" "h-4 w-4"
                       "Edit"
               }
@@ -1063,7 +1063,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
-            unless (V.null projMembers) $ button_ [class_ "btn btn-sm btn-outline gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
+            unless (V.null projMembers) $ button_ [class_ "btn btn-sm gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers

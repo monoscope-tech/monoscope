@@ -1,5 +1,19 @@
 import { describe, expect, test } from 'vitest';
-import { sumTimeseriesValues } from '../src/widgets';
+import { chartDataUrl, sumTimeseriesValues } from '../src/widgets';
+
+describe('chartDataUrl', () => {
+  test('inherits the page default when the URL has no explicit time range', () => {
+    window.history.replaceState({}, '', '/p/proj/infrastructure/containers');
+    document.body.innerHTML = '<div data-default-window="5M"></div>';
+
+    const url = new URL(
+      chartDataUrl({ query: 'metrics', querySQL: '', pid: 'proj', chartType: 'timeseries' }),
+      window.location.origin
+    );
+
+    expect(url.searchParams.get('since')).toBe('5M');
+  });
+});
 
 describe('sumTimeseriesValues', () => {
   test('sums every chart series while excluding timestamps and null gaps', () => {

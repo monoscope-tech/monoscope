@@ -31,9 +31,9 @@ import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..),
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (factGrid_, metaChip_)
 import Pages.Containers qualified as Containers
+import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import Relude.Extra.Tuple (dup)
@@ -240,12 +240,12 @@ hostGroupControl :: Projects.ProjectId -> TimePicker.TimeWindow -> HostFilters -
 hostGroupControl pid window filters grouping count =
   div_ [class_ "flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak px-3 py-2"] do
     span_ [class_ "text-xs text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ show count <> " hosts"
-    form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "flex items-center gap-2"] do
+    form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "flex shrink-0 items-center gap-2 whitespace-nowrap"] do
       TimePicker.timeHiddenInputs_ window.fromQuery window.toQuery window.sinceQuery
       forM_ ([("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)] :: [(Text, Maybe Text)]) \(field, valueM) ->
         whenJust valueM \value -> input_ [type_ "hidden", name_ field, value_ value]
-      label_ [Lucid.for_ "hosts-group", class_ "text-xs text-textWeak"] "Group by"
-      select_ [id_ "hosts-group", name_ "group", class_ "select select-xs border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
+      label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
+      select_ [id_ "hosts-group", name_ "group", class_ "select select-xs shrink-0 cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
         $ forM_ ([("", "None"), ("provider", "Provider"), ("region", "Region"), ("os", "Operating system"), ("integration", "Integration")] :: [(Text, Text)]) \(value, label) ->
           option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
 
@@ -266,7 +266,7 @@ hostColumns pid =
   where
     nameCell = \case
       HostGroupRow label count -> div_ [class_ "flex items-center gap-2 py-1 font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show count)
-      HostItem host -> button_ ([class_ "flex items-center gap-2 font-medium text-textStrong hover:text-textBrand", type_ "button", onclick_ "event.stopPropagation()"] <> drawerLoadAttrs_ (hostDetailUrl pid host.name)) do
+      HostItem host -> button_ ([class_ "flex cursor-pointer items-center gap-2 font-medium text-textStrong hover:text-textBrand", type_ "button", onclick_ "event.stopPropagation()"] <> drawerLoadAttrs_ (hostDetailUrl pid host.name)) do
         faSprite_ "server" "solid" "h-3.5 w-3.5 text-iconNeutral"
         span_ [class_ "truncate"] $ toHtml host.name
     configCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] do
@@ -300,7 +300,12 @@ instance ToHtml HostDetailGet where
 
 
 hostDetailGet_ :: HostDetailGet -> Html ()
-hostDetailGet_ HostDetailMissing = div_ [class_ "p-4 text-textWeak"] "This host is no longer reporting."
+hostDetailGet_ HostDetailMissing = div_ [class_ "flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center"] do
+  faSprite_ "server" "regular" "h-8 w-8 text-iconNeutral"
+  div_ [class_ "space-y-1"] do
+    h2_ [class_ "font-semibold text-textStrong"] "Host not found in this time range"
+    p_ [class_ "max-w-md text-sm text-textWeak"] "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range."
+  a_ [href_ "./hosts", class_ "btn btn-sm"] "Return to Hosts"
 hostDetailGet_ (HostDetail pid host) = hostDetail_ pid host
 
 
@@ -314,80 +319,115 @@ hostDetailGetH pid hostM = do
 
 
 hostDetail_ :: Projects.ProjectId -> HostRow -> Html ()
-hostDetail_ pid host = div_ [class_ "min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
-    div_ [class_ "flex items-center gap-2"] do
-      faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral"
-      h2_ [class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml host.name
-    div_ [class_ "mt-2 flex flex-wrap gap-1.5"] do
-      forM_ metadata $ uncurry metaChip_
-      forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
-  div_ [class_ "flex min-h-0 max-lg:flex-col"] do
-    nav_ [class_ "w-44 shrink-0 border-r border-strokeWeak p-3 max-lg:w-full max-lg:border-b max-lg:border-r-0", Aria.label_ "Host detail sections"] do
-      div_ [class_ "flex flex-col gap-1 max-lg:flex-row max-lg:overflow-x-auto"] do
-        sectionLink "host-summary" "server" "Host summary"
-        sectionLink "host-metrics" "chart-line" "Metrics"
-        a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?node=" <> toUriStr host.name, class_ sectionClass] $ faSprite_ "cube" "regular" "h-3.5 w-3.5" >> "Containers"
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr ("resource.host.name==" <> kqlQuoted host.name), class_ sectionClass] $ faSprite_ "file-lines" "regular" "h-3.5 w-3.5" >> "Logs"
-    main_ [class_ "min-w-0 flex-1 space-y-5 p-5"] do
-      section_ [id_ "host-summary", class_ "space-y-3"] do
-        div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-          h3_ [class_ "font-semibold text-textStrong"] "Host summary"
-          span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak"] do
-            span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillSuccess-strong" (availableSignals == 4)] ""
-            toHtml $ "Signal coverage " <> show availableSignals <> "/4"
-        factGrid_
-          "grid-cols-6 bg-bgBase max-xl:grid-cols-3 max-sm:grid-cols-2"
-          [ ("CPU used", pct host.cpuPct)
-          , ("Memory used", pct host.memoryPct)
-          , ("Storage used", pct host.storagePct)
+hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+  header_ [class_ "border-b border-strokeBrand-weak bg-fillBrand-weak px-5 py-4 pr-14"] do
+    div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
+      div_ [class_ "min-w-0"] do
+        div_ [class_ "flex items-center gap-2"] do
+          faSprite_ "server" "solid" "h-4 w-4 text-iconBrand"
+          h2_ [id_ "host-detail-title", data_ "drawer-title" "true", class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml host.name
+        div_ [class_ "mt-1.5 flex flex-wrap gap-1.5"] do
+          forM_ metadata $ uncurry metaChip_
+          forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
+      a_ ([href_ containersUrl, class_ "btn btn-xs gap-1.5 text-textBrand"] <> navTabAttrs) do
+        faSprite_ "cube" "regular" "h-3.5 w-3.5"
+        "View containers"
+  nav_ [class_ "sticky top-0 z-20 border-b border-strokeWeak bg-bgRaised px-4 py-2", Aria.label_ "Host detail sections"] do
+    div_ [class_ "flex gap-1 overflow-x-auto"] do
+      sectionLink "host-summary" "server" "Summary"
+      sectionLink "host-logs" "file-lines" "Recent logs"
+      sectionLink "host-metrics" "chart-line" "Metrics"
+  main_ [class_ "min-w-0 space-y-5 px-5 py-4"] do
+    section_ [id_ "host-summary", class_ "space-y-3"] do
+      div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
+        h3_ [class_ "font-semibold text-textStrong"] "Host summary"
+        span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> coverageClass] do
+          span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillSuccess-strong" (availableSignals == 4), Aria.hidden_ "true"] ""
+          toHtml $ "Signal coverage: " <> show availableSignals <> " of 4"
+      factGrid_
+        (bool "grid-cols-2 bg-bgBase max-sm:grid-cols-1" "grid-cols-6 bg-bgBase max-xl:grid-cols-3 max-sm:grid-cols-2" (availableSignals > 0))
+        summaryFacts
+      when (availableSignals > 0 && availableSignals < 4) $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 rounded-md border border-strokeWarning-weak bg-fillWarning-weak px-3 py-2 text-xs text-textWeak"] do
+        span_ [class_ "flex min-w-0 items-start gap-2"] do
+          faSprite_ "triangle-exclamation" "regular" "mt-0.5 h-3.5 w-3.5 shrink-0 text-iconWarning"
+          span_ [class_ "max-w-3xl"] "Some host metrics are missing from this time range. Available signals remain visible below."
+        a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "shrink-0 font-medium text-textBrand hover:underline"] "Set up host metrics"
+    section_ [id_ "host-logs", class_ "space-y-3 border-t border-strokeWeak pt-5"] do
+      div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
+        div_ [class_ "space-y-0.5"] do
+          h3_ [class_ "font-semibold text-textStrong"] "Recent logs"
+          p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
+        a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer"
+      div_ [class_ "h-64 min-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logDataUrl) Nothing
+      div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
+        p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to inspect its logs on a smaller screen."
+        a_ ([href_ logExplorerUrl, class_ "btn btn-sm btn-outline"] <> navTabAttrs) "Open logs in Explorer"
+    section_ [id_ "host-metrics", class_ "space-y-3 border-t border-strokeWeak pt-4"] do
+      div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
+        h3_ [class_ "font-semibold text-textStrong"] "Metrics"
+        when (availableSignals > 0) $ a_ ([href_ metricsUrl, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics"
+      if availableSignals == 0
+        then div_ [class_ "rounded-lg border border-strokeWarning-weak bg-fillWarning-weak p-5", role_ "status"] do
+          div_ [class_ "flex items-start gap-3"] do
+            div_ [class_ "flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-bgRaised text-iconWarning"] $ faSprite_ "chart-line" "regular" "h-4 w-4"
+            div_ [class_ "min-w-0 space-y-1"] do
+              h4_ [class_ "font-semibold text-textStrong"] "No host metrics in this time range"
+              p_ [class_ "max-w-xl text-sm text-textWeak"] "Monoscope found no CPU, memory, filesystem, or load samples for this host. Expand the time range or check the collector setup."
+          div_ [class_ "mt-4 flex flex-wrap gap-2"] do
+            a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm"] "Try last 1 hour"
+            a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary"] "Set up host metrics"
+        else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host) $ div_ [class_ "min-h-56"] . Widget.widget_
+  where
+    metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
+    availableSignals = length $ catMaybes [host.cpuPct, host.memoryPct, host.storagePct, host.load1]
+    coverageClass = bool "bg-fillWarning-weak text-textWarning" "bg-fillSuccess-weak text-textSuccess" (availableSignals == 4)
+    summaryFacts
+      | availableSignals == 0 = [("Containers", show host.containers), ("Host metrics", "No samples")]
+      | otherwise =
+          [ ("CPU usage", pct host.cpuPct)
+          , ("Memory usage", pct host.memoryPct)
+          , ("Storage usage", pct host.storagePct)
           , ("Load (1m)", maybe "—" (Containers.showFFloat' 2) host.load1)
           , ("Uptime", maybe "—" formatUptime host.uptime)
           , ("Containers", show host.containers)
           ]
-        when (availableSignals < 4) $ p_ [class_ "flex items-start gap-2 rounded-md bg-fillInformation-weak px-3 py-2 text-xs text-textWeak"] do
-          faSprite_ "circle-info" "regular" "mt-0.5 h-3.5 w-3.5 shrink-0 text-iconInformation"
-          "Some host signals are unavailable in this time range. Enable the hostmetrics CPU, memory, filesystem, load, and uptime scrapers to complete this view."
-      section_ [id_ "host-metrics", class_ "space-y-3 border-t border-strokeWeak pt-4"] do
-        div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-          h3_ [class_ "font-semibold text-textStrong"] "Metrics"
-          a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=system.", class_ "btn btn-xs btn-outline"] <> navTabAttrs) "View in Metrics"
-        div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host.name) $ div_ [class_ "min-h-56"] . Widget.widget_
-      div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-        a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr ("resource.host.name==" <> kqlQuoted host.name), class_ "btn btn-sm btn-outline"] <> navTabAttrs) "View logs"
-        a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=system.", class_ "btn btn-sm btn-outline"] <> navTabAttrs) "View metrics"
-  where
-    metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
-    availableSignals = length $ catMaybes [host.cpuPct, host.memoryPct, host.storagePct, host.load1]
     pct = maybe "—" (\v -> Containers.showFFloat' 0 (v * 100) <> "%")
-    sectionClass = "flex items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong"
+    query = "resource.host.name==" <> kqlQuoted host.name
+    path = "/p/" <> pid.toText
+    logExplorerUrl = path <> "/log_explorer?query=" <> toUriStr query <> "&since=15M&source=logs"
+    logDataUrl = path <> "/log_explorer/data?query=" <> toUriStr query <> "&since=15M&source=logs"
+    metricsUrl = path <> "/metrics?metric_prefix=system."
+    containersUrl = path <> "/infrastructure/containers?node=" <> toUriStr host.name
+    sectionClass = "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand"
     sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ sectionClass] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
 
 
-hostWidgets :: Projects.ProjectId -> Text -> [Widget.Widget]
+hostWidgets :: Projects.ProjectId -> HostRow -> [Widget.Widget]
 hostWidgets pid host =
-  [ widget "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and resource.host.name == " <> quoted <> " and attributes.cpu.mode != \"idle\" | summarize sum(value) * 100 by bin_auto(timestamp)"
-  , widget "host-memory" "Memory used" "bytes" $ "metrics | where metric_name == \"system.memory.usage\" and resource.host.name == " <> quoted <> " and attributes.system.memory.state == \"used\" | summarize max(value) by bin_auto(timestamp)"
-  , widget "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and resource.host.name == " <> quoted <> " | summarize max(value) * 100 by bin_auto(timestamp)"
-  , widget "host-load" "Load average (1m)" "" $ "metrics | where metric_name == \"system.cpu.load_average.1m\" and resource.host.name == " <> quoted <> " | summarize max(value) by bin_auto(timestamp)"
-  ]
+  catMaybes
+    [ widget host.cpuPct "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and resource.host.name == " <> quoted <> " and attributes.cpu.mode != \"idle\" | summarize sum(value) * 100 by bin_auto(timestamp)"
+    , widget host.memoryPct "host-memory" "Memory usage" "bytes" $ "metrics | where metric_name == \"system.memory.usage\" and resource.host.name == " <> quoted <> " and attributes.system.memory.state == \"used\" | summarize max(value) by bin_auto(timestamp)"
+    , widget host.storagePct "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and resource.host.name == " <> quoted <> " | summarize max(value) * 100 by bin_auto(timestamp)"
+    , widget host.load1 "host-load" "Load average (1m)" "" $ "metrics | where metric_name == \"system.cpu.load_average.1m\" and resource.host.name == " <> quoted <> " | summarize max(value) by bin_auto(timestamp)"
+    ]
   where
-    quoted = kqlQuoted host
-    widget ident title unit query =
-      (def :: Widget.Widget)
-        { Widget.id = Just ident
-        , Widget.wType = WTTimeseriesLine
-        , Widget.title = Just title
-        , Widget.query = Just query
-        , Widget.unit = Just unit
-        , Widget._projectId = Just pid
-        , Widget.standalone = Just True
-        , Widget.hideSubtitle = Just True
-        , Widget.hideValue = Just True
-        , Widget.legendPosition = Just "top-right"
-        , Widget.legendSize = Just "xs"
-        , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
-        }
+    quoted = kqlQuoted host.name
+    widget signal ident title unit query =
+      signal
+        $> (def :: Widget.Widget)
+          { Widget.id = Just ident
+          , Widget.wType = Widget.WTTimeseriesLine
+          , Widget.title = Just title
+          , Widget.query = Just query
+          , Widget.unit = Just unit
+          , Widget._projectId = Just pid
+          , Widget.standalone = Just True
+          , Widget.hideSubtitle = Just True
+          , Widget.hideValue = Just True
+          , Widget.legendPosition = Just "top-right"
+          , Widget.legendSize = Just "xs"
+          , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
+          }
 
 
 data ImageRow = ImageRow
@@ -536,8 +576,8 @@ imageDetail_ pid image = div_ [class_ "min-h-full"] do
         faSprite_ "shield-check" "regular" "mt-0.5 h-4 w-4 shrink-0 text-iconInformation"
         "No SBOM or vulnerability findings are connected for this image. Monoscope will not infer a clean result from missing scanner data."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?image=" <> toUriStr image.image, class_ "btn btn-sm btn-outline"] "View containers"
-      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=container.", class_ "btn btn-sm btn-outline"] "View metrics"
+      a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?image=" <> toUriStr image.image, class_ "btn btn-sm"] "View containers"
+      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=container.", class_ "btn btn-sm"] "View metrics"
 
 
 -- | Constructor order is tab order: @[minBound ..]@ is what the resource tab strip renders,
@@ -756,9 +796,9 @@ kubernetesDetail_ pid resource row = div_ [class_ "min-h-full"] do
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      whenJust row.namespace $ \namespace -> a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?namespace=" <> toUriStr namespace, class_ "btn btn-sm btn-outline"] "View containers"
-      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr (kubeQuery resource row), class_ "btn btn-sm btn-outline"] "View logs"
-      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=k8s.", class_ "btn btn-sm btn-outline"] "View metrics"
+      whenJust row.namespace $ \namespace -> a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?namespace=" <> toUriStr namespace, class_ "btn btn-sm"] "View containers"
+      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr (kubeQuery resource row), class_ "btn btn-sm"] "View logs"
+      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=k8s.", class_ "btn btn-sm"] "View metrics"
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
     kubeQuery kind resourceRow = field <> "==" <> kqlQuoted resourceRow.name
@@ -834,8 +874,8 @@ hostMapGroups grouping hosts = M.toAscList $ V.foldl' (\acc host -> M.insertWith
 
 
 hostMap_ :: HostMapData -> Html ()
-hostMap_ page = div_ [class_ "flex min-h-full flex-col"] do
-  form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgBase px-4 py-3"] do
+hostMap_ page = div_ [class_ "flex min-h-full flex-col bg-bgSunken"] do
+  form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (hostMapFillParam page.fill) [("cpu", "CPU usage"), ("memory", "Memory usage"), ("storage", "Storage usage")]
     mapSelect "group" "Group by" (hostGroupParam page.grouping) [("", "None"), ("provider", "Provider"), ("region", "Region"), ("os", "Operating system"), ("integration", "Integration")]
@@ -848,7 +888,7 @@ hostMap_ page = div_ [class_ "flex min-h-full flex-col"] do
       legend "bg-fillNeutral-strong" "No data"
   if null page.groups
     then div_ [class_ "m-auto flex max-w-md flex-col items-center gap-2 p-8 text-center"] $ faSprite_ "server" "regular" "h-8 w-8 text-iconNeutral" >> h2_ [class_ "font-semibold text-textStrong"] "No hosts reporting" >> p_ [class_ "text-sm text-textWeak"] "Enable hostmetrics or Kubernetes node telemetry to populate the map."
-    else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgSunken p-3 " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
+    else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
       h2_ [class_ "mb-3 flex items-baseline gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "text-xs font-normal text-textWeak"] (toHtml $ show (length hosts) <> " hosts")
       div_ [class_ "flex flex-wrap gap-1"] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.fill (length hosts <= 12)
   where
@@ -864,7 +904,7 @@ mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text
 hostHex :: Projects.ProjectId -> HostMapFill -> Bool -> HostRow -> Html ()
 hostHex pid fill enlarged host =
   button_
-    ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 " <> utilizationClass value
+    ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
       , type_ "button"
       , style_ $ (if enlarged then "height:54px;width:49px;" else "height:44px;width:40px;") <> "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"
       , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" (\v -> Containers.showFFloat' 0 (v * 100) <> "%") value

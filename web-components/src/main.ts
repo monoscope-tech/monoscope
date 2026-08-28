@@ -231,6 +231,10 @@ window.setTimeRefreshInterval = (_transport, interval) => {
   syncTimeTransports();
 };
 
+document.addEventListener('htmx:after:swap', () => {
+  if (!document.querySelector('[data-time-transport]')) window.setTimeRefreshInterval(null, 0);
+});
+
 window.initTimeTransport = (transport) => {
   const live = transport.parentElement?.querySelector('[data-live-range="true"]') != null;
   transport.dataset.live = String(live);

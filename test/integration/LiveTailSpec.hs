@@ -21,15 +21,16 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, getCurrentTime, parseTimeM)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Ki qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (TestResources (..), createTestAPIKey, frozenTime, ingestLog, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (TestResources (..), createTestAPIKey, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
 import Relude
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
@@ -152,6 +153,42 @@ spec = do
       (rows, _) <- LT.takeBatch conn
       map (\case LT.LogRow f -> f.truncated; _ -> False) rows `shouldBe` [True]
       map (T.length . logBody) rows `shouldBe` [LT.maxRowFieldChars]
+
+    it "uses the timestamp precision the durable record lookup can round-trip" do
+      incoming <- parseTimeM True defaultTimeLocale "%F %T%Q UTC" "2026-08-28 11:19:22.10099157 UTC" :: IO UTCTime
+      stored <- parseTimeM True defaultTimeLocale "%F %T%Q UTC" "2026-08-28 11:19:22.100992 UTC" :: IO UTCTime
+      midnightEdge <- parseTimeM True defaultTimeLocale "%F %T%Q UTC" "2026-08-28 23:59:59.9999997 UTC" :: IO UTCTime
+      nextDay <- parseTimeM True defaultTimeLocale "%F %T%Q UTC" "2026-08-29 00:00:00 UTC" :: IO UTCTime
+      let base :: Telemetry.OtelLogsAndSpans
+          base = logRecord "checkout" "prod" "info" "precision"
+          record :: Telemetry.OtelLogsAndSpans
+          record = base{Telemetry.timestamp = incoming}
+      LT.storageTimestamp incoming `shouldBe` stored
+      LT.storageTimestamp midnightEdge `shouldBe` nextDay
+      case LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] record of
+        LT.LogRow fields -> fields.timestamp `shouldBe` stored
+        LT.TableRow _ -> fail "expected a log row"
+        LT.Notice _ -> fail "expected a log row"
+
+    it "projects fields selected by the standalone live-tail viewer" do
+      let column = "attributes___http___request___method"
+          sub = mkSubScoped 7 (LT.LogTail (Just "checkout") LT.SKLogs) [column] Nothing ""
+      (conn, rt) <- fixture [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
+      (rows, _) <- LT.takeBatch conn
+      case rows of
+        [LT.LogRow f] -> Map.lookup column f.fields `shouldBe` Just (AE.String "GET")
+        _ -> fail "expected exactly one LogRow"
+
+    it "projects the rich summary selected by the spans viewer" do
+      let summary = V.fromList ["request_type;badge-neutral⇒incoming", "span_name;text-textStrong⇒handler"]
+          sub = mkSubScoped 8 (LT.LogTail (Just "checkout") LT.SKSpans) ["summary"] Nothing ""
+      (conn, rt) <- fixture [sub]
+      _ <- LT.publishMatches rt pid (V.singleton (spanRecord "checkout" "prod" "error"){Telemetry.summary = summary})
+      (rows, _) <- LT.takeBatch conn
+      case rows of
+        [LT.LogRow f] -> Map.lookup "summary" f.fields `shouldBe` Just (AE.toJSON summary)
+        _ -> fail "expected exactly one LogRow"
 
   describe "Events live mode (AllSignals scope)" do
     it "delivers spans, which a logs-only subscription must never see" do
@@ -294,6 +331,37 @@ spec = do
           Right (decoded :: LT.LiveEnvelope) -> decoded.v == env.v && decoded.subscriptionId == env.subscriptionId
           Left _ -> False
 
+    it "accepts current envelopes from producers that predate projected fields" do
+      let sub = mkSub 34 "checkout" Nothing ""
+          legacy =
+            AE.object
+              [ "v" AE..= LT.envelopeVersion
+              , "subscription_id" AE..= sub.id.toText
+              , "row"
+                  AE..= AE.object
+                    [ "shape" AE..= ("log" :: Text)
+                    , "log"
+                        AE..= AE.object
+                          [ "id" AE..= ("00000000-0000-0000-0000-000000000034" :: Text)
+                          , "timestamp" AE..= frozenTime
+                          , "level" AE..= Just ("info" :: Text)
+                          , "service" AE..= Just ("checkout" :: Text)
+                          , "trace_id" AE..= (Nothing :: Maybe Text)
+                          , "span_id" AE..= (Nothing :: Maybe Text)
+                          , "name" AE..= Just ("legacy" :: Text)
+                          , "body" AE..= ("still visible during a rolling deploy" :: Text)
+                          , "truncated" AE..= False
+                          ]
+                    ]
+              ]
+      LT.envelopeFromValue legacy `shouldSatisfy` \case
+        LT.Delivered env -> case env.row of
+          LT.LogRow fields -> fields.fields == mempty
+          LT.TableRow _ -> False
+          LT.Notice _ -> False
+        LT.VersionMismatch _ -> False
+        LT.Undecodable _ -> False
+
     it "routes a decoded envelope to the subscription it names, and to no other" do
       -- This is the web-pod half of the Kafka path: every pod consumes every message, so
       -- delivering to the wrong local queue would leak one user's rows into another's tail.
@@ -390,9 +458,9 @@ spec = do
       -- registered fine, said @live@, held its SSE connection, and matched nothing ever.
       --
       -- Driven through 'ingestLog', which is 'logsServiceExport': the real gRPC entry point,
-      -- not a re-implementation of it. AllSignals so the assertion is "a row arrived at all"
-      -- rather than a claim about the fixture's service name.
-      let sub = mkSubScoped 100 LT.AllSignals [] Nothing ""
+      -- not a re-implementation of it. No service gate, so the assertion is "a row arrived at
+      -- all" rather than a claim about the fixture's service name.
+      let sub = mkSubScoped 100 (LT.LogTail Nothing LT.SKLogs) [] Nothing ""
       conn <- LT.newConn 10
       _ <- LT.attachConn tr.trATCtx.liveTail.hub sub.id conn
       _ <- LT.refreshSubCache tr.trATCtx.liveTail.cache frozenTime [sub]
@@ -402,6 +470,13 @@ spec = do
       -- on a queue nothing will ever write to.
       delivered <- LT.takeBatchWithin 2_000_000 conn
       fmap (length . fst) delivered `shouldBe` Just 1
+      case delivered of
+        Just ([LT.LogRow row], _) -> do
+          recordId <- maybe (fail "live row id was not a UUID") pure (UUID.fromText row.id)
+          (_, stored) <- testServant tr $ LiveTailPage.liveTailRecordH pid recordId row.timestamp
+          stored.id `shouldBe` row.id
+          AE.toJSON stored `shouldSatisfy` \case AE.Object obj -> length obj > 10; _ -> False
+        _ -> fail "expected one streamed log row"
 
     it "countActive_int8Decoder_doesNotThrow" \tr -> do
       -- Regression. These were `count(*)::int` — int4 — while the Haskell `Int` decoder expects

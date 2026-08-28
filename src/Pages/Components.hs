@@ -128,7 +128,7 @@ factGrid_ cols facts =
 
 -- | @label: value@ chip for the identity strip at the top of a detail panel.
 metaChip_ :: Text -> Text -> Html ()
-metaChip_ label value = span_ [class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1 text-xs text-textWeak"] do
+metaChip_ label value = span_ [class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1 text-xs text-textWeak", data_ "tippy-content" $ label <> ": " <> value] do
   strong_ [class_ "font-medium text-textStrong"] $ toHtml $ label <> ":"
   toHtml value
 
@@ -159,13 +159,11 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
       , Aria.label_ "Toggle drawer"
       ]
         <> [checked_ | startOpen]
-        <> [ [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
-          on change
+        <> [ [__|on change
             if my.checked then
               add .overflow-hidden to <body/>
-              set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > div:last-child'))
-              wait 100ms then
-              set :closeBtn to my.closest('.drawer').querySelector('[aria-label="Close drawer"]')
+              set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
+              set :closeBtn to my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
               if :closeBtn then call :closeBtn.focus() end
             else
               remove .overflow-hidden from <body/>
@@ -177,18 +175,32 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
-    div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full relative"] do
-      label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "btn btn-sm btn-circle btn-ghost sticky top-3 float-right z-30 mr-3 mt-3 bg-bgRaised shadow-sm"] $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      div_
-        [ id_ $ drawerId <> "-content"
-        , class_ "pb-4 px-8 h-full flex flex-col gap-8"
-        , term "hx-on::after:swap" "window.evalScriptsFromContent(this)"
-        ]
-        -- hx-swap sits on the requester rather than being inherited from the wrapper:
-        -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
-        $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]) urlM)
-        $ fromMaybe (loadingIndicator_ LdMD LdDots) content
-      div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
+    div_
+      [ id_ $ drawerId <> "-panel"
+      , style_ "width: min(90vw, 1200px)"
+      , class_ "bg-bgRaised h-full overflow-y-auto overscroll-contain overflow-x-hidden w-full max-sm:w-screen! relative"
+      , role_ "dialog"
+      , term "aria-modal" "true"
+      , Aria.label_ "Details"
+      ]
+      do
+        button_
+          [ type_ "button"
+          , Aria.label_ "Close drawer"
+          , class_ "btn btn-sm btn-circle btn-ghost sticky top-3 float-right z-30 mr-3 mt-3 bg-bgRaised shadow-sm"
+          , term "_" $ "on click set #" <> drawerId <> ".checked to false then trigger change on #" <> drawerId
+          ]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+        div_
+          [ id_ $ drawerId <> "-content"
+          , class_ "pb-4 px-8 h-full flex flex-col gap-8"
+          , term "hx-on::after:swap" "window.evalScriptsFromContent(this); window.labelDrawer(this.closest('[role=dialog]'))"
+          ]
+          -- hx-swap sits on the requester rather than being inherited from the wrapper:
+          -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
+          $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]) urlM)
+          $ fromMaybe (loadingIndicator_ LdMD LdDots) content
+        div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
 
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
@@ -645,8 +657,8 @@ formSelectField_ size lbl name required options =
     $ select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
   where
     selectCls = case size of
-      FieldSm -> "select select-sm w-full"
-      FieldMd -> "select w-full h-12"
+      FieldSm -> "select select-sm w-full cursor-pointer"
+      FieldMd -> "select w-full h-12 cursor-pointer"
 
 
 data PanelCfg = PanelCfg
@@ -699,7 +711,7 @@ tagInput_ inputId ph attrs = textarea_ ([class_ "textarea w-full min-h-12 resize
 
 formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
 formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
-  label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] "Cancel"
+  label_ [Lucid.for_ modalId, class_ "btn cursor-pointer"] "Cancel"
   submitBtn
 
 

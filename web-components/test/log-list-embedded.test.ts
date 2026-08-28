@@ -110,6 +110,15 @@ describe('embedded log widget: refresh triggers', () => {
 });
 
 describe('embedded log widget: chrome', () => {
+  test('empty state points to the explorer instead of a time picker the embed does not have', async () => {
+    const el = await embedded();
+    el.transport = serverTransport(logPage([], { hasMore: false }));
+    await el.fetchData('first', true);
+
+    expect(el.textContent).toContain('Open in Explorer to adjust the time range.');
+    expect(el.textContent).not.toContain('time picker above');
+  });
+
   test('offers no "load newer" edge — a widget is a window, not a live tail', async () => {
     const el = await embedded();
     el.transport = serverTransport(logPage(['a', 'b']));

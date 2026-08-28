@@ -390,20 +390,22 @@ widget_ w' = case w.wType of
   where
     normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] w'.children
     w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
-    isFullWidth = (== Just 12) $ w.layout >>= (.w)
+    effectiveWidth = min 12 $ max 1 $ fromMaybe defaultWidgetWidth $ w.layout >>= (.w)
+    isFullWidth = effectiveWidth == 12
     effectiveHeight = case w.wType of
-      WTGroup -> Just $ widgetHeightForWidth (fromMaybe 1 $ w.layout >>= (.w)) w
+      WTGroup -> Just $ widgetHeightForWidth effectiveWidth w
       _ -> w.layout >>= (.h)
-    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
+    layoutFields = [("x", (.x)), ("y", (.y))] :: [(Text, Layout -> Maybe Int)]
     attrs =
       foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
+        <> [term "gs-w" $ show effectiveWidth]
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
         <> [ style_
                $ T.intercalate ";"
                $ catMaybes
                  [ ("--grid-preload-left:" <>) . gridPercent <$> (w.layout >>= (.x))
                  , ("--grid-preload-top:" <>) . gridRem <$> (w.layout >>= (.y))
-                 , ("--grid-preload-width:" <>) . gridPercent <$> (w.layout >>= (.w))
+                 , Just $ "--grid-preload-width:" <> gridPercent effectiveWidth
                  , ("--grid-preload-height:" <>) . gridRem <$> effectiveHeight
                  ]
            ]
@@ -482,7 +484,7 @@ normalizeWidgetLayouts widgets =
 
     placeWidget (occupied, acc) (idx, widget) =
       let layout = fromMaybe def widget.layout
-          width = min 12 $ max 1 $ fromMaybe 1 layout.w
+          width = min 12 $ max 1 $ fromMaybe defaultWidgetWidth layout.w
           normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] widget.children
           normalizedWidget = widget{children = normalizedChildren <$ widget.children}
           height = widgetHeightForWidth width normalizedWidget
@@ -500,6 +502,10 @@ normalizeWidgetLayouts widgets =
 
     isFree occupied width height (y, x) = not (any (overlaps (x, y, width, height)) occupied)
     overlaps (x1, y1, w1, h1) (x2, y2, w2, h2) = x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2
+
+
+defaultWidgetWidth :: Int
+defaultWidgetWidth = 3
 
 
 layoutRows :: [Widget] -> Int
@@ -917,7 +923,7 @@ renderChart widget = do
                       item "all" "All values"
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
-          unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
+          unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else if isTrue widget.standalone then " px-2 pt-2" else " p-2"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
             let sumBy = fromMaybe SBSum widget.summarizeBy
                 theme = fromMaybe "default" widget.theme
@@ -1084,6 +1090,7 @@ widgetToECharts widget =
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
+                    , "tooltip" AE..= AE.object ["show" AE..= True]
                     , "data" AE..= maybe seriesNames (map (fromMaybe "Unnamed Series" . (.query))) widget.queries -- Use series names from dataset if no explicit queries
                     ]
                       <> legendOffset
@@ -1094,7 +1101,7 @@ widgetToECharts widget =
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
               , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then (28 :: Int) else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
-              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else (8 :: Int)
+              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
               ]

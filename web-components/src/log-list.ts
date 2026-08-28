@@ -2800,7 +2800,9 @@ export class LogList extends LitElement {
           ? html`<div class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
               ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
               <span class="text-sm text-textWeak">No events match in the selected time range.</span>
-              <span class="text-xs text-textWeak">Try expanding the time picker above.</span>
+              <span class="text-xs text-textWeak">
+                ${this.initialFetchUrl ? 'Open in Explorer to adjust the time range.' : 'Try expanding the time picker above.'}
+              </span>
             </div>`
           : nothing}
         ${!isAggregate && !this.shouldScrollToBottom && this.flipDirection

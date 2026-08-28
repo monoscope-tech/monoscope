@@ -279,7 +279,7 @@ notConnectedView actionUrl = do
         p_ [class_ "text-xs text-textWeak"] do
           "Dashboards are stored in "
           code_ [class_ "text-textBrand"] "dashboards/"
-        button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
+        button_ [class_ "btn btn-sm gap-1", type_ "submit"] do
           "Connect with token"
           htmxIndicator_ "indicator" LdXS
 
@@ -303,7 +303,7 @@ connectedView sync actionUrl webhookUrl = do
     if isViaApp
       then div_ [class_ "flex items-end gap-3"] do
         formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
-        a_ [href_ (actionUrl <> "/repos"), class_ "btn btn-sm btn-outline gap-1.5 shrink-0"] do
+        a_ [href_ (actionUrl <> "/repos"), class_ "btn btn-sm gap-1.5 shrink-0"] do
           faSprite_ "code-branch" "regular" "w-3 h-3"
           "Change repository"
         input_ [type_ "hidden", name_ "owner", value_ sync.owner]

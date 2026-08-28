@@ -302,11 +302,18 @@ spec = sequential $ aroundAll withTestResources do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
       html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins"]
-      T.isInfixOf "<details open=\"\" class=\"group/summary" html `shouldBe` False
+      T.isInfixOf "group/summary" html `shouldBe` False
+      T.isInfixOf "Usage over time" html `shouldBe` False
+      T.isInfixOf "min-height:" html `shouldBe` False
+      T.count "class=\"container-usage-chart\"" html `shouldBe` 2
+      html `shouldContainAll` ["px-2 pt-2", "\"bottom\":0", "\"tooltip\":{\"show\":true}"]
       T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
       -- column, crossing the badge border. The label is one indivisible status.
       html `shouldContainAll` ["Not ready", "class=\"badge badge-sm badge-error whitespace-nowrap\""]
+      -- The regular download symbol has 24px path coordinates in a 16px viewBox and renders
+      -- as a clipped stroke. The table export uses the correctly framed Font Awesome symbol.
+      html `shouldContainAll` ["M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32"]
 
       -- Each facet narrows independently, and an unknown value yields an empty list rather
       -- than silently falling back to "all".
@@ -326,11 +333,31 @@ spec = sequential $ aroundAll withTestResources do
       -- A bare node is its own runtime, so it is reachable and does not pollute the others.
       listWith (containersPage noContainerFilters{runtime = Just "host"}) >>= (`shouldBe` ["vps-bare-01"])
 
+    -- Keep both identity columns readable when image and workload names are long.
+    it "longContainerMetadata_doesNotOverlapPodColumn" \tr -> do
+      (_, page) <- testServant tr $ containersPage noContainerFilters
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html
+        `shouldContainAll` [ "w-80 max-w-80 overflow-hidden"
+                           , "w-72 max-w-72 overflow-hidden"
+                           , "min-w-0 flex-1 truncate"
+                           , "max-w-36 truncate"
+                           , "data-tip=\"Runtime: kubernetes\""
+                           , "data-tippy-content=\"Container: checkout\""
+                           , "data-tippy-content=\"Image: demo:2.2.0\""
+                           , "data-tippy-content=\"Workload: checkout\""
+                           , "data-tippy-content=\"CPU limit used: "
+                           , "data-tippy-content=\"Memory limit used: "
+                           , "data-tippy-content=\"Latest reported readiness: Ready\""
+                           , "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
+                           ]
+
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
-      Icons.lookupIcon "regular" "download" `shouldSatisfy` isJust
       (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
-        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts"]
+        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap"]
+      Icons.lookupIcon "solid" "download" `shouldSatisfy` isJust
+      Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
       (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
@@ -348,7 +375,18 @@ spec = sequential $ aroundAll withTestResources do
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hostDetail)
-        `shouldContainAll` ["Host summary", "CPU usage", "Memory used", "Max storage usage", "Load average", "View logs", "View metrics", "Signal coverage"]
+        `shouldContainAll` [ "Host summary"
+                           , "CPU usage"
+                           , "Memory usage"
+                           , "Recent logs"
+                           , "View logs in Explorer"
+                           , "id=\"host-logs\""
+                           , "<log-list"
+                           , "initialFetchUrl=\"/p/00000000-0000-0000-0000-000000000000/log_explorer/data?"
+                           , "resource.host.name%3D%3D%22vps-bare-01%22"
+                           , "View in Metrics"
+                           , "Signal coverage: 2 of 4"
+                           ]
 
       (_, imageDetail) <- testServant tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml imageDetail)
@@ -358,10 +396,16 @@ spec = sequential $ aroundAll withTestResources do
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
 
+    it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
+      (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-d6d7e318")
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostWithoutMetrics
+      html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Signal coverage: 0 of 4"]
+      html `shouldNotSatisfy` T.isInfixOf "host-cpu"
+
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs")
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'
-      html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name"]
+      html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\""]
 
       -- A container that stopped reporting must say so, not render a blank panel.
       (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing

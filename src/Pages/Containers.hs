@@ -22,14 +22,14 @@ import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersI
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (factGrid_, metaChip_)
-import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
+import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
+import Utils (drawerRowAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -121,7 +121,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                         , menu "Node" "node" filters.node (.nodeName)
                         , menu "Image" "image" filters.image (.image)
                         ]
-                , header = Just $ containerSummary_ pid
+                , header = Just $ containerCharts_ pid
                 , showFilterRail = True
                 , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers"
                 , exportName = Just "containers"
@@ -160,15 +160,27 @@ instance ToHtml ContainersGet where
 
 containerColumns :: [Column ContainerVM]
 containerColumns =
-  [ col "Container" renderNameCol & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-48 max-lg:hidden"]
+  [ col "Container" renderNameCol & withAttrs [class_ "w-80 max-w-80 overflow-hidden"]
+  , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-lg:hidden"]
   , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
   , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
   , col "CPU" (numCell 3 (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
-  , col "CPU limit used" (pctCell cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
-  , col "Memory" (\vm -> plainCell $ formatBytes <$> vm.row.memBytes) & withAttrs [class_ "w-24 text-right"]
-  , col "Memory limit used" (pctCell memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
-  , col "Restarts" (numCell 0 (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+  , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
+  , col "Memory" (\vm -> plainCell $ formatBytes <$> vm.row.memBytes) & withAttrs [class_ "w-28 text-right"]
+  , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
+  , col "Restarts" (numCell 0 (.restarts))
+      & withColHeaderExtra
+        ( let explanation = "Latest cumulative restart count reported within the selected time range. This is not the number of restarts during the range."
+           in span_
+                [ class_ "inline-flex cursor-help rounded-sm text-iconNeutral focus-visible:outline-2 focus-visible:outline-offset-2"
+                , tabindex_ "0"
+                , role_ "note"
+                , term "aria-label" explanation
+                , data_ "tippy-content" explanation
+                ]
+                $ faSprite_ "circle-info" "regular" "h-3 w-3"
+        )
+      & withAttrs [class_ "w-20 text-right max-md:hidden"]
   , col "Ready" readyCell & withAttrs [class_ "w-16 max-md:hidden"]
   ]
 
@@ -176,7 +188,7 @@ containerColumns =
 -- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
 -- "cannot infer the usage percentage", and a fabricated 0% read at 3 AM is worse than a blank.
 plainCell :: Maybe Text -> Html ()
-plainCell = maybe (span_ [class_ "text-textWeak"] "—") (span_ [class_ "text-textStrong tabular-nums"] . toHtml)
+plainCell = maybe (span_ [class_ "text-textWeak"] "—") (span_ [class_ "whitespace-nowrap text-textStrong tabular-nums"] . toHtml)
 
 
 textCell :: (ContainerRow -> Maybe Text) -> ContainerVM -> Html ()
@@ -191,37 +203,37 @@ numCell places f vm = plainCell $ toText . showFFloat' places <$> f vm.row
 
 -- | Percentage plus a bar. The bar is the second, non-colour signal the design principles
 -- require: at a glance you read fullness from length even where colour is unavailable.
-pctCell :: (ContainerRow -> Maybe Double) -> ContainerVM -> Html ()
-pctCell f vm = case f vm.row of
+pctCell :: Text -> (ContainerRow -> Maybe Double) -> ContainerVM -> Html ()
+pctCell label f vm = case f vm.row of
   Nothing -> span_ [class_ "text-textWeak"] "—"
-  Just frac -> div_ [class_ "flex items-center gap-1.5"] do
-    span_ [class_ "tabular-nums text-textStrong w-10 text-right shrink-0"] $ toHtml $ showFFloat' 0 (frac * 100) <> "%"
-    div_ [class_ "h-1.5 grow rounded-full bg-fillWeak overflow-hidden"]
-      -- Ratios legitimately exceed 1.0, so the bar clamps while the number keeps the truth.
-      $ div_ [class_ $ "h-full rounded-full " <> if frac >= 0.9 then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "width:" <> showFFloat' 0 (min 1 frac * 100) <> "%"] mempty
+  Just frac ->
+    let value = showFFloat' 0 (frac * 100) <> "%"
+     in div_ [class_ "flex items-center gap-1.5", data_ "tippy-content" $ label <> ": " <> value] do
+          span_ [class_ "tabular-nums text-textStrong w-10 text-right shrink-0"] $ toHtml value
+          div_ [class_ "h-1.5 grow rounded-full bg-fillWeak overflow-hidden"]
+            -- Ratios legitimately exceed 1.0, so the bar clamps while the number keeps the truth.
+            $ div_ [class_ $ "h-full rounded-full " <> if frac >= 0.9 then "bg-fillError-strong" else "bg-fillBrand-strong", style_ $ "width:" <> showFFloat' 0 (min 1 frac * 100) <> "%"] mempty
 
 
 readyCell :: ContainerVM -> Html ()
 readyCell vm = case vm.row.ready of
   Nothing -> span_ [class_ "text-textWeak"] "—"
   Just v
-    | v > 0 -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap"] "Ready"
-    | otherwise -> span_ [class_ "badge badge-sm badge-error whitespace-nowrap"] "Not ready"
+    | v > 0 -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Ready"] "Ready"
+    | otherwise -> span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
 
 
 renderNameCol :: ContainerVM -> Html ()
-renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
+renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0 overflow-hidden"] do
   div_ [class_ "flex items-center gap-2 min-w-0"] do
-    span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ runtimeLabel $ runtimeOf vm.row]
+    span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ "Runtime: " <> runtimeLabel (runtimeOf vm.row)]
       $ faSprite_ (case runtimeOf vm.row of Kubernetes -> "cube"; Docker -> "layer-group"; Host -> "server") "solid" "w-3.5 h-3.5 fill-iconNeutral"
-    button_
-      ( [class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0 text-left cursor-pointer", type_ "button", onclick_ "event.stopPropagation()"]
-          <> drawerLoadAttrs_ (detailUrl vm)
-      )
-      $ toHtml vm.row.containerName
-  div_ [class_ "flex items-center gap-2 min-w-0 text-xs text-textWeak"] do
-    whenJust vm.row.image \img -> span_ [class_ "truncate"] $ toHtml $ shortImage img <> maybe "" (":" <>) vm.row.imageTag
-    whenJust vm.row.workload $ span_ [class_ "badge badge-xs badge-ghost shrink-0"] . toHtml
+    span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" $ "Container: " <> vm.row.containerName] $ toHtml vm.row.containerName
+  div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
+    whenJust vm.row.image \img ->
+      let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
+       in span_ [class_ "min-w-0 flex-1 truncate", term "data-tippy-content" $ "Image: " <> image] $ toHtml image
+    whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", term "data-tippy-content" $ "Workload: " <> workload] $ toHtml workload
 
 
 -- | Datadog's @short_image@: the last path segment, which is the lowest-cardinality useful
@@ -291,7 +303,7 @@ containerDetail_ pid r = div_ [class_ "min-h-full"] do
         div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid "container-detail-cpu" "CPU usage" "cores" (metricQuery "container.cpu.usage")
         div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid "container-detail-memory" "Memory working set" "bytes" (metricQuery "container.memory.working_set")
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] $ forM_ pivots \(label, url) ->
-      a_ ([href_ url, class_ "btn btn-sm btn-outline"] <> navTabAttrs) $ toHtml label
+      a_ ([href_ url, class_ "btn btn-sm"] <> navTabAttrs) $ toHtml label
   where
     dash = fromMaybe "—"
     pct = maybe "—" (\value -> showFFloat' 0 (value * 100) <> "%")
@@ -336,16 +348,11 @@ formatBytes = go ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
     trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 
 
-containerSummary_ :: Projects.ProjectId -> Html ()
-containerSummary_ pid =
-  details_ [class_ "group/summary border-b border-strokeWeak"] do
-    summary_ [class_ "flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium text-textStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2"] do
-      faSprite_ "chart-simple" "regular" "h-3.5 w-3.5 text-iconNeutral"
-      "Usage over time"
-      faSprite_ "chevron-down" "regular" "ml-auto h-3 w-3 text-iconNeutral transition-transform group-open/summary:rotate-180"
-    div_ [class_ "grid grid-cols-2 gap-3 border-t border-strokeWeak p-3 max-lg:grid-cols-1", style_ "min-height:260px"] do
-      Widget.widget_ $ infrastructureWidget pid "containers-cpu" "CPU by container" "cores" "metrics | where metric_name == \"container.cpu.usage\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
-      Widget.widget_ $ infrastructureWidget pid "containers-memory" "Memory by container" "bytes" "metrics | where metric_name == \"container.memory.working_set\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
+containerCharts_ :: Projects.ProjectId -> Html ()
+containerCharts_ pid =
+  div_ [class_ "grid grid-cols-2 gap-3 border-b border-strokeWeak max-lg:grid-cols-1"] do
+    div_ [class_ "container-usage-chart"] $ Widget.widget_ $ infrastructureWidget pid "containers-cpu" "CPU by container" "cores" "metrics | where metric_name == \"container.cpu.usage\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
+    div_ [class_ "container-usage-chart"] $ Widget.widget_ $ infrastructureWidget pid "containers-memory" "Memory by container" "bytes" "metrics | where metric_name == \"container.memory.working_set\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)"
 
 
 infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget

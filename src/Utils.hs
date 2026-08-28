@@ -1607,7 +1607,7 @@ drawerLoadAttrs_ url =
   , hxTarget_ "#global-data-drawer-content"
   , hxSwap_ "innerHTML"
   , hxIndicator_ "#global-data-drawer-indicator"
-  , term "hx-on::before:request" "document.querySelector('#global-data-drawer').checked = true"
+  , term "hx-on::before:request" "const drawer = document.querySelector('#global-data-drawer'); drawer._returnFocus = event.currentTarget; if (!drawer.checked) { drawer.checked = true; drawer.dispatchEvent(new Event('change', { bubbles: true })); }"
   ]
 
 

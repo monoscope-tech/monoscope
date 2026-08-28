@@ -13,10 +13,9 @@ const LIVE_TAIL_URL = `/p/${DEMO_PROJECT}/live_tail`;
  * therefore always empty — so narrowing a tail was impossible, and every server-side test
  * still passed.
  *
- * So the assertions here are deliberately about *seams*, not logic: the page mounts, the
- * selector fills from the live schema response, and a selection round-trips the URL. Row
- * streaming is not asserted — that needs ingest traffic, and the server-side specs already pin
- * matching and delivery.
+ * So the assertions here are deliberately about *seams*, not matching logic: the page mounts,
+ * selectors fill from the live schema response, the row composition survives the real CSS,
+ * and the drawer shows a complete stored record. Ingest matching remains server-tested.
  */
 test.describe("Live Tail", () => {
   // The seam is checked in two halves so neither depends on the box having telemetry in it.
@@ -64,8 +63,8 @@ test.describe("Live Tail", () => {
     const component = page.locator("live-tail");
     await expect(component).toBeVisible();
 
-    await expect(component.getByLabel("Service").locator("option")).toHaveText([/All services/, "checkout", "billing"]);
-    await expect(component.getByLabel("Environment").locator("option")).toHaveText([/All environments/, "prod"]);
+    await expect(component.getByLabel("Service", { exact: true }).locator("option")).toHaveText([/All services/, "checkout", "billing"]);
+    await expect(component.getByLabel("Environment", { exact: true }).locator("option")).toHaveText([/All environments/, "prod"]);
   });
 
   // "The selection is the control" — there is deliberately no start button and no service
@@ -86,11 +85,85 @@ test.describe("Live Tail", () => {
     // A plain link carries no filter params.
     expect(new URL(page.url()).searchParams.get("service")).toBeNull();
 
-    await component.getByLabel("Service").selectOption("checkout");
+    await component.getByLabel("Service", { exact: true }).selectOption("checkout");
 
     await expect
       .poll(() => new URL(page.url()).searchParams.get("service"))
       .toBe("checkout");
+  });
+
+  test("AI search opens from Live Tail and applies the generated KQL", async ({ page }) => {
+    let prompt = "";
+    await page.route("**/log_explorer/ai_search", async route => {
+      prompt = (await route.request().postDataJSON()).input;
+      await route.fulfill({ json: { query: 'level == "ERROR"' } });
+    });
+    await page.goto(LIVE_TAIL_URL, { waitUntil: "domcontentloaded" });
+    const component = page.locator("live-tail");
+    await component.locator("query-editor").click();
+    await component.getByRole("button", { name: "Open AI search" }).click();
+    await component.getByLabel("AI search prompt").fill("errors in checkout");
+    await component.getByRole("button", { name: "Submit AI search" }).click();
+
+    await expect.poll(() => prompt).toBe("errors in checkout");
+    await expect.poll(() => new URL(page.url()).searchParams.get("query")).toBe('level == "ERROR"');
+    await expect(component.getByLabel("AI search prompt")).toHaveCount(0);
+  });
+
+  test("keeps metadata in two lanes, selected fields in one message, and the complete record in the drawer", async ({ page }) => {
+    await page.route("**/live_tail/records/**", async (route) => {
+      await route.fulfill({
+        json: {
+          id: "00000000-0000-4000-8000-000000000001",
+          timestamp: "2024-01-01T00:00:00.000Z",
+          level: "info",
+          body: { message: "complete record" },
+          attributes: { order: { id: "ord-42" }, private: { token: "not-enabled" } },
+          resource: { service: { name: "checkout" } },
+        },
+      });
+    });
+    await page.goto(LIVE_TAIL_URL, { waitUntil: "domcontentloaded" });
+    const component = page.locator("live-tail");
+    await expect(component).toBeVisible();
+    await page.waitForFunction(() => customElements.get("live-tail"));
+    await component.evaluate((element: any) => {
+      element.teardown();
+      element.buffer = [];
+      element.rows = [];
+      element.appendRows([
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          timestamp: "2024-01-01T00:00:00.000Z",
+          level: "info",
+          service: "checkout",
+          trace_id: null,
+          span_id: null,
+          name: null,
+          body: "plain message",
+          fields: { "attributes.order.id": "ord-42" },
+          truncated: false,
+        },
+      ]);
+    });
+
+    await component.getByText("Fields 2", { exact: true }).click();
+    await component.getByLabel("Find a field").fill("attributes.order.id");
+    await component.getByLabel("Show attributes.order.id in each row").check();
+    await component.getByText("Fields 3", { exact: true }).click();
+
+    const row = component.locator("[data-row]");
+    await expect(row.locator("[data-service]")).toHaveText("checkout");
+    await expect(row.locator("[data-time]")).toHaveText("00:00:00.000");
+    await expect(row.locator("[data-message]")).toContainText('level="info"');
+    await expect(row.locator("[data-message]")).toContainText('attributes.order.id="ord-42"');
+
+    await row.click();
+    const dialog = page.getByRole("dialog", { name: "Record details" });
+    await expect(dialog).toContainText("Complete stored JSON");
+    await expect(dialog).toContainText("not-enabled");
+    await expect(dialog.getByLabel("Show attributes.private.token in each row")).toBeVisible();
+    await expect(row.locator("[data-message]")).not.toContainText("attributes.private.token");
   });
 
   test("the Explorer tab strip leads with Live Tail but still lands on Events", async ({ page }) => {

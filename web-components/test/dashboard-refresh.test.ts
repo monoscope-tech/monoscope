@@ -83,6 +83,17 @@ describe('auto-refresh interval', () => {
     expect(refreshes).toBe(1);
   });
 
+  test('leaving a timed page stops its global refresh timer', () => {
+    selectInterval(10_000);
+    document.body.innerHTML = '';
+    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(refreshes).toBe(0);
+    expect(window.dashboardRefreshTimer).toBeNull();
+  });
+
   test('a value that is not a number does not start a runaway timer', () => {
     selectInterval('not-a-number');
 

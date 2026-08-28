@@ -14,6 +14,7 @@ module Pages.LogExplorer.LiveTail (
   SseHeaders,
   liveTailGetH,
   liveTailRegisterH,
+  liveTailRecordH,
   liveTailStreamH,
   liveTailRenewH,
   liveTailDeleteH,
@@ -27,12 +28,14 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (UTCTime, addUTCTime)
+import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Media qualified as M
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.DeriveUtils (idFromText)
@@ -42,7 +45,7 @@ import Relude
 import Servant qualified
 import Servant.API (Accept (..), Headers, MimeRender (..), addHeader)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (explorerNavTabs_)
 
@@ -180,6 +183,14 @@ jsonError e msg =
 --
 -- 404 rather than a silent re-create when the lease has already lapsed: the browser must open
 -- a new subscription and know it has a gap, not carry on believing it never missed anything.
+liveTailRecordH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATAuthCtx (RespHeaders Telemetry.OtelLogsAndSpans)
+liveTailRecordH pid recordId timestamp = do
+  _ <- Projects.sessionAndProject pid
+  appCtx <- Reader.ask @AuthContext
+  Telemetry.otelRecordByProjectAndId appCtx.env.enableTimefusionReads pid (LT.storageTimestamp timestamp) recordId
+    >>= maybe (Error.throwError (jsonError Servant.err404 "The complete record is not available yet.")) addRespHeaders
+
+
 liveTailRenewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders AE.Value)
 liveTailRenewH pid rawSid = do
   sess <- Projects.getSession

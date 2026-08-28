@@ -167,15 +167,57 @@ window.updateUrlState = (key, value) => {
   history.replaceState(null, '', url.toString())
 }
 
+/** Label a drawer from the first heading in its loaded content. */
+window.labelDrawer = (drawer) => {
+  if (!drawer) return
+  const title = drawer.querySelector('[data-drawer-title], h1, h2, h3')
+  if (!title) {
+    drawer.removeAttribute('aria-labelledby')
+    drawer.setAttribute('aria-label', 'Details')
+    return
+  }
+  if (!title.id) title.id = `${drawer.id}-title`
+  drawer.setAttribute('aria-labelledby', title.id)
+  drawer.removeAttribute('aria-label')
+}
+
+document.addEventListener('htmx:after:swap', () => {
+  document.querySelectorAll('.drawer-toggle:checked').forEach(toggle => {
+    window.labelDrawer(toggle.closest('.drawer')?.querySelector('[role="dialog"]'))
+  })
+})
+
 /**
- * Create a focus trap within an element (for modals/drawers)
- * @param {HTMLElement} container - The element to trap focus within
- * @returns {Function} - Cleanup function to remove the trap
+ * Isolate focus and screen-reader navigation within a modal drawer.
+ * @param {HTMLElement} container - The drawer's dialog panel
+ * @returns {Function} - Cleanup function that restores the page and trigger focus
  */
 window.createFocusTrap = (container) => {
   const focusableSelectors = 'button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])'
+  const drawer = container.closest('.drawer')
+  const toggle = drawer.querySelector('.drawer-toggle')
+  const previousFocus = toggle._returnFocus || document.activeElement
+  const inerted = []
+  const drawerSide = container.closest('.drawer-side')
+
+  window.labelDrawer(container)
+  for (let node = drawerSide; node && node !== document.body; node = node.parentElement) {
+    const parent = node.parentElement
+    if (!parent) break
+    for (const sibling of parent.children) {
+      if (sibling === node || sibling.classList.contains('drawer-toggle') || sibling.inert) continue
+      sibling.inert = true
+      inerted.push(sibling)
+    }
+  }
 
   const handleKeydown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      toggle.checked = false
+      toggle.dispatchEvent(new Event('change', { bubbles: true }))
+      return
+    }
     if (e.key !== 'Tab') return
 
     const focusables = [...container.querySelectorAll(focusableSelectors)].filter(el => !el.disabled && el.offsetParent !== null)
@@ -194,7 +236,11 @@ window.createFocusTrap = (container) => {
   }
 
   container.addEventListener('keydown', handleKeydown)
-  return () => container.removeEventListener('keydown', handleKeydown)
+  return () => {
+    container.removeEventListener('keydown', handleKeydown)
+    inerted.forEach(element => { element.inert = false })
+    if (previousFocus?.isConnected) previousFocus.focus()
+  }
 }
 
 /**

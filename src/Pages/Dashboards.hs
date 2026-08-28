@@ -2551,11 +2551,11 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
       div_ [class_ "flex justify-between items-center p-4 border-b border-strokeWeak shrink-0"] do
         h2_ [class_ "text-lg font-semibold"] "Edit Dashboard Schema"
         div_ [class_ "flex items-center gap-2"] do
-          label_ [class_ "btn btn-outline btn-sm cursor-pointer", Lucid.for_ "yaml-import-input"] do
+          label_ [class_ "btn btn-sm cursor-pointer", Lucid.for_ "yaml-import-input"] do
             faSprite_ "upload" "regular" "w-3 h-3 mr-1"
             "Import"
           input_ [id_ "yaml-import-input", type_ "file", accept_ ".yaml,.yml", class_ "hidden", [__|on change call yamlEditorImport(me.files[0]) then set my.value to ''|]]
-          button_ [class_ "btn btn-outline btn-sm", [__|on click call yamlEditorExport()|]] do
+          button_ [class_ "btn btn-sm", [__|on click call yamlEditorExport()|]] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
           label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"

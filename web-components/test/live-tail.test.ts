@@ -54,6 +54,8 @@ const settle = async () => {
   await new Promise(r => setTimeout(r, 0));
 };
 
+const nextFrame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
 const mount = async () => {
   stubServer();
   const el = document.createElement('live-tail') as any;
@@ -83,15 +85,36 @@ const pushed = (from: number, to: number) => Array.from({ length: to - from }, (
 
 afterEach(() => {
   document.body.innerHTML = '';
+  localStorage.clear();
+  window.history.replaceState({}, '', '/p/p1/live_tail');
   FakeEventSource.last = null;
 });
 
 describe('Live Tail row buffer', () => {
+  test('keeps the full buffer but mounts only a viewport-sized row window', async () => {
+    const el = await mount();
+    el.appendRows(pushed(0, 1000).map((r: any) => r.log));
+    await nextFrame();
+    await el.updateComplete;
+
+    expect(el.rows).toHaveLength(1000);
+    expect(el.querySelectorAll('[data-row]').length).toBeLessThan(100);
+
+    const list = el.querySelector('[data-rows]') as HTMLElement;
+    Object.defineProperty(list, 'scrollHeight', { value: 4000, configurable: true });
+    // Render, virtualizer layout, then the follow-scroll frame.
+    await nextFrame();
+    await nextFrame();
+    await nextFrame();
+    expect(list.scrollTop).toBe(4000);
+  });
+
   test('caps the buffer and counts what it dropped', async () => {
     // 1200 rows into a 1000-row cap. The count matters as much as the cap: rows vanishing with
     // no number attached is indistinguishable from a filter that stopped matching.
     const el = await mount();
     el.appendRows(pushed(0, 1200).map((r: any) => r.log));
+    await nextFrame();
     await el.updateComplete;
 
     expect(el.rows).toHaveLength(1000);
@@ -209,6 +232,156 @@ describe('Live Tail connection state', () => {
     await el.updateComplete;
 
     expect(el.droppedServer).toBe(30);
+  });
+});
+
+describe('Live Tail fields and details', () => {
+  test('keeps service and timestamp as the only fixed columns and groups selected fields as one message', async () => {
+    const el = await mount();
+    el.appendRows([{ ...logRow(1), fields: { 'attributes.order.id': 'ord-42' } }, logRow(2)]);
+    el.toggleField('attributes.order.id', true);
+    await el.updateComplete;
+
+    const rows = el.querySelectorAll('[data-row]');
+    const row = rows[0];
+    expect(row.querySelector('[data-service]')!.textContent).toContain('checkout');
+    expect(row.querySelector('[data-time]')!.textContent).toContain('00:00:00.000');
+    expect(row.querySelector('[data-message]')!.textContent).toContain('level="info"');
+    expect(row.querySelector('[data-message]')!.textContent).toContain('attributes.order.id="ord-42"');
+    expect(rows[1].querySelector('[data-message]')!.textContent).not.toContain('attributes.order.id=');
+    expect((el as any).selectedFields).toEqual(['level', 'body', 'attributes.order.id']);
+    expect(el.querySelector('input[aria-label*="service in each row"]')).toBeNull();
+    expect(el.querySelector('input[aria-label*="timestamp in each row"]')).toBeNull();
+  });
+
+  test('renders structured bodies as readable key-value pairs in the message column', async () => {
+    const el = await mount();
+    el.appendRows([{ ...logRow(1), body: '{"message":"charged","user":{"id":42}}' }]);
+    await el.updateComplete;
+
+    const message = el.querySelector('[data-message]')!.textContent!;
+    expect(message).toContain('message="charged"');
+    expect(message).toContain('user.id=42');
+    expect(message).not.toContain('{"message"');
+  });
+
+  test('uses the rich summary as the primary span content', async () => {
+    window.history.replaceState({}, '', '/p/p1/live_tail?kind=spans');
+    const el = await mount();
+    const summary = ['request_type;badge-neutral⇒incoming', 'method;badge-POST⇒POST', 'route;text-textStrong⇒/checkout'];
+    el.appendRows([{ ...logRow(1), level: null, body: '', name: 'POST /checkout', fields: { summary } }]);
+    await el.updateComplete;
+
+    expect((el as any).stream.opts.body().columns).toContain('summary');
+    expect((el as any).selectedFields).toEqual(['summary']);
+    expect(el.querySelector('[data-row]')!.textContent).toContain('incoming');
+    expect(el.querySelector('[data-row]')!.textContent).toContain('POST');
+    expect(el.querySelector('[data-row]')!.textContent).toContain('/checkout');
+    expect(el.querySelector('[data-row]')!.textContent).not.toContain('summary=');
+  });
+
+  test('adds and removes projected fields without discarding the visible tail', async () => {
+    const el = await mount();
+    const row = {
+      ...logRow(1),
+      fields: { attributes___http___request___method: 'GET' },
+    };
+    el.appendRows([row]);
+    await el.updateComplete;
+
+    el.toggleField('attributes___http___request___method', true);
+    await el.updateComplete;
+
+    expect((el as any).stream.opts.body().columns).toContain('attributes___http___request___method');
+    expect(el.querySelector('[data-row]')!.textContent).toContain('attributes.http.request.method="GET"');
+    expect(el.rows).toHaveLength(1);
+
+    el.toggleField('attributes___http___request___method', false);
+    await el.updateComplete;
+    expect(el.querySelector('[data-row]')!.textContent).not.toContain('attributes.http.request.method');
+  });
+
+  test('opens AI search and applies its generated query to the live stream', async () => {
+    const el = await mount();
+    const fetchStub = globalThis.fetch;
+    let requestBody: any;
+    (globalThis as any).fetch = async (url: string, init?: any) => {
+      if (url.includes('/ai_search')) {
+        requestBody = JSON.parse(init.body);
+        return { ok: true, status: 200, json: async () => ({ query: 'level == "ERROR"' }) };
+      }
+      return fetchStub(url, init);
+    };
+
+    el.querySelector('query-editor')!.dispatchEvent(new CustomEvent('open-ai-search', { bubbles: true }));
+    await el.updateComplete;
+    const prompt = el.querySelector('[aria-label="AI search prompt"]') as HTMLInputElement;
+    expect(prompt).not.toBeNull();
+    prompt.value = 'errors in checkout';
+    prompt.dispatchEvent(new Event('input'));
+    await el.updateComplete;
+    (el.querySelector('[aria-label="Submit AI search"]') as HTMLButtonElement).click();
+    await settle();
+    await el.updateComplete;
+
+    expect(requestBody.input).toBe('errors in checkout');
+    expect((el as any).stream.opts.body().query).toBe('level == "ERROR"');
+    expect(el.querySelector('[aria-label="AI search prompt"]')).toBeNull();
+  });
+
+  test('loads the complete durable record into the drawer instead of stopping at streamed fields', async () => {
+    const el = await mount();
+    const fetchStub = globalThis.fetch;
+    (globalThis as any).fetch = async (url: string, init?: any) =>
+      url.includes('/live_tail/records/')
+        ? {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: '00000000-0000-4000-8000-000000000001',
+              timestamp: '2024-01-01T00:00:00.000Z',
+              body: { message: 'complete record' },
+              resource: { service: { name: 'checkout' } },
+              attributes: { order: { id: 'ord-full' } },
+            }),
+          }
+        : fetchStub(url, init);
+    el.appendRows([{ ...logRow(1), id: '00000000-0000-4000-8000-000000000001', body: 'streamed preview' }]);
+    el.openDetails(el.rows[0]);
+    await settle();
+    await el.updateComplete;
+
+    const dialog = el.querySelector('dialog') as HTMLDialogElement;
+    expect(dialog.textContent).toContain('Complete stored JSON');
+    expect(dialog.textContent).toContain('complete record');
+    expect(dialog.textContent).toContain('attributes.order.id');
+    expect(dialog.textContent).toContain('ord-full');
+    expect(dialog.querySelector('input[aria-label*="service in each row"]')).toBeNull();
+    expect(dialog.textContent).toContain('Pinned');
+  });
+
+  test('opens an accessible details drawer with raw JSON, field switches and zebra rows', async () => {
+    const el = await mount();
+    el.appendRows([
+      { ...logRow(1), body: '{"message":"charged","user":{"id":42}}' },
+      { ...logRow(2), body: 'plain text' },
+    ]);
+    await el.updateComplete;
+
+    const rowClasses = [...el.querySelectorAll('[data-row]')].map((row: Element) => row.className);
+    expect(rowClasses[0]).not.toBe(rowClasses[1]);
+
+    const row = el.querySelector('[data-row]') as HTMLButtonElement;
+    expect(row.tagName).toBe('BUTTON');
+    expect(row.getAttribute('aria-haspopup')).toBe('dialog');
+    row.click();
+    await el.updateComplete;
+    const dialog = el.querySelector('dialog') as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    expect(dialog.getAttribute('aria-labelledby')).toBe('live-tail-detail-title');
+    expect(dialog.textContent).toContain('Raw record');
+    expect(dialog.textContent).toContain('body.user.id');
+    expect(dialog.querySelector('input[aria-label="Show body.user.id in each row"]')).not.toBeNull();
   });
 });
 

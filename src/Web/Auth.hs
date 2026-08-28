@@ -437,7 +437,7 @@ errorPageHtml envCfg code = renderBS $ bodyWrapper def{pageTitle = title <> " â€
     h2_ [class_ "text-2xl font-semibold"] $ toHtml title
     p_ [class_ "text-textWeak max-w-md"] $ toHtml desc
     div_ [class_ "flex gap-3 mt-4"] do
-      button_ [class_ "btn btn-outline", onclick_ "history.back()"] "Go Back"
+      button_ [class_ "btn", onclick_ "history.back()"] "Go Back"
       a_ [href_ "/", class_ "btn btn-primary"] "Home"
   where
     (icon, title, desc) = errorInfo code
