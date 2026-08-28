@@ -81,7 +81,7 @@ describe('embedded log widget: refresh triggers', () => {
     const el = await embedded();
     const refetch = vi.spyOn(el as any, 'refetchLogs').mockResolvedValue(undefined);
 
-    window.dispatchEvent(new CustomEvent('update-query'));
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
 
     await vi.waitFor(() => expect(refetch).toHaveBeenCalled());
   });

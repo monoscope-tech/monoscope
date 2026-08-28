@@ -49,6 +49,18 @@ describe('auto-refresh interval', () => {
     expect(refreshes).toBe(3);
   });
 
+  test('marks timer ticks so a log list can merge rather than replace its rows', () => {
+    const sources: unknown[] = [];
+    const recordSource = (event: Event) => sources.push((event as CustomEvent).detail?.source);
+    window.addEventListener('update-query', recordSource);
+    selectInterval(15_000);
+
+    vi.advanceTimersByTime(15_000);
+
+    window.removeEventListener('update-query', recordSource);
+    expect(sources).toEqual(['auto-refresh']);
+  });
+
   // Each selection must replace the previous timer. Leaking one doubles the query
   // volume against every widget, and the dashboard gets quietly more expensive the
   // more times the user changes their mind.

@@ -225,7 +225,9 @@ window.setTimeRefreshInterval = (_transport, interval) => {
   if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
   const running = interval > 0;
   window.dashboardRefreshInterval = running ? interval : 0;
-  window.dashboardRefreshTimer = running ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query')), interval) : null;
+  window.dashboardRefreshTimer = running
+    ? setInterval(() => window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } })), interval)
+    : null;
   syncTimeTransports();
 };
 

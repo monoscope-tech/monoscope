@@ -529,6 +529,18 @@ describe('LogList — MED correctness', () => {
     expect((el as any).expandTimeRange).toBe(false);
   });
 
+  // hasMore describes the history edge. A newer-direction response naturally has no page
+  // beyond its newest row; applying that flag to history removes load-more every refresh tick.
+  test('a non-empty recent fetch does not close the history edge', async () => {
+    const el = await mountList();
+    el.transport = serverTransport(logPage(['1', '2'], { hasMore: true }), logPage(['new'], { hasMore: false }));
+    await el.fetchData('initial');
+
+    await el.fetchData('recent', false, true);
+
+    expect((el as any).hasMore).toBe(true);
+  });
+
   // Switching to an aggregate view must null the stream, not just stop it — else
   // handleLiveToggle's `!liveStream?.isRunning` guard is fine but the stale object lingers,
   // and a switch-back re-enables against a connection that is already gone.

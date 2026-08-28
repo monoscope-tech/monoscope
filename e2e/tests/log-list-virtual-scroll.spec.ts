@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { DEMO_PROJECT } from "./helpers";
 
-const URL = `/p/${DEMO_PROJECT}/log_explorer`;
+const LOG_EXPLORER_URL = `/p/${DEMO_PROJECT}/log_explorer`;
 const HARNESS_URL = process.env.LOG_LIST_HARNESS_URL;
 
 // This is intentionally a browser test rather than another jsdom geometry stub. It drives the
@@ -17,7 +17,7 @@ test("deep paging and live delivery preserve the row under the reader", async ({
         json: { logsData: [], cols: [], colIdxMap: {}, traces: [], count: 0, hasMore: false },
       }),
     );
-    await page.goto(URL, { waitUntil: "domcontentloaded" });
+    await page.goto(LOG_EXPLORER_URL, { waitUntil: "domcontentloaded" });
     await expect(page.locator("log-list")).toBeVisible();
   }
 
@@ -65,7 +65,7 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       await list.updateComplete;
       const virtualizer = list.querySelector("lit-virtualizer") as any;
       if (virtualizer?.layoutComplete) {
-        await Promise.race([virtualizer.layoutComplete, new Promise((resolve) => setTimeout(resolve, 500))]);
+        await Promise.race([virtualizer.layoutComplete.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 500))]);
       }
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     };
@@ -124,6 +124,26 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     container.scrollTop = Math.min(container.scrollHeight - container.clientHeight, 120 * 28);
     container.dispatchEvent(new Event("scroll"));
     await settle();
+
+    const refreshAnchor = topRow();
+    const refreshScrollTop = container.scrollTop;
+    list.transport = async (url: string) => {
+      calls.push(url);
+      return {
+        tree: makeRows("refresh", 200, Date.parse("2026-08-28T12:02:00Z")),
+        meta: { cols: columns, colIdxMap, traces: [], serviceColors: {}, count: COUNT + 200, hasMore: true },
+      };
+    };
+    window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } }));
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await settle();
+      if (calls.length === 7 && !list.isFetchingRecent && list.scrollSettling === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const afterRefreshAnchor = topRow();
+    const afterRefreshScrollTop = container.scrollTop;
+    const refreshRowsVisible = list.spanListTree.some((row: any) => row.id.startsWith("refresh-"));
+
     const liveAnchor = topRow();
     const liveScrollTop = container.scrollTop;
     list.isLiveStreaming = true;
@@ -154,6 +174,12 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       anchors,
       calls,
       retained: list.spanListTree.length,
+      refreshAnchor,
+      afterRefreshAnchor,
+      refreshScrollTop,
+      afterRefreshScrollTop,
+      refreshRowsVisible,
+      refreshUrl: calls[6],
       liveAnchor,
       afterLiveAnchor: topRow(),
       liveScrollTop,
@@ -169,7 +195,11 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     expect(page.scrollTop).toBeGreaterThan(0);
   }
   expect(result.retained).toBe(2_500);
-  expect(result.calls).toEqual(["older-0", "older-1", "older-2", "older-3", "older-4", "older-5"]);
+  expect(result.calls.slice(0, 6)).toEqual(["older-0", "older-1", "older-2", "older-3", "older-4", "older-5"]);
+  expect(new URL(result.refreshUrl).searchParams.get("direction")).toBe("newer");
+  expect(result.afterRefreshAnchor).toBe(result.refreshAnchor);
+  expect(result.afterRefreshScrollTop).toBeGreaterThan(result.refreshScrollTop);
+  expect(result.refreshRowsVisible).toBe(true);
   expect(result.afterLiveAnchor).toBe(result.liveAnchor);
   expect(result.afterLiveScrollTop).toBe(result.liveScrollTop);
   expect(result.buffered).toBe(200);

@@ -328,6 +328,10 @@ export class LogList extends LitElement {
   private handleUpdateQuery = (e: Event) => {
     const source = (e as CustomEvent).detail?.source || 'default';
     if (source === 'expand-timerange') return;
+    if (source === 'auto-refresh' && !this.initialFetchUrl && !this.isAggregate) {
+      void this.fetchData(this.buildRecentFetchUrl(), false, true);
+      return;
+    }
     this.debouncedRefetchLogs();
   };
   private liveBtn: HTMLInputElement | null = null;
@@ -1750,8 +1754,12 @@ export class LogList extends LitElement {
         return;
       }
 
-      this.hasMore = meta.hasMore !== false;
-      if (!this.hasMore) this.expandTimeRange = true;
+      // A newer-direction response's hasMore describes its newest edge, not the history
+      // edge rendered by the load-more row. Preserve history pagination across refresh ticks.
+      if (!isRecentFetch) {
+        this.hasMore = meta.hasMore !== false;
+        if (!this.hasMore) this.expandTimeRange = true;
+      }
       if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
