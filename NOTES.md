@@ -237,8 +237,9 @@ advisory locks for a row in a table with an owner and a TTL. Either way it deser
 that asserts the lock is *released* after `withAdvisoryLock` returns (query `pg_locks`),
 because the current bug is precisely a missing release.
 
-**Operational note for this morning — still held as of 02:37 UTC**, ~3 hours after the
-backend started, so the pool has not recycled it. If it survives until 00:00 UTC the next
+**Operational note for this morning — still held at 03:13 UTC**, on a backend that started
+23:35 UTC. Three and a half hours and the pool has not recycled it, and the connection is
+actively serving queries, so it is unlikely to recycle on its own. If it survives until 00:00 UTC the next
 daily run skips, which means no metering that day — and that directly worsens the 08-31
 clamp deadline above. I did not clear it: `pg_terminate_backend` on a live pooled
 connection aborts whatever it is running, and there were ~21 hours of margin for the pool
