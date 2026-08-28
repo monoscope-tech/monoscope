@@ -1298,7 +1298,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
         script_ [text| var widgetJSON = ${widgetJSON}; |]
         div_
           [ id_ widgetPreviewId
-          , class_ "h-full w-full"
+          , class_ "h-full w-full overflow-hidden"
           , hxPost_ ("/p/" <> pid.toText <> "/widget")
           , hxTrigger_ "intersect once, update-widget"
           , hxTarget_ "this"
