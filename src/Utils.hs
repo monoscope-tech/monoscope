@@ -1562,10 +1562,12 @@ infrastructureTabs :: [(Text, Text)]
 infrastructureTabs = [("Hosts", "/infrastructure/hosts"), ("Containers", "/infrastructure/containers"), ("Images", "/infrastructure/images"), ("Kubernetes", "/infrastructure/kubernetes"), ("Host Map", "/infrastructure/host-map")]
 
 
+-- | Marks a link whose href should pick up the page's current @from@/@to@/@since@ before it is
+-- followed. The rewrite itself lives in the bundle (@preserve-time-range@ in main.ts) — it is
+-- real imperative URL work, and inlining it re-serialized 200 characters of JS onto every nav
+-- link on every render.
 preserveTimeRangeAttrs :: [Attribute]
-preserveTimeRangeAttrs = [onmouseover_ preserve, onfocus_ preserve, onpointerdown_ preserve, onkeydown_ $ "if(event.key==='Enter'||event.key===' '){" <> preserve <> "}"]
-  where
-    preserve = "const next=new URL(this.href);const current=new URLSearchParams(location.search);['from','to','since'].forEach((key)=>{const value=current.get(key);if(value)next.searchParams.set(key,value)});this.href=next.toString()"
+preserveTimeRangeAttrs = [data_ "preserve-time-range" ""]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.

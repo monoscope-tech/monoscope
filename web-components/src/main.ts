@@ -268,6 +268,32 @@ window.shiftTimeRange = (direction) => {
   else window.setParams({ since: '', from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() }, true);
 };
 
+// Carry the page's time range onto a nav link before it is followed. Delegated and rewritten
+// just-in-time rather than at render: the range changes without a reload, so an href baked in
+// at render time goes stale the moment someone moves the time picker.
+function preserveTimeRange(target: EventTarget | null) {
+  const link = (target as Element | null)?.closest?.('a[data-preserve-time-range]') as HTMLAnchorElement | null;
+  if (!link) return;
+  const next = new URL(link.href);
+  const current = new URLSearchParams(window.location.search);
+  for (const key of ['from', 'to', 'since']) {
+    const value = current.get(key);
+    if (value) next.searchParams.set(key, value);
+  }
+  link.href = next.toString();
+}
+
+for (const type of ['pointerover', 'focusin', 'pointerdown'] as const) {
+  document.addEventListener(type, (e) => preserveTimeRange(e.target), { capture: true });
+}
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if (e.key === 'Enter' || e.key === ' ') preserveTimeRange(e.target);
+  },
+  { capture: true }
+);
+
 window.addEventListener('setRefreshInterval', (event) => {
   const interval = Number((event as CustomEvent<{ interval?: number | string }>).detail?.interval);
   if (Number.isFinite(interval)) window.setTimeRefreshInterval(null, interval);

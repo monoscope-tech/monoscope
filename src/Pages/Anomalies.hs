@@ -82,7 +82,7 @@ import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSi
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), FilterMenu (..), FilterOption (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
@@ -1501,8 +1501,8 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
           , baseUrl = baseUrl
           , targetId = "anomalyListContainer"
           }
-      serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
-      typeMenu = FilterMenu{label = "Type", paramName = "type", multiSelect = True, options = map (\t -> FilterOption{label = t, value = t, isActive = t `elem` typeFilters}) availableTypes}
+      serviceMenu = multiSelectFilter "Service" "service" serviceFilters availableServices
+      typeMenu = multiSelectFilter "Type" "type" typeFilters availableTypes
       issuesVM = V.fromList $ map (IssueVM False currTime filterV) issues
       tableActions =
         TableHeaderActions

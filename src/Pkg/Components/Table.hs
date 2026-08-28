@@ -21,6 +21,7 @@ module Pkg.Components.Table (
   FilterOption (..),
   facetValues,
   singleSelectFilter,
+  multiSelectFilter,
   facetActions,
   -- Sorting types and utilities
   SortOrder (..),
@@ -261,14 +262,25 @@ facetValues :: (a -> Maybe Text) -> V.Vector a -> [Text]
 facetValues getter = Relude.sort . ordNub . filter (not . T.null) . mapMaybe getter . V.toList
 
 
-singleSelectFilter :: Text -> Text -> Maybe Text -> [Text] -> FilterMenu
-singleSelectFilter label paramName selected values =
+-- | A facet menu over @values@, marking those in @selected@ active. Single-select is the
+-- same menu with at most one selection, so both go through here rather than each call site
+-- assembling 'FilterMenu'/'FilterOption' by hand.
+filterMenu :: Bool -> Text -> Text -> [Text] -> [Text] -> FilterMenu
+filterMenu multiSelect label paramName selected values =
   FilterMenu
     { label
     , paramName
-    , options = [FilterOption value value (Just value == selected) | value <- values]
-    , multiSelect = False
+    , options = [FilterOption value value (value `elem` selected) | value <- values]
+    , multiSelect
     }
+
+
+singleSelectFilter :: Text -> Text -> Maybe Text -> [Text] -> FilterMenu
+singleSelectFilter label paramName selected = filterMenu False label paramName (maybeToList selected)
+
+
+multiSelectFilter :: Text -> Text -> [Text] -> [Text] -> FilterMenu
+multiSelectFilter = filterMenu True
 
 
 -- | Header actions for a filter-only inventory table. The active-filter chips are read back

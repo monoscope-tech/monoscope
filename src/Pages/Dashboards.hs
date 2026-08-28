@@ -1818,7 +1818,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
               }
-          tagFilterMenu = Table.FilterMenu{label = "Tags", paramName = "tag", multiSelect = True, options = map (\t -> Table.FilterOption{label = t, value = t, isActive = t `elem` filters.tag}) availableTags}
+          tagFilterMenu = Table.multiSelectFilter "Tags" "tag" filters.tag availableTags
           tableActions =
             Just
               Table.TableHeaderActions
