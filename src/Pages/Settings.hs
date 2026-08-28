@@ -87,6 +87,7 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -336,9 +337,10 @@ apiKeysPage pid apiKeys = do
         iconBadgeLg_ BrandBadge "key"
         span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
         form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ settingsContentTarget] do
-          div_ [class_ "flex flex-col"] do
-            p_ [class_ "text-textWeak"] "Please input a title for your API key."
-            div_ $ input_ [class_ "input px-4 py-2 mt-6 border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", required_ "true", maxlength_ "100"]
+          div_ [class_ "flex flex-col gap-1.5"] do
+            label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
+            p_ [class_ "text-xs text-textWeak"] "Use a name that identifies where this key is used."
+            input_ [id_ "api-key-title", class_ "input px-4 py-2 border w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off"]
           div_ [class_ "flex w-full"] $ button_ [type_ "submit", class_ "btn btn-primary w-full"] "Create key"
     apiMainContent pid apiKeys Nothing
 
@@ -376,21 +378,23 @@ apiKeyColumns pid =
       -- Keyed by key id, not row index — the active and archived tables both index from 0.
       let revealId = "reveal-key-" <> apiKey.id.toText
       div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
-        input_ [type_ "checkbox", id_ revealId, class_ "sr-only"]
+        input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
         span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
         span_ [class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
         div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left", data_ "tip" "Show key"]
+          let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
+          label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
             $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left", data_ "tip" "Hide key"]
+          label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivate]
             $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
           button_
-            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left"
+            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
             , type_ "button"
+            , Aria.label_ $ "Copy " <> apiKey.title
             , term "data-key" apiKey.keyPrefix
             , [__| on click if 'clipboard' in window.navigator then
                             call navigator.clipboard.writeText(my @data-key)
-                            send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
+                            send successToast(value:['API key copied to clipboard']) to <body/>
                           end |]
             , data_ "tip" "Copy key"
             ]
@@ -399,9 +403,11 @@ apiKeyColumns pid =
                 if apiKey.active
                   then ("hover:bg-fillError-weak", hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
                   else ("hover:bg-fillSuccess-weak", hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
-              confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API Key?"
+              confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
           button_
-            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left " <> hoverCls
+            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> hoverCls
+            , type_ "button"
+            , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
             , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
             , hxConfirm_ confirmMsg
             , hxTarget_ settingsContentTarget

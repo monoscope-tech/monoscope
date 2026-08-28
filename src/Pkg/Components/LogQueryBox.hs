@@ -139,7 +139,7 @@ logQueryBox_ config = do
               do
                 faSprite_ "arrow-right" "regular" "h-4 w-4"
                 "Submit"
-            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse AI search"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+            label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Collapse AI search", class_ "cursor-pointer p-1 focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tippy-content" "Collapse AI search", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
           -- Above the editor, not below it: the suggestions dropdown opens downward
           -- over that space and hid the message while the user was typing the query
@@ -409,10 +409,10 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
                  else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved")
-        $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-8", role_ "tablist"] do
-          input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
+        $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
+          input_ [class_ "sr-only", type_ "checkbox", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]
+          span_ [Aria.hidden_ "true", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
+          span_ [Aria.hidden_ "true", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
 
 
 hidePopoverJS :: Text
@@ -499,7 +499,7 @@ queryLibItem_ isRecent qli =
   where
     actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
     actionBtn_ tip icon attrs =
-      button_ ([type_ "button", class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
+      button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
         $ faSprite_ icon "regular" "h-3 w-3"
 
 

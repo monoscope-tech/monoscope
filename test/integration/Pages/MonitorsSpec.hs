@@ -4,13 +4,15 @@ import Data.Vector qualified as V
 import Models.Apis.Monitors
 import Test.Hspec
 
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as LT
 import Data.UUID qualified as UUID
+import Lucid qualified
 import Pkg.TestUtils
 
 import Pages.Monitors qualified as Alerts
 import Relude
 import Relude.Unsafe qualified as Unsafe
-
 
 
 alertId :: UUID.UUID
@@ -92,3 +94,12 @@ spec = sequential $ aroundAll withTestResources do
           monitor.alertThreshold `shouldBe` 1
           monitor.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
+
+    it "monitorRowActions_haveAccessibleNames" \tr -> do
+      _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
+      (_, page) <- testServant tr $ Alerts.unifiedMonitorsGetH testPid Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      for_ ["Deactivate", "Mute", "Delete"] \action ->
+        html `shouldSatisfy` T.isInfixOf ("aria-label=\"" <> action <> "\"")
+      html `shouldSatisfy` T.isInfixOf ("id=\"mute-pop-" <> UUID.toText alertId <> "-desktop\"")
+      html `shouldSatisfy` T.isInfixOf ("id=\"mute-pop-" <> UUID.toText alertId <> "-mobile\"")

@@ -10,7 +10,7 @@ colors:
   bg-overlay: "oklch(99.1% 0.002 247)"
   bg-inverse: "oklch(16.4% 0.012 263)"
   text-strong: "oklch(14.4% 0.069 263 / 0.9)"
-  text-weak: "oklch(16.7% 0.086 263 / 0.65)"
+  text-weak: "oklch(16.7% 0.086 263 / 0.84)"
   text-disabled: "oklch(21.2% 0.117 264 / 0.45)"
   stroke-weak: "oklch(25.2% 0.146 264 / 0.1)"
   stroke-strong: "oklch(21.2% 0.117 264 / 0.45)"

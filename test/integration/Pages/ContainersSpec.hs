@@ -301,7 +301,7 @@ spec = sequential $ aroundAll withTestResources do
       V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\""]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\""]
       T.isInfixOf "<details open=\"\" class=\"group/summary" html `shouldBe` False
       T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
@@ -330,7 +330,7 @@ spec = sequential $ aroundAll withTestResources do
       Icons.lookupIcon "regular" "download" `shouldSatisfy` isJust
       (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
-        `shouldContainAll` ["Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Group by", "Customize", "LIVE", "Last 15 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts"]
+        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 15 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts"]
 
       (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
@@ -338,7 +338,7 @@ spec = sequential $ aroundAll withTestResources do
 
       (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
-        `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail"]
+        `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail"]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap

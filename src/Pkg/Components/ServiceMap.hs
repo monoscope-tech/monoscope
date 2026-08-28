@@ -148,7 +148,7 @@ nodeCardTemplate_ :: Html ()
 nodeCardTemplate_ =
   template_ [term "data-node-card" ""] $ do
     div_
-      [ class_ "absolute flex w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-[11px] leading-[15px] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong"
+      [ class_ "absolute flex w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-xs leading-4 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong"
       , term "data-node" ""
       , tabindex_ "0"
       ]
@@ -249,7 +249,7 @@ dependencyTable_ graph = details_ [class_ "group border border-strokeStrong roun
   div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full text-xs"] do
     thead_ [class_ "text-textWeak border-b border-strokeWeak"]
       $ tr_
-      $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95"]
+      $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95 latency"]
       $ \h -> th_ [class_ "text-left font-medium px-3 py-1.5 whitespace-nowrap"] h
     tbody_ $ forM_ (sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)) \e -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
       td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay graph e.source

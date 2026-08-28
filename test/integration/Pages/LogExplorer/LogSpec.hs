@@ -780,6 +780,8 @@ spec = around withTestResources do
       -- "dataset.query)" is the raw pass-through; the Run button renders "dataset.query, true".
       html `shouldSatisfy` T.isInfixOf "dataset.query)"
       html `shouldNotSatisfy` T.isInfixOf "JSON.parse"
+      for_ ["Run this query", "Copy query to clipboard", "Edit query title", "Delete query", "Show all team queries"] \action ->
+        html `shouldSatisfy` T.isInfixOf ("aria-label=\"" <> action <> "\"")
     -- Mutations used to be smuggled through the log-fetch GET via ?layout=.
     -- They are now their own POST/DELETE endpoints; this exercises the full
     -- create → rename → delete round-trip through the DB.

@@ -594,6 +594,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
         ( Utils.drawerLoadAttrs_ url
             <> maybe [] (pure . hxPushUrl_) widget.expandPushUrl
             <> [ class_ "p-2 cursor-pointer tap-target"
+               , Aria.label_ "Expand widget"
                , data_ "tippy-content" "Expand widget"
                ]
         )
@@ -602,8 +603,8 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
       $ let pid = projectIdText widget
             dashId = maybeToMonoid widget._dashboardId
          in button_
-              [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 touch:opacity-100 tap-target transition-opacity"
-              , title_ "Expand widget"
+              [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
+              , Aria.label_ "Expand widget"
               , data_ "tippy-content" "Expand widget"
               , data_ "expand-btn" wId
               , term
@@ -1270,10 +1271,13 @@ renderTableWithDataAndParams widget dataRows params = do
         V.forM_ dataRows \row -> do
           let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
               rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
+              isCurrent = Just rowValue == currentVar
           tr_
-            [ class_ $ "hover cursor-pointer" <> memptyIfFalse (Just rowValue == currentVar) " bg-fillBrand-strong/20 border-l-4 border-strokeBrand-strong"
-            , data_ "row" $ encodeText $ AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
-            ]
+            ( [ class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"
+              , data_ "row" $ encodeText $ AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
+              ]
+                <> [term "aria-current" "true" | isCurrent]
+            )
             $ ifor_ columns \idx col ->
               td_ [class_ $ cellClass col]
                 $ if isJust col.progress

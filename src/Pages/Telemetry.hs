@@ -1215,19 +1215,24 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 input_
                   [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
                   , type_ "text"
-                  , placeholder_ "Search"
+                  , Aria.label_ "Search spans"
+                  , placeholder_ "Search spans"
                   , id_ "search-input"
                   , [__| on input show .span-filterble in #trace_span_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
                   ]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ decodeUtf8 $ AE.encode $ (.spanId) <$> spanRecords] do
                   button_
-                    [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong  cursor-pointer"
+                    [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer"
+                    , Aria.label_ "Previous matching span"
+                    , term "data-tippy-content" "Previous matching span"
                     , onpointerdown_ "navigateSpans('prev')"
                     ]
                     $ faSprite_ "chevron-up" "regular" "w-3 h-3"
                   button_
                     [ class_ "h-6 w-6 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-strokeWeak text-textStrong cursor-pointer"
+                    , Aria.label_ "Next matching span"
+                    , term "data-tippy-content" "Next matching span"
                     , onpointerdown_ "navigateSpans('next')"
                     ]
                     $ faSprite_ "chevron-down" "regular" "h-3 w-3"

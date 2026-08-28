@@ -13,6 +13,7 @@ import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, serviceGraphForRange)
@@ -74,6 +75,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
     input_
       [ type_ "search"
       , class_ "ml-auto input input-sm border border-strokeWeak bg-fillWeaker rounded-lg w-56 max-md:w-32"
+      , Aria.label_ "Filter services"
       , placeholder_ "Filter services"
       , -- `call`, not `send`: hyperscript parses an event name as an identifier path, so a
         -- dashed custom-event name is a parse error and the whole attribute is dropped.

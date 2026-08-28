@@ -1583,8 +1583,9 @@ starButton_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> Html ()
 starButton_ pid dashId isStarred =
   button_
     [ id_ $ "star-btn-" <> dashId.toText
-    , class_ $ "leading-none cursor-pointer " <> if isStarred then "" else "opacity-0 group-hover/row:opacity-100"
-    , data_ "tippy-content" $ if isStarred then "Click to unstar this dashboard" else "Click to star this dashboard"
+    , class_ $ "inline-flex h-6 w-6 items-center justify-center rounded leading-none cursor-pointer focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 " <> if isStarred then "" else "opacity-0 group-hover/row:opacity-100"
+    , Aria.label_ $ if isStarred then "Remove dashboard from favorites" else "Add dashboard to favorites"
+    , data_ "tippy-content" $ if isStarred then "Remove from favorites" else "Add to favorites"
     , hxPost_ $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/star"
     , hxTarget_ $ "#star-btn-" <> dashId.toText
     , hxSwap_ "outerHTML"

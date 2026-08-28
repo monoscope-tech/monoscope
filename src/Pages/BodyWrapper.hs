@@ -184,6 +184,8 @@ data BWConfig = BWConfig
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
   let isProd = bcfg.config.environment /= Dev
+      initialTheme = maybe "dark" (.theme) bcfg.sessM
+      themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
   doctype_
   html_ [lang_ "en"] do
     head_ do
@@ -205,7 +207,7 @@ bodyWrapper bcfg child = do
       link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
       link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
-      meta_ [name_ "theme-color", content_ "#ffffff"]
+      meta_ [name_ "theme-color", content_ themeColor, id_ "theme-color-meta"]
 
       -- Resource hints. Avatars are served from /api/avatar (same origin) and easepick's
       -- CSS is self-hosted now, so only the origins actually contacted are listed — an
@@ -368,7 +370,7 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-preload:inherited" "mouseover"] do
+    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" initialTheme, term "hx-preload:inherited" "mouseover"] do
       -- Skip to main content link for keyboard users (accessibility)
       a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
       -- ARIA live region for toast announcements (screen reader accessibility)
@@ -468,6 +470,7 @@ bodyWrapper bcfg child = do
             const newTheme = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
             document.documentElement.classList.add('no-transition');
             document.body.setAttribute('data-theme', newTheme);
+            document.getElementById('theme-color-meta').content = newTheme === 'dark' ? '#060708' : '#fbfcfd';
             setCookie('theme', newTheme, 365);
             syncThemeToggles(newTheme);
             requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
@@ -478,13 +481,17 @@ bodyWrapper bcfg child = do
             const savedTheme = getCookie('theme');
             if (!savedTheme) {
               const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-              document.body.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+              const theme = prefersDark ? 'dark' : 'light';
+              document.body.setAttribute('data-theme', theme);
+              document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
             }
             // Watch for OS theme changes (only if user hasn't manually set)
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
               if (!getCookie('theme')) {
                 document.documentElement.classList.add('no-transition');
-                document.body.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+                const theme = e.matches ? 'dark' : 'light';
+                document.body.setAttribute('data-theme', theme);
+                document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
                 requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
               }
             });
@@ -575,7 +582,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         button_
           ( [ type_ "button"
             , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
-            , Aria.haspopup_ "listbox"
+            , Aria.haspopup_ "dialog"
             , Aria.label_ $ "Switch project, current: " <> project.title
             ]
               <> tippyRight_ (project.title <> " — Switch project")
@@ -585,11 +592,33 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
             span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
-        div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
+        div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "dialog", Aria.label_ "Project switcher"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
-      label_ ([term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeak hover:text-textStrong flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (bool "true" "false" sess.isSidebarClosed), Aria.controls_ "side-nav-menu"] <> tippyRight_ "Expand sidebar" <> [[__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]]) do
-        faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
-      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
+      label_
+        ( [ term "for" "sidenav-toggle"
+          , role_ "button"
+          , tabindex_ "0"
+          , class_ "max-md:hidden cursor-pointer text-textWeak hover:text-textStrong flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2"
+          , Aria.label_ "Toggle sidebar"
+          , Aria.expanded_ (bool "true" "false" sess.isSidebarClosed)
+          , Aria.controls_ "side-nav-menu"
+          , [__|on keydown[key=='Enter' or key==' ']
+                  halt the event
+                  call me.click()
+                end
+                on change from #sidenav-toggle
+                  if #sidenav-toggle.checked
+                    set @aria-expanded to 'false'
+                  else
+                    set @aria-expanded to 'true'
+                  end
+                end|]
+          ]
+            <> tippyRight_ "Expand sidebar"
+        )
+        do
+          faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
+      label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Close menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
     let searchScript = [__|on click send paletteToggle to #cmd-palette-global|]
     div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
@@ -662,7 +691,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
       faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
     -- Collapsed: centered icon button
-    label_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"] <> tippyRight_ "Toggle dark mode") do
+    button_ ([type_ "button", class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"] <> tippyRight_ "Toggle dark mode") do
       span_ [class_ "dark:hidden"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
       span_ [class_ "hidden dark:inline-flex"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
 
@@ -710,24 +739,28 @@ navbar bcfg menuL =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
       whenJust bcfg.currProject \_ -> do
-        label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
+        label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
         a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
-      let targetPage = Components.getTargetPage bcfg.pageTitle
-      if targetPage /= "" && isJust bcfg.pageTitleSuffix
-        then whenJust bcfg.currProject \p -> a_ ([class_ "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
-        else label_ [class_ "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid bcfg.pageTitleModalId, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
-      -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
-      span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
-        faSprite_ "chevron-right" "regular" "w-3 h-3"
-        -- Make tab name clickable if modal ID is provided
-        case bcfg.pageTitleSuffixModalId of
-          Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
-          Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
+      h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
+        let targetPage = Components.getTargetPage bcfg.pageTitle
+            titleClass = "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong"
+            keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
+        if targetPage /= "" && isJust bcfg.pageTitleSuffix
+          then whenJust bcfg.currProject \p -> a_ ([class_ $ titleClass <> " hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+          else case bcfg.pageTitleModalId of
+            Just modalId -> label_ [class_ $ titleClass <> " cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
+            Nothing -> span_ [class_ titleClass, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+        -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
+        span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
+          faSprite_ "chevron-right" "regular" "w-3 h-3"
+          case bcfg.pageTitleSuffixModalId of
+            Just modalId -> label_ [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleSuffixText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> suffix, keyboardActivate] $ toHtml suffix
+            Nothing -> span_ [class_ "font-medium text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
@@ -828,10 +861,10 @@ settingsWrapper pid current pageHtml =
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full [&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"] do
         li_ [class_ "md:hidden shrink-0"]
-          $ label_ [term "for" "mobile-nav-toggle", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu"]
+          $ label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
-    main_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto"] do
+    section_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto", Aria.label_ current] do
       div_ [id_ settingsLoadingId, class_ "htmx-indicator absolute inset-0 z-10 bg-bgBase/60 flex items-center justify-center"] do
         loadingIndicatorWith_ LdMD LdSpinner "text-textBrand"
       pageHtml

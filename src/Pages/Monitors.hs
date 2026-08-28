@@ -535,13 +535,13 @@ renderNameCol item = do
       si = statusInfo item.currentStatus
       isActive = item.status == "Active"
       inlineBtn tip icon hxAction extraAttrs =
-        button_ ([type_ "button", data_ "tip" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target tooltip tooltip-top", hxSwap_ "none", hxAction] <> extraAttrs)
+        button_ ([type_ "button", Aria.label_ tip, data_ "tip" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target tooltip tooltip-top", hxSwap_ "none", hxAction] <> extraAttrs)
           $ faSprite_ icon "regular" "h-3.5 w-3.5"
-      actionBtns = do
+      actionBtns suffix = do
         inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
         if isJust item.mutedUntil
           then inlineBtn "Unmute" "bell" (hxPost_ $ alertBase <> "/unmute") []
-          else durationMenu_ ("mute-pop-" <> item.monitorId) "Mute for…" (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
+          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
             inlineBtn "Mute" "bell-slash" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ alertBase <> "/resolve") []
         inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
@@ -555,7 +555,7 @@ renderNameCol item = do
          in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0 tooltip tooltip-top", data_ "tip" muteLabel] do
               faSprite_ "bell-slash" "regular" "h-3 w-3"
               toHtml muteLabel
-      div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] actionBtns
+      div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] $ actionBtns "-desktop"
     div_ [class_ "flex items-center gap-1.5"]
       $ span_ [class_ "text-xs text-textStrong/70 font-mono max-md:line-clamp-1 line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query]
       $ toHtml item.details.query
@@ -568,7 +568,7 @@ renderNameCol item = do
           span_ [class_ "text-textWeak/40"] "\xb7"
           span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> item.details.triggerDirection
         forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
-      div_ [class_ "flex gap-1 items-center shrink-0"] actionBtns
+      div_ [class_ "flex gap-1 items-center shrink-0"] $ actionBtns "-mobile"
 
 
 data StatusInfo = StatusInfo {dotColor :: Text, statusLabel :: Text, rank :: Int, textColor :: Text}
@@ -895,6 +895,7 @@ alertNotificationsTab_ alert teams = do
             button_
               [ type_ "button"
               , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
+              , Aria.label_ $ "Remove " <> team.name <> " team"
               , term "data-tippy-content" "Remove team"
               , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
               , hxTarget_ $ "#" <> team.handle

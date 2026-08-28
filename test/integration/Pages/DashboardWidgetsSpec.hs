@@ -131,10 +131,15 @@ spec = sequential $ aroundAll withTestResources do
       let metricCard = (widgetOf Widget.WTTimeseriesLine "metric"){Widget.layout = Just def{Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}}
       normalized <- onlyWidget $ Widget.normalizeWidgetLayouts [metricCard]
       (normalized.layout >>= (.w), normalized.layout >>= (.h)) `shouldBe` (Just 2, Just 3)
+      toStrict (renderText $ Widget.widget_ metricCard{Widget.expandBtnFn = Just "/details"})
+        `shouldSatisfy` T.isInfixOf "aria-label=\"Expand widget\""
 
       _ <- newDashboard tr "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
       toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "successToast"
+      (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+      toStrict (renderText $ toHtml dashboards)
+        `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
 
   -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
   -- resize it, then re-read the dashboard the way the next page load does. Every type goes

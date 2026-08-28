@@ -174,7 +174,7 @@
   --color-textInverse-strong: oklch(100% 0 0);
   --color-textInverse-weak: oklch(100% 0 0 / 0.78);
   --color-textStrong: oklch(14.4% 0.069 263 / 0.9);
-  --color-textWeak: oklch(16.7% 0.086 263 / 0.65);
+  --color-textWeak: oklch(16.7% 0.086 263 / 0.84);
   --animate-fadeBg: fadeBg 2s ease-out;
 
 

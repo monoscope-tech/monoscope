@@ -925,12 +925,14 @@ untilLabel what now until'
 
 periodToggle_ :: Text -> Text -> Text -> Html ()
 periodToggle_ baseUrl targetId currentPeriod =
-  span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden"] do
+  span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden", role_ "group", Aria.label_ "Activity window"] do
     forM_ ["24h" :: Text, "7d" :: Text] \val ->
       let url = deleteParam "period" baseUrl <> "&period=" <> val
        in button_
             [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
             , type_ "button"
+            , Aria.label_ $ "Show " <> val <> " activity"
+            , term "aria-pressed" $ bool "false" "true" (val == currentPeriod)
             , hxGet_ url
             , hxTarget_ $ "#" <> targetId
             , hxSelect_ $ "#" <> targetId

@@ -334,7 +334,7 @@ spec = around withTestResources do
           ]
       -- ...and is legible in the rendered page without running any JavaScript: the
       -- dependency table is what a shared link opened on a phone actually shows.
-      html `shouldContainAll` ["Entry point", "gateway", "checkout", "orders", "orders.v1", "Dependencies (4)"]
+      html `shouldContainAll` ["Entry point", "gateway", "checkout", "orders", "orders.v1", "Dependencies (4)", "p95 latency"]
       -- The canvas hydrates from the embedded payload rather than an extra round trip.
       html `shouldContainAll` ["data-service-map", "global-service-map-data", "global-service-map-colors"]
       html `shouldContainAll` ["aria-label=\"Service colors\"", "data-service-color=\"gateway\"", "data-service-color=\"checkout\""]
@@ -347,7 +347,7 @@ spec = around withTestResources do
     it "serviceMapFilter_wiresTheInputWithoutADashedSend" \tr -> do
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
-      html `shouldContainAll` ["call window.serviceMapFilter(me.value)"]
+      html `shouldContainAll` ["call window.serviceMapFilter(me.value)", "aria-label=\"Filter services\""]
       T.isInfixOf "service-map-filter&quot;(" html `shouldBe` False
 
     -- The trace-level map: same grammar, scoped to one request. It is derived from spans
@@ -382,6 +382,9 @@ spec = around withTestResources do
                            , "Timeline"
                            , "Services"
                            , ">Map<"
+                           , "aria-label=\"Search spans\""
+                           , "aria-label=\"Previous matching span\""
+                           , "aria-label=\"Next matching span\""
                            ]
 
       -- The graph is serialised into the page, so a shared trace link needs no fetch. It
