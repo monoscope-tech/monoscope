@@ -87,7 +87,7 @@ Explorer nav link; it is one delegated listener in `main.ts` keyed on
 without a reload. `singleSelectFilter` gained a `multiSelectFilter` sibling over a
 shared builder; Anomalies and Dashboards no longer hand-build `FilterMenu`.
 
-## Refactor sweep — branch `refactor-sweep` (this worktree, NOT pushed)
+## Refactor sweep — branch `refactor-sweep` (pushed to origin, NOT merged)
 
 Working in a worktree because the other session is editing `Dashboards`, `Anomalies`,
 `Monitors`, `Settings`, `Infrastructure`, `Containers`, `BodyWrapper`, `ServiceMap`,
@@ -101,7 +101,7 @@ Full suite otherwise: 758 examples, 2 failures, 28 pending.
 (The main checkout reports 758 with 2 failures — the extra example and both failures are
 the other session's uncommitted spec edits, not something lost here: `ReportUsageSpec` has
 16 `it` blocks before and after my change.)
-library compiles clean (125 modules, 2 pre-existing warnings); fourmolu + hlint clean.
+Library compiles clean (125 modules, 2 pre-existing warnings); fourmolu + hlint clean.
 Not merged — review and merge when the other session's work settles.
 
 ### Reviewed

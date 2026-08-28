@@ -227,6 +227,17 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                     Just (ackId, b64Msg)
                 )
                 messages
+        -- A message with no ackId or no decodable payload falls out of the mapMaybe above,
+        -- and because its ackId never reaches the acknowledge call it is redelivered
+        -- forever. Silent either way, so say it: never drop ingest data without a signal.
+        let droppedCount = length messages - length validMsgs
+        when (droppedCount > 0)
+          $ liftIO
+          $ runLogT "pubsub-service" appLogger LogAttention
+          $ LogBase.logAttention
+            "pubsubService: undecodable messages skipped (no ackId or no data) — these will redeliver"
+            (AE.object ["topic" AE..= topic, "dropped" AE..= droppedCount, "received" AE..= length messages])
+
         let msgAttrs = maybeToMonoid $ messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
         msgIds <-
