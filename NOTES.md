@@ -21,7 +21,10 @@ per week: 3 (May) → 719 → 4098 → 4234 → 1330. Total 10,384.
   nullable column, non-`Maybe` field; `trigger_less_than` had no default either).
 - Regression test: `neverEvaluatedMonitor_isDueImmediatelyAndDoesNotBlindTheOthers`.
 
-**Verify after deploy:** `QueryMonitorsCheck` failures should stop; monitors resume.
+**Verified in production after the deploy (finished 2026-08-28 00:55 UTC):**
+`QueryMonitorsCheck` failures were 11 in the 00:00 hour and **zero** since. All **13 of 13**
+active monitors have a `last_evaluated` inside the last 45 minutes. Alerting is live again
+after three weeks dark.
 
 ### 2. Billing — diagnosed, partially fixed, one decision left for you
 
@@ -50,6 +53,12 @@ next 00:00 UTC DailyJob.
 (≈323M billable units per earlier analysis) or TestCorp (the public demo project) starts
 real invoicing. Left untouched.
 
+**Timing note:** the 00:00 UTC DailyJob on 08-28 ran *before* the deploy finished (00:55),
+so it still emitted the old log lines — DSI-APP logged "Reporting usage" at 00:00:23 and
+again did not advance, consistent with the empty sub-item. The new `Counting usage` /
+`Usage reporting skipped` lines will first appear at the **next** 00:00 UTC run, which is
+what will finally discriminate Talstack Prod. Nothing to do but read the log then.
+
 **Deadline:** `usageWindowStart` clamps to 7 countable days. The 08-23/08-24 group's gap
 becomes permanently unbillable ~**08-31**. The 07-17 group is already past recovery.
 
@@ -71,15 +80,42 @@ Working in a worktree because the other session is editing `Dashboards`, `Anomal
 `LogSpec:784` assert `aria-label`s whose source changes have not landed yet.
 Full suite otherwise: 758 examples, 2 failures, 28 pending.
 
+**Branch state:** full integration suite **757 examples, 0 failures, 28 pending**;
+library compiles clean (125 modules, 2 pre-existing warnings); fourmolu + hlint clean.
+Not merged — review and merge when the other session's work settles.
+
 ### Reviewed
 
 - `ProcessMessage.hs` — **no findings**. Dense but genuinely well-built: doctests on every
   pure helper, rationale comments, idiomatic combinators. Forcing changes would be churn.
 - `BackgroundJobs.hs` — `processBackgroundJob` was 657 lines. ~40 arms correctly delegate
-  to named functions, but `ReportUsage` had its entire 133-line implementation inline.
-  Extracted to `reportUsageForProject`, matching the file's own convention. Payoff:
-  the billing gate is now reachable from a test, and `BillingSpec` is the first spec
-  this codebase has ever had for revenue-critical code.
+  to named functions; five did not. `ReportUsage` (133 lines), `TrialEndingReminder`,
+  `CleanupDemoProject`, `ErrorAssigned` and `SendDiscordData` now delegate too, so the
+  rule the file already follows holds everywhere. Payoff beyond tidiness: the billing
+  gate became reachable from a spec.
+- `Data/Effectful/Notify.hs` — a **file-wide** `-Wno-redundant-constraints` was hiding
+  exactly one thing: `sendSlack` declared `Reader AuthContext` and never read it. An
+  effect row is a capability claim, so that is a false claim. Constraint and pragma both
+  gone; the file is clean under `-Werror=redundant-constraints`.
+- `Pages/CodeContext.hs` — `nonBlank` was `Utils.nonEmptyT` re-implemented with `guarded`
+  instead of `mfilter`. Deleted; 8 call sites use the shared one.
+- **No findings** (reviewed, nothing worth changing): `Web/ApiHandlers.hs` (103 small
+  functions, already has `withRefetchNoContent`/`notFoundOr` helpers), `Pkg/LiveTail.hs`,
+  `Pages/Replay.hs`, `Models/Apis/Issues.hs`, `Pkg/EmailTemplates.hs`. Their `_ ->`
+  catch-alls are all on `Text` or on byte/char parsing — open domains, which the
+  guidelines explicitly allow — and their `String`s are `Either String` from aeson/Minio
+  at the boundary.
+
+### Honest assessment of "we shipped with no regard for code quality"
+
+The evidence does not support that. Across the whole tree: no `fromJust`/`head` outside
+`Devel.hs`, every remaining manual `ToJSON`/`FromJSON`/`FromField` instance is an orphan
+for a foreign type that *cannot* be derived (`Either`, `CI Text`, `ByteString`, `Map`),
+only eight warning suppressions exist and seven were justified, and the long functions
+are mostly long *type definitions*, not long bodies. The real finds tonight were three
+narrow ones, all now fixed. What the codebase is short of is not tidiness but **tests on
+the revenue path** — before tonight the billing gate had coverage that tested `NULL`
+where production failed on `""`.
 
 ### Identified, deliberately NOT done
 
