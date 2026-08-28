@@ -26,14 +26,8 @@ import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
+import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT)
 import Web.FormUrlEncoded (FromForm)
-
-
--- | Absent and blank mean the same thing here: form fields and span attributes both arrive
--- as @""@ rather than missing.
-nonBlank :: Maybe Text -> Maybe Text
-nonBlank = (>>= guarded (not . T.null))
 
 
 -- | Source around one stack frame, read from the repository linked to the project.
@@ -48,9 +42,9 @@ codeContextH :: Projects.ProjectId -> Maybe Text -> Maybe Int -> Maybe Text -> M
 codeContextH pid fileM lineM svcM revM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  case (nonBlank fileM, lineM) of
+  case (nonEmptyT fileM, lineM) of
     (Just path, Just n) ->
-      W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonBlank revM) path n)
+      W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
         . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
@@ -186,10 +180,10 @@ repoConn cfg cred = do
 codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
 codeMappingsPostH pid form = do
   credM <- codeContextCredential pid
-  let sample = nonBlank form.samplePath
-  case (credM, nonBlank form.repo) of
+  let sample = nonEmptyT form.samplePath
+  case (credM, nonEmptyT form.repo) of
     (Just cred, Just repo) -> do
-      let ref = fromMaybe "main" $ nonBlank form.ref
+      let ref = fromMaybe "main" $ nonEmptyT form.ref
           repoRef = GitSync.RepoRef cred.account repo ref
           typed = (fromMaybe "" form.pathPrefix, fromMaybe "" form.sourceRoot)
       derived <- case sample of
@@ -198,7 +192,7 @@ codeMappingsPostH pid form = do
       case derived of
         Left err -> addErrorToast "Could not work out the mapping" (Just err)
         Right (prefix, root) -> do
-          let svc = nonBlank form.service
+          let svc = nonEmptyT form.service
           -- The row is keyed on (service, path prefix), so a second repository added with the
           -- same scope silently takes the first one's place. Saying so beats leaving someone
           -- to work out why the repo they linked five minutes ago stopped resolving.

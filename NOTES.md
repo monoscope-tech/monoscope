@@ -81,6 +81,32 @@ Full suite otherwise: 758 examples, 2 failures, 28 pending.
   the billing gate is now reachable from a test, and `BillingSpec` is the first spec
   this codebase has ever had for revenue-critical code.
 
+### Identified, deliberately NOT done
+
+**1. `queryEditorInitializationCode` (LogQueryBox.hs) — ~180 lines of JS in a Haskell
+string.** It defines nine `window.*` globals and interpolates only three Haskell values
+(`$vizType`, `$schemaUrl`, `$popularQueriesJson`), so it looks like a clean move to the
+bundle. It is not: the block re-executes per render on HTMX morph swaps and relies on
+`customElements.whenDefined` plus proximity to `#filterElement`. A bundle module
+initialises once, so moving it means rebuilding the Explorer's re-init lifecycle — a
+rewrite, not an extraction. Needs a browser to verify; chrome-devtools was disconnected
+and jsdom cannot exercise morph swaps. **Do this one with the app open.**
+
+**2. Three byte formatters, three different outputs.**
+`Telemetry.humanBytes` → `3KB` (integer div, 1024 divisor but decimal label),
+`Settings.humanBytes` → `1.5 KB` (same mislabel), `Containers.formatBytes` → `1.5 KiB`
+(correct binary labels, scales to PiB). `formatBytes` is the right one to keep. Merging
+changes user-visible text in three places, and two of the three files are being edited
+by the other session, so it wants a deliberate decision rather than a 5am sweep.
+
+**3. Same-name-different-module pairs that are NOT duplicates** (checked, leave alone):
+`linkButton` in Bots/Utils vs Bots/Discord are Slack and Discord payload shapes;
+`parseStackTrace` in StackTrace vs ErrorFingerprint return different types.
+
+**4. `ratio` and `plainCell` are true duplicates** between `Models/Telemetry/Containers.hs`
+and `Pages/Infrastructure.hs` (identical signatures; Infrastructure already imports
+Containers). Left alone only because both files are open in the other session.
+
 ### Notes for whoever continues
 
 - The worktree watcher is **compile-only on purpose**. `make live-reload` there runs
