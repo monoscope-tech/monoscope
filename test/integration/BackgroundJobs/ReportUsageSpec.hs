@@ -161,12 +161,20 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
     -- A paid plan with no subscription item has nothing to report against; reporting anyway
     -- would be a submission we cannot attribute.
-    it "reports nothing for a paid project with no subscription item" \(tr, pid) -> do
-      setBilling tr pid "GraduatedPricing" Nothing stripeSub (addUTCTime (-86400 * 5) frozenTime)
+    -- Both spellings of "no subscription item", because only one of them ever happened:
+    -- DSI-APP and TestCorp went unbilled from 2026-07-17 to 2026-08-27 behind a
+    -- first_sub_item_id of "" — empty, not NULL, which is why an IS NOT NULL audit called
+    -- them healthy. The watermark assertion is the one that matters: the gate has to refuse
+    -- to bill *without* advancing past usage it never counted.
+    it "reports nothing for a paid project whose subscription item is missing or blank" \(tr, pid) -> do
+      for_ ([Nothing, Just ""] :: [Maybe Text]) \subItem -> do
+        let watermarkBefore = addUTCTime (-86400 * 5) frozenTime
+        setBilling tr pid "GraduatedPricing" subItem stripeSub watermarkBefore
 
-      runReport tr pid
+        runReport tr pid
 
-      submissions tr pid >>= (`shouldBe` [])
+        submissions tr pid >>= (`shouldBe` [])
+        lastReportedOf tr pid >>= (`shouldBe` watermarkBefore)
 
     -- The invariant that protects customers: a stale watermark must not drag the window
     -- back into a cycle that has already been invoiced.
