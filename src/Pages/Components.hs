@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -606,6 +606,64 @@ chartSkeleton_ = div_ [class_ "h-64 w-full rounded-lg relative overflow-hidden b
   div_ [class_ "absolute left-8 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute left-1/2 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute right-4 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
+
+
+-- | A page body whose query is too slow to hold up first paint. The first request answers
+-- with 'DeferredShell' — a skeleton that immediately re-fetches the same URL with the
+-- handler's defer parameter set — and that second request answers with 'DeferredBody'.
+--
+-- Both branches live under the same container id, so the response swaps itself in place and
+-- the surrounding chrome (nav, tabs, time picker) is never re-rendered. That chrome is what
+-- the user navigates by, so it must arrive in milliseconds regardless of query cost.
+data Deferred a = DeferredShell Text Text (Html ()) | DeferredBody a
+
+
+-- | Run @load@ only on the request that carries the defer parameter. The first request pays
+-- for nothing but chrome.
+withDeferredBody :: Monad m => Maybe Text -> Text -> Text -> Html () -> m a -> m (Deferred a)
+withDeferredBody deferredM containerId url skeleton load
+  | isNothing deferredM = pure $ DeferredShell containerId url skeleton
+  | otherwise = DeferredBody <$> load
+
+
+instance ToHtml a => ToHtml (Deferred a) where
+  toHtml (DeferredBody body) = toHtml body
+  toHtml (DeferredShell containerId url skeleton) = toHtmlRaw $ deferredShell_ containerId url skeleton
+  toHtmlRaw = toHtml
+
+
+-- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one
+-- fragment of a larger page.
+deferredShell_ :: Text -> Text -> Html () -> Html ()
+deferredShell_ containerId url =
+  div_
+    [ id_ containerId
+    , class_ "w-full"
+    , hxGet_ url
+    , hxTrigger_ "load"
+    , hxTarget_ "this"
+    , hxSwap_ "outerHTML"
+    , hxSelect_ $ "#" <> containerId
+    , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
+      -- itself on hover, doubling the very request it exists to make once.
+      makeAttribute "hx-preload" "false"
+    ]
+
+
+-- | Placeholder for a table that has not loaded yet: a header strip and @rows@ row bars.
+-- Deliberately not an empty table — a zero state that turns into rows a second later reads
+-- as "nothing here" during the moment a user is deciding whether the page is broken.
+tableSkeleton_ :: Int -> Html ()
+tableSkeleton_ rows = div_ [class_ "flex w-full flex-col gap-3 px-4 pt-4", role_ "status", Aria.label_ "Loading"] do
+  div_ [class_ "flex items-center gap-3"] do
+    div_ [class_ "h-8 w-64 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "ml-auto h-8 w-28 rounded-lg skeleton-shimmer"] ""
+  div_ [class_ "flex flex-col gap-2 rounded-lg border border-strokeWeak p-3"]
+    $ replicateM_ rows
+    $ div_ [class_ "flex items-center gap-4"] do
+      div_ [class_ "h-3 grow rounded skeleton-shimmer"] ""
+      div_ [class_ "h-3 w-24 shrink-0 rounded skeleton-shimmer max-md:hidden"] ""
+      div_ [class_ "h-3 w-16 shrink-0 rounded skeleton-shimmer"] ""
 
 
 data FieldSize = FieldSm | FieldMd

@@ -32,7 +32,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..))
+import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
 import Pages.Containers (showFFloat')
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -434,7 +434,7 @@ data RumData = RumData
   }
 
 
-newtype RumGet = RumGet (PageCtx RumData)
+newtype RumGet = RumGet (PageCtx (Deferred RumData))
 
 
 instance ToHtml RumGet where
@@ -442,8 +442,25 @@ instance ToHtml RumGet where
   toHtmlRaw = toHtml
 
 
-rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
-rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
+-- | Every RUM panel is a separate scan of a 24-hour window, and a tab click re-runs all of
+-- them. Holding the page chrome hostage to the slowest one is what makes switching tabs feel
+-- broken, so the first request renders the tab strip, time picker and a skeleton, and the
+-- panels arrive on the request the skeleton fires.
+rumSkeleton_ :: Html ()
+rumSkeleton_ = div_ [id_ "rum-page", class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
+  div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
+    $ replicateM_ 4
+    $ div_ [class_ "flex flex-col gap-2 px-4 py-3"] do
+      div_ [class_ "h-6 w-16 rounded skeleton-shimmer"] ""
+      div_ [class_ "h-3 w-24 rounded skeleton-shimmer"] ""
+  div_ [class_ "grid grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)] gap-4 max-xl:grid-cols-1"] do
+    div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase p-4"] Components.chartSkeleton_
+    div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] $ Components.tableSkeleton_ 5
+  div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] $ Components.tableSkeleton_ 6
+
+
+rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
+rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM deferredM = do
   (session, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
@@ -469,17 +486,23 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
         Performance -> [pagesQ, errorsQ, vitalsQ]
       runQuery (label, action) =
         tryAny action >>= either (\err -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)) (pure . Right)
-  outcomes <- pooledForConcurrently tabQueries runQuery
-  let results = rights outcomes
-      degradedPanels = lefts outcomes
-      summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
-      trend = fold [value | TrendResult value <- results]
-      pages = fold [value | PagesResult value <- results]
-      errors = fold [value | ErrorsResult value <- results]
-      sessions = mergeSessions (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
-      vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
-      data' = RumData{pid, tab, summary, trend, pages, errors, sessions, vitals, window, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
-      conf =
+      deferredUrl =
+        TimePicker.windowUrl
+          ("/p/" <> pid.toText <> "/rum")
+          ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM)]] <> [("deferred", "1")])
+          window
+  body <- withDeferredBody deferredM "rum-page" deferredUrl rumSkeleton_ do
+    outcomes <- pooledForConcurrently tabQueries runQuery
+    let results = rights outcomes
+        degradedPanels = lefts outcomes
+        summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
+        trend = fold [value | TrendResult value <- results]
+        pages = fold [value | PagesResult value <- results]
+        errors = fold [value | ErrorsResult value <- results]
+        sessions = mergeSessions (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
+        vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
+    pure RumData{pid, tab, summary, trend, pages, errors, sessions, vitals, window, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
+  let conf =
         bw
           { pageTitle = "Real User Monitoring"
           , menuItem = Just "Real User Monitoring"
@@ -487,7 +510,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
           , pageActions = Just $ rumActions_ pid window
           , docsLink = Just "https://monoscope.tech/docs/sdks/browser/"
           }
-  addRespHeaders $ RumGet $ PageCtx conf data'
+  addRespHeaders $ RumGet $ PageCtx conf body
 
 
 rumNavTabs_ :: Projects.ProjectId -> RumTab -> TimePicker.TimeWindow -> Html ()
