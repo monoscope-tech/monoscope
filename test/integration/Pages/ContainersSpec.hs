@@ -408,7 +408,7 @@ spec = sequential $ aroundAll withTestResources do
       -- navigating the section is back to seconds per click.
       let shellOf render = LT.toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
       hostsShell <- shellOf $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load\"", "/infrastructure/hosts?deferred=1"]
+      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load\"", "/infrastructure/hosts?", "deferred=1"]
       hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
 
       containersShell <- shellOf $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

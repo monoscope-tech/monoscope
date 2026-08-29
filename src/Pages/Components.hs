@@ -639,6 +639,10 @@ deferredShell_ containerId url =
   div_
     [ id_ containerId
     , class_ "w-full"
+    , -- Marks the page as still waiting on its body. Tests wait for this to disappear
+      -- instead of a fixed timeout, which is what stops a deferred page from quietly
+      -- passing an assertion it never actually ran against real content.
+      data_ "deferred-shell" ""
     , hxGet_ url
     , hxTrigger_ "load"
     , hxTarget_ "this"
