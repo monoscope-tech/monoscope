@@ -69,7 +69,10 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
-      (_, overviewPage@(RUM.RumGet (PageCtx _ (DeferredBody overviewData)))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "1")
+      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewBody))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "1")
+      overviewData <- case overviewBody of
+        DeferredBody loaded -> pure loaded
+        DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
       overviewData.summary.sessions `shouldBe` 2
       overviewData.summary.pageViews `shouldBe` 2
       overviewData.summary.errors `shouldBe` 1

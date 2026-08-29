@@ -447,7 +447,7 @@ instance ToHtml RumGet where
 -- broken, so the first request renders the tab strip, time picker and a skeleton, and the
 -- panels arrive on the request the skeleton fires.
 rumSkeleton_ :: Html ()
-rumSkeleton_ = div_ [id_ "rum-page", class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
+rumSkeleton_ = div_ [class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
   div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
     $ replicateM_ 4
     $ div_ [class_ "flex flex-col gap-2 px-4 py-3"] do

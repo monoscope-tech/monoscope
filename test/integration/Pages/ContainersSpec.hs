@@ -38,6 +38,19 @@ noContainerFilters :: ContainerQuery
 noContainerFilters = ContainerQuery Nothing Nothing Nothing Nothing Nothing
 
 
+-- | The loaded body of a deferred response. A shell here means the handler skipped the query
+-- the test is asserting on, which is a failure worth naming rather than a pattern-match crash.
+deferredBody :: Deferred a -> IO a
+deferredBody = \case
+  DeferredBody body -> pure body
+  DeferredShell{} -> fail "handler answered with the deferred shell; expected the loaded body"
+
+
+-- | What a first, non-deferred request answers with: page chrome and a skeleton, no query.
+shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
+shellHtml tr render = LT.toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
+
+
 containersPage :: ContainerQuery -> ATAuthCtx (RespHeaders Containers.ContainersGet)
 containersPage q = Containers.containersGetH testPid q.runtime q.namespace q.node q.image q.cluster Nothing Nothing Nothing (Just "1")
 
@@ -196,7 +209,8 @@ spec = sequential $ aroundAll withTestResources do
       V.toList rows `shouldBe` []
 
       (_, page) <- testServant tr $ containersPage noContainerFilters
-      let Containers.ContainersPage (PageCtx conf (DeferredBody table)) = page
+      let Containers.ContainersPage (PageCtx conf body) = page
+      table <- deferredBody body
       conf.pageTitle `shouldBe` "Containers"
       V.length table.rows `shouldBe` 0
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
@@ -302,7 +316,8 @@ spec = sequential $ aroundAll withTestResources do
 
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
       (_, page) <- testServant tr $ containersPage noContainerFilters
-      let Containers.ContainersPage (PageCtx _ (DeferredBody table)) = page
+      let Containers.ContainersPage (PageCtx _ body) = page
+      table <- deferredBody body
       V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
@@ -324,7 +339,8 @@ spec = sequential $ aroundAll withTestResources do
       -- than silently falling back to "all".
       let listWith f = do
             (_, p) <- testServant tr f
-            let Containers.ContainersPage (PageCtx _ (DeferredBody t)) = p
+            let Containers.ContainersPage (PageCtx _ b) = p
+            t <- deferredBody b
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
       listWith (containersPage noContainerFilters{namespace = Just "default"}) >>= (`shouldBe` ["checkout"])
       listWith (containersPage noContainerFilters{runtime = Just "docker"}) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
@@ -406,18 +422,17 @@ spec = sequential $ aroundAll withTestResources do
       -- the page must not wait for it: it answers with nav, tabs and a skeleton that fetches
       -- the body itself. Rows appearing here again would mean the deferral was undone and
       -- navigating the section is back to seconds per click.
-      let shellOf render = LT.toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
-      hostsShell <- shellOf $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      hostsShell <- shellHtml tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load\"", "/infrastructure/hosts?", "deferred=1"]
       hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
 
-      containersShell <- shellOf $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      containersShell <- shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       containersShell `shouldContainAll` ["id=\"containersContainer\"", "hx-trigger=\"load\"", "deferred=1"]
       containersShell `shouldNotSatisfy` T.isInfixOf "checkout-7fb5b4f859-nlcjs"
 
       -- The filters the shell was asked for have to survive the round trip, or the rows that
       -- arrive would not be the rows the visible filter chips claim.
-      filteredShell <- shellOf $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing
+      filteredShell <- shellHtml tr $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing
       filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1"]
 
     it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
