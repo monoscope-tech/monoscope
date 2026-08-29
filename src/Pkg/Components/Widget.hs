@@ -221,7 +221,7 @@ data WidgetDataset = WidgetDataset
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetDataset
 
 
 -- | The query to run for a widget, paired with the row shape it decodes into.
@@ -250,15 +250,11 @@ data WidgetDataset = WidgetDataset
 -- >>> chartQuery (def :: Widget)
 -- (Nothing,DTMetric)
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
-chartQuery w = case w.wType of
-  WTStat -> (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
-  WTLogs -> asIs
-  WTTable -> asIs
-  WTTopList -> asIs
-  WTTraces -> asIs
-  _ -> (w.query <&> \q -> if hasSummarize q && hasBinning q then q else q <> " | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
+chartQuery w
+  | w.wType == WTStat = (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
+  | w.wType `elem` [WTLogs, WTTable, WTTopList, WTTraces] = (w.query, Charts.DTText)
+  | otherwise = (w.query <&> \q -> if hasSummarize q && hasBinning q then q else q <> " | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
   where
-    asIs = (w.query, Charts.DTText)
     hasSummarize = T.isInfixOf "summarize" . T.toLower
     hasBinning = T.isInfixOf " by bin" . T.toLower
 
@@ -284,7 +280,7 @@ data WidgetAxis = WidgetAxis
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetAxis
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetAxis
 
 
 data TableColumn = TableColumn
@@ -316,7 +312,7 @@ data RowClickAction = RowClickAction
 
 -- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
 encodeText :: AE.ToJSON a => a -> Text
-encodeText = decodeUtf8 . fromLazy . AE.encode
+encodeText = decodeUtf8 . AE.encode
 
 
 -- | Widget's project id as Text, or empty when absent.
@@ -395,16 +391,17 @@ widget_ w' = case w.wType of
     effectiveHeight = case w.wType of
       WTGroup -> Just $ widgetHeightForWidth effectiveWidth w
       _ -> w.layout >>= (.h)
-    layoutFields = [("x", (.x)), ("y", (.y))] :: [(Text, Layout -> Maybe Int)]
+    (lx, ly) = (w.layout >>= (.x), w.layout >>= (.y))
     attrs =
-      foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
+      foldMap (\v -> [term "gs-x" (show v)]) lx
+        <> foldMap (\v -> [term "gs-y" (show v)]) ly
         <> [term "gs-w" $ show effectiveWidth]
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
         <> [ style_
                $ T.intercalate ";"
                $ catMaybes
-                 [ ("--grid-preload-left:" <>) . gridPercent <$> (w.layout >>= (.x))
-                 , ("--grid-preload-top:" <>) . gridRem <$> (w.layout >>= (.y))
+                 [ ("--grid-preload-left:" <>) . gridPercent <$> lx
+                 , ("--grid-preload-top:" <>) . gridRem <$> ly
                  , Just $ "--grid-preload-width:" <> gridPercent effectiveWidth
                  , ("--grid-preload-height:" <>) . gridRem <$> effectiveHeight
                  ]
@@ -567,7 +564,7 @@ displayUnit = \case
 
 
 renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (isTrue widget.standalone), id_ $ wId <> "_header"] do
+renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (isTrue widget.standalone), id_ $ wId <> "_header"] do
   when (isTrue widget._centerTitle) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
@@ -575,9 +572,9 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM && not (isTrue widget.hideValue) then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> bool "hidden" "" (isJust valueM && not (isTrue widget.hideValue)), id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
@@ -606,8 +603,8 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     when (isJust widget._dashboardId)
-      $ let pid = projectIdText widget
-            dashId = maybeToMonoid widget._dashboardId
+      $ let dashId = maybeToMonoid widget._dashboardId
+            pid = projectIdText widget
          in button_
               [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
               , Aria.label_ "Expand widget"
@@ -637,13 +634,12 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
       button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
       ul_ ([class_ "dropdown text-textStrong dropdown-end menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-lg leading-none border border-strokeWeak"] <> Utils.popoverPanel_ widgetMenuPop) do
-        -- Only show the "Move to dashboard" option if we're in a dashboard context
-
-        let dashId = maybeToMonoid widget._dashboardId
-            -- A widget on a dashboard is copied from it by id. One that is not — the log
-            -- explorer's chart — has no server-side row to copy, so its own JSON goes with
-            -- it and the picker PUTs that as a new widget.
-            onDashboard = isJust widget._dashboardId
+        -- A widget on a dashboard is copied from it by id. One that is not — the log
+        -- explorer's chart — has no server-side row to copy, so its own JSON goes with
+        -- it and the picker PUTs that as a new widget.
+        let onDashboard = isJust widget._dashboardId
+            dashId = maybeToMonoid widget._dashboardId
+            pid = projectIdText widget
         li_
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
@@ -663,26 +659,6 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
             |]
             ]
             (bool "Add to dashboard" "Copy to dashboard" onDashboard)
-        let copyItem tip label expr =
-              li_
-                $ a_
-                  [ class_ "p-2 w-full text-left block cursor-pointer"
-                  , data_ "tippy-content" tip
-                  , term
-                      "_"
-                      [text|
-                on click
-                set widgetEl to the closest <[data-widget]/>
-                set widgetData to JSON.parse(widgetEl.dataset.widget)
-                set txt to ${expr}
-                if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText(txt)
-                  send successToast(value:['${label} copied to clipboard']) to <body/>
-                end
-              |]
-                  ]
-                  (toHtml $ "Copy " <> label)
-        let pid = projectIdText widget
         li_
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
@@ -706,7 +682,24 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
             |]
             ]
             "Copy SQL"
-        copyItem "Copy KQL query to clipboard" "KQL" "widgetData.query or 'No KQL available'"
+        li_
+          $ a_
+            [ class_ "p-2 w-full text-left block cursor-pointer"
+            , data_ "tippy-content" "Copy KQL query to clipboard"
+            , term
+                "_"
+                [text|
+              on click
+              set widgetEl to the closest <[data-widget]/>
+              set widgetData to JSON.parse(widgetEl.dataset.widget)
+              set txt to widgetData.query or 'No KQL available'
+              if 'clipboard' in window.navigator then
+                call navigator.clipboard.writeText(txt)
+                send successToast(value:['KQL copied to clipboard']) to <body/>
+              end
+            |]
+            ]
+            "Copy KQL"
         whenJust widget.pngUrl \url ->
           li_
             $ a_
@@ -718,13 +711,12 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
               ]
               "Download PNG"
 
-        -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
           li_
             $ a_
               [ class_ "p-2 w-full text-left block cursor-pointer"
               , data_ "tippy-content" "Create a copy of this widget"
-              , hxPost_ ("/p/" <> projectIdText widget <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
+              , hxPost_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
               , hxTrigger_ "click"
               , hxTarget_ "closest .grid-stack"
               , hxSwap_ "beforeend"
@@ -881,7 +873,7 @@ renderChart widget = do
       unitSuffix = foldMap displayUnit widget.unit
       valueM = widget.dataset >>= (.value) <&> \x -> Utils.prettyPrintCount (round x) <> unitSuffix
       isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
-  div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
+  div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (isTrue widget.naked || isStat)
       $ renderWidgetHeader widget valueM rateM widget.expandBtnFn Nothing
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
@@ -896,14 +888,14 @@ renderChart widget = do
           -- Failure banner: one line at the top of the card, above the content,
           -- rather than a centred overlay printed over the chart it describes.
           -- widgets.ts fills the message and unhides it.
-          div_ [id_ $ chartId <> "_error", class_ "hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-2.5 py-1"]
+          div_ [id_ $ chartId <> "_error", class_ "hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-3 py-1.5"]
             $ div_ [class_ "flex items-center gap-1.5 text-xs text-textError"] do
               Utils.faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0"
               span_ [class_ "truncate", id_ $ chartId <> "_errorMsg"] ""
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
-             in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
-                  $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
+             in div_ [class_ "flex shrink-0 justify-end px-3 pt-3"]
+                  $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1.5rem)]"] do
                     summary_ [class_ "btn btn-xs min-w-0 cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
                       span_ [class_ "shrink-0 text-textDisabled"] "Group by"
                       span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
@@ -923,8 +915,18 @@ renderChart widget = do
                       item "all" "All values"
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
-          unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else if isTrue widget.standalone then " px-2 pt-2" else " p-2"] do
+          unless (widget.wType == WTStat) $ div_ [class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
+            div_
+              [ id_ $ chartId <> "_empty"
+              , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"
+              , role_ "status"
+              , Aria.live_ "polite"
+              , Aria.atomic_ "true"
+              ]
+              $ div_ [class_ "max-w-sm"] do
+                strong_ [class_ "text-sm font-semibold text-textStrong"] "No data in this time range"
+                p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
             let sumBy = fromMaybe SBSum widget.summarizeBy
                 theme = fromMaybe "default" widget.theme
                 echartOpt = encodeText $ widgetToECharts widget
@@ -1112,27 +1114,27 @@ widgetToECharts widget =
                 , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
                 , "splitLine" AE..= AE.object ["show" AE..= False]
                 , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just)), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
-                , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
+                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget.xAxis >>= (.showAxisLabel))), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
+                , "show" AE..= (axisVisibility || fromMaybe False (widget.xAxis >>= (.showAxisLabel)))
                 ]
                   <> if isCategorical
                     then [] -- For categorical, ECharts will derive categories from dataset
                     else
-                      [ "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
-                      , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+                      [ "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget.dataset >>= (.from))
+                      , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget.dataset >>= (.to))
                       ]
               )
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
               , "min" AE..= (0 :: Int)
-              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) (widget ^? #dataset . _Just . #stats . _Just . #maxGroupSum)
+              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) ((.maxGroupSum) <$> (widget.dataset >>= (.stats)))
               , "splitLine"
                   AE..= AE.object
                     [ "show" AE..= axisVisibility
                     , "lineStyle" AE..= AE.object ["type" AE..= "dotted", "color" AE..= "#0011661A"]
                     , "interval"
-                        AE..= if fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
+                        AE..= if fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
                           then "function(index, value) { return value === this.yAxis.max }"
                           else AE.Null
                     ]
@@ -1140,13 +1142,13 @@ widgetToECharts widget =
               , "axisLine" AE..= AE.object ["show" AE..= False]
               , "axisLabel"
                   AE..= AE.object
-                    [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
+                    [ "show" AE..= (axisVisibility && fromMaybe True (widget.yAxis >>= (.showAxisLabel)))
                     , "inside" AE..= False
                     , "margin" AE..= (8 :: Int)
                     , "hideOverlap" AE..= True
                     , "formatter"
                         AE..= let fmt = unitValueExprJS widget.unit
-                                  showOnlyMax = fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
+                                  showOnlyMax = fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
                                in if showOnlyMax
                                     then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
                                     else "function(value, index) { return " <> fmt <> "; }"
@@ -1366,11 +1368,9 @@ getRowValue idx row = fromMaybe "" $ row V.!? idx
 calculateMaxValues :: [TableColumn] -> V.Vector (V.Vector Text) -> M.Map Text Double
 calculateMaxValues columns dataRows =
   M.fromList
-    [ (col.field, maxVal)
+    [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
     | (col, idx) <- zip columns [0 ..]
     , col.progress == Just "column_percent"
-    , let values = V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows
-    , let maxVal = if V.null values then 0 else V.maximum values
     ]
 
 

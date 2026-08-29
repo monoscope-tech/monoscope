@@ -90,30 +90,30 @@
   --color-slate-250: oklch(89.2% 0.012 226);
 
   /* Background colors */
-  --color-bgAlternate: oklch(97.7% 0.006 247);
-  --color-bgBase: oklch(99.1% 0.002 247);
+  --color-bgAlternate: oklch(97% 0.01 261);
+  --color-bgBase: oklch(98.5% 0.006 261);
   --color-bgInverse: oklch(16.4% 0.012 263);
-  --color-bgOverlay: oklch(99.1% 0.002 247);
-  --color-bgRaised: oklch(99.1% 0.002 247);
-  --color-bgSunken: oklch(97.7% 0.006 247);
+  --color-bgOverlay: oklch(99.5% 0.004 261);
+  --color-bgRaised: oklch(100% 0 0);
+  --color-bgSunken: oklch(94.5% 0.014 261);
   --color-bgBrand: oklch(56.7% 0.239 261);
 
   /* Chart colors */
-  --color-chart-default: oklch(49.3% 0.088 241);
-  --color-chartBg: oklch(97.7% 0.014 236 / 0.4);
+  --color-chart-default: oklch(52% 0.18 261);
+  --color-chartBg: oklch(94.5% 0.014 261 / 0.55);
   --color-chartMask: oklch(100% 0 0 / 0.8);
 
   /* Fill colors */
   --color-fillBrand-strong: oklch(56.7% 0.239 261);
   --color-fillBrand-action: oklch(52% 0.22 261);
-  --color-fillBrand-weak: oklch(56.7% 0.239 261 / 0.05);
+  --color-fillBrand-weak: oklch(56.7% 0.239 261 / 0.12);
   --color-fillDisabled: oklch(25.2% 0.146 264 / 0.1);
   --color-fillStrong: oklch(14.4% 0.069 263 / 0.9);
   --color-fillError-strong: oklch(51.3% 0.197 21);
-  --color-fillError-weak: rgba(255 74 74 / 0.05);
-  --color-fillHover: oklch(29.2% 0.174 264 / 0.04);
-  --color-fillInformation-strong: oklch(49.3% 0.088 241);
-  --color-fillInformation-weak: rgba(38 176 255 / 0.05);
+  --color-fillError-weak: oklch(51.3% 0.197 21 / 0.1);
+  --color-fillHover: oklch(29.2% 0.174 264 / 0.06);
+  --color-fillInformation-strong: oklch(53% 0.16 261);
+  --color-fillInformation-weak: oklch(53% 0.16 261 / 0.08);
   --color-fillNeutral-strong: oklch(65% 0.012 247);
   --color-fillInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-fillInverse-hover: oklch(100% 0 0 / 0.06);
@@ -121,22 +121,22 @@
   --color-fillInverse-strong: oklch(99.1% 0.002 247);
   --color-fillInverse-weak: oklch(100% 0 0 / 0.06);
   --color-fillOverlay: oklch(21.2% 0.117 264 / 0.45);
-  --color-fillPress: oklch(25.2% 0.146 264 / 0.1);
+  --color-fillPress: oklch(25.2% 0.146 264 / 0.12);
   --color-fillSelected: oklch(56.7% 0.239 261);
   --color-fillSuccess-strong: oklch(47.8% 0.130 162);
-  --color-fillSuccess-weak: rgba(10 204 146 / 0.05);
+  --color-fillSuccess-weak: oklch(47.8% 0.13 162 / 0.1);
   --color-fillWarning-strong: oklch(54.7% 0.126 69);
-  --color-fillWarning-weak: rgba(255 192 46 / 0.05);
-  --color-fillWeak: oklch(29.2% 0.174 264 / 0.04);
-  --color-fillWeaker: oklch(29.2% 0.174 264 / 0.02);
+  --color-fillWarning-weak: oklch(54.7% 0.126 69 / 0.1);
+  --color-fillWeak: oklch(29.2% 0.174 264 / 0.08);
+  --color-fillWeaker: oklch(29.2% 0.174 264 / 0.04);
   --color-fillWhite: oklch(100% 0 0);
   --color-fillYellow: oklch(85.8% 0.179 92);
 
   /* Icon colors */
-  --color-iconBrand: oklch(56.7% 0.239 261 / 0.8);
+  --color-iconBrand: oklch(50.5% 0.22 261);
   --color-iconDisabled: oklch(25.2% 0.146 264 / 0.1);
   --color-iconError: rgba(199 58 58 / 0.8);
-  --color-iconInformation: rgba(26 116 168 / 0.8);
+  --color-iconInformation: oklch(53% 0.16 261 / 0.8);
   --color-iconInverse: oklch(100% 0 0 / 0.6);
   --color-iconInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-iconInverse-strong: oklch(100% 0 0);
@@ -151,26 +151,26 @@
   --color-strokeError-strong: rgba(199 58 58 / 0.8);
   --color-strokeError-weak: rgba(199 58 58 / 0.14);
   --color-strokeFocus: oklch(56.7% 0.239 261);
-  --color-strokeInformation-strong: rgba(26 116 168 / 0.8);
-  --color-strokeInformation-weak: rgba(26 116 168 / 0.2);
+  --color-strokeInformation-strong: oklch(53% 0.16 261 / 0.8);
+  --color-strokeInformation-weak: oklch(53% 0.16 261 / 0.2);
   --color-strokeInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-strokeInverse-strong: oklch(100% 0 0 / 0.6);
   --color-strokeInverse-weak: oklch(100% 0 0 / 0.12);
   --color-strokeSelected: oklch(56.7% 0.239 261);
-  --color-strokeStrong: oklch(21.2% 0.117 264 / 0.45);
+  --color-strokeStrong: oklch(21.2% 0.117 264 / 0.5);
   --color-strokeSuccess-strong: rgba(6 122 87 / 0.8);
   --color-strokeSuccess-weak: rgba(6 122 87 / 0.2);
   --color-strokeWarning-strong: rgba(143 108 26 / 0.8);
   --color-strokeWarning-weak: rgba(143 108 26 / 0.2);
-  --color-strokeWeak: oklch(25.2% 0.146 264 / 0.1);
+  --color-strokeWeak: oklch(25.2% 0.146 264 / 0.18);
 
   /* Text colors */
-  --color-textBrand: oklch(56.7% 0.239 261);
+  --color-textBrand: oklch(50.5% 0.22 261);
   --color-textDisabled: oklch(21.2% 0.117 264 / 0.45);
   --color-textError: oklch(51.3% 0.197 21);
-  --color-textInformation: oklch(49.3% 0.088 241);
+  --color-textInformation: oklch(53% 0.16 261);
   --color-textSuccess: oklch(47.8% 0.130 162);
-  --color-textWarning: oklch(54.7% 0.126 69);
+  --color-textWarning: oklch(53% 0.126 69);
   --color-textInverseDisabled: oklch(100% 0 0 / 0.12);
   --color-textInverse-strong: oklch(100% 0 0);
   --color-textInverse-weak: oklch(100% 0 0 / 0.78);
@@ -1697,7 +1697,7 @@ code, pre, .code, .monospace {
 
 @layer custom {
   .surface-raised {
-    @apply bg-fillWeaker border border-strokeWeak rounded-xl;
+    @apply bg-bgRaised border border-strokeWeak rounded-xl;
   }
 
   .investigation-fullscreen {
@@ -1732,7 +1732,7 @@ code, pre, .code, .monospace {
   /* Table panel surface — matches surface-raised so list/table pages elevate
      above the page background in dark mode. */
   .surface-table {
-    @apply bg-fillWeaker border border-strokeWeak rounded-xl;
+    @apply bg-bgRaised border border-strokeWeak rounded-xl;
   }
 
   :root {
@@ -1900,23 +1900,23 @@ code, pre, .code, .monospace {
     --color-bgOverlay: oklch(22% 0.004 260);
     --color-bgRaised: oklch(18% 0.004 260);
     --color-bgSunken: oklch(8% 0.003 260);
-    --color-bgBrand: oklch(60% 0.18 265);
+    --color-bgBrand: oklch(64% 0.18 261);
 
     /* Chart colors — dark theme */
     --color-chartBg: oklch(22% 0.015 260 / 0.18);
     --color-chartMask: oklch(15% 0.01 260 / 0.85);
 
     /* Fill colors — dark theme */
-    --color-fillBrand-strong: oklch(60% 0.18 265);
-    --color-fillBrand-action: oklch(52% 0.18 265);
-    --color-fillBrand-weak: oklch(60% 0.18 265 / 0.15);
+    --color-fillBrand-strong: oklch(64% 0.18 261);
+    --color-fillBrand-action: oklch(54% 0.18 261);
+    --color-fillBrand-weak: oklch(64% 0.18 261 / 0.15);
     --color-fillDisabled: rgba(255 255 255 / 0.12);
     --color-fillStrong: rgb(255 255 255);
     --color-fillError-strong: oklch(77.2% 0.126 21);
     --color-fillError-weak: rgba(255 156 156 / 0.08);
     --color-fillHover: rgba(255 255 255 / 0.07);
-    --color-fillInformation-strong: oklch(75.5% 0.098 241);
-    --color-fillInformation-weak: rgba(126 192 229 / 0.08);
+    --color-fillInformation-strong: oklch(75.5% 0.098 261);
+    --color-fillInformation-weak: oklch(75.5% 0.098 261 / 0.08);
     --color-fillNeutral-strong: oklch(47% 0.008 260);
     --color-fillInverseDisabled: rgba(15 15 20 / 0.1);
     --color-fillInverse-hover: rgba(15 15 20 / 0.04);
@@ -1936,10 +1936,10 @@ code, pre, .code, .monospace {
     --color-fillYellow: oklch(85.8% 0.179 92);
 
     /* Icon colors — dark theme */
-    --color-iconBrand: oklch(72% 0.15 265 / 0.9);
+    --color-iconBrand: oklch(72% 0.15 261 / 0.9);
     --color-iconDisabled: oklch(100% 0 0 / 0.12);
     --color-iconError: oklch(77.2% 0.126 21 / 0.8);
-    --color-iconInformation: oklch(78% 0.095 241 / 0.8);
+    --color-iconInformation: oklch(78% 0.095 261 / 0.8);
     --color-iconInverse: oklch(10% 0.005 260 / 0.45);
     --color-iconInverseDisabled: oklch(10% 0.005 260 / 0.1);
     --color-iconInverse-strong: oklch(10% 0.005 260 / 0.88);
@@ -1948,30 +1948,30 @@ code, pre, .code, .monospace {
     --color-iconWarning: oklch(79.5% 0.106 92 / 0.8);
 
     /* Stroke colors — dark theme */
-    --color-strokeBrand-strong: oklch(72% 0.15 265 / 0.5);
-    --color-strokeBrand-weak: oklch(72% 0.15 265 / 0.15);
+    --color-strokeBrand-strong: oklch(72% 0.15 261 / 0.5);
+    --color-strokeBrand-weak: oklch(72% 0.15 261 / 0.15);
     --color-strokeDisabled: rgba(255 255 255 / 0.12);
     --color-strokeError-strong: rgba(248 113 113 / 0.5);
     --color-strokeError-weak: rgba(248 113 113 / 0.15);
-    --color-strokeFocus: oklch(72% 0.15 265);
-    --color-strokeInformation-strong: rgba(147 197 253 / 0.5);
-    --color-strokeInformation-weak: rgba(147 197 253 / 0.15);
+    --color-strokeFocus: oklch(72% 0.15 261);
+    --color-strokeInformation-strong: oklch(78% 0.095 261 / 0.5);
+    --color-strokeInformation-weak: oklch(78% 0.095 261 / 0.15);
     --color-strokeInverseDisabled: rgba(15 15 20 / 0.1);
     --color-strokeInverse-strong: rgba(10 10 15 / 0.4);
     --color-strokeInverse-weak: rgba(15 15 20 / 0.1);
-    --color-strokeSelected: oklch(60% 0.18 265);
-    --color-strokeStrong: rgba(255 255 255 / 0.25);
+    --color-strokeSelected: oklch(64% 0.18 261);
+    --color-strokeStrong: rgba(255 255 255 / 0.35);
     --color-strokeSuccess-strong: rgba(134 239 172 / 0.5);
     --color-strokeSuccess-weak: rgba(134 239 172 / 0.15);
     --color-strokeWarning-strong: rgba(251 191 36 / 0.5);
     --color-strokeWarning-weak: rgba(251 191 36 / 0.15);
-    --color-strokeWeak: rgba(255 255 255 / 0.08);
+    --color-strokeWeak: rgba(255 255 255 / 0.05);
 
     /* Text colors — dark theme */
-    --color-textBrand: oklch(72% 0.15 265);
+    --color-textBrand: oklch(72% 0.15 261);
     --color-textDisabled: rgba(255 255 255 / 0.35);
     --color-textError: oklch(77.2% 0.126 21);
-    --color-textInformation: oklch(78% 0.095 241);
+    --color-textInformation: oklch(78% 0.095 261);
     --color-textInverseDisabled: rgba(15 15 20 / 0.1);
     --color-textInverse-strong: rgba(10 10 15 / 0.88);
     --color-textInverse-weak: rgba(10 10 15 / 0.6);
@@ -2651,6 +2651,18 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
    panel's own toggle is the only one that should be visible then. */
 #facets_and_loglist:has(#trace_expanded_view:not(.hidden)) #log_details_container .fs-details-toggle {
   display: none;
+}
+
+/* Controls need a 3:1 boundary. strokeWeak remains available for decorative dividers. */
+:where(.btn:not(.btn-primary):not(.btn-ghost), .input, .select, .textarea, .checkbox, .radio, .toggle, button.border:not(.btn-primary):not([class*='border-stroke']), label[role='switch']) {
+  border-color: var(--color-strokeStrong) !important;
+}
+
+/* Selection is an interaction signal, not another neutral surface. */
+:where(.tab.tab-active, .tab[aria-selected='true'], .tab[aria-current='page'], input.tab:checked) {
+  background-color: var(--color-fillBrand-weak) !important;
+  border-color: var(--color-strokeBrand-strong) !important;
+  color: var(--color-textBrand) !important;
 }
 
 .container-usage-chart {

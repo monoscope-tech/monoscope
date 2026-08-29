@@ -1044,7 +1044,7 @@ export class LogList extends LitElement {
       raw_url: 212,
       url_path: 212,
       service: 136,
-      summary: 3600,
+      summary: 1200, // 3600px made every virtual row pay triple-width style and paint costs.
       latency_breakdown: 120,
     };
   }
@@ -2358,13 +2358,11 @@ export class LogList extends LitElement {
   };
 
   /**
-   * Colour for one value of the breakdown dimension.
+   * Colour for one value of the latency breakdown dimension.
    *
-   * Keyed on the dimension, not on `span_name`. Keying on the span name made this a
-   * per-operation palette wearing the name "service colors": two spans in one service got two
-   * colours, the same operation in two services got one, and any name missing the palette fell
-   * back to grey. Kind is a fixed semantic palette; service is hashed, so a service keeps its
-   * colour across queries, sessions and pages — which is what makes the legend worth reading.
+   * Kind uses a fixed palette and service is hashed, so the same service remains recognisable
+   * across rows, queries and pages. The bar uses these colours to show where the time went;
+   * warning and critical markers communicate urgency separately.
    */
   private dimColor(value: string): string {
     return this.latencyDim === 'kind' ? (KIND_COLORS[value] ?? 'bg-fillStrong') : this.serviceColors[value] || 'bg-fillStrong';
@@ -2441,6 +2439,10 @@ export class LogList extends LitElement {
       this.isScrolling = false;
       this.logsContainer?.classList.remove('is-scrolling');
       this.scrollEndTimer = null;
+      // The health check reads row geometry. Running it for every wheel event forced a full
+      // style/layout flush while the virtualizer was moving; once after scroll settles keeps
+      // the blank-list recovery without putting synchronous layout work in the hot path.
+      this.healBlankVirtualizer();
     }, 80);
   }
 
@@ -2448,10 +2450,6 @@ export class LogList extends LitElement {
     this.markScrolling();
     this.syncBottomPin();
     this.resumeLiveTailAtEdge();
-    // Also checked here, not only after an update: once the virtualizer is stuck it renders
-    // nothing, so nothing changes, so Lit never updates again — `updated` would never run and
-    // the list would stay blank forever. Scrolling is what the user does when they see it.
-    this.healBlankVirtualizer();
   };
 
   handleVisibilityChange = (e: any) => {
@@ -3034,7 +3032,7 @@ export class LogList extends LitElement {
         const indicatorClass = (isExpanded ? errClass.replace('-weak', '-strong') : errClass).replace(
           'w-1',
           this.mode === 'sessions' && depth === 0 ? 'w-1.5' : 'w-1'
-        );
+        ) + ' min-w-[3px]';
         const errTip =
           this.mode === 'sessions'
             ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session`
@@ -3192,6 +3190,7 @@ export class LogList extends LitElement {
                       }
                     : null,
                   barWidth: currentWidth - 12,
+                  state: latencyState(duration),
                 })}
                 <span class="w-1"></span>
               </div>
@@ -3303,6 +3302,7 @@ export class LogList extends LitElement {
                   : 'items-center overflow-hidden'
             )}
           >
+            ${this.isNarrow && !isSessionTopLevel ? mobileLatencyBadge(rowData.duration) : nothing}
             ${summaryContent}${synthParentId ? renderCopyIdChip(synthParentId) : nothing}
           </div>
         </div>`;
@@ -3589,14 +3589,16 @@ export class LogList extends LitElement {
       );
 
       const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
-      // Error sessions escalate visually: the row takes on a soft red tint
-      // so a broken session reads as the urgent thing on the page without
-      // shouting. The existing red left-stripe (rendered in the id column
-      // via getErrorClassification) anchors the severity; this tint makes
-      // the whole row belong to that signal.
-      const isErrorSessionRow = isSessionTopLevelRow && !!rowData.hasErrors;
-      const cellBg = isErrorSessionRow ? 'bg-fillError-weak' : 'bg-bgBase';
-      const rowHoverBg = isErrorSessionRow ? 'hover:bg-fillError-weak' : 'hover:bg-fillWeaker';
+      const level = String(
+        lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'level') ||
+        lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'severity_text') || ''
+      ).toLowerCase();
+      const isErrorRow = !!rowData.hasErrors || /error|fatal|critical|exception/.test(level);
+      const isWarningRow = !isErrorRow && /warn/.test(level);
+      // The existing level badge or error rail is the non-colour cue. The weak
+      // row tint makes the same severity scannable without turning it into a CTA.
+      const cellBg = isErrorRow ? 'bg-fillError-weak' : isWarningRow ? 'bg-fillWarning-weak' : 'bg-bgRaised';
+      const rowHoverBg = isErrorRow ? 'hover:bg-fillError-weak' : isWarningRow ? 'hover:bg-fillWarning-weak' : 'hover:bg-fillWeaker';
       // Synthetic placeholder rows (server tags id="synthetic-<parent_id>")
       // get muted styling so they don't compete with real spans.
       const isSynthetic = isSyntheticRowId(lookupVecValue<string>(rowData.data, this.colIdxMap, 'id'));
@@ -4239,6 +4241,41 @@ const KIND_COLORS: Record<string, string> = {
   log: 'bg-fillStrong',
 };
 
+export type LatencyState = 'missing' | 'normal' | 'warning' | 'critical';
+
+/** Product thresholds match the Explorer's built-in slow-request queries: 1s and 5s. */
+export const latencyState = (duration: number): LatencyState =>
+  !(duration > 0) ? 'missing' : duration >= 5_000_000_000 ? 'critical' : duration >= 1_000_000_000 ? 'warning' : 'normal';
+
+const LATENCY_LABELS: Record<Exclude<LatencyState, 'missing'>, string> = {
+  normal: 'Normal latency',
+  warning: 'Slow latency (at least 1s)',
+  critical: 'Critical latency (at least 5s)',
+};
+
+function mobileLatencyBadge(duration: number) {
+  const state = latencyState(duration);
+  if (state === 'missing') return nothing;
+  const classes =
+    state === 'critical'
+      ? 'border-strokeError-strong bg-fillError-weak text-textError'
+      : state === 'warning'
+        ? 'border-strokeWarning-strong bg-fillWarning-weak text-textWarning'
+        : 'border-strokeWeak bg-fillWeaker text-textWeak';
+  return html`<span
+    data-mobile-latency-state=${state}
+    class=${`inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border px-1 text-xs tabular-nums ${classes}`}
+    aria-label=${`${LATENCY_LABELS[state]}: ${fmtNs(duration)}`}
+  >
+    ${state === 'warning'
+      ? html`<span data-latency-marker="warning" aria-hidden="true">${faSprite('triangle-exclamation', 'regular', 'h-3 w-3')}</span>`
+      : state === 'critical'
+        ? html`<span data-latency-marker="critical" aria-hidden="true">${faSprite('circle-exclamation', 'regular', 'h-3 w-3')}</span>`
+        : nothing}
+    <span>${fmtNs(duration)}</span>
+  </span>`;
+}
+
 export type LatencySegment = { leftPct: number; widthPct: number; color: string; label: string; ns: number };
 
 /**
@@ -4387,12 +4424,15 @@ export function latencyTitle(
   row: { startNs: number; duration: number; traceStart: number },
   segments: LatencySegment[]
 ): string {
+  const state = latencyState(row.duration);
+  if (state === 'missing') return 'No latency data';
   const byLabel = new Map<string, number>();
   for (const s of segments) byLabel.set(s.label, (byLabel.get(s.label) ?? 0) + s.ns);
   const accounted = segments.reduce((a, s) => a + s.ns, 0);
   const self = Math.max(0, row.duration - accounted);
   const parts = [...byLabel.entries()].sort((a, b) => b[1] - a[1]).map(([label, ns]) => `${label} ${fmtNs(ns)}`);
   return [
+    LATENCY_LABELS[state],
     `${fmtNs(row.duration)} total`,
     `+${fmtNs(Math.max(0, row.startNs - row.traceStart))} into the trace`,
     `self ${fmtNs(self)}`,
@@ -4403,11 +4443,9 @@ export function latencyTitle(
 /**
  * The bar in words and numbers, as a hover card rather than a native `title`.
  *
- * `title=` could only ever be one flat string: it names services without connecting them to
- * the colours in the bar it is describing, waits about a second before appearing, can't be
- * reached from the keyboard, and can't be styled. This is the same data with the swatch beside
- * each name, which is what makes the colour legible — the mapping is stable (services are
- * coloured by a hash of their name), so reading it once here teaches it everywhere.
+ * `title=` could only ever be one flat string. The card names each service beside the same
+ * stable swatch used in the bar, connecting each duration to the segment that spent it. It is
+ * keyboard reachable and dismisses on Escape.
  *
  * Only called where there is a breakdown to show. A log has no duration and a childless span
  * has nothing under it, so their card could only restate the duration the row already prints —
@@ -4494,6 +4532,7 @@ export function spanLatencyBreakdown({
   card,
   barWidth,
   frame,
+  state,
 }: {
   track: string;
   segments: LatencySegment[];
@@ -4501,7 +4540,18 @@ export function spanLatencyBreakdown({
   card: { id: string; body: () => TemplateResult } | null;
   barWidth: number;
   frame: boolean;
+  state: LatencyState;
 }) {
+  if (state === 'missing' && !frame)
+    return html`<span
+      data-latency-state="missing"
+      class="-mt-1 inline-flex h-5 shrink-0 items-center justify-center text-textWeak"
+      style=${`width:${barWidth}px`}
+      role="img"
+      aria-label="No latency data"
+      >—</span
+    >`;
+
   // On the row axis the track IS the row's self time, so a gap between two children is time
   // the row spent on its own rather than an absence of information; on the trace axis it is
   // the rest of the trace, and the row's own span is the first segment painted on it.
@@ -4510,7 +4560,11 @@ export function spanLatencyBreakdown({
   // sub-pixel on a 120px column, which renders as nothing at all. Pushing left back by the
   // floored width keeps a mark at the far end inside the bar instead of clipped away.
   const minPct = (3 / Math.max(barWidth, 1)) * 100;
-  const bar = html`<div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
+  const bar = html`<div
+    data-latency-state=${state}
+    class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`}
+    style=${`width:${barWidth}px`}
+  >
     ${segments.map((s) => {
       const width = Math.max(s.widthPct, minPct);
       return html`<div
@@ -4518,6 +4572,21 @@ export function spanLatencyBreakdown({
         style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
       ></div>`;
     })}
+    ${state === 'warning'
+      ? html`<span
+          data-latency-marker="warning"
+          class="absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center text-textInverse-strong"
+          aria-hidden="true"
+          >${faSprite('triangle-exclamation', 'regular', 'h-3 w-3')}</span
+        >`
+      : state === 'critical'
+        ? html`<span
+            data-latency-marker="critical"
+            class="absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center text-textInverse-strong"
+            aria-hidden="true"
+            >${faSprite('circle-exclamation', 'regular', 'h-3 w-3')}</span
+          >`
+        : nothing}
     <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
            a span two thirds of the way into a trace is just a small block somewhere. -->
     ${frame

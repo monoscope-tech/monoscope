@@ -2,7 +2,7 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
-import Control.Exception (ErrorCall (..), throwIO, try)
+import Control.Exception (throwIO, try)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as AEE
 import Data.Aeson.Key qualified as AEKey

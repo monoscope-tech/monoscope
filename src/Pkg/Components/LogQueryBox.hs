@@ -75,7 +75,7 @@ logQueryBox_ config = do
         -- and the message row below both derive from it in CSS, so JS sets one
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
-        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
             $ [ class_ "sr-only ai-search"
               , type_ "checkbox"
@@ -91,6 +91,9 @@ logQueryBox_ config = do
                     if event.target.tagName is not 'INPUT' and event.target.tagName is not 'TEXTAREA' and event.target.contentEditable is not 'true'
                       set my.checked to true
                       set #ai-search-input.value to ''
+                      -- a programmatic value set fires no input event, so the
+                      -- submit button would stay enabled from a previous prompt
+                      send input to #ai-search-input
                       send change to me
                       halt
                     end
@@ -106,10 +109,9 @@ logQueryBox_ config = do
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
-              [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
+              [ class_ "border-0 w-full flex-1 p-1 no-focus-ring"
               , placeholder_ "Ask in plain English — e.g. \"errors in payment service last hour\""
               , id_ "ai-search-input"
-              , required_ "required"
               , name_ "input"
               , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/ai_search"
               , -- `htmx:trigger` is not special-cased by htmx; it only fires a request because
@@ -118,13 +120,15 @@ logQueryBox_ config = do
               , hxSwap_ "none"
               , hxExt_ "json-enc"
               , hxVals_ "js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
-              , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
               , data_ "container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
               , -- The response fans out to three JS subsystems (time picker, query editor,
                 -- viz tabs), so the routing lives in one named function beside them rather
                 -- than as a branch tree here — see window.applyAiSearchResult.
-                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
+                [__|on input
+                     if my.value.trim().length > 0 then set #ai-search-submit's @aria-disabled to 'false'
+                     else set #ai-search-submit's @aria-disabled to 'true' end
+                   on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
                    on keydown[key=='Enter']
                      if my.value.trim().length > 0
                        then halt then trigger htmx:trigger
@@ -132,9 +136,12 @@ logQueryBox_ config = do
                    on htmx:after:request call window.applyAiSearchResult(event, me)|]
               ]
             span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
-            a_
-              [ class_ "px-3 py-0.5 inline-flex gap-2 items-center cursor-pointer border text-textDisabled shadow-strokeBrand-weak hover:border-strokeBrand-weak rounded-sm peer-valid:border-strokeBrand-strong peer-valid:text-textBrand peer-valid:shadow-md"
-              , onpointerdown_ "htmx.trigger('#ai-search-input', 'htmx:trigger')"
+            button_
+              [ type_ "button"
+              , id_ "ai-search-submit"
+              , Aria.disabled_ "true"
+              , class_ "px-3 py-0.5 inline-flex gap-2 items-center border rounded-sm shadow-strokeBrand-weak aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-disabled:border-strokeWeak aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-textBrand aria-[disabled=false]:border-strokeBrand-strong aria-[disabled=false]:shadow-md"
+              , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
               do
                 faSprite_ "arrow-right" "regular" "h-4 w-4"
@@ -182,7 +189,7 @@ logQueryBox_ config = do
                     option_ (value_ v : [selected_ "true" | fromMaybe "all-spans" config.targetSpan == v]) $ toHtml label
 
               div_ [class_ "inline-block max-md:hidden"] do
-                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
+                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeWeak hover:border-strokeStrong h-full cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
                 ul_ ([class_ "dropdown dropdown-end border border-strokeWeak menu bg-bgRaised rounded-box w-60 p-2 shadow-lg"] <> popoverPanel_ "save-query-pop") do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
@@ -247,12 +254,12 @@ logQueryBox_ config = do
             datalist_ [id_ "pattern-field-list"]
               $ forM_ (Map.keys Schema.telemetrySchema.fields) \f ->
                 option_ [value_ f] ""
-          span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
+          span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden", Aria.hidden_ "true"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
           whenNothing_ config.targetWidgetPreview
             $ popularSearchChips_ config.pid noActiveQuery
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
-          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
+          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label text-textWeak space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
               >> span_ [class_ "text-xs"] "Hide timeline"
 
@@ -260,9 +267,9 @@ logQueryBox_ config = do
           $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full"]
 
         div_ [class_ "flex justify-end gap-2 max-md:hidden"] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label text-textWeak space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label text-textWeak space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
             input_
               $ [ type_ "checkbox"
                 , id_ "create-alert-toggle"
@@ -287,9 +294,10 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    -- A widget container means we are in the dashboard widget editor rather than the
-    -- log explorer.
-    let inWidgetEditor = isJust widgetContainerId
+    let vizId (_, _, t, _) = t
+        -- A widget container means we are in the dashboard widget editor rather than the
+        -- log explorer.
+        inWidgetEditor = isJust widgetContainerId
         -- A dashboard widget starts as a chart. Logs is a full log table — the most
         -- expensive thing on a dashboard and the wrong thing to drop on one by default.
         defaultVizType = fromMaybe (bool "logs" "timeseries" (alert || inWidgetEditor)) vizTypeM
@@ -302,8 +310,8 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
         -- what the reader wants, so they lead the strip and Logs moves to the end. The log
         -- explorer keeps Logs first, where it is the view the page is named after.
         visible =
-          bool Relude.id (sortOn (\(_, _, t, _) -> t == "logs")) inWidgetEditor
-            $ filter (\(_, _, t, _) -> t `notElem` hidden) visTypes
+          bool Relude.id (sortOn ((== "logs") . vizId)) inWidgetEditor
+            $ filter ((`notElem` hidden) . vizId) visTypes
     forM_ visible \(_icon, label, vizType, emoji) ->
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
         input_
@@ -335,7 +343,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
             ]
           <> [checked_ | vizType == defaultVizType]
         -- Emojis only in widget mode, not in the log explorer
-        when (isJust widgetContainerId) $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+        when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
         span_ $ toHtml label
 
 
@@ -347,7 +355,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 -- into its light DOM), so nothing here needs to be interactive.
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
-  div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong"] do
+  div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong bg-bgRaised"] do
     div_ [class_ "relative overflow-x-hidden w-full flex-1"]
       $ div_ [class_ "w-full text-sm leading-5 py-2 truncate font-mono"]
       $ case query of
@@ -515,7 +523,7 @@ popularSearchChips_ pid showChips =
         , [__|on 'update-query' from window if (event.detail.value or '').trim() is not '' add .hidden to me else remove .hidden from me|]
         ]
         do
-          span_ [class_ "text-textDisabled"] "Try:"
+          span_ [class_ "text-textWeak"] "Try:"
           forM_ (take 3 popularQueries) \(q, l, _) ->
             button_
               [ type_ "button"
@@ -740,7 +748,7 @@ queryEditorInitializationCode vizTypeM pid = do
     // JS only fills the text and toggles visibility.
     // Sets one attribute; the border and the message row follow from it in CSS.
     // A repeated set of the same message is a no-op so a refetch can't twitch the page.
-    window.__setQueryParseError = function(msg) {
+    window.showQueryParseError = function(msg) {
       msg = msg || '';
       const el = document.getElementById('query-parse-error');
       if (!el || el.dataset.msg === msg) return;
@@ -749,8 +757,7 @@ queryEditorInitializationCode vizTypeM pid = do
       if (m) m.textContent = msg;
       document.getElementById('queryBox')?.setAttribute('data-query-state', msg ? 'error' : 'ok');
     };
-    window.showQueryParseError = msg => window.__setQueryParseError(msg);
-    window.clearQueryParseError = () => window.__setQueryParseError('');
+    window.clearQueryParseError = () => window.showQueryParseError('');
     // The editor re-validates right after this event and re-asserts a still-valid
     // error, so clearing here would only flash the strip off and on.
     window.addEventListener('update-query', () => window.clearQueryParseError());

@@ -1,5 +1,5 @@
 'use strict';
-import { getSeriesColor } from './colorMapping';
+import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
@@ -210,6 +210,7 @@ export const getChartStyles = () => {
 // visible underneath, which is usually the context you want while reading why
 // the refresh failed. Only the legitimately-empty range keeps a centred overlay.
 export const showChartError = (chartId: string, message: string) => {
+  hideNoDataOverlay(chartId);
   const msg = $(`${chartId}_errorMsg`);
   if (!msg) return;
   msg.textContent = message;
@@ -219,26 +220,9 @@ export const showChartError = (chartId: string, message: string) => {
 
 const hideChartError = (chartId: string) => $(`${chartId}_error`)?.classList.add('hidden');
 
-const showNoDataOverlay = (chartId: string, message?: string) => {
-  const el = $(`${chartId}`);
-  const parent = el?.parentElement;
-  if (!parent) return;
-  let overlay = parent.querySelector('.chart-no-data') as HTMLElement;
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.className = 'chart-no-data absolute inset-0 flex items-center justify-center z-10 pointer-events-none';
-    parent.style.position = 'relative';
-    parent.appendChild(overlay);
-  }
-  overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${message || 'No data for the selected time range'}</p></div>`;
-  overlay.classList.remove('hidden');
-};
+export const showNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.remove('hidden');
 
-const hideNoDataOverlay = (chartId: string) => {
-  const el = $(`${chartId}`);
-  const overlay = el?.parentElement?.querySelector('.chart-no-data') as HTMLElement;
-  if (overlay) overlay.classList.add('hidden');
-};
+export const hideNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.add('hidden');
 
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
@@ -260,6 +244,7 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
 
   const backgroundStyle = { color: styles.chartBg };
 
+  const inventorySeriesOpacity = widgetData.chartId?.startsWith('containers-') && i > 0 ? 0.72 : 1;
   const seriesOpt: any = {
     type: widgetData.chartType,
     name,
@@ -270,13 +255,13 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
     barMaxWidth: '10',
     barMinHeight: '1',
     encode: { x: 0, y: i + 1 },
-    // Set the color explicitly for all series types
-    itemStyle: { color: paletteColor },
+    itemStyle: { color: paletteColor, opacity: inventorySeriesOpacity },
   };
 
   // For line charts, also set lineStyle color
   if (widgetData.chartType === 'line') {
-    seriesOpt.lineStyle = { color: paletteColor };
+    const inventoryLineType = widgetData.chartId?.startsWith('containers-') ? ['solid', 'dashed', 'dotted'][i % 3] : 'solid';
+    seriesOpt.lineStyle = { color: paletteColor, opacity: inventorySeriesOpacity, width: inventorySeriesOpacity === 1 ? 2.25 : 1.5, type: inventoryLineType };
     // For line charts in dark mode, override the symbol to avoid white centers
     if (document.body.getAttribute('data-theme') === 'dark') {
       seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
@@ -459,7 +444,6 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
       // so the user can distinguish a broken widget from an empty range.
       chart.hideLoading();
-      hideNoDataOverlay(chartId);
       showChartError(chartId, error);
       setStatValue(widgetData, null); // clear the stat spinner; failed ≠ loading
       return;
@@ -844,6 +828,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   // Register with shared theme observer instead of per-widget MutationObserver
   const onThemeChange: ThemeCallback = (_isDark, _cbStyles) => {
+    invalidateLogLevelColors();
     const freshStyles = getChartStyles();
     if (freshStyles.textColor) {
       opt.legend = opt.legend || {};
@@ -859,6 +844,11 @@ const chartWidget = (widgetData: WidGetData) => {
     opt.backgroundColor = 'transparent';
     opt.series?.forEach((s: any) => {
       if (s.backgroundStyle) s.backgroundStyle = { color: freshStyles.chartBg };
+      if (widgetData.widgetType !== 'timeseries_stat') {
+        const color = getSeriesColor(s.name || '');
+        s.itemStyle = { ...s.itemStyle, color };
+        if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
+      }
     });
     chart.setOption(opt, false);
   };

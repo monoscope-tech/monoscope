@@ -14,10 +14,37 @@ import {
   getContrastTextColor,
   tailwindToHex,
   resolveColor,
+  getSeriesPalette,
   TAILWIND_TO_HEX,
 } from '../src/colorMapping';
 
 const isHex = (c: string) => /^#[0-9a-f]{6}$/i.test(c);
+const luminance = (hex: string) => {
+  const channel = (offset: number) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+};
+const contrast = (a: string, b: string) => {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (light + 0.05) / (dark + 0.05);
+};
+type RGB = [number, number, number];
+const oklchRgb = (value: string): { rgb: RGB; alpha: number } => {
+  const [, l, c, h, alpha = '1'] = value.match(/oklch\(([\d.]+)%\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)/)!;
+  const angle = (+h * Math.PI) / 180;
+  const [a, b] = [+c * Math.cos(angle), +c * Math.sin(angle)];
+  const [lp, mp, sp] = [+l / 100 + 0.3963377774 * a + 0.2158037573 * b, +l / 100 - 0.1055613458 * a - 0.0638541728 * b, +l / 100 - 0.0894841775 * a - 1.291485548 * b];
+  const [ll, m, s] = [lp ** 3, mp ** 3, sp ** 3];
+  const encode = (v: number) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.max(0, v) ** (1 / 2.4) - 0.055);
+  return { rgb: [encode(4.0767416621 * ll - 3.3077115913 * m + 0.2309699292 * s), encode(-1.2684380046 * ll + 2.6097574011 * m - 0.3413193965 * s), encode(-0.0041960863 * ll - 0.7034186147 * m + 1.707614701 * s)], alpha: +alpha };
+};
+const rgbContrast = (a: RGB, b: RGB) => {
+  const lum = (rgb: RGB) => rgb.reduce((sum, v, i) => sum + [0.2126, 0.7152, 0.0722][i] * (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4), 0);
+  const [light, dark] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (light + 0.05) / (dark + 0.05);
+};
 
 describe('status code colours', () => {
   test('every class of response gets a colour, and they differ from each other', () => {
@@ -74,6 +101,82 @@ describe('log level colours', () => {
 
   test('a level embedded in a longer label is still recognised', () => {
     expect(getLogLevelColor('SEVERE ERROR')).toBe(getLogLevelColor('error'));
+  });
+});
+
+describe('theme-aware series palettes', () => {
+  test('every light-mode data mark has 3:1 contrast on the chart surface', () => {
+    getSeriesPalette('light').forEach((color) => expect(contrast(color, '#f7f9fc')).toBeGreaterThanOrEqual(3));
+  });
+
+  test('light and dark palettes keep stable positions but use different values', () => {
+    const light = getSeriesPalette('light');
+    const dark = getSeriesPalette('dark');
+    expect(light).toHaveLength(dark.length);
+    expect(light).not.toEqual(dark);
+    expect(new Set(light).size).toBe(light.length);
+    expect(new Set(dark).size).toBe(dark.length);
+  });
+
+  test('every dark-mode data mark has 3:1 contrast on the chart surface', () => {
+    getSeriesPalette('dark').forEach((color) => expect(contrast(color, '#202124')).toBeGreaterThanOrEqual(3));
+  });
+
+  test('the active document theme changes a service value without changing its palette position', () => {
+    document.body.setAttribute('data-theme', 'light');
+    const light = getSeriesColor('checkout', 'service');
+    document.body.setAttribute('data-theme', 'dark');
+    const dark = getSeriesColor('checkout', 'service');
+    document.body.removeAttribute('data-theme');
+    expect(light).not.toBe(dark);
+  });
+});
+
+describe('light-mode design token contract', () => {
+  const css = readFileSync(resolve(process.cwd(), '../static/public/assets/css/tailwind.css'), 'utf8');
+  const token = (name: string) => css.match(new RegExp(`--color-${name}:\\s*([^;]+);`))?.[1].trim();
+
+  test('canvas, raised and overlay surfaces have distinct values', () => {
+    expect(new Set(['bgBase', 'bgRaised', 'bgOverlay', 'bgSunken'].map(token)).size).toBe(4);
+  });
+
+  test('raised panels use surface tokens rather than near-transparent fills', () => {
+    expect(css).toMatch(/\.surface-raised\s*{[^}]*bg-bgRaised/s);
+    expect(css).toMatch(/\.surface-table\s*{[^}]*bg-bgRaised/s);
+  });
+
+  test('selected and semantic weak fills are visible in light mode', () => {
+    expect(token('fillBrand-weak')).toMatch(/\/ 0\.1[02]\)$/);
+    for (const role of ['fillError-weak', 'fillInformation-weak', 'fillSuccess-weak', 'fillWarning-weak']) {
+      expect(token(role)).toMatch(/\/ 0\.(?:08|1)\)$/);
+    }
+  });
+
+  test('warning text remains readable on its weak warning fill', () => {
+    const text = oklchRgb(token('textWarning')!);
+    const fill = oklchRgb(token('fillWarning-weak')!);
+    const surface = oklchRgb(token('bgRaised')!);
+    const background = fill.rgb.map((v, i) => v * fill.alpha + surface.rgb[i] * (1 - fill.alpha)) as RGB;
+    expect(rgbContrast(text.rgb, background)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test('essential controls use the strong stroke in both themes', () => {
+    expect(token('strokeStrong')).toMatch(/\/ 0\.5\)$/);
+    expect(css).toMatch(/\[data-theme="dark"\][\s\S]*--color-strokeStrong:\s*rgba\(255 255 255 \/ 0\.35\)/);
+    expect(css).toMatch(/\.checkbox, \.radio, \.toggle/);
+  });
+
+  test('dark decorative strokes recede behind controls and data', () => {
+    expect(css).toMatch(/\[data-theme="dark"\][\s\S]*--color-strokeWeak:\s*rgba\(255 255 255 \/ 0\.05\)/);
+  });
+
+  test('an explicit weak button boundary is not promoted to the strong control stroke', () => {
+    expect(css).toMatch(/button\.border:not\(\.btn-primary\):not\(\[class\*='border-stroke'\]\)/);
+  });
+
+  test('selected tabs use the brand selection role', () => {
+    expect(css).toMatch(/\.tab\.tab-active[\s\S]*background-color:\s*var\(--color-fillBrand-weak\)/);
+    expect(css).toMatch(/\.tab\.tab-active[\s\S]*border-color:\s*var\(--color-strokeBrand-strong\)/);
   });
 });
 

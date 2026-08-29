@@ -134,9 +134,21 @@ describe('LogList — LOWER', () => {
     container.id = 'logs_list_container_inner';
     el.appendChild(container);
     Object.defineProperty(el, 'logsContainer', { value: container, configurable: true });
+    await new Promise((resolve) => setTimeout(resolve, 50)); // drain the mount-time double-rAF health check
+    const heal = vi.spyOn(el as any, 'healBlankVirtualizer').mockImplementation(() => {});
+    (el as any).handleListScroll();
     (el as any).handleListScroll();
     expect(container.classList.contains('is-scrolling')).toBe(true);
-    await vi.waitFor(() => expect(container.classList.contains('is-scrolling')).toBe(false), { timeout: 250 });
+    expect(heal).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(container.classList.contains('is-scrolling')).toBe(false);
+      expect(heal).toHaveBeenCalledOnce();
+    }, { timeout: 250 });
+  });
+
+  test('unwrapped summaries are bounded instead of making every virtual row 3600px wide', async () => {
+    const el = await mountList();
+    expect((el as any).fixedColumnWidths.summary).toBeLessThanOrEqual(1200);
   });
 
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed

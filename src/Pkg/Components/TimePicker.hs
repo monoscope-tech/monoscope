@@ -144,7 +144,7 @@ timepicker_ submitForm currentRange targetIdM = do
     , style_ $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
     , onclick_ "event.stopPropagation()"
-    , class_ $ "flex min-h-9 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer" <> bool "" " bg-fillSuccess-weak/40" isLive
+    , class_ "flex min-h-9 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
     , data_ "live-range" $ bool "false" "true" isLive
     ]
     do
@@ -309,7 +309,7 @@ refreshButton_ =
       transportBtn "Pause live updates" "" [data_ "live-toggle" "", onclick_ "window.toggleLiveRefresh(this.closest('[data-time-transport]'))"] do
         span_ [data_ "pause-icon" ""] $ faSprite_ "pause" "solid" "h-3.5 w-3.5 text-iconBrand"
         span_ [data_ "play-icon" "", class_ "hidden"] $ faSprite_ "play" "solid" "h-3.5 w-3.5 text-iconNeutral"
-      transportBtn "Next time window" " disabled:bg-bgSunken disabled:text-textDisabled" [data_ "next-window" "", onclick_ "window.shiftTimeRange(1, this.closest('[data-time-transport]'))"]
+      transportBtn "Next time window" " disabled:-ms-px disabled:bg-bgSunken disabled:text-textDisabled" [data_ "next-window" "", onclick_ "window.shiftTimeRange(1, this.closest('[data-time-transport]'))"]
         $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5 text-iconNeutral"
       transportBtn "Live update interval" "" (popoverTrigger_ "auto-refresh-pop")
         $ faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral"

@@ -58,3 +58,14 @@ spec = describe "dashboard templates" do
           d.discoveryMetrics `shouldSatisfy` isJust
           let metricQueries = [q | w <- allWidgets d, Just q <- [w.query], "metrics" `T.isPrefixOf` T.strip q]
           metricQueries `shouldSatisfy` (not . null)
+
+  it "RUM scopes Web Vitals by application and counts each session once" do
+    case find (\d -> d.file == Just "rum.yaml") templates of
+      Nothing -> expectationFailure "missing template: rum.yaml"
+      Just d -> do
+        let widgets = allWidgets d
+            metricSql = [sql | w <- widgets, Just sql <- [w.sql], "FROM otel_metrics" `T.isInfixOf` sql]
+            sessionQueries = [q | w <- widgets, w.title == Just "Sessions", Just q <- [w.query]]
+        metricSql `shouldSatisfy` (not . null)
+        forM_ metricSql (`shouldSatisfy` T.isInfixOf "resource___service___name = '{{var-app}}'")
+        sessionQueries `shouldSatisfy` (not . any (T.isInfixOf "dcount"))

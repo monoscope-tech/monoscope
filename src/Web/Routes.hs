@@ -7,7 +7,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
-import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
@@ -110,6 +109,7 @@ import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
+import Pages.RealUserMonitoring qualified as RUM
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.ServiceMap qualified as ServiceMap
@@ -134,6 +134,10 @@ type ProjectId = Capture "projectID" Projects.ProjectId
 type GetRedirect = Verb 'GET 302
 
 
+type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text] a)
+type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
+
+
 -- Query parameter types
 type QPT a = QueryParam a Text
 
@@ -150,7 +154,6 @@ data AllQueryParams
 
 
 -- Type-level expression for preserving field prefixes in RecordParam
-type role KeepPrefixExp phantom phantom
 data KeepPrefixExp :: Symbol -> Exp Symbol
 type instance Eval (KeepPrefixExp sym) = sym
 
@@ -209,7 +212,6 @@ instance Servant.MimeRender JSON ByteString where
 -- =============================================================================
 
 type ApiV1Routes :: Type -> Type
-type role ApiV1Routes nominal
 data ApiV1Routes mode = ApiV1Routes
   { eventsSearch
       :: mode
@@ -374,27 +376,24 @@ data ApiV1Routes mode = ApiV1Routes
 -- =============================================================================
 
 -- Root routes
-type role Routes nominal
-
-
 type Routes :: Type -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
-  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-  , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-  , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-  , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , login :: mode :- "login" :> QPT "redirect_to" :> QPT "screen_hint" :> QPT "login_hint" :> SessionRedirect NoContent
+  , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> SessionRedirect NoContent
+  , logout :: mode :- "logout" :> SessionRedirect NoContent
+  , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> SessionRedirect NoContent
+  , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> SessionRedirect (Html ())
   , -- OTLP/HTTP ingestion (protobuf) — collector-less SDK exporters
     otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
-  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
+  , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
   , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
@@ -440,14 +439,12 @@ data Routes mode = Routes
 
 
 -- Cookie Protected Routes
-type role CookieProtectedRoutes nominal
-
-
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
-    dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
-  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
+    dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
+  , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
+  , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> QPT "copy_widget_id" :> QPUUId "source_dashboard_id" :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
@@ -532,7 +529,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
 
 
 -- Log Explorer Routes
-type role LogExplorerRoutes' nominal
 type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 
@@ -573,7 +569,6 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
 
 
 -- Anomalies Routes
-type role AnomaliesRoutes' nominal
 type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
 
 
@@ -600,13 +595,13 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
 
 
 -- Telemetry Routes
-type role TelemetryRoutes' nominal
 type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 
 
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
+  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
@@ -633,7 +628,6 @@ data TelemetryRoutes' mode = TelemetryRoutes'
 
 
 -- Monitors Routes
-type role MonitorsRoutes' nominal
 type MonitorsRoutes = NamedRoutes MonitorsRoutes'
 
 
@@ -656,14 +650,13 @@ data MonitorsRoutes' mode = MonitorsRoutes'
 
 
 -- Projects Routes
-type role ProjectsRoutes' nominal
 type ProjectsRoutes = NamedRoutes ProjectsRoutes'
 
 
 type ProjectsRoutes' :: Type -> Type
 data ProjectsRoutes' mode = ProjectsRoutes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
-  , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
+  , onboardingProject :: mode :- "p" :> "new" :> LocationRedirect (PageCtx (Html ())) -- p represents project
   , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
   , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
@@ -748,7 +741,7 @@ server logger env tp otlpTraces otlpLogs =
     , widgetPngGet = widgetPngGetH
     , proxyLanding = \path ->
         Onboarding.proxyLandingH path
-          & State.evalState @TriggerEvents Map.empty
+          & State.evalState @TriggerEvents mempty
           & State.evalState @HXRedirectDest Nothing
           & State.evalState @XWidgetJSON Nothing
     , deviceCode = Auth.deviceCodeH
@@ -764,7 +757,7 @@ server logger env tp otlpTraces otlpLogs =
           ( \page ->
               page
                 & Notify.runNotifyProduction
-                & State.evalState Map.empty -- TriggerEvents
+                & State.evalState mempty -- TriggerEvents
                 & State.evalState Nothing -- HXRedirectDest
                 & State.evalState Nothing -- XWidgetJSON
                 & Reader.runReader sessionWithCookies
@@ -894,6 +887,7 @@ cookieProtectedServer =
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
+    , rumDashboardRedirect = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH
@@ -1030,6 +1024,7 @@ telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthC
 telemetryServer pid =
   TelemetryRoutes'
     { tracesGet = Trace.traceH pid
+    , rumGetH = RUM.rumGetH pid
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
@@ -1120,11 +1115,9 @@ data Status = Status
 
 
 statusH :: ATBaseCtx Status
-statusH = do
-  versionM <- Hasql.interpOne [HI.sql| select version() |]
-  hash <- maybe "dev" toText <$> lookupEnv "GIT_HASH"
-  commitDate <- maybe "dev" toText <$> lookupEnv "GIT_COMMIT_DATE"
-  pure Status{dbVersion = versionM, gitHash = hash, gitCommitDate = commitDate}
+statusH = Status <$> Hasql.interpOne [HI.sql| select version() |] <*> envOr "GIT_HASH" <*> envOr "GIT_COMMIT_DATE"
+  where
+    envOr k = maybe "dev" toText <$> lookupEnv k
 
 
 pingH :: ATBaseCtx Text

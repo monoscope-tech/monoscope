@@ -5,76 +5,25 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Theme colors ordered for maximum hue separation: any 3 consecutive are visually distinct
-const THEME_COLORS = [
-  '#60a5fa', // Blue-400
-  '#f87171', // Red-400
-  '#4ade80', // Green-400
-  '#fbbf24', // Amber-400
-  '#c084fc', // Purple-400
-  '#2dd4bf', // Teal-400
-  '#fb923c', // Orange-400
-  '#38bdf8', // Sky-400
-  '#fb7185', // Rose-400
-  '#a3e635', // Lime-400
-  '#818cf8', // Indigo-400
-  '#facc15', // Yellow-400
-  '#f472b6', // Pink-400
-  '#34d399', // Emerald-400
-  '#a78bfa', // Violet-400
-  '#22d3ee', // Cyan-400
-  '#e879f9', // Fuchsia-400
-  '#fc8452', // Dark orange
-  '#1A74A8', // Deep blue
-  '#ee6666'  // Classic red
+// Light-mode marks use darker values so every essential series clears 3:1 on
+// the cool chart surface. Dark mode keeps the brighter 400-weight family.
+const LIGHT_THEME_COLORS = [
+  '#2563eb', '#dc2626', '#15803d', '#b45309', '#9333ea', '#0f766e',
+  '#c2410c', '#0369a1', '#e11d48', '#4d7c0f', '#4f46e5', '#a16207',
+  '#be185d', '#047857', '#7c3aed', '#0e7490', '#a21caf', '#475569',
+  '#1d4ed8', '#b91c1c'
+];
+const DARK_THEME_COLORS = [
+  '#60a5fa', '#f87171', '#4ade80', '#fbbf24', '#c084fc', '#2dd4bf',
+  '#fb923c', '#38bdf8', '#fb7185', '#a3e635', '#818cf8', '#facc15',
+  '#f472b6', '#34d399', '#a78bfa', '#22d3ee', '#e879f9', '#94a3b8',
+  '#73c0de', '#ee6666'
 ];
 
-// HTTP Status Code Colors
-const STATUS_CODE_COLORS: Record<number, string> = {
-  // 2xx Success - Blues and Greens
-  200: '#1A74A8',  // Primary blue
-  201: '#37a2da',  // Lighter blue
-  202: '#32c5e9',  // Cyan-blue
-  204: '#73c0de',  // Light cyan
-  206: '#67e0e3',  // Very light cyan
-  
-  // 3xx Redirects - Cyans and Teals
-  301: '#73c0de',  // Light cyan
-  302: '#67e0e3',  // Lighter cyan
-  304: '#9fe6b8',  // Cyan-green
-  307: '#3ba272',  // Green-cyan
-  308: '#91cc75',  // Light green
-  
-  // 4xx Client Errors - Yellows and Oranges
-  400: '#fac858',  // Yellow
-  401: '#ffdb5c',  // Bright yellow
-  403: '#ff9f7f',  // Light orange
-  404: '#fc8452',  // Orange
-  405: '#fb7293',  // Orange-pink
-  429: '#e062ae',  // Pink-orange
-  
-  // 5xx Server Errors - Reds and Pinks
-  500: '#ee6666',  // Red
-  502: '#fb7293',  // Pink-red
-  503: '#e062ae',  // Dark pink
-  504: '#e690d1',  // Light pink
-  507: '#e7bcf3',  // Very light pink
-};
-
-// Percentile Colors - Performance gradient
-const PERCENTILE_COLORS: Record<string, string> = {
-  'p50': '#91cc75',  // Green - good performance
-  'median': '#91cc75',
-  'p75': '#3ba272',  // Darker green - acceptable
-  'q1': '#3ba272',
-  'p90': '#fac858',  // Yellow - warning level
-  'p95': '#fc8452',  // Orange - concerning
-  'q3': '#fc8452',
-  'p99': '#dc2626',  // Harsh red - critical (using Tailwind red-600 equivalent)
-  'p100': '#991b1b', // Dark red - maximum/worst (using Tailwind red-800 equivalent)
-  'max': '#991b1b',
-  'min': '#91cc75',  // Green - minimum/best
-};
+const currentTheme = (): 'light' | 'dark' => typeof document !== 'undefined' && document.body?.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+export const getSeriesPalette = (theme: 'light' | 'dark' = currentTheme()) =>
+  theme === 'dark' ? DARK_THEME_COLORS : LIGHT_THEME_COLORS;
+const themeColors = () => getSeriesPalette();
 
 // Log Level / Error Pattern Colors (hardcoded fallbacks for server-side rendering).
 // Browser callers should use resolveLogLevelColors() for CSS-token-aware colors.
@@ -149,54 +98,43 @@ function hashString(str: string): number {
 
 // Get color for HTTP status codes
 export function getStatusCodeColor(code: number | string): string {
-  // Handle grouped status codes (2xx, 3xx, etc.)
-  if (typeof code === 'string') {
-    const lowerCode = code.toLowerCase();
-    if (lowerCode === '2xx') return '#1A74A8'; // Primary blue
-    if (lowerCode === '3xx') return '#73c0de'; // Light cyan
-    if (lowerCode === '4xx') return '#fac858'; // Yellow/Orange
-    if (lowerCode === '5xx') return '#ee6666'; // Red
-  }
-  
-  const numCode = typeof code === 'string' ? parseInt(code, 10) : code;
-  
-  // Check if we have a specific color for this code
-  if (STATUS_CODE_COLORS[numCode]) {
-    return STATUS_CODE_COLORS[numCode];
-  }
-  
-  // Fallback colors by range
-  if (numCode >= 200 && numCode < 300) return '#67e0e3'; // Light cyan
-  if (numCode >= 300 && numCode < 400) return '#3ba272'; // Green-cyan
-  if (numCode >= 400 && numCode < 500) return '#fb7293'; // Orange-pink
-  if (numCode >= 500 && numCode < 600) return '#e7bcf3'; // Light pink
-  
-  // Default fallback
-  return '#9d96f5'; // Purple
+  const grouped = typeof code === 'string' && /^[2-5]xx$/i.test(code) ? Number(code[0]) * 100 : Number(code);
+  const dark = currentTheme() === 'dark';
+  if (grouped >= 200 && grouped < 300) return dark ? '#34d399' : '#047857';
+  if (grouped >= 300 && grouped < 400) return dark ? '#38bdf8' : '#0369a1';
+  if (grouped >= 400 && grouped < 500) return dark ? '#fbbf24' : '#b45309';
+  if (grouped >= 500 && grouped < 600) return dark ? '#f87171' : '#dc2626';
+  return themeColors()[4];
 }
 
 // Get color for percentiles
 export function getPercentileColor(percentile: string): string {
   const normalized = percentile.toLowerCase().trim();
-  return PERCENTILE_COLORS[normalized] || THEME_COLORS[hashString(percentile) % THEME_COLORS.length];
+  const dark = currentTheme() === 'dark';
+  const colors: Record<string, string> = dark
+    ? { p50: '#4ade80', median: '#4ade80', p75: '#34d399', q1: '#34d399', p90: '#fbbf24', p95: '#fb923c', q3: '#fb923c', p99: '#f87171', p100: '#fb7185', max: '#fb7185', min: '#4ade80' }
+    : { p50: '#15803d', median: '#15803d', p75: '#047857', q1: '#047857', p90: '#a16207', p95: '#c2410c', q3: '#c2410c', p99: '#dc2626', p100: '#be123c', max: '#be123c', min: '#15803d' };
+  const palette = themeColors();
+  return colors[normalized] || palette[hashString(percentile) % palette.length];
 }
 
 // Get color for log levels and error patterns
 export function getLogLevelColor(text: string): string {
-  const colors = resolveLogLevelColors();
+  const levels = resolveLogLevelColors();
   const normalized = text.toLowerCase().trim();
 
-  if (colors[normalized]) return colors[normalized];
-
-  for (const [pattern, color] of Object.entries(colors)) {
+  if (levels[normalized]) return levels[normalized];
+  for (const [pattern, color] of Object.entries(levels)) {
     if (normalized.includes(pattern)) return color;
   }
 
-  return THEME_COLORS[hashString(text) % THEME_COLORS.length];
+  const colors = themeColors();
+  return colors[hashString(text) % colors.length];
 }
 
 // Main function to get deterministic color for any series
 export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
+  const colors = themeColors();
   // Handle null and undefined values with visible but muted blue-gray
   if (value && value.toLowerCase() === 'unset') {
     return '#7c8db5'; // Visible desaturated blue — muted but clearly present on dark backgrounds
@@ -207,7 +145,7 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   
   // Handle empty values - use default color
   if (!value || value.trim() === '') {
-    return THEME_COLORS[0];
+    return colors[0];
   }
   
   // If context is provided, use specific color function
@@ -243,31 +181,36 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   }
   
   // Default: Use hash-based color selection for consistent service colors
-  return THEME_COLORS[hashString(value) % THEME_COLORS.length];
+  return colors[hashString(value) % colors.length];
 }
 
-// Tailwind class to hex mapping for service colors (full hue wheel for maximum distinguishability)
+// Tailwind class to hex mapping for service colors. These values are the
+// light-mode equivalents of the server's stable class positions.
 export const TAILWIND_TO_HEX: Record<string, string> = {
-  'bg-blue-400': '#60a5fa',
-  'bg-red-400': '#f87171',
-  'bg-green-400': '#4ade80',
-  'bg-amber-400': '#fbbf24',
-  'bg-purple-400': '#c084fc',
-  'bg-teal-400': '#2dd4bf',
-  'bg-orange-400': '#fb923c',
-  'bg-sky-400': '#38bdf8',
-  'bg-rose-400': '#fb7185',
-  'bg-lime-400': '#a3e635',
-  'bg-indigo-400': '#818cf8',
-  'bg-yellow-400': '#facc15',
-  'bg-pink-400': '#f472b6',
-  'bg-emerald-400': '#34d399',
-  'bg-violet-400': '#a78bfa',
-  'bg-cyan-400': '#22d3ee',
-  'bg-fuchsia-400': '#e879f9',
-  'bg-slate-400': '#94a3b8',
-  'bg-gray-500': '#9ca3af',
+  'bg-blue-400': '#2563eb',
+  'bg-red-400': '#dc2626',
+  'bg-green-400': '#15803d',
+  'bg-amber-400': '#b45309',
+  'bg-purple-400': '#9333ea',
+  'bg-teal-400': '#0f766e',
+  'bg-orange-400': '#c2410c',
+  'bg-sky-400': '#0369a1',
+  'bg-rose-400': '#e11d48',
+  'bg-lime-400': '#4d7c0f',
+  'bg-indigo-400': '#4f46e5',
+  'bg-yellow-400': '#a16207',
+  'bg-pink-400': '#be185d',
+  'bg-emerald-400': '#047857',
+  'bg-violet-400': '#7c3aed',
+  'bg-cyan-400': '#0e7490',
+  'bg-fuchsia-400': '#a21caf',
+  'bg-slate-400': '#475569',
+  'bg-gray-500': '#4b5563',
 };
+
+const DARK_TAILWIND_TO_HEX: Record<string, string> = Object.fromEntries(
+  Object.keys(TAILWIND_TO_HEX).map((key, index) => [key, DARK_THEME_COLORS[index] ?? DARK_THEME_COLORS[0]])
+);
 
 // Convert hex to HSL
 function hexToHsl(hex: string): [number, number, number] {
@@ -310,7 +253,8 @@ export function getContrastTextColor(hexColor: string): string {
 
 // Convert Tailwind class to hex color
 export function tailwindToHex(tailwindClass: string): string {
-  return TAILWIND_TO_HEX[tailwindClass] || THEME_COLORS[0];
+  const palette = currentTheme() === 'dark' ? DARK_TAILWIND_TO_HEX : TAILWIND_TO_HEX;
+  return palette[tailwindClass] || themeColors()[0];
 }
 
 // One service → one hex, shared by waterfall, timeline and service map. The map

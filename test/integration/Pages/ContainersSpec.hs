@@ -305,11 +305,11 @@ spec = sequential $ aroundAll withTestResources do
       V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "border border-strokeStrong bg-bgRaised", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "flex min-w-0 items-center text-textStrong max-md:hidden", "text-textWeak widget-subtitle"]
       T.isInfixOf "group/summary" html `shouldBe` False
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
-      T.count "class=\"container-usage-chart\"" html `shouldBe` 2
+      T.count "class=\"container-usage-chart " html `shouldBe` 2
       html `shouldContainAll` ["px-2 pt-2", "\"bottom\":0", "\"tooltip\":{\"show\":true}"]
       T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status

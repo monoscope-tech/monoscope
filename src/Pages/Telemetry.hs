@@ -105,7 +105,6 @@ data SpanMin = SpanMin
   , hasErrors :: Bool
   , serviceName :: Text
   , startTime :: Integer
-  , endTime :: Maybe Integer
   , timestamp :: UTCTime
   , attributes :: Maybe (Map Text AE.Value)
   }
@@ -472,16 +471,13 @@ relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = d
     ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
       div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
         $ toHtml
-        $ scopedToSubject
-        $ metricWidget pid m.metricName m.metricType m.metricUnit Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing
+        $ (metricWidget pid m.metricName m.metricType m.metricUnit Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
+          { Widget.timeFrom = Just $ formatUTC lo
+          , Widget.timeTo = Just $ formatUTC hi
+          , Widget.highlightFrom = Just $ formatUTC subLo
+          , Widget.highlightTo = Just $ formatUTC subHi
+          }
   where
-    scopedToSubject w =
-      w
-        { Widget.timeFrom = Just $ formatUTC lo
-        , Widget.timeTo = Just $ formatUTC hi
-        , Widget.highlightFrom = Just $ formatUTC subLo
-        , Widget.highlightTo = Just $ formatUTC subHi
-        }
     hint :: Text -> Html ()
     hint t = div_ [class_ "px-3 py-4 text-sm text-textWeak"] $ toHtml t
     section :: Text -> Html () -> Html ()
@@ -575,19 +571,6 @@ overViewTabs pid tab =
       viewTab "Table" "datapoints"
 
 
--- | A "select ... reload with query param" dropdown, shared by the service/metric-group filters.
-filterSelect_ :: Foldable f => Text -> Text -> Text -> Text -> Text -> f Text -> (Text -> Html ()) -> Html ()
-filterSelect_ widthCls param ariaLbl allLabel current opts display =
-  select_
-    [ class_ $ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 " <> widthCls <> " max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
-    , Aria.label_ ariaLbl
-    , onchange_ $ "window.setQueryParamAndReload('" <> param <> "', this.value)"
-    ]
-    do
-      option_ ([selected_ "all" | "all" == current] ++ [value_ "all"]) $ toHtml allLabel
-      forM_ opts $ \o -> option_ ([selected_ o | o == current] ++ [value_ o]) $ display o
-
-
 -- | Service picker for the metric catalogue. A project can have thousands of services, so
 -- the list is searched server-side and capped rather than rendered up front — the options
 -- only exist once the popover is opened, and only the matching ones.
@@ -645,9 +628,9 @@ serviceOptionsLimit = 50
 
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> Text -> Text -> Int -> Maybe Text -> Html ()
-chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = do
+chartsPage pid metricList labels inactive source mFilter activeCount nextUrl =
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload:inherited" "false"]
-    $ do
+    do
       div_ [class_ "w-full"] do
         div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
           overViewTabs pid "charts"
@@ -664,7 +647,14 @@ chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = d
             span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
             div_ [class_ "join max-md:w-full"] do
               servicePicker_ pid source
-              filterSelect_ "w-auto" "metric_prefix" "Filter by metric group" "All metric groups" mFilter metricNames (toHtml . stripTrailing)
+              select_
+                [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+                , Aria.label_ "Filter by metric group"
+                , onchange_ "window.setQueryParamAndReload('metric_prefix', this.value)"
+                ]
+                do
+                  option_ ([selected_ "all" | mFilter == "all"] ++ [value_ "all"]) "All metric groups"
+                  forM_ metricNames \o -> option_ ([selected_ o | o == mFilter] ++ [value_ o]) $ toHtml $ stripTrailing o
           div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
           label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
             faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
@@ -685,7 +675,7 @@ chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = d
           when (V.null metricList && not (V.null inactive))
             $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
           unless (V.null metricList)
-            $ div_ [class_ "w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4", id_ "metric_list_container"]
+            $ div_ [class_ "w-full grid grid-cols-1 gap-x-4 gap-y-5 pb-4 md:grid-cols-2 lg:grid-cols-3", id_ "metric_list_container"]
             $ chartList pid labels source metricList nextUrl
           unless (V.null inactive) $ inactiveMetricsList pid source inactive
 
@@ -720,7 +710,7 @@ spanDetailAttrs_ loading pidT spanUuid ts =
   , hxIndicator_ "#loading-span-list"
   ]
     <> case loading of
-      ShowSkeleton -> [term "hx-on::before:request" "window.showTraceDetailsLoading(this)"]
+      ShowSkeleton -> [term "hx-on::before:request" "window.showTraceDetailsLoading()"]
       -- Nothing extra: the panel opens from #trace_details_content's own after:settle hook.
       KeepCurrent -> []
 
@@ -783,7 +773,7 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source selected
   div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
-    $ div_ [class_ "h-56"]
+    $ div_ [class_ "h-60"]
     $ toHtml
     $ (metricWidget pid metricName metricType metricUnit selected (Just metricName) Nothing (Just detailUrl))
       { Widget.expandPushUrl = Just $ metricExpandUrl pid metricName source selected
@@ -820,7 +810,7 @@ dataPointsPage pid metrics refCounts = do
   let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
       rows = flattenMetricTree dataMap tree 0 []
-  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
+  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] do
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" False Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
@@ -1102,9 +1092,8 @@ monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) (["\"
 
 widgetRefsMetric :: Text -> Widget.Widget -> Bool
 widgetRefsMetric metricName widget =
-  let allTexts = maybeToList widget.query <> maybeToList widget.sql
-      quoted = "\"" <> metricName <> "\""
-   in any (T.isInfixOf quoted) allTexts || any (widgetRefsMetric metricName) (fromMaybe [] widget.children)
+  any (T.isInfixOf ("\"" <> metricName <> "\"")) (maybeToList widget.query <> maybeToList widget.sql)
+    || any (widgetRefsMetric metricName) (fold widget.children)
 
 
 -- Trace UI components
@@ -1431,9 +1420,8 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
     }
     function scheduleTraceCharts() {
       requestAnimationFrame(() => {
-        const run = () => initTraceCharts();
-        if (window.requestIdleCallback) window.requestIdleCallback(run, {timeout: 200});
-        else setTimeout(run, 0);
+        if (window.requestIdleCallback) window.requestIdleCallback(initTraceCharts, {timeout: 200});
+        else setTimeout(initTraceCharts, 0);
       });
     }
     document.addEventListener("DOMContentLoaded", scheduleTraceCharts);
@@ -1572,9 +1560,8 @@ buildSpanTree spans =
       [ let cStart = utcTimeToNanoseconds sp.startTime
             delta = max 0 (pStart - cStart)
             adjStart = cStart + delta
-            adjEnd = fmap ((+ delta) . utcTimeToNanoseconds) sp.endTime
             adjDur = if delta > 0 then min sp.spanDurationNs (pEnd - adjStart) else sp.spanDurationNs
-            rec = (spanMinFromRecord sp){spanDurationNs = adjDur, startTime = adjStart, endTime = adjEnd}
+            rec = (spanMinFromRecord sp){spanDurationNs = adjDur, startTime = adjStart}
          in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
       | sp <- Map.findWithDefault [] parentId spanMap
       ]
@@ -1592,7 +1579,6 @@ buildSpanTree spans =
                 , spanName = "Upstream span missing \x2014 " <> T.take 8 missingPid
                 , spanDurationNs = max 0 (endNs - startNs)
                 , startTime = startNs
-                , endTime = Just endNs
                 , hasErrors = False
                 , attributes = Just (one (syntheticMissingParentKey, AE.String missingPid))
                 }
@@ -1601,9 +1587,9 @@ buildSpanTree spans =
 
 
 -- | Lift a 'Telemetry.SpanRecord' into the lighter 'SpanMin' the waterfall
--- renderer consumes. Time fields are normalised to nanos and end-time is
--- mapped through Maybe; callers override durations / bounds when applying
--- clock-skew adjustment or building synthetic placeholders.
+-- renderer consumes. Time fields are normalised to nanos; callers override
+-- durations / bounds when applying clock-skew adjustment or building
+-- synthetic placeholders.
 spanMinFromRecord :: Telemetry.SpanRecord -> SpanMin
 spanMinFromRecord sp =
   SpanMin
@@ -1614,7 +1600,6 @@ spanMinFromRecord sp =
     , spanDurationNs = sp.spanDurationNs
     , serviceName = getServiceName sp.resource
     , startTime = utcTimeToNanoseconds sp.startTime
-    , endTime = utcTimeToNanoseconds <$> sp.endTime
     , hasErrors = spanHasErrors sp
     , timestamp = sp.timestamp
     , attributes = sp.attributes

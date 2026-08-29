@@ -141,8 +141,9 @@ spec = sequential $ aroundAll withTestResources do
       let metricCard = (widgetOf Widget.WTTimeseriesLine "metric"){Widget.layout = Just def{Widget.x = Just 0, Widget.y = Just 0, Widget.w = Just 2, Widget.h = Just 1}}
       normalized <- onlyWidget $ Widget.normalizeWidgetLayouts [metricCard]
       (normalized.layout >>= (.w), normalized.layout >>= (.h)) `shouldBe` (Just 2, Just 3)
-      toStrict (renderText $ Widget.widget_ metricCard{Widget.expandBtnFn = Just "/details"})
-        `shouldSatisfy` T.isInfixOf "aria-label=\"Expand widget\""
+      let html = toStrict $ renderText $ Widget.widget_ metricCard{Widget.expandBtnFn = Just "/details"}
+      for_ ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"] \fragment ->
+        html `shouldSatisfy` T.isInfixOf fragment
 
       _ <- newDashboard tr "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
@@ -150,6 +151,13 @@ spec = sequential $ aroundAll withTestResources do
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
       toStrict (renderText $ toHtml dashboards)
         `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
+
+    it "chartWidget_groupsTitleWithCardAndGuidesTheEmptyState" \_ -> do
+      let html = toStrict $ renderText $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.id = Just "requests-chart"}
+      html `shouldSatisfy` T.isInfixOf "gap-0.5 flex flex-col"
+      html `shouldNotSatisfy` T.isInfixOf "gap-1.5 flex flex-col"
+      for_ ["id=\"requests-chart_empty\"", "role=\"status\"", "No data in this time range", "Try a wider time range or adjust the filters."] \fragment ->
+        html `shouldSatisfy` T.isInfixOf fragment
 
   -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
   -- resize it, then re-read the dashboard the way the next page load does. Every type goes

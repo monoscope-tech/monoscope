@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle, latencyTooltip, spanLatencyBreakdown, dimTotals } from '../src/log-list';
+import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyState, latencyTitle, latencyTooltip, spanLatencyBreakdown, dimTotals } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -233,6 +233,18 @@ describe('exclusiveSegments', () => {
   });
 });
 
+describe('latencyState', () => {
+  test.each([
+    [0, 'missing'],
+    [999_999_999, 'normal'],
+    [1_000_000_000, 'warning'],
+    [4_999_999_999, 'warning'],
+    [5_000_000_000, 'critical'],
+  ] as const)('%s ns maps to %s', (duration, state) => {
+    expect(latencyState(duration)).toBe(state);
+  });
+});
+
 describe('latencyBar', () => {
   // Expanding a trace is what makes the column a waterfall again: the child rows only mean
   // something as a breakdown of the one request, which needs a shared axis.
@@ -276,8 +288,8 @@ describe('latencyBar', () => {
 });
 
 describe('latencyTooltip', () => {
-  // The card replaces a native `title=`, which could only say the numbers. Its job is to tie
-  // each number to the swatch colour the bar is painted in.
+  // The card replaces a native `title=`, which could only say the numbers. Stable identity
+  // swatches explain where time went while the bar independently communicates urgency.
   const seg = (label: string, ns: number, leftPct: number) => ({ leftPct, widthPct: ns / 100, color: `bg-${label}`, label, ns });
   const row = { duration: 1_000, startNs: 1_500, traceStart: 1_000, color: 'bg-api' };
   const card = (segments: any[], r = row) => {
@@ -288,7 +300,7 @@ describe('latencyTooltip', () => {
   const lines = (host: HTMLElement) =>
     [...host.querySelectorAll('.latency-card-body > div')].slice(1).map((d) => d.textContent!.replace(/\s+/g, ' ').trim());
 
-  test('each service carries its own swatch, so the card explains the colours in the bar', () => {
+  test('each service keeps its identity swatch while the bar uses semantic latency colour', () => {
     const host = card([seg('postgres', 500, 0), seg('redis', 100, 60)]);
     expect([...host.querySelectorAll('.latency-card-body span[class*="rounded-xs"]')].map((s) => s.className)).toEqual(
       expect.arrayContaining([expect.stringContaining('bg-postgres'), expect.stringContaining('bg-redis'), expect.stringContaining('bg-api')])
@@ -330,11 +342,41 @@ describe('spanLatencyBreakdown wrapper', () => {
   // and it opens with no script at all. Both halves of that are attribute contracts: lose
   // `interestfor`/`popover` and it never opens; lose `anchor-name`/`position-anchor` and it
   // opens somewhere unrelated to the bar it describes.
-  const wrap = (card: { id: string; body: () => any } | null) => {
+  const wrap = (card: { id: string; body: () => any } | null, state: ReturnType<typeof latencyState> = 'normal', frame = false) => {
     const host = document.createElement('div');
-    render(spanLatencyBreakdown({ track: 'bg-api', segments: [], title: '1.2s total', card, barWidth: 108, frame: false }), host);
+    render(
+      spanLatencyBreakdown({
+        track: 'bg-api',
+        segments: [{ leftPct: 20, widthPct: 30, color: 'bg-db', label: 'db', ns: 300 }],
+        title: '1.2s total',
+        card,
+        barWidth: 108,
+        frame,
+        state,
+      }),
+      host
+    );
     return host;
   };
+
+  test.each(['normal', 'warning', 'critical'] as const)('%s latency retains service colours so the bar shows where time was spent', (state) => {
+    const bar = wrap(null, state).querySelector(`[data-latency-state="${state}"]`)!;
+    expect(bar.className).toContain('bg-api');
+    expect(bar.querySelector('[class*="bg-db"]')).not.toBeNull();
+    expect(bar.className).not.toContain('bg-fillNeutral-strong');
+  });
+
+  test('warning and critical latency have distinct non-colour markers', () => {
+    expect(wrap(null, 'warning').querySelector('[data-latency-marker="warning"]')).not.toBeNull();
+    expect(wrap(null, 'critical').querySelector('[data-latency-marker="critical"]')).not.toBeNull();
+  });
+
+  test('missing latency is an em dash rather than a zero-length bar', () => {
+    const missing = wrap(null, 'missing');
+    expect(missing.textContent).toContain('—');
+    expect(missing.querySelector('[data-latency-state="missing"]')?.getAttribute('aria-label')).toBe('No latency data');
+    expect(missing.querySelector('[data-latency-state="normal"]')).toBeNull();
+  });
 
   test('a row with a breakdown gets a button wired to its own popover, anchored to its own bar', () => {
     const host = wrap({ id: 'lat-abc', body: () => latencyTooltip({ duration: 1_000, startNs: 0, traceStart: 0, color: 'bg-api' }, []) });
@@ -356,6 +398,31 @@ describe('spanLatencyBreakdown wrapper', () => {
     expect(host.querySelector('button')).toBeNull();
     expect(host.querySelector('[popover]')).toBeNull();
     expect(host.querySelector('[role="img"]')!.getAttribute('aria-label')).toBe('1.2s total');
+  });
+});
+
+describe('mobile latency summary', () => {
+  test('keeps the numeric duration and non-colour warning marker when the latency column is hidden', () => {
+    const el = new LogList();
+    Object.assign(el as any, { isNarrow: true, colIdxMap: { summary: 0 } });
+    const host = document.createElement('div');
+    render((el as any).logItemCol({ ...row('slow', ['[]']), duration: 1_500_000_000 }, 'summary'), host);
+    const latency = host.querySelector('[data-mobile-latency-state="warning"]')!;
+    expect(latency.textContent).toContain('1.50s');
+    expect(latency.querySelector('[data-latency-marker="warning"]')).not.toBeNull();
+  });
+});
+
+describe('trace expansion control', () => {
+  test('a non-error extender keeps the explicitly weak boundary', () => {
+    const el = new LogList();
+    Object.assign(el as any, { view: 'tree', colIdxMap: { summary: 0 } });
+    const host = document.createElement('div');
+    render((el as any).logItemCol({ ...row('root', ['[]']), children: 10 }, 'summary'), host);
+    const extender = host.querySelector('button[aria-label="Expand trace (10 spans)"]')!;
+    expect(extender.className).toContain('border-strokeWeak');
+    expect(extender.className).not.toContain('border-strokeStrong');
+    expect(extender.className).not.toContain('strokeError');
   });
 });
 
@@ -431,6 +498,14 @@ describe('legend strip', () => {
 });
 
 describe('latencyTitle', () => {
+  test.each([
+    [1_000_000_000, 'Slow latency (at least 1s)'],
+    [5_000_000_000, 'Critical latency (at least 5s)'],
+    [0, 'No latency data'],
+  ] as const)('names the %s ns state without relying on colour', (duration, label) => {
+    expect(latencyTitle('service', { startNs: 0, duration, traceStart: 0 }, [])).toContain(label);
+  });
+
   test('says in words what the colours say, including the trace offset the bar no longer encodes', () => {
     const title = latencyTitle(
       'service',
@@ -449,6 +524,6 @@ describe('latencyTitle', () => {
 
   test('a leaf span is all self time and names no dimension', () => {
     const title = latencyTitle('kind', { startNs: 0, duration: 3_000_000, traceStart: 0 }, []);
-    expect(title).toBe('3ms total · +0ns into the trace · self 3ms');
+    expect(title).toBe('Normal latency · 3ms total · +0ns into the trace · self 3ms');
   });
 });

@@ -235,4 +235,6 @@ spec = do
       (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       pageHtml `shouldSatisfy` T.isInfixOf "/metrics/services"
+      pageHtml `shouldSatisfy` T.isInfixOf "gap-x-4 gap-y-5 pb-4"
+      pageHtml `shouldSatisfy` T.isInfixOf "h-60"
       T.count "checkout-" pageHtml `shouldBe` 0

@@ -17,7 +17,7 @@ embedIconEntries sprites = do
   entries <-
     concat <$> forM sprites \(kind, path) -> do
       TH.qAddDependentFile path
-      contents <- TH.runIO $ readFileText path
+      contents <- TH.runIO $ decodeUtf8 <$> readFileBS path
       either (fail . ((path <> ": ") <>)) pure $ parseSprite kind contents
   -- SVG fragment lookup resolves the first matching id. Preserve that behavior
   -- for the few legacy duplicate symbols already present in the sheets.

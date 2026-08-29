@@ -834,6 +834,23 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "facets?group=http"
       html `shouldNotSatisfy` T.isInfixOf eagerUrl
 
+    it "queryEditor_keepsRestingBoundariesQuietUntilFocus" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
+      html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
+      html `shouldSatisfy` T.isInfixOf "aria-disabled:border-strokeWeak"
+      html `shouldSatisfy` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-full"
+      html `shouldSatisfy` T.isInfixOf "id=\"ai-search-submit\""
+      html `shouldSatisfy` T.isInfixOf "aria-disabled=\"true\""
+      html `shouldSatisfy` T.isInfixOf "set #ai-search-submit&#39;s @aria-disabled"
+
+    it "timeTransport_disabledNextButton_hasSingleDivider" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      find (T.isInfixOf "aria-label=\"Next time window\"") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "disabled:-ms-px")
+
     -- Regression: HTMX swaps only #main-content, so a preload script in <head>
     -- was discarded when arriving from another page. The table then raced its
     -- fallback worker fetch against chart requests and could render an empty list.

@@ -72,6 +72,7 @@ menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
   [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
   , (I18n.t lang "nav.explorer", p "/log_explorer", "explore")
+  , ("Real User Monitoring", p "/rum", "web")
   , (I18n.t lang "nav.infrastructure", p "/infrastructure/hosts", "server")
   , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
   , (I18n.t lang "nav.issues", p "/issues", "bug")
@@ -94,7 +95,7 @@ onboardingChecklist_ project = do
         , (has "NotifChannel", ("Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
-      doneCount = length [i | i <- items, fst i]
+      doneCount = length $ filter fst items
       totalCount = length items
       progress = show doneCount <> "/" <> show totalCount :: Text
   unless (doneCount == totalCount || has "checklist_dismissed")
@@ -465,35 +466,30 @@ bodyWrapper bcfg child = do
             });
           }
 
-          // Dark mode toggle - disables transitions during theme switch to prevent flash
+          function applyTheme(theme) {
+            document.body.setAttribute('data-theme', theme);
+            document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
+          }
+
+          // Suppresses transitions across the swap so the theme change doesn't flash.
+          function applyThemeSmooth(theme) {
+            document.documentElement.classList.add('no-transition');
+            applyTheme(theme);
+            requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
+          }
+
           function toggleDarkMode() {
             const newTheme = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-            document.documentElement.classList.add('no-transition');
-            document.body.setAttribute('data-theme', newTheme);
-            document.getElementById('theme-color-meta').content = newTheme === 'dark' ? '#060708' : '#fbfcfd';
+            applyThemeSmooth(newTheme);
             setCookie('theme', newTheme, 365);
             syncThemeToggles(newTheme);
-            requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
           }
 
           // System theme detection - respect OS preference if user hasn't manually set
           (function() {
-            const savedTheme = getCookie('theme');
-            if (!savedTheme) {
-              const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-              const theme = prefersDark ? 'dark' : 'light';
-              document.body.setAttribute('data-theme', theme);
-              document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
-            }
-            // Watch for OS theme changes (only if user hasn't manually set)
+            if (!getCookie('theme')) applyTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-              if (!getCookie('theme')) {
-                document.documentElement.classList.add('no-transition');
-                const theme = e.matches ? 'dark' : 'light';
-                document.body.setAttribute('data-theme', theme);
-                document.getElementById('theme-color-meta').content = theme === 'dark' ? '#060708' : '#fbfcfd';
-                requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
-              }
+              if (!getCookie('theme')) applyThemeSmooth(e.matches ? 'dark' : 'light');
             });
           })();
 
@@ -566,7 +562,7 @@ projectsDropDown currProject projects = do
       div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
         actionLink [href_ "/"] "grid" "All projects"
         actionLink [href_ "/p/new"] "plus" "New project"
-        when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
+        when (currProject.paymentPlan `elem` ["UsageBased", "GraduatedPricing"])
           $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
@@ -738,7 +734,7 @@ navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()
 navbar bcfg menuL =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
-      whenJust bcfg.currProject \_ -> do
+      when (isJust bcfg.currProject) do
         label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
@@ -746,15 +742,14 @@ navbar bcfg menuL =
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
-      h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
+      h1_ [class_ $ "flex min-w-0 items-center text-textStrong" <> bool "" " max-md:hidden" (isJust bcfg.pageActions)] do
         let targetPage = Components.getTargetPage bcfg.pageTitle
-            titleClass = "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong"
             keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
         if targetPage /= "" && isJust bcfg.pageTitleSuffix
-          then whenJust bcfg.currProject \p -> a_ ([class_ $ titleClass <> " hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+          then whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
           else case bcfg.pageTitleModalId of
-            Just modalId -> label_ [class_ $ titleClass <> " cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
-            Nothing -> span_ [class_ titleClass, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
+            Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
         -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
         span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
           faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -885,6 +880,7 @@ navFlyoutItems :: Text -> Text -> [(Text, Text)]
 navFlyoutItems pidTxt = \case
   "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
   "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
+  "Real User Monitoring" -> [("Overview", p "/rum"), ("Sessions", p "/rum?tab=sessions"), ("Performance", p "/rum?tab=performance")]
   "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]

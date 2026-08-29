@@ -168,6 +168,7 @@ extra-source-files:
     static/migrations/0137_replay_rrweb_root_prefix.sql
     static/migrations/0138_drop_replay_migration_jobs.sql
     static/migrations/0139_git_sync_announced_revision.sql
+    static/migrations/0140_query_monitor_not_null_flags.sql
 
 source-repository head
   type: git
@@ -233,6 +234,7 @@ library
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects
+      Pages.RealUserMonitoring
       Pages.Replay
       Pages.Reports
       Pages.ServiceMap
@@ -657,6 +659,7 @@ test-suite integration-tests
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
+      Pages.RealUserMonitoringSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.ShareSpec
@@ -831,6 +834,7 @@ test-suite test-dev
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects
+      Pages.RealUserMonitoring
       Pages.Replay
       Pages.Reports
       Pages.ServiceMap
@@ -936,6 +940,7 @@ test-suite test-dev
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
+      Pages.RealUserMonitoringSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.ShareSpec

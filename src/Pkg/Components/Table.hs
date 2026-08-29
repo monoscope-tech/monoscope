@@ -259,7 +259,7 @@ data FilterOption = FilterOption
 -- >>> facetValues snd (V.fromList [("a", Just "b"), ("c", Just "a"), ("d", Nothing)])
 -- ["a","b"]
 facetValues :: (a -> Maybe Text) -> V.Vector a -> [Text]
-facetValues getter = Relude.sort . ordNub . filter (not . T.null) . mapMaybe getter . V.toList
+facetValues getter = sortNub . filter (not . T.null) . mapMaybe getter . V.toList
 
 
 -- | A facet menu over @values@, marking those in @selected@ active. Single-select is the
@@ -293,7 +293,7 @@ facetActions baseUrl targetId filterMenus =
     , sortOptions = []
     , currentSort = ""
     , filterMenus
-    , activeFilters = [(menu.label, selected) | menu <- filterMenus, selected <- [[o.value | o <- menu.options, o.isActive]], not $ null selected]
+    , activeFilters = [(menu.label, selected) | menu <- filterMenus, let selected = [o.value | o <- menu.options, o.isActive], not $ null selected]
     }
 
 
@@ -327,7 +327,7 @@ instance Default Config where
   def =
     Config
       { tableClasses = "table table-sm w-full relative"
-      , thClasses = "text-left bg-fillWeaker sticky top-0 overflow-hidden"
+      , thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden"
       , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-4"
       , showHeader = True
@@ -464,7 +464,7 @@ renderTable :: Table a -> Html ()
 renderTable tbl =
   let isEmpty = V.null tbl.rows && isJust tbl.features.zeroState
       tableMain = do
-        whenJust tbl.features.header id
+        sequence_ tbl.features.header
         when (isJust tbl.features.resultSummary || isJust tbl.features.exportName) $ renderResultToolbar tbl
         div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
@@ -495,9 +495,7 @@ renderTable tbl =
         (Nothing, Nothing) -> []
         where
           swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid]
-   in case tbl.config.containerId of
-        Just cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent
-        Nothing -> paddedContent
+   in maybe paddedContent (\cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
 
 
 renderRows :: Table a -> Html ()
@@ -522,7 +520,7 @@ renderRows tbl
                 th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-index" $ show idx]) do
                   span_ [class_ "flex items-center gap-2 min-w-0"] do
                     span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
-                    whenJust c.headerExtra id
+                    sequence_ c.headerExtra
                     whenJust sortOrder \case
                       Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
                       Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
@@ -610,8 +608,8 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
 
 renderFilterRail :: TableHeaderActions -> Html ()
 renderFilterRail actions =
-  details_ [open_ "", class_ "w-60 shrink-0 rounded-lg border border-strokeWeak bg-bgBase max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
-    summary_ [class_ "cursor-pointer border-b border-strokeWeak px-3 py-2 text-sm font-semibold text-textStrong"] "Filters"
+  details_ [open_ "", class_ "w-60 shrink-0 rounded-lg border border-strokeStrong bg-bgRaised max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
+    summary_ [class_ "cursor-pointer border-b border-strokeWeak bg-bgAlternate px-3 py-2 text-sm font-semibold text-textStrong"] "Filters"
     facetRail_ Nothing "p-2" "Search filters" (Just clearAll) $ forM_ (zip [0 :: Int ..] actions.filterMenus) \(index, menu) ->
       facetSection_ (index == 0 || any (.isActive) menu.options) "" [] (toHtml menu.label)
         $ div_ [class_ "max-h-48 overflow-y-auto"]
@@ -820,7 +818,7 @@ treeScript =
 col :: Text -> (a -> Html ()) -> Column a
 col name render =
   Column
-    { name = name
+    { name
     , render = \row -> let content = render row in if TL.null (TL.strip $ renderText content) then span_ [class_ "text-textDisabled"] "-" else content
     , attrs = []
     , sortField = Nothing

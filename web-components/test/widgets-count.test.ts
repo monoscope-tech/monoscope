@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { chartDataUrl, sumTimeseriesValues } from '../src/widgets';
+import { chartDataUrl, hideNoDataOverlay, showChartError, showNoDataOverlay, sumTimeseriesValues } from '../src/widgets';
 
 describe('chartDataUrl', () => {
   test('inherits the page default when the URL has no explicit time range', () => {
@@ -12,6 +12,31 @@ describe('chartDataUrl', () => {
     );
 
     expect(url.searchParams.get('since')).toBe('5M');
+  });
+});
+
+describe('chart empty state', () => {
+  test('reveals and hides the stable server-rendered guidance', () => {
+    document.body.innerHTML = '<div id="latency_empty" class="chart-no-data hidden"></div>';
+
+    showNoDataOverlay('latency');
+    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(false);
+
+    hideNoDataOverlay('latency');
+    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(true);
+  });
+
+  test('replaces stale empty guidance with the fetch error', () => {
+    document.body.innerHTML = `
+      <div id="latency_empty" class="chart-no-data hidden"></div>
+      <div id="latency_error" class="hidden"><span id="latency_errorMsg"></span></div>`;
+
+    showNoDataOverlay('latency');
+    showChartError('latency', 'Unable to load this chart.');
+
+    expect(document.querySelector('#latency_empty')?.classList.contains('hidden')).toBe(true);
+    expect(document.querySelector('#latency_error')?.classList.contains('hidden')).toBe(false);
+    expect(document.querySelector('#latency_errorMsg')?.textContent).toBe('Unable to load this chart.');
   });
 });
 

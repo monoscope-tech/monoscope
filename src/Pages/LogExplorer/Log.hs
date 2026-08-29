@@ -235,21 +235,19 @@ buildTraceTree colIdxMap queryResultCount rows
   | otherwise = (adjustedRows, sortWith (Down . (.startTime)) entries)
   where
     lookupIdx = flip HM.lookup colIdxMap
-    valText v = (v V.!?) >=> \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
-    valInt64 v = (v V.!?) >=> \case AE.Number n -> toBoundedInteger n :: Maybe Int64; _ -> Nothing
+    txt k row = mfilter (not . T.null) $ lookupVecTextByKey row colIdxMap k
+    int64 k row = (lookupIdx k >>= (row V.!?)) >>= \case AE.Number n -> toBoundedInteger n :: Maybe Int64; _ -> Nothing
 
     mkSpanInfo :: Int -> V.Vector AE.Value -> SpanInfo
     mkSpanInfo idx row =
-      let isLog = maybe False (\i -> valText row i == Just "log") (lookupIdx "kind")
-          rawId = fromMaybe ("gen-" <> show idx) $ lookupIdx "id" >>= valText row
-          rawLb = lookupIdx "latency_breakdown" >>= valText row
-          sid = if isLog then rawId else fromMaybe rawId rawLb
-          pid = lookupIdx "parent_id" >>= valText row
-          tid = fromMaybe ("gen-trace-" <> show idx) $ lookupIdx "trace_id" >>= valText row
-          sns = fromMaybe 0 $ lookupIdx "start_time_ns" >>= valInt64 row
-          d = if isLog then 0 else fromMaybe 0 (lookupIdx "duration" >>= valInt64 row)
-          ts = lookupIdx "timestamp" >>= valText row
-       in SpanInfo sid pid tid sns d ts (idx < queryResultCount) idx
+      let isLog = txt "kind" row == Just "log"
+          rawId = fromMaybe ("gen-" <> show idx) $ txt "id" row
+          sid = if isLog then rawId else fromMaybe rawId (txt "latency_breakdown" row)
+          pid = txt "parent_id" row
+          tid = fromMaybe ("gen-trace-" <> show idx) $ txt "trace_id" row
+          sns = fromMaybe 0 $ int64 "start_time_ns" row
+          d = if isLog then 0 else fromMaybe 0 (int64 "duration" row)
+       in SpanInfo sid pid tid sns d (txt "timestamp" row) (idx < queryResultCount) idx
 
     spanInfos = V.imap mkSpanInfo rows
 
@@ -268,15 +266,15 @@ buildTraceTree colIdxMap queryResultCount rows
     adjMap = Map.fromList [(i, (s, d)) | (i, s, d) <- adjustments]
     adjustedRows = V.imap applyAdj rows
       where
-        applyAdj i row = case Map.lookup i adjMap of
-          Nothing -> row
-          Just (s, d) ->
-            let upd =
-                  catMaybes
-                    [ (,AE.Number (fromIntegral s)) <$> stIdxM
-                    , (,AE.Number (fromIntegral d)) <$> durIdxM
-                    ]
-             in if null upd then row else row V.// upd
+        applyAdj i row = maybe row adjustRow (Map.lookup i adjMap)
+          where
+            adjustRow (s, d) =
+              let upd =
+                    catMaybes
+                      [ (,AE.Number (fromIntegral s)) <$> stIdxM
+                      , (,AE.Number (fromIntegral d)) <$> durIdxM
+                      ]
+               in if null upd then row else row V.// upd
 
     buildTraceEntries :: [SpanInfo] -> [(TraceTreeEntry, [(Int, Int64, Int64)])]
     buildTraceEntries spans =
@@ -360,9 +358,7 @@ buildTraceTree colIdxMap queryResultCount rows
 -- >>> colsFitRows (HM.fromList [("id",0)]) V.empty
 -- False
 colsFitRows :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> Bool
-colsFitRows colIdxMap rows = case V.length <$> rows V.!? 0 of
-  Nothing -> False
-  Just w -> all (< w) (HM.elems colIdxMap)
+colsFitRows colIdxMap rows = maybe False (\w -> all (< w) (HM.elems colIdxMap)) (V.length <$> rows V.!? 0)
 
 
 -- | Detect query-result spans whose parent_id is missing from the result and
@@ -376,7 +372,7 @@ synthesizeOrphanHeaders colIdxMap rows
   where
     lookupIdx = flip HM.lookup colIdxMap
     colCount = maybe 0 V.length (rows V.!? 0)
-    textAt k r = lookupIdx k >>= (r V.!?) >>= \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
+    textAt k r = mfilter (not . T.null) $ lookupVecTextByKey r colIdxMap k
     numAt k r = lookupIdx k >>= (r V.!?) >>= \case AE.Number n -> Just (round n :: Integer); _ -> Nothing
     presentIds = S.fromList $ V.toList $ V.mapMaybe (textAt "latency_breakdown") rows
     -- Combined orphan-detect + key extraction: trace_id + parent_id where the
@@ -627,17 +623,15 @@ renderFacetValue f (FacetValue val count) =
 
 renderFacetTail :: Text -> FacetSummary -> Html ()
 renderFacetTail field facetSummary =
-  case L.find ((== field) . (.path)) facetDefs of
-    Nothing -> mempty
-    Just facet ->
-      let (FacetData facetMap) = facetSummary.facetJson
-          values = drop 5 $ HM.lookupDefault [] field facetMap
-          count = prettyPrintCount $ length values
-       in details_ [class_ "facet-tail group", open_ ""] do
-            summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
-              span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
-              span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
-            div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
+  whenJust (L.find ((== field) . (.path)) facetDefs) \facet -> do
+    let (FacetData facetMap) = facetSummary.facetJson
+        values = drop 5 $ HM.lookupDefault [] field facetMap
+        count = prettyPrintCount $ length values
+    details_ [class_ "facet-tail group", open_ ""] do
+      summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
+        span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
+        span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
+      div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
 
 
 -- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
@@ -732,21 +726,17 @@ translateQueryError raw =
       | T.length firstLine > 240 = T.take 237 firstLine <> "…"
       | otherwise = firstLine
    in
-    case extractMissingColumn raw of
-      Just col ->
-        kqlError400
-          "unknown_field"
-          ("Unknown field \"" <> col <> "\"")
-          (Just col)
-          (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
-          (Just raw)
-      Nothing ->
-        kqlError400
-          "query_failed"
-          summary
-          Nothing
-          Nothing
-          (Just raw)
+    maybe
+      (kqlError400 "query_failed" summary Nothing Nothing (Just raw))
+      ( \col ->
+          kqlError400
+            "unknown_field"
+            ("Unknown field \"" <> col <> "\"")
+            (Just col)
+            (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
+            (Just raw)
+      )
+      (extractMissingColumn raw)
 
 
 -- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
@@ -820,13 +810,9 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   -- The initial HTMX facet request used to enqueue this job. Common facets now render
   -- with the page, so preserve the missing-summary recovery without restoring that
   -- client-side round trip.
-  when (isNothing bw.facetSummaryM)
-    $ liftIO
-    $ withResource authCtx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
+  when (isNothing bw.facetSummaryM) $ enqueueFacetsJob authCtx pid now
 
-  let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
-  logErr "freeTierStatus" freeTierStatusE
+  whenLeft_ (void freeTierStatusE) (Log.logAttention "Log explorer freeTierStatus failed" . show @Text)
 
   let freeTierStatus = fromRight def freeTierStatusE
 
@@ -906,7 +892,7 @@ logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-c
 
 -- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
 -- app config + clock, and resolve the time range once.
--- | The sticky deployment-environment selection travels with the session (it is read from
+-- The sticky deployment-environment selection travels with the session (it is read from
 -- the @env@ cookie at auth time), so every data endpoint that already resolves the session
 -- gets it here rather than declaring a query parameter it would have to be handed on every
 -- link in the app.
@@ -960,10 +946,7 @@ logExplorerFacetsH pid fieldM groupM = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   facetSummary <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
-  when (isNothing facetSummary)
-    $ liftIO
-    $ withResource authCtx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
+  when (isNothing facetSummary) $ enqueueFacetsJob authCtx pid now
   addRespHeaders
     $ maybe
       (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
@@ -975,10 +958,6 @@ logExplorerFacetsH pid fieldM groupM = do
       facetSummary
 
 
--- | Enriched span schema for the query editor, served from a dedicated endpoint
--- so the ~365KB payload isn't inlined into (and re-encoded on) every page render.
--- The client caches it in a window promise for the session. Facet enrichment is
--- from in-memory summary state (cheap); the time range is ignored by getFacetSummary.
 -- | Structured verdict for the query editor. It underlines @column@..@width@ and
 -- prints @message@, so the squiggle comes from the same parser that gates
 -- execution instead of a regex approximation of the grammar.
@@ -1000,11 +979,17 @@ logExplorerValidateH pid queryM sourceM = do
   -- Same source the query will run under, so the squiggle and the execution agree about
   -- which table's columns exist. Without it a metrics query is marked invalid on a page
   -- that runs it happily.
-  addRespHeaders $ case parseQueryDiagnosed (parseMaybe pSource =<< sourceM) (maybeToMonoid queryM) of
-    Right _ -> QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing}
-    Left e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width}
+  addRespHeaders
+    $ either
+      (\e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width})
+      (const QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing})
+      (parseQueryDiagnosed (parseMaybe pSource =<< sourceM) (maybeToMonoid queryM))
 
 
+-- | Enriched span schema for the query editor, served from a dedicated endpoint
+-- so the ~365KB payload isn't inlined into (and re-encoded on) every page render.
+-- The client caches it in a window promise for the session. Facet enrichment is
+-- from in-memory summary state (cheap); the time range is ignored by getFacetSummary.
 logExplorerSchemaH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
 logExplorerSchemaH pid = do
   _ <- Projects.sessionAndProject pid
@@ -1041,7 +1026,7 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
       let skip = fromMaybe 0 skipM
       (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM skip
       -- Summary only rides the first page; later load-more pages don't need it.
-      addRespHeaders $ SessionsView total (V.fromList rows) (if skip == 0 then Just summ else Nothing)
+      addRespHeaders $ SessionsView total (V.fromList rows) (guard (skip == 0) $> summ)
 
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
@@ -1052,6 +1037,13 @@ alertFormH pid alertM = do
   alertDM <- lookupAlert alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
   addRespHeaders $ alertConfigurationForm_ project alertDM teams
+
+
+-- | Queue facet generation for a project whose summary hasn't been built yet.
+enqueueFacetsJob :: AuthContext -> Projects.ProjectId -> UTCTime -> ATAuthCtx ()
+enqueueFacetsJob authCtx pid now =
+  liftIO $ withResource authCtx.jobsPool \conn ->
+    void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
 
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
@@ -1469,7 +1461,7 @@ virtualTable pid initialFetchUrl modeM = do
       , term "windowTarget" "logList"
       , term "projectId" pid.toText
       ]
-        <> [term "initialFetchUrl" (fromMaybe "" initialFetchUrl) | isJust initialFetchUrl]
+        <> [term "initialFetchUrl" u | u <- maybeToList initialFetchUrl]
         <> [term "mode" m | m <- maybeToList modeM]
     )
     ("" :: Text)
@@ -1632,7 +1624,7 @@ apiLogsPage page = do
           , patternSelected = page.targetPattern
           , mobileExtra = Just do
               filtersLabel_ [Lucid.for_ "toggle-filters"] pass
-              span_ [class_ "text-strokeWeak text-xs"] "·"
+              span_ [class_ "text-strokeWeak text-xs", Aria.hidden_ "true"] "·"
               rowCountDisplay_ "mobile" countText suffixText
           , parseError = page.parseError
           }
@@ -1709,7 +1701,7 @@ apiLogsPage page = do
                 js document.getElementById('filterElement')?.refreshLayout?.() end
             |]
           ]
-      span_ [class_ "text-strokeWeak "] "|"
+      span_ [class_ "text-strokeWeak", Aria.hidden_ "true"] "|"
       rowCountDisplay_ "" countText suffixText
 
     -- Shows when not in logs view (skip for patterns mode which uses log-list)
@@ -1862,7 +1854,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
 
   let hasMore = V.length rows > limitN
-      shown = if hasMore then V.take limitN rows else rows
+      shown = V.take limitN rows
       colIdxMap = listToIndexHashMap cols
       colOf k v = lookupVecTextByKey v colIdxMap k
       alreadyLoadedIds = V.mapMaybe (colOf "id") shown

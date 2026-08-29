@@ -1,0 +1,85 @@
+module Pages.RealUserMonitoringSpec (spec) where
+
+import Data.Pool (withResource)
+import Data.Text qualified as T
+import Data.Time (addUTCTime)
+import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
+import Database.PostgreSQL.Simple qualified as PG
+import Lucid qualified
+import Pages.BodyWrapper (PageCtx (..))
+import Pages.RealUserMonitoring qualified as RUM
+import Pkg.TestUtils
+import Relude
+import Test.Hspec
+
+
+replayUuid :: UUID.UUID
+replayUuid = [uuid|00000000-0000-0000-0000-000000000042|]
+
+
+emptyReplayUuid :: UUID.UUID
+emptyReplayUuid = [uuid|00000000-0000-0000-0000-000000000043|]
+
+
+mergedReplayUuid :: UUID.UUID
+mergedReplayUuid = [uuid|00000000-0000-0000-0000-000000000044|]
+
+
+sessionId :: Text
+sessionId = UUID.toText replayUuid
+
+
+browserSpan :: Text -> Text -> Text -> [(Text, Text)] -> Text -> Text -> Maybe Text -> Text -> TestResources -> IO ()
+browserSpan apiKey trId spId extras name sid parentM service tr =
+  ingestSpanReq tr $ mkSpanRequest trId spId parentM name [] Nothing (map (uncurry mkAttr) $ ("session.id", sid) : extras) (mkResource apiKey [mkAttr "telemetry.sdk.language" "webjs", mkAttr "service.name" service]) frozenTime
+
+
+renderPage :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
+renderPage tr tab query sessionFilterM selected = do
+  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected
+  pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+
+
+shouldContainAll :: Text -> [Text] -> Expectation
+shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack)) needles of
+  [] -> pass
+  missing -> expectationFailure $ "missing from rendered page: " <> show missing
+
+
+spec :: Spec
+spec = sequential $ aroundAll withTestResources do
+  describe "Real User Monitoring" do
+    it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
+      html <- renderPage tr Nothing Nothing Nothing Nothing
+      html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
+
+    it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "rum-browser-key"
+      browserSpan apiKey "10000000000000000000000000000001" "1000000000000001" [("url.path", "/checkout"), ("user.id", "usr-42"), ("user.full_name", "Ada Lovelace")] "Pageview · /checkout" sessionId Nothing "storefront" tr
+      browserSpan apiKey "10000000000000000000000000000001" "1000000000000002" [("url.path", "/checkout"), ("error.type", "TypeError"), ("error.message", "Cannot read cart")] "TypeError · /checkout" sessionId (Just "1000000000000001") "storefront" tr
+      browserSpan apiKey "20000000000000000000000000000002" "2000000000000001" [("url.path", "/search"), ("user.id", "usr-9")] "Pageview · /search" "session-search" Nothing "storefront" tr
+      ingestTrace tr apiKey "GET /backend-only" frozenTime
+      ingestMetric tr apiKey [] [] "browser.web_vital.lcp" 2200 frozenTime
+      ingestMetric tr apiKey [] [] "browser.web_vital.cls" 0.08 frozenTime
+
+      withResource tr.trPool \conn -> do
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_id, user_name) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at" (replayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "usr-42" :: Text, "Ada Lovelace" :: Text)
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
+
+      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewData))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing
+      overviewData.summary.sessions `shouldBe` 2
+      overviewData.summary.pageViews `shouldBe` 2
+      overviewData.summary.errors `shouldBe` 1
+      overviewData.degradedPanels `shouldBe` []
+      let overview = toStrict $ Lucid.renderText $ Lucid.toHtml overviewPage
+      overview `shouldContainAll` ["page views", "browser error", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
+
+      sessions <- renderPage tr (Just "sessions") Nothing (Just "errors") (Just sessionId)
+      sessions `shouldContainAll` ["With errors", "Ada Lovelace", "Watch replay", "initialSession=\"00000000-0000-0000-0000-000000000042\""]
+      T.isInfixOf "/search" sessions `shouldBe` False
+
+      replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
+      T.isInfixOf "No recording" replaySessions `shouldBe` False
+      T.isInfixOf "Merged replay" replaySessions `shouldBe` True
