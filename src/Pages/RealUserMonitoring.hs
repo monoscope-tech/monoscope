@@ -436,9 +436,41 @@ data RumLinks = RumLinks
   }
 
 
+-- | One independently-loaded region of the page. Each panel is a separate scan of the
+-- window, costing 0.5–4s on its own, and the panels together contend badly enough that six
+-- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
+-- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
+data RumPanel = PanelServices | PanelPulse | PanelTrend | PanelPages | PanelVitals | PanelErrors | PanelSessions
+  deriving stock (Eq, Show)
+
+
+panelParam :: RumPanel -> Text
+panelParam = \case
+  PanelServices -> "services"
+  PanelPulse -> "pulse"
+  PanelTrend -> "trend"
+  PanelPages -> "pages"
+  PanelVitals -> "vitals"
+  PanelErrors -> "errors"
+  PanelSessions -> "sessions"
+
+
+-- | Ids are the swap contract: 'deferredShell_' selects @#id@ out of the panel response, so
+-- the shell and the rendered panel must agree on it.
+panelId :: RumPanel -> Text
+panelId panel = "rum-panel-" <> panelParam panel
+
+
+parsePanel :: Text -> Maybe RumPanel
+parsePanel value = find ((== value) . panelParam) [PanelServices, PanelPulse, PanelTrend, PanelPages, PanelVitals, PanelErrors, PanelSessions]
+
+
 data RumData = RumData
   { links :: RumLinks
   , tab :: RumTab
+  , panel :: Maybe RumPanel
+  -- ^ Which panel this response carries. 'Nothing' is the page skeleton: every panel
+  -- renders as a shell that fetches itself.
   , summary :: RumSummary
   , trend :: [RumTrend]
   , pages :: [RumPage]
@@ -496,12 +528,13 @@ rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "sta
   div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] $ Components.tableSkeleton_ 6
 
 
-rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
-rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM deferredM = do
+rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
+rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panelM deferredM = do
   (session, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let tab = parseTab tabM
+      panel = panelM >>= parsePanel
       sessionFilter = parseSessionFilter sessionFilterM
       window = TimePicker.mkTimeWindow now fromM toM (sinceM <|> Just "24H")
       environment = session.environment
@@ -525,15 +558,23 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
       -- Keyed unscoped, matching the query: the option list is the same whichever service is
       -- selected, so scoping the key would cache one identical list per service.
       servicesQ = ("services" :: Text, RumCacheKey pid ServicesQuery environment Nothing fromM toM (sinceM <|> Just "24H"), ServicesResult <$> rumServices scope)
-      -- Run together. These were once batched two at a time on the finding that TimeFusion
-      -- degrades when they compete — but that was measured while every one of them matched
-      -- zero rows, because the browser filter was broken. Re-measured against real data, four
-      -- concurrent scans finish in 7.4s and the same four in two batches take 8.1s: the
-      -- contention is real but far cheaper than serialising.
-      tabQueries = case tab of
-        Overview -> [summaryQ, trendQ, pagesQ, errorsQ, sessionsQ, replaysQ, vitalsQ, servicesQ]
-        Sessions -> [sessionsQ, replaysQ, servicesQ]
-        Performance -> [pagesQ, errorsQ, vitalsQ, servicesQ]
+      -- Only the requested panel's queries run. The skeleton request runs none at all, so the
+      -- page chrome is free and each panel pays only for itself.
+      --
+      -- These all used to run together on one request. Measured on the demo project over 24h
+      -- (scripts/local/rum-perf-2026-08-30.md): panels cost 0.5–4.1s individually but six
+      -- concurrently take 10–28s — contention eats most of the parallelism, and the page still
+      -- waited for the slowest. Per-panel fetching trades that for a first paint at the cost
+      -- of one panel.
+      panelQueries = case panel of
+        Just PanelServices -> [servicesQ]
+        Just PanelPulse -> [summaryQ]
+        Just PanelTrend -> [trendQ]
+        Just PanelPages -> [pagesQ]
+        Just PanelVitals -> [vitalsQ]
+        Just PanelErrors -> [errorsQ]
+        Just PanelSessions -> [sessionsQ, replaysQ]
+        Nothing -> []
       runQuery (label, key, action) =
         tryAny
           ( liftIO (Cache.lookup appCtx.rumCache key)
@@ -546,7 +587,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
           ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM), ("service", serviceFilter)]] <> [("deferred", "1")])
           window
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
-    outcomes <- pooledForConcurrently tabQueries runQuery
+    outcomes <- pooledForConcurrently panelQueries runQuery
     let results = rights outcomes
         degradedPanels = lefts outcomes
         summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
@@ -556,7 +597,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
         sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
     let services = fold [value | ServicesResult value <- results]
-    pure RumData{links, tab, summary, trend, pages, errors, sessions, vitals, services, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
+    pure RumData{links, tab, panel, summary, trend, pages, errors, sessions, vitals, services, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
   let conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -597,16 +638,33 @@ instance ToHtml RumData where
   toHtmlRaw = toHtml
 
 
+-- | A panel slot. On the skeleton response every slot is a shell that fetches only its own
+-- panel; on a panel response the matching slot carries content and the rest stay shells —
+-- @hx-select@ discards them, so rendering the surrounding layout costs nothing.
+slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
+slot_ page panel skeleton content
+  | page.panel == Just panel = div_ [id_ $ panelId panel, class_ "w-full"] content
+  | otherwise =
+      Components.deferredShell_
+        (panelId panel)
+        (rumUrl page.links [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")])
+        -- Deliberately NOT serialised with @hx-sync ... queue@. The panels do contend in
+        -- TimeFusion, but measured cold over 24h that is still the better trade: concurrent
+        -- paints the first panel at 2.6s and finishes at 24.7s, queued paints the first at
+        -- 5.0s and finishes at 28.7s (scripts/local/rum-perf-2026-08-30.md). Contention costs
+        -- less than the queue wait it would replace.
+        []
+        skeleton
+
+
 rumPage_ :: RumData -> Html ()
 rumPage_ page = main_ [id_ "rum-page", class_ "min-h-full bg-bgSunken"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
-  servicePicker_ page
-  if hasRumData page
-    then case page.tab of
-      Overview -> overview_ page
-      Sessions -> sessions_ page
-      Performance -> performance_ page
-    else maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
+  slot_ page PanelServices mempty $ servicePicker_ page
+  case page.tab of
+    Overview -> overview_ page
+    Sessions -> sessions_ page
+    Performance -> performance_ page
 
 
 -- | Scopes every panel to one browser service. A project with several teams reports several
@@ -641,10 +699,6 @@ servicePicker_ page
               option_ ([value_ name] <> [selected_ "" | page.links.service == Just name]) $ toHtml name
         whenJust page.links.service \name ->
           span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Every panel below is scoped to " <> name <> "."
-
-
-hasRumData :: RumData -> Bool
-hasRumData page = page.summary.sessions > 0 || page.summary.pageViews > 0 || any (isJust . (.value)) page.vitals || any (.hasReplay) page.sessions
 
 
 -- | A service filter that matched nothing is not an uninstrumented project. The unscoped
@@ -682,15 +736,36 @@ rumEmptyState_ pid = div_ [class_ "mx-auto flex min-h-[60vh] max-w-2xl flex-col 
 
 overview_ :: RumData -> Html ()
 overview_ page = div_ [class_ "space-y-5 p-4 max-md:p-3"] do
-  pulse_ page
+  slot_ page PanelPulse pulseSkeleton_ $ pulseOrEmpty_ page
   div_ [class_ "grid grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)] gap-4 max-xl:grid-cols-1"] do
     div_ [class_ "min-w-0 space-y-4"] do
-      trendPanel_ page.trend
-      topPages_ page.links page.pages
+      slot_ page PanelTrend (panelSkeleton_ Components.chartSkeleton_) $ trendPanel_ page.trend
+      slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
     aside_ [class_ "min-w-0 space-y-4"] do
-      vitalsPanel_ page.vitals
-      recentErrors_ page.links page.errors
-  recentSessions_ page
+      slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 4) $ vitalsPanel_ page.vitals
+      slot_ page PanelErrors (panelSkeleton_ $ Components.tableSkeleton_ 4) $ recentErrors_ page.links page.errors
+  slot_ page PanelSessions (panelSkeleton_ $ Components.tableSkeleton_ 6) $ recentSessions_ page
+
+
+-- | The onboarding pitch belongs to the summary: it is the panel that knows whether the
+-- project has any browser telemetry at all. Panels with no rows of their own still render
+-- their individual empty states.
+pulseOrEmpty_ :: RumData -> Html ()
+pulseOrEmpty_ page
+  | page.summary.sessions > 0 || page.summary.pageViews > 0 = pulse_ page
+  | otherwise = maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
+
+
+pulseSkeleton_ :: Html ()
+pulseSkeleton_ = div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2", role_ "status", Aria.label_ "Loading summary"]
+  $ replicateM_ 4
+  $ div_ [class_ "flex flex-col gap-2 px-4 py-3"] do
+    div_ [class_ "h-6 w-16 rounded skeleton-shimmer"] ""
+    div_ [class_ "h-3 w-24 rounded skeleton-shimmer"] ""
+
+
+panelSkeleton_ :: Html () -> Html ()
+panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"]
 
 
 pulse_ :: RumData -> Html ()
@@ -795,7 +870,7 @@ recentSessions_ page = section_ [class_ "overflow-hidden rounded-lg border borde
 
 
 sessions_ :: RumData -> Html ()
-sessions_ page = do
+sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
   div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
@@ -914,6 +989,14 @@ replayPrompt_ title description action = div_ [class_ "flex min-h-[34rem] flex-c
 
 performance_ :: RumData -> Html ()
 performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
+  slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page
+  div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
+    slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
+    slot_ page PanelErrors (panelSkeleton_ $ Components.tableSkeleton_ 5) $ recentErrors_ page.links page.errors
+
+
+vitalsTable_ :: RumData -> Html ()
+vitalsTable_ page = do
   section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
     panelHeader_ "Web Vitals field performance" "P75 reflects what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
@@ -929,9 +1012,6 @@ performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
           span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle vital.rating).fillClass, Aria.hidden_ "true"] ""
           toHtml $ (ratingStyle vital.rating).label
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ show vital.samples
-  div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
-    topPages_ page.links page.pages
-    recentErrors_ page.links page.errors
 
 
 panelHeader_ :: Text -> Text -> Maybe (Text, Text) -> Html ()

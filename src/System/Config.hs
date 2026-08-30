@@ -470,7 +470,10 @@ configToEnv config = do
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
-  rumCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
+  -- 15s was shorter than the queries it caches: a RUM panel set takes ~28s over a 24h
+  -- window, so every entry expired before the next request could reach it and the cache
+  -- never hit. Matches the other telemetry stat caches above.
+  rumCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
   -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot

@@ -601,7 +601,7 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "deferred" :> Get '[HTML] (RespHeaders RUM.RumGet)
+  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))

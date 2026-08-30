@@ -62,10 +62,18 @@ renderPage :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe T
 renderPage tr tab query sessionFilterM selected = renderScoped tr tab query sessionFilterM selected Nothing
 
 
--- | Same page, scoped to one browser service.
+-- | Every panel fetches itself, so the page a user ends up looking at is the concatenation of
+-- the panel responses. Asserting against that keeps these tests about what is on screen rather
+-- than about which request delivered it.
 renderScoped :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
-renderScoped tr tab query sessionFilterM selected service = do
-  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service (Just "1")
+renderScoped tr tab query sessionFilterM selected service =
+  fmap fold . forM ["services", "pulse", "trend", "pages", "vitals", "errors", "sessions"] $ \panel ->
+    renderPanel tr tab query sessionFilterM selected service (Just panel)
+
+
+renderPanel :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
+renderPanel tr tab query sessionFilterM selected service panel = do
+  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service panel (Just "1")
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
@@ -79,10 +87,10 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
     it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
-      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing
+      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
       toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
-      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing
+      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
       toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["grid-cols-5", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
@@ -101,7 +109,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
-      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewBody))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "1")
+      (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1")
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
@@ -109,16 +117,16 @@ spec = sequential $ aroundAll withTestResources do
       overviewData.summary.pageViews `shouldBe` 2
       overviewData.summary.errors `shouldBe` 1
       overviewData.degradedPanels `shouldBe` []
+      overview <- renderPage tr Nothing Nothing Nothing Nothing
       -- The unscoped read caches under an unscoped key; `service` is part of that key so a
       -- scoped page can never be served these rows.
       isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid RUMData.VitalSamplesQuery Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
-      let overview = toStrict $ Lucid.renderText $ Lucid.toHtml overviewPage
       overview `shouldContainAll` ["page views", "browser error", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
 
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
-      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing
+      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
       let shell = toStrict $ Lucid.renderText $ Lucid.toHtml shellPage
       shell `shouldContainAll` ["Real User Monitoring", "tabs tabs-box tabs-outline", "id=\"rum-page\"", "hx-trigger=\"load\"", "deferred=1"]
       T.isInfixOf "Ada Lovelace" shell `shouldBe` False

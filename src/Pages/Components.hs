@@ -628,30 +628,34 @@ withDeferredBody deferredM containerId url skeleton load
 
 instance ToHtml a => ToHtml (Deferred a) where
   toHtml (DeferredBody body) = toHtml body
-  toHtml (DeferredShell containerId url skeleton) = toHtmlRaw $ deferredShell_ containerId url skeleton
+  toHtml (DeferredShell containerId url skeleton) = toHtmlRaw $ deferredShell_ containerId url [] skeleton
   toHtmlRaw = toHtml
 
 
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one
 -- fragment of a larger page.
-deferredShell_ :: Text -> Text -> Html () -> Html ()
-deferredShell_ containerId url =
+deferredShell_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
+deferredShell_ containerId url extra =
   div_
-    [ id_ containerId
-    , class_ "w-full"
-    , -- Marks the page as still waiting on its body. Tests wait for this to disappear
-      -- instead of a fixed timeout, which is what stops a deferred page from quietly
-      -- passing an assertion it never actually ran against real content.
-      data_ "deferred-shell" ""
-    , hxGet_ url
-    , hxTrigger_ "load"
-    , hxTarget_ "this"
-    , hxSwap_ "outerHTML"
-    , hxSelect_ $ "#" <> containerId
-    , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
-      -- itself on hover, doubling the very request it exists to make once.
-      makeAttribute "hx-preload" "false"
-    ]
+    ( [ id_ containerId
+      , class_ "w-full"
+      , -- Marks the page as still waiting on its body. Tests wait for this to disappear
+        -- instead of a fixed timeout, which is what stops a deferred page from quietly
+        -- passing an assertion it never actually ran against real content.
+        data_ "deferred-shell" ""
+      , hxGet_ url
+      , hxTrigger_ "load"
+      , hxTarget_ "this"
+      , hxSwap_ "outerHTML"
+      , hxSelect_ $ "#" <> containerId
+      , -- The body inherits @hx-preload: mouseover@; without this the shell would also fetch
+        -- itself on hover, doubling the very request it exists to make once.
+        makeAttribute "hx-preload" "false"
+      ]
+        -- Must not carry `class`: Lucid concatenates duplicate class attributes with no
+        -- separator, which would corrupt both this element's classes and the caller's.
+        <> extra
+    )
 
 
 -- | Placeholder for a table that has not loaded yet: a header strip and @rows@ row bars.
