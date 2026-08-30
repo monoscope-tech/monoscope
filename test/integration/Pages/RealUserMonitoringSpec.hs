@@ -37,8 +37,13 @@ browserSpan apiKey trId spId extras name sid parentM service tr =
 
 
 renderPage :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
-renderPage tr tab query sessionFilterM selected = do
-  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected (Just "1")
+renderPage tr tab query sessionFilterM selected = renderScoped tr tab query sessionFilterM selected Nothing
+
+
+-- | Same page, scoped to one browser service.
+renderScoped :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
+renderScoped tr tab query sessionFilterM selected service = do
+  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service (Just "1")
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
@@ -69,7 +74,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
-      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewBody))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "1")
+      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewBody))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "1")
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
@@ -83,7 +88,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
-      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing
+      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing
       let shell = toStrict $ Lucid.renderText $ Lucid.toHtml shellPage
       shell `shouldContainAll` ["Real User Monitoring", "tabs tabs-box tabs-outline", "id=\"rum-page\"", "hx-trigger=\"load\"", "deferred=1"]
       T.isInfixOf "Ada Lovelace" shell `shouldBe` False
@@ -95,3 +100,33 @@ spec = sequential $ aroundAll withTestResources do
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
       T.isInfixOf "No recording" replaySessions `shouldBe` False
       T.isInfixOf "Merged replay" replaySessions `shouldBe` True
+
+    it "panelLinks_carryKqlTheLogExplorerCanParse" \tr -> do
+      -- windowUrl URI-encodes every parameter it is given, so a caller that encodes first
+      -- ships a double-escaped query: a space arrives as %2520, the Explorer sees one
+      -- meaningless token, and the link silently returns nothing.
+      overview <- renderPage tr Nothing Nothing Nothing Nothing
+      overview `shouldContainAll` ["/log_explorer?since=24H&amp;query=resource.telemetry.sdk.language%20%3D%3D%20%22webjs%22%20and%20name%20startswith%20%22Pageview%20%C2%B7%20%22"]
+      T.isInfixOf "%25" overview `shouldBe` False
+
+    it "serviceFilter_scopesEveryPanelToOneBrowserService" \tr -> do
+      -- Several teams report into one project. Averaging their services together hides a
+      -- checkout regression behind a healthy marketing site, so the page has to be scopeable.
+      apiKey <- createTestAPIKey tr testPid "rum-service-key"
+      -- Reuses the session that already has a recording, so the scoped page can be checked
+      -- for the replay badge as well as the rows.
+      browserSpan apiKey "30000000000000000000000000000003" "3000000000000001" [("url.path", "/admin/users")] "Pageview · /admin/users" (UUID.toText mergedReplayUuid) Nothing "admin-console" tr
+
+      unscoped <- renderPage tr Nothing Nothing Nothing Nothing
+      unscoped `shouldContainAll` ["All services", ">storefront<", ">admin-console<", "/admin/users", "/checkout"]
+
+      scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "admin-console")
+      scoped `shouldContainAll` ["Every panel below is scoped to admin-console.", "/admin/users"]
+      -- The other team's pages are the whole point: if they survive the filter it does nothing.
+      T.isInfixOf "/checkout" scoped `shouldBe` False
+      -- The scope has to ride every self-link, or one click puts the user back on all services.
+      scoped `shouldContainAll` ["service=admin-console", "resource.service.name%20%3D%3D%20%22admin-console%22"]
+      -- A recording carries no service, so it can only be trusted where a span already places
+      -- the session in this service — attached to that row, never added as a row of its own.
+      scoped `shouldContainAll` ["Replay"]
+      T.isInfixOf "No recording" scoped `shouldBe` False
