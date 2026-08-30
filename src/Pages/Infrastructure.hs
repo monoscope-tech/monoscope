@@ -181,7 +181,7 @@ hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceP
       grouping = parseHostGroup groupM
       url = deferUrl pid "/infrastructure/hosts" [("provider", providerM), ("region", regionM), ("os", osM), ("integration", integrationM), ("group", groupM)] window
   body <- withDeferredBody deferredM "hostsContainer" url (tableSkeleton_ 8) do
-    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
     pure $ hostsTable pid window filters grouping (applyHostFilters filters allHosts) allHosts
   addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) body
 
@@ -325,7 +325,7 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  hosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  hosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe HostDetailMissing (HostDetail pid) $ V.find ((== hostM) . Just . (.name)) hosts
 
 
@@ -484,7 +484,7 @@ imagesGetH pid runtimeM registryM fromParam toParam sinceParam deferredM = do
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
       url = deferUrl pid "/infrastructure/images" [("runtime", runtimeM), ("registry", registryM)] window
   body <- withDeferredBody deferredM "imagesContainer" url (tableSkeleton_ 8) do
-    allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
     let images = V.filter (\image -> maybe True (\wanted -> any ((== wanted) . Containers.runtimeLabel) image.runtimes) runtimeM && maybe True (== image.registry) registryM) allImages
     pure $ imagesTable pid window runtimeM registryM images allImages
   addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) body
@@ -560,7 +560,7 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  images <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  images <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe ImageDetailMissing (ImageDetail pid) $ V.find ((== imageM) . Just . (.image)) images
 
 
@@ -691,7 +691,7 @@ kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam since
       window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
       url = deferUrl pid "/infrastructure/kubernetes" [("resource", resourceM), ("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)] window
   body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
-    allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
     let rows = V.filter (\row -> matches clusterM row.cluster && matches namespaceM row.namespace && maybe True (\wanted -> wanted == kubeStatusLabel row.status) statusM) allRows
     pure $ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
   addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) body
@@ -786,7 +786,7 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
   now <- Time.currentTime
   let resource = parseKubeResource resourceM
       window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  rows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  rows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe KubernetesDetailMissing (KubernetesDetail pid resource) $ V.find (\row -> Just row.name == nameM && maybe True (\cluster -> row.cluster == Just cluster) clusterM && maybe True (\namespace -> row.namespace == Just namespace) namespaceM) rows
 
 
@@ -872,7 +872,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
       grouping = parseHostGroup groupM
       url = deferUrl pid "/infrastructure/host-map" [("fill", fillM), ("group", groupM), ("provider", providerM), ("region", regionM), ("os", osM)] window
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
-    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
     let groups = hostMapGroups grouping $ applyHostFilters filters allHosts
     pure HostMapData{pid, window, fill = parseHostMapFill fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body

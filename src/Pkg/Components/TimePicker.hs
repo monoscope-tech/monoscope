@@ -7,12 +7,13 @@ module Pkg.Components.TimePicker (
   TimeWindow (..),
   mkTimeWindow,
   windowUrl,
+  cacheTtl,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
@@ -23,6 +24,7 @@ import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (some)
+import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
@@ -31,6 +33,8 @@ import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, timeScopedUr
 
 -- $setup
 -- >>> import Relude.Unsafe qualified as Unsafe
+-- >>> import Data.Time (UTCTime (UTCTime), fromGregorian)
+-- >>> let epoch = UTCTime (fromGregorian 2026 1 1) 0
 
 
 type Parser = Parsec Void Text
@@ -269,6 +273,28 @@ mkTimeWindow now fromQuery toQuery sinceParam =
 
 
 -- | A URL under @base@ that carries this window's params forward, plus any extras.
+-- | How long a read over this window may be served from cache.
+--
+-- A cached answer drifts from the truth at a rate set by the window it covers: five minutes of
+-- staleness is 0.3% of a 24-hour count and invisible, but it is the whole of a five-minute one.
+-- So the budget is a fraction of the window rather than one number for every view.
+--
+-- The floor matters more than the ceiling. A cache whose entries expire before the page that
+-- fills them has finished building is worse than no cache — it pays the write and never serves
+-- a read. RUM at 24h took 8-22s to assemble and the infrastructure pages 32-60s, against a flat
+-- 15s expiry, so not one of those reads was ever reused. The ceiling matches the sibling
+-- endpoint and host stats caches.
+--
+-- >>> cacheTtl (mkTimeWindow epoch Nothing Nothing (Just "24H"))
+-- TimeSpec {sec = 300, nsec = 0}
+-- >>> cacheTtl (mkTimeWindow epoch Nothing Nothing (Just "1H"))
+-- TimeSpec {sec = 30, nsec = 0}
+-- >>> cacheTtl (mkTimeWindow epoch Nothing Nothing (Just "5M"))
+-- TimeSpec {sec = 30, nsec = 0}
+cacheTtl :: TimeWindow -> TimeSpec
+cacheTtl window = TimeSpec (max 30 $ min 300 $ round (diffUTCTime window.toTime window.fromTime) `div` 120) 0
+
+
 windowUrl :: Text -> [(Text, Text)] -> TimeWindow -> Text
 windowUrl base extras window = timeScopedUrl base extras window.fromQuery window.toQuery window.sinceQuery
 

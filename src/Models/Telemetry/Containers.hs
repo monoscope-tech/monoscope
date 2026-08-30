@@ -54,6 +54,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..))
 import Relude
+import System.Clock (TimeSpec)
 import System.Types (DB)
 
 
@@ -260,15 +261,19 @@ containersInWindowCached
   :: (DB es, Labeled "timefusion" Hasql :> es)
   => Cache ContainerSnapshotKey (V.Vector ContainerRow)
   -> ContainerSnapshotKey
+  -> TimeSpec
+  -- ^ How long this snapshot may be reused; see 'Pkg.Components.TimePicker.cacheTtl'. The
+  -- pivot takes under a second over five minutes but a full minute over a day, so a single
+  -- fixed expiry either serves stale hosts or expires before the page it filled has rendered.
   -> Bool
   -> Projects.ProjectId
   -> UTCTime
   -> UTCTime
   -> Eff es (V.Vector ContainerRow)
-containersInWindowCached cache key useTimefusion pid fromTime toTime =
+containersInWindowCached cache key ttl useTimefusion pid fromTime toTime =
   liftIO (Cache.lookup cache key)
     >>= maybe
-      (containersInWindow useTimefusion pid fromTime toTime >>= \rows -> rows <$ unless (V.null rows) (liftIO $ Cache.insert cache key rows))
+      (containersInWindow useTimefusion pid fromTime toTime >>= \rows -> rows <$ unless (V.null rows) (liftIO $ Cache.insert' cache (Just ttl) key rows))
       pure
 
 

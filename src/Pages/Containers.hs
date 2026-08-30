@@ -96,7 +96,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           ([(key, value) | (key, Just value) <- [("runtime", runtimeM), ("namespace", namespaceM), ("node", nodeM), ("image", imageM), ("cluster", clusterM)]] <> [("deferred", "1")])
           window
   body <- withDeferredBody deferredM "containersContainer" deferredUrl (tableSkeleton_ 10) do
-    allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
     let
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
@@ -279,7 +279,7 @@ containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
   addRespHeaders $ maybe (div_ [class_ "p-4 text-textWeak"] "This container is no longer reporting.") (containerDetail_ pid) found
 

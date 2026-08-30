@@ -537,7 +537,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
       runQuery (label, key, action) =
         tryAny
           ( liftIO (Cache.lookup appCtx.rumCache key)
-              >>= maybe (action >>= \fresh -> fresh <$ when (cacheableRumResult fresh) (liftIO $ Cache.insert appCtx.rumCache key fresh)) pure
+              >>= maybe (action >>= \fresh -> fresh <$ when (cacheableRumResult fresh) (liftIO $ Cache.insert' appCtx.rumCache (Just $ TimePicker.cacheTtl window) key fresh)) pure
           )
           >>= either (\err -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)) (pure . Right)
       deferredUrl =
