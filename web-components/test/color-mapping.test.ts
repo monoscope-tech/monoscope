@@ -109,6 +109,15 @@ describe('theme-aware series palettes', () => {
     getSeriesPalette('light').forEach((color) => expect(contrast(color, '#f7f9fc')).toBeGreaterThanOrEqual(3));
   });
 
+  test('light-mode marks stay vivid instead of drifting into dark 700-weight colours', () => {
+    document.body.removeAttribute('data-theme');
+    const semanticMarks = ['2xx', '3xx', '4xx', '5xx'].map(getStatusCodeColor)
+      .concat(['p50', 'p75', 'p90', 'p95', 'p99'].map(getPercentileColor))
+      .concat(['error', 'warning', 'success', 'info'].map(getLogLevelColor));
+    getSeriesPalette('light').concat(semanticMarks)
+      .forEach((color) => expect(contrast(color, '#f7f9fc')).toBeLessThanOrEqual(4.6));
+  });
+
   test('light and dark palettes keep stable positions but use different values', () => {
     const light = getSeriesPalette('light');
     const dark = getSeriesPalette('dark');

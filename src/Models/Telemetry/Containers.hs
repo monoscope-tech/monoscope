@@ -34,9 +34,13 @@ module Models.Telemetry.Containers (
   imageAndTag,
   swarmService,
   dropShadowed,
+  ContainerSnapshotKey,
+  containersInWindowCached,
   containersInWindow,
 ) where
 
+import Data.Cache (Cache)
+import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAsciiLower, isDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -48,56 +52,9 @@ import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Models.Telemetry.ContainerTypes (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..))
 import Relude
 import System.Types (DB)
-
-
--- | One container as the list renders it. Kubernetes-only signals are 'Nothing' on a Docker
--- row and render as an em dash — never as a zero, because Datadog is explicit that a missing
--- denominator means "cannot infer", not "0%", and a fabricated 0% during an incident is worse
--- than a blank.
-data ContainerRow = ContainerRow
-  { containerName :: Text
-  , scope :: Scope
-  , podName :: Maybe Text
-  , namespace :: Maybe Text
-  , nodeName :: Maybe Text
-  , cluster :: Maybe Text
-  , provider :: Maybe Text
-  , region :: Maybe Text
-  , osType :: Maybe Text
-  , architecture :: Maybe Text
-  , image :: Maybe Text
-  , imageTag :: Maybe Text
-  , workload :: Maybe Text
-  , cpuCores :: Maybe Double
-  , cpuLimit :: Maybe Double
-  , cpuRequest :: Maybe Double
-  , memBytes :: Maybe Double
-  , memLimit :: Maybe Double
-  , memRequest :: Maybe Double
-  , load1 :: Maybe Double
-  , storagePct :: Maybe Double
-  , uptime :: Maybe Double
-  , restarts :: Maybe Double
-  , ready :: Maybe Double
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (HI.DecodeRow, NFData)
-
-
--- | What a row actually measures, decided by the metric family it was built from. Carried on
--- the row rather than inferred, because only the query knows it — and because 'dropShadowed'
--- has to tell a pod that is standing in for its containers from one that is not.
-data Scope = ScopeContainer | ScopePod | ScopeHost
-  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
-  deriving anyclass (NFData)
-  deriving (HI.DecodeValue) via WrappedEnumSC 'Nothing "Scope" Scope
-
-
-data Runtime = Kubernetes | Docker | Host
-  deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
 -- | Scope decides the runtime, except that a container may come from either kubeletstats or
@@ -295,6 +252,24 @@ normalizeRow r = withWorkload $ case r.imageTag of
     withWorkload row = case row.workload of
       Just _ -> row
       Nothing -> row{workload = swarmService row.containerName}
+
+
+-- | Reuse the expensive wide metrics pivot across infrastructure views. Empty results stay
+-- uncached so a newly connected collector appears immediately on the next refresh.
+containersInWindowCached
+  :: (DB es, Labeled "timefusion" Hasql :> es)
+  => Cache ContainerSnapshotKey (V.Vector ContainerRow)
+  -> ContainerSnapshotKey
+  -> Bool
+  -> Projects.ProjectId
+  -> UTCTime
+  -> UTCTime
+  -> Eff es (V.Vector ContainerRow)
+containersInWindowCached cache key useTimefusion pid fromTime toTime =
+  liftIO (Cache.lookup cache key)
+    >>= maybe
+      (containersInWindow useTimefusion pid fromTime toTime >>= \rows -> rows <$ unless (V.null rows) (liftIO $ Cache.insert cache key rows))
+      pure
 
 
 -- | Every container, stand-in pod and bare host seen in the trailing window, newest datapoint

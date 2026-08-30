@@ -27,7 +27,7 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (factGrid_, metaChip_)
 import Pages.Containers qualified as Containers
@@ -170,7 +170,7 @@ hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceP
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  snapshot <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  snapshot <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let filters = HostFilters providerM regionM osM integrationM
       hosts = applyHostFilters filters $ hostsFromRows snapshot
       grouping = parseHostGroup groupM
@@ -198,13 +198,13 @@ hostsTable pid window filters grouping hosts allHosts =
           , bulkActionsInHeader = Just 0
           , containerClasses = "w-full mx-auto space-y-4 group/columns"
           }
-    , columns = hostColumns pid
+    , columns = hostColumns pid window
     , rows = hostEntries grouping hosts
     , features =
         def
           { search = Just ClientSide
           , searchPlaceholder = Just "Search hosts"
-          , rowAttrs = Just $ \case HostGroupRow _ _ -> []; HostItem host -> drawerRowAttrs_ $ hostDetailUrl pid host.name
+          , rowAttrs = Just $ \case HostGroupRow _ _ -> []; HostItem host -> drawerRowAttrs_ $ hostDetailUrl pid window host.name
           , header = Just $ hostGroupControl pid window filters grouping (V.length hosts)
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
@@ -245,13 +245,13 @@ hostGroupControl pid window filters grouping count =
       forM_ ([("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)] :: [(Text, Maybe Text)]) \(field, valueM) ->
         whenJust valueM \value -> input_ [type_ "hidden", name_ field, value_ value]
       label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
-      select_ [id_ "hosts-group", name_ "group", class_ "select select-xs shrink-0 cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
+      select_ [id_ "hosts-group", name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
         $ forM_ ([("", "None"), ("provider", "Provider"), ("region", "Region"), ("os", "Operating system"), ("integration", "Integration")] :: [(Text, Text)]) \(value, label) ->
           option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
 
 
-hostColumns :: Projects.ProjectId -> [Column HostListRow]
-hostColumns pid =
+hostColumns :: Projects.ProjectId -> TimePicker.TimeWindow -> [Column HostListRow]
+hostColumns pid window =
   [ col "Host" nameCell & withAttrs [class_ "min-w-52"]
   , col "Configuration" configCell & withAttrs [class_ "w-44 max-lg:hidden"]
   , col "System" systemCell & withAttrs [class_ "w-32 max-xl:hidden"]
@@ -266,7 +266,7 @@ hostColumns pid =
   where
     nameCell = \case
       HostGroupRow label count -> div_ [class_ "flex items-center gap-2 py-1 font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show count)
-      HostItem host -> button_ ([class_ "flex cursor-pointer items-center gap-2 font-medium text-textStrong hover:text-textBrand", type_ "button", onclick_ "event.stopPropagation()"] <> drawerLoadAttrs_ (hostDetailUrl pid host.name)) do
+      HostItem host -> button_ ([class_ "flex cursor-pointer items-center gap-2 font-medium text-textStrong hover:text-textBrand", type_ "button", onclick_ "event.stopPropagation()"] <> drawerLoadAttrs_ (hostDetailUrl pid window host.name)) do
         faSprite_ "server" "solid" "h-3.5 w-3.5 text-iconNeutral"
         span_ [class_ "truncate"] $ toHtml host.name
     configCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] do
@@ -287,8 +287,8 @@ hostColumns pid =
     titleCase = T.toTitle
 
 
-hostDetailUrl :: Projects.ProjectId -> Text -> Text
-hostDetailUrl pid name = "/p/" <> pid.toText <> "/infrastructure/hosts/detail?host=" <> toUriStr name
+hostDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Text
+hostDetailUrl pid window name = infraUrl pid "/infrastructure/hosts/detail" [("host", name)] window
 
 
 data HostDetailGet = HostDetailMissing | HostDetail Projects.ProjectId HostRow
@@ -309,12 +309,12 @@ hostDetailGet_ HostDetailMissing = div_ [class_ "flex min-h-64 flex-col items-ce
 hostDetailGet_ (HostDetail pid host) = hostDetail_ pid host
 
 
-hostDetailGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders HostDetailGet)
-hostDetailGetH pid hostM = do
+hostDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostDetailGet)
+hostDetailGetH pid hostM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now Nothing Nothing Nothing
-  hosts <- hostsFromRows <$> containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
+  hosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe HostDetailMissing (HostDetail pid) $ V.find ((== hostM) . Just . (.name)) hosts
 
 
@@ -471,7 +471,7 @@ imagesGetH pid runtimeM registryM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allImages <- imagesFromRows <$> containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let images = V.filter (\image -> maybe True (\wanted -> any ((== wanted) . Containers.runtimeLabel) image.runtimes) runtimeM && maybe True (== image.registry) registryM) allImages
       table = imagesTable pid window runtimeM registryM images allImages
   addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) table
@@ -547,7 +547,7 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  images <- imagesFromRows <$> containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  images <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe ImageDetailMissing (ImageDetail pid) $ V.find ((== imageM) . Just . (.image)) images
 
 
@@ -676,7 +676,7 @@ kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam since
   now <- Time.currentTime
   let resource = parseKubeResource resourceM
       window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allRows <- kubeRowsFromRows resource <$> containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let rows = V.filter (\row -> matches clusterM row.cluster && matches namespaceM row.namespace && maybe True (\wanted -> wanted == kubeStatusLabel row.status) statusM) allRows
       table = kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
   addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) table
@@ -771,7 +771,7 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
   now <- Time.currentTime
   let resource = parseKubeResource resourceM
       window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  rows <- kubeRowsFromRows resource <$> containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  rows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   addRespHeaders $ maybe KubernetesDetailMissing (KubernetesDetail pid resource) $ V.find (\row -> Just row.name == nameM && maybe True (\cluster -> row.cluster == Just cluster) clusterM && maybe True (\namespace -> row.namespace == Just namespace) namespaceM) rows
 
 
@@ -853,7 +853,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  snapshot <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  snapshot <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let allHosts = hostsFromRows snapshot
       filters = HostFilters providerM regionM osM Nothing
       hosts = applyHostFilters filters allHosts
@@ -896,7 +896,7 @@ hostMap_ page = div_ [class_ "flex min-h-full flex-col bg-bgSunken"] do
       a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary mt-2"] "Set up host monitoring"
     else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
       h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium text-textStrong"] (toHtml $ show (length hosts) <> " hosts")
-      div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" (length hosts <= 12)] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.fill (length hosts <= 12)
+      div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" (length hosts <= 12)] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.window page.fill (length hosts <= 12)
   where
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"] mempty >> toHtml label
 
@@ -907,8 +907,8 @@ mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text
   select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
 
 
-hostHex :: Projects.ProjectId -> HostMapFill -> Bool -> HostRow -> Html ()
-hostHex pid fill enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
+hostHex :: Projects.ProjectId -> TimePicker.TimeWindow -> HostMapFill -> Bool -> HostRow -> Html ()
+hostHex pid window fill enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
   button_
     ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
       , type_ "button"
@@ -916,7 +916,7 @@ hostHex pid fill enlarged host = div_ [class_ $ "flex flex-col items-center gap-
       , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" (\v -> Containers.showFFloat' 0 (v * 100) <> "%") value
       , Aria.label_ $ host.name <> ", " <> fillLabel fill <> ": " <> maybe "no data" (\v -> Containers.showFFloat' 0 (v * 100) <> " percent") value
       ]
-        <> drawerLoadAttrs_ (hostDetailUrl pid host.name)
+        <> drawerLoadAttrs_ (hostDetailUrl pid window host.name)
     )
     $ faSprite_ "server" "solid"
     $ bool "h-3 w-3" "h-4 w-4" enlarged

@@ -4,56 +4,58 @@ description: OpenTelemetry-native observability — dense, calm, incident-first.
 colors:
   brand: "oklch(56.7% 0.239 261)"
   brand-content: "oklch(100% 0 0)"
-  bg-base: "oklch(99.1% 0.002 247)"
-  bg-sunken: "oklch(97.7% 0.006 247)"
-  bg-alternate: "oklch(97.7% 0.006 247)"
-  bg-overlay: "oklch(99.1% 0.002 247)"
+  bg-base: "oklch(98.5% 0.006 261)"
+  bg-raised: "oklch(100% 0 0)"
+  bg-sunken: "oklch(94.5% 0.014 261)"
+  bg-alternate: "oklch(97% 0.01 261)"
+  bg-overlay: "oklch(99.5% 0.004 261)"
   bg-inverse: "oklch(16.4% 0.012 263)"
   text-strong: "oklch(14.4% 0.069 263 / 0.9)"
   text-weak: "oklch(16.7% 0.086 263 / 0.84)"
+  text-brand: "oklch(50.5% 0.22 261)"
   text-disabled: "oklch(21.2% 0.117 264 / 0.45)"
-  stroke-weak: "oklch(25.2% 0.146 264 / 0.1)"
-  stroke-strong: "oklch(21.2% 0.117 264 / 0.45)"
-  fill-weak: "oklch(29.2% 0.174 264 / 0.04)"
-  fill-hover: "oklch(29.2% 0.174 264 / 0.04)"
+  stroke-weak: "oklch(25.2% 0.146 264 / 0.18)"
+  stroke-strong: "oklch(21.2% 0.117 264 / 0.5)"
+  fill-weak: "oklch(29.2% 0.174 264 / 0.08)"
+  fill-hover: "oklch(29.2% 0.174 264 / 0.06)"
   error: "oklch(51.3% 0.197 21)"
   warning: "oklch(54.7% 0.126 69)"
   success: "oklch(47.8% 0.130 162)"
-  information: "oklch(49.3% 0.088 241)"
+  information: "oklch(53% 0.16 261)"
 typography:
   display:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.5rem"
     fontWeight: 600
     lineHeight: "2rem"
     letterSpacing: "-0.01em"
   headline:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.125rem"
     fontWeight: 600
     lineHeight: "1.75rem"
     letterSpacing: "normal"
   title:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 600
     lineHeight: "1.5rem"
     letterSpacing: "normal"
   body:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: "1.25rem"
     letterSpacing: "normal"
     fontFeature: "'liga' 1, 'calt' 1, 'ss01' 1, 'ss02' 1, 'cv01' 1, 'cv02' 1"
   label:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.75rem"
     fontWeight: 500
     lineHeight: "1rem"
     letterSpacing: "normal"
   caption:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "Inter, 'Inter Metric Fallback', ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.625rem"
     fontWeight: 500
     lineHeight: "0.875rem"
@@ -124,29 +126,36 @@ The system is light-first with **full dark parity** — every semantic token is 
 An OKLCH semantic-token palette organized by role (fill / text / stroke / icon / bg), anchored by a single confident brand blue, with a tightly-controlled semantic set and a categorical series palette for data viz.
 
 ### Primary
-- **Signal Blue** (`oklch(56.7% 0.239 261)`): The brand color and the one interactive accent. Used for primary buttons, current selection, focus rings, links, and "clickable" affordances only. In dark mode it softens to `oklch(60% 0.18 265)` to avoid glare. Available as `fillBrand-strong` and a 5%-alpha `fillBrand-weak` for tinted backgrounds.
+- **Signal Blue** (`oklch(56.7% 0.239 261)`): The brand color and the one interactive accent. Used for primary buttons, current selection, focus rings, links, and "clickable" affordances only. In dark mode it lifts to `oklch(64% 0.18 261)` for contrast. Available as `fillBrand-strong` and a 12%-alpha `fillBrand-weak` for selected backgrounds.
 
 ### Secondary
 - **Semantic Error Red** (`oklch(51.3% 0.197 21)`): Errors, failed spans, 5xx. Paired always with a non-color signal (icon, position, text).
 - **Semantic Warning Amber** (`oklch(54.7% 0.126 69)`): Degraded state, 4xx, elevated latency.
 - **Semantic Success Green** (`oklch(47.8% 0.130 162)`): Healthy, resolved, 2xx.
-- **Semantic Information Blue** (`oklch(49.3% 0.088 241)`): Informational callouts and the default chart line. **Reconciliation note:** this currently sits at hue 241, a different blue from the brand's 261 — unintentional drift, not a designed second blue. The target is to migrate `fillInformation`/`chart-default` onto the brand hue (261) at an info-weight lightness, so the system carries one blue hue. Until then, treat this hue as legacy.
+- **Semantic Information Blue** (`oklch(53% 0.16 261)`): Informational callouts and the default chart line. It shares the brand hue. Lower chroma and contextual use distinguish information from interaction.
 
-Each semantic color ships `-strong` (text/icon/border) and `-weak` (~5% alpha fill) variants, and each lifts in lightness for dark mode (e.g. error → `oklch(77.2% 0.126 21)`).
+Each semantic color ships `-strong` (text/icon/border) and `-weak` (8–12% alpha fill) variants, and each lifts in lightness for dark mode.
 
 ### Neutral
 - **Ink** (`oklch(14.4% 0.069 263 / 0.9)`): `textStrong` — primary body and heading text.
-- **Muted Ink** (`oklch(16.7% 0.086 263 / 0.65)`): `textWeak` — secondary text, still comfortably above 4.5:1 on base surfaces.
-- **Base Surface** (`oklch(99.1% 0.002 247)`): `bgBase`, the near-white content plane, faintly cooled toward the brand hue (never warmed).
-- **Sunken / Alternate** (`oklch(97.7% 0.006 247)`): recessed panels, table zebra, toolbars — the second neutral layer.
-- **Strokes**: `strokeWeak` (`oklch(25.2% 0.146 264 / 0.1)`) for dividers and field borders; `strokeStrong` for emphasis. Borders are hairline (1px) and tinted toward ink, never pure black.
+- **Muted Ink** (`oklch(16.7% 0.086 263 / 0.84)`): `textWeak` — secondary text, still comfortably above 4.5:1 on base surfaces.
+- **Base Surface** (`oklch(98.5% 0.006 261)`): `bgBase`, the cool page canvas.
+- **Raised Surface** (`oklch(100% 0 0)`): `bgRaised`, the content plane for tables and charts.
+- **Overlay Surface** (`oklch(99.5% 0.004 261)`): `bgOverlay`, reserved for transient top-layer content.
+- **Sunken Surface** (`oklch(94.5% 0.014 261)`): `bgSunken`, the strongest recessed plane.
+- **Alternate Surface** (`oklch(97% 0.01 261)`): `bgAlternate`, table headers and toolbars.
+- **Strokes**: `strokeWeak` is decorative. Essential control boundaries use `strokeStrong`, which reaches 3:1 against the light canvas.
 
-Dark mode swaps the neutral base to a subtle warm charcoal (`bgBase: oklch(12.5% 0.004 260)`) with clear surface steps (`bgSunken` → `bgBase` → `bgRaised` → `bgOverlay`).
+Dark mode swaps the neutral base to a subtle warm charcoal (`bgBase: oklch(12.5% 0.004 260)`) with clear surface steps (`bgSunken` → `bgBase` → `bgRaised` → `bgOverlay`). Decorative dividers and explicitly quiet metadata controls use a 5%-white `strokeWeak`; essential controls use a quieter 35%-white `strokeStrong` that still reaches 3:1.
 
 ### Named Rules
 **The Signal Rule.** Color is signal, not decoration. Brand blue means clickable; red means error; green means success; a service or status hue means identity. If an element carries no meaning, it carries no color — it is neutral ink on a neutral surface.
 
-**The One-Blue Rule.** There is a single blue hue in the system: the brand's 261. It carries interaction at full strength (`fillBrand`) and informational state at a lighter weight (`fillInformation`) — the *same* hue, never a second one. Semantic distinction between "clickable" and "informational" comes from strength and context, not from a rival blue hue. Any new blue that isn't hue 261 is drift; fix the token, don't add a rule for it.
+**The Latency Rule.** Breakdown color shows where time was spent: the track carries the row's service or span-kind color, and child segments keep their stable dimension colors. Durations from 1s add a warning triangle; durations from 5s add a critical-circle marker without replacing the breakdown palette. Missing duration is an em dash, never a zero-value bar. The numeric duration remains visible in every measured state.
+
+**The One-Blue Rule.** There is a single blue hue in the system: 261. It carries interaction at full strength and informational state at a lower chroma. Semantic distinction comes from strength, context, and labels, not from a rival hue.
+
+**The Contrast Rule.** Normal text reaches 4.5:1. Large text, essential control boundaries, focus indicators, and essential data marks reach 3:1. Color-coded state always has a text, icon, shape, or position cue.
 
 ## 3. Typography
 
@@ -218,7 +227,7 @@ Components feel **tactile and confident**: standard affordances tuned well, with
 
 ### Data Visualization (signature)
 Monoscope's charts are the product's heroes, so color mapping is codified, not ad-hoc:
-- **Categorical series:** a fixed 20-step palette of `-400`-weight hues (blue, red, green, amber, purple, teal, orange, sky, rose, lime, …) assigned in order so series stay stable across renders.
+- **Categorical series:** a fixed 20-step vivid-boundary palette (500-weight where it clears 3:1 on the light chart surface, otherwise the brightest passing 600-weight value) assigned in order so series stay stable across renders. Dark mode uses the lighter 400-weight family.
 - **HTTP status → hue:** 2xx = blues/greens, 3xx = cyans/teals, 4xx = yellows/oranges, 5xx = reds/pinks. Status color is semantic and consistent everywhere a status appears.
 - **Percentile → performance gradient:** p50 green → p90 amber → p95 orange → p99/p100 harsh red. Latency severity reads as temperature.
 
@@ -230,7 +239,7 @@ State-conveying only, 75–250ms, exponential ease-out (`--ease-out-expo`, `--ea
 ### Do:
 - **Do** treat color as signal — brand blue for interaction, semantic hues for state, service/status hues for identity. No meaning, no color.
 - **Do** pack density where power users scan: tight within rows, generous between logical groups.
-- **Do** keep both Signal Blue (hue 261, clickable) and Information Blue (hue 241, data/info) distinct; never let "info" read as "clickable."
+- **Do** keep Signal Blue and Information Blue in the same hue-261 family; distinguish their roles with chroma, strength, context, and labels.
 - **Do** set machine-emitted content (IDs, status codes, logs, queries) in JetBrains Mono; human chrome in Inter.
 - **Do** convey depth with tonal surface steps and 1px strokes; reserve shadows for floating layers.
 - **Do** verify every token and every state in both light and dark — dark parity is required, not optional.

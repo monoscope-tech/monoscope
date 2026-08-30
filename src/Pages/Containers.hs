@@ -18,7 +18,7 @@ import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (factGrid_, metaChip_)
@@ -36,6 +36,7 @@ import Utils (drawerRowAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
 -- every one of them taking the id as a second argument.
 data ContainerVM = ContainerVM
   { pid :: Projects.ProjectId
+  , window :: TimePicker.TimeWindow
   , row :: ContainerRow
   }
 
@@ -87,7 +88,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allRows <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
@@ -102,7 +103,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
             -- at all, however many are configured.
             config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns = containerColumns
-          , rows = V.fromList $ map (ContainerVM pid) rows
+          , rows = V.fromList $ map (ContainerVM pid window) rows
           , features =
               def
                 { search = Just ClientSide
@@ -256,21 +257,20 @@ shortImage = T.takeWhileEnd (/= '/')
 
 detailUrl :: ContainerVM -> Text
 detailUrl vm =
-  "/p/"
-    <> vm.pid.toText
-    <> "/infrastructure/containers/detail?container="
-    <> toUriStr vm.row.containerName
-    <> foldMap (("&pod=" <>) . toUriStr) vm.row.podName
+  TimePicker.windowUrl
+    ("/p/" <> vm.pid.toText <> "/infrastructure/containers/detail")
+    (("container", vm.row.containerName) : [("pod", pod) | pod <- maybeToList vm.row.podName])
+    vm.window
 
 
 -- | The drawer for one container. It reuses the list query rather than adding a second one:
 -- the window is short and the result already carries every field the panel shows.
-containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-containerDetailGetH pid containerM podM = do
+containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now Nothing Nothing Nothing
-  rows <- containersInWindow appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
+  rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
   addRespHeaders $ maybe (div_ [class_ "p-4 text-textWeak"] "This container is no longer reporting.") (containerDetail_ pid) found
 

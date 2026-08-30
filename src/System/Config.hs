@@ -23,6 +23,8 @@ import Effectful.Ki qualified as Ki
 import Log (LogLevel (..))
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ContainerTypes qualified as Containers
+import Models.Telemetry.RUM qualified as RUM
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
@@ -384,6 +386,10 @@ data AuthContext = AuthContext
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
   , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats)
   -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
+  , infrastructureCache :: Cache Containers.ContainerSnapshotKey (V.Vector Containers.ContainerRow)
+  -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
+  , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
+  -- ^ Briefly reuses RUM panel reads across tab navigation and preloaded requests.
   , codeBlobCache :: Cache CodeBlobKey ByteString
   -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
   -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
@@ -463,6 +469,8 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
+  rumCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
   -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
   -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
@@ -512,6 +520,8 @@ configToEnv config = do
       , logsPatternCache
       , hostStatsCache
       , endpointStatsCache
+      , infrastructureCache
+      , rumCache
       , codeBlobCache
       , extractionWorker
       , traceSessionCache

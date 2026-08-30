@@ -1,5 +1,6 @@
 module Pages.RealUserMonitoringSpec (spec) where
 
+import Data.Cache qualified as Cache
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
@@ -7,10 +8,12 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
+import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.RealUserMonitoring qualified as RUM
 import Pkg.TestUtils
 import Relude
+import System.Config (AuthContext (..))
 import Test.Hspec
 
 
@@ -37,7 +40,7 @@ browserSpan apiKey trId spId extras name sid parentM service tr =
 
 renderPage :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderPage tr tab query sessionFilterM selected = do
-  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected
+  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected True
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
@@ -51,6 +54,10 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
     it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
+      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing False
+      toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["aria-busy=\"true\"", "hx-trigger=\"load\"", "load=true", "loading-dots"]
+      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing False
+      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["grid-cols-5", "loading-dots"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
 
@@ -68,16 +75,17 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
-      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewData))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing
+      (_, overviewPage@(RUM.RumGet (PageCtx _ overviewData))) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing True
       overviewData.summary.sessions `shouldBe` 2
       overviewData.summary.pageViews `shouldBe` 2
       overviewData.summary.errors `shouldBe` 1
       overviewData.degradedPanels `shouldBe` []
+      isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid RUMData.VitalSamplesQuery Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
       let overview = toStrict $ Lucid.renderText $ Lucid.toHtml overviewPage
       overview `shouldContainAll` ["page views", "browser error", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
 
       sessions <- renderPage tr (Just "sessions") Nothing (Just "errors") (Just sessionId)
-      sessions `shouldContainAll` ["With errors", "Ada Lovelace", "Watch replay", "initialSession=\"00000000-0000-0000-0000-000000000042\""]
+      sessions `shouldContainAll` ["With errors", "Ada Lovelace", "Watch replay", "initialSession=\"00000000-0000-0000-0000-000000000042\"", "hx-target=\"#rum-replay-workspace\"", "hx-sync=\"#rum-replay-workspace:replace\""]
       T.isInfixOf "/search" sessions `shouldBe` False
 
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing

@@ -208,7 +208,9 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Telemetry.Containers
+      Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
+      Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
@@ -808,7 +810,9 @@ test-suite test-dev
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Telemetry.Containers
+      Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
+      Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer

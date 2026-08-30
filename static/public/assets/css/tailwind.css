@@ -99,7 +99,7 @@
   --color-bgBrand: oklch(56.7% 0.239 261);
 
   /* Chart colors */
-  --color-chart-default: oklch(52% 0.18 261);
+  --color-chart-default: oklch(56.7% 0.239 261);
   --color-chartBg: oklch(94.5% 0.014 261 / 0.55);
   --color-chartMask: oklch(100% 0 0 / 0.8);
 

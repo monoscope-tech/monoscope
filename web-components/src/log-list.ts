@@ -2115,9 +2115,7 @@ export class LogList extends LitElement {
     // Cursor pagination is guaranteed to return the next history edge and can append without
     // touching visible geometry. Recent/live delivery is not timestamp-ordered, so only that
     // path pays to place delayed trace groups chronologically.
-    const merged = isRecentFetch
-      ? this.mergeInTimeOrder(this.spanListTree, fresh, true)
-      : this.orderMerge(this.spanListTree, fresh, false);
+    const merged = isRecentFetch ? this.mergeInTimeOrder(this.spanListTree, fresh, true) : this.orderMerge(this.spanListTree, fresh, false);
     if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) {
       this.evictedEdge = null;
       this.evictedCount = 0;
@@ -2707,9 +2705,13 @@ export class LogList extends LitElement {
             </div>`
           : nothing}
         ${!isAggregate && this.recentCount > 0 && !this.flipDirection
-          ? html` <div class="pointer-events-none sticky top-[30px] z-50 flex h-0 items-start justify-center" role="status" aria-live="polite">
+          ? html` <div
+              class="pointer-events-none sticky top-[30px] z-50 flex h-0 items-start justify-center"
+              role="status"
+              aria-live="polite"
+            >
               <button
-                class="cbadge-sm pointer-events-auto inline-flex min-h-6 items-center whitespace-nowrap cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:bg-fillWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
+                class="cbadge-sm pointer-events-auto inline-flex min-h-6 items-center whitespace-nowrap cursor-pointer border border-strokeStrong bg-bgRaised text-textStrong shadow-sm rounded-full text-sm hover:border-strokeBrand-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
                 @click=${this.handleRecentClick}
                 aria-label="${this.recentCount} new events, click to load"
               >
@@ -3029,10 +3031,11 @@ export class LogList extends LitElement {
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
         // Session roots get a wider bar so a red "this session errored" signal is
         // scannable down the rail rather than a 1px hairline you must hover to read.
-        const indicatorClass = (isExpanded ? errClass.replace('-weak', '-strong') : errClass).replace(
-          'w-1',
-          this.mode === 'sessions' && depth === 0 ? 'w-1.5' : 'w-1'
-        ) + ' min-w-[3px]';
+        const indicatorClass =
+          (isExpanded ? errClass.replace('-weak', '-strong') : errClass).replace(
+            'w-1',
+            this.mode === 'sessions' && depth === 0 ? 'w-1.5' : 'w-1'
+          ) + ' min-w-[3px]';
         const errTip =
           this.mode === 'sessions'
             ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session`
@@ -3591,7 +3594,8 @@ export class LogList extends LitElement {
       const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
       const level = String(
         lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'level') ||
-        lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'severity_text') || ''
+          lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'severity_text') ||
+          ''
       ).toLowerCase();
       const isErrorRow = !!rowData.hasErrors || /error|fatal|critical|exception/.test(level);
       const isWarningRow = !isErrorRow && /warn/.test(level);

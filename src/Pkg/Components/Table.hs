@@ -608,8 +608,8 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
 
 renderFilterRail :: TableHeaderActions -> Html ()
 renderFilterRail actions =
-  details_ [open_ "", class_ "w-60 shrink-0 rounded-lg border border-strokeStrong bg-bgRaised max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
-    summary_ [class_ "cursor-pointer border-b border-strokeWeak bg-bgAlternate px-3 py-2 text-sm font-semibold text-textStrong"] "Filters"
+  details_ [open_ "", class_ "w-60 shrink-0 max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
+    summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] "Filters"
     facetRail_ Nothing "p-2" "Search filters" (Just clearAll) $ forM_ (zip [0 :: Int ..] actions.filterMenus) \(index, menu) ->
       facetSection_ (index == 0 || any (.isActive) menu.options) "" [] (toHtml menu.label)
         $ div_ [class_ "max-h-48 overflow-y-auto"]

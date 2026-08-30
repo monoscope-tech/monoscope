@@ -225,7 +225,37 @@ export const showNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.cla
 export const hideNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.add('hidden');
 
 
-const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
+const MAX_VISIBLE_SERIES = 8;
+
+// Keep dense charts legible without changing their totals: rank series by peak value,
+// retain the leaders, and fold the rest into one explicitly labelled series.
+export const collapseLongTail = (data: any): any => {
+  if (!Array.isArray(data) || !Array.isArray(data[0])) return data;
+  const [headers, ...rows] = data;
+  const names = headers.slice(1);
+  if (names.length <= MAX_VISIBLE_SERIES) return data;
+
+  const ranked = names
+    .map((name: string, index: number) => ({
+      name,
+      index,
+      peak: Math.max(...rows.map((row: any[]) => Number.isFinite(row?.[index + 1]) ? row[index + 1] : -Infinity)),
+    }))
+    .sort((a: any, b: any) => b.peak - a.peak || a.index - b.index);
+  const visible = ranked.slice(0, MAX_VISIBLE_SERIES);
+  const hidden = ranked.slice(MAX_VISIBLE_SERIES);
+
+  return [
+    [headers[0], ...visible.map((series: any) => series.name), `Other (${hidden.length})`],
+    ...rows.map((row: any[]) => {
+      if (!Array.isArray(row)) return row;
+      const hiddenValues = hidden.map((series: any) => row[series.index + 1]).filter(Number.isFinite);
+      return [row[0], ...visible.map((series: any) => row[series.index + 1]), hiddenValues.length ? hiddenValues.reduce((sum: number, value: number) => sum + value, 0) : null];
+    }),
+  ];
+};
+
+export const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
   // A thresholded stat (e.g. Error Rate) is treated as a caution metric — color
   // it red so the signal isn't an arbitrary hash color, rather than leaving it to
   // getSeriesColor's hash. Assumes higher = worse; revisit (explicit intent field)
@@ -237,8 +267,8 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
   const paletteColor = isErrorStat ? styles.errorColor : isGenericStatColumn ? styles.brandColor : getSeriesColor(name);
 
-  const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
+  const gradientColor = (opacity: number) => new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
+    { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, opacity) },
     { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
@@ -262,6 +292,7 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   if (widgetData.chartType === 'line') {
     const inventoryLineType = widgetData.chartId?.startsWith('containers-') ? ['solid', 'dashed', 'dotted'][i % 3] : 'solid';
     seriesOpt.lineStyle = { color: paletteColor, opacity: inventorySeriesOpacity, width: inventorySeriesOpacity === 1 ? 2.25 : 1.5, type: inventoryLineType };
+    if (i === 0) seriesOpt.areaStyle = { color: gradientColor(0.24) };
     // For line charts in dark mode, override the symbol to avoid white centers
     if (document.body.getAttribute('data-theme') === 'dark') {
       seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
@@ -270,8 +301,8 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   }
 
   if (widgetData.widgetType == 'timeseries_stat') {
-    seriesOpt.itemStyle = { color: gradientColor };
-    seriesOpt.areaStyle = { color: gradientColor };
+    seriesOpt.itemStyle = { color: gradientColor(1) };
+    seriesOpt.areaStyle = { color: gradientColor(1) };
   }
 
   return seriesOpt;
@@ -280,8 +311,11 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
 const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
   if (!data) return opt;
 
+  const source = collapseLongTail(data);
+  opt.dataset = { ...opt.dataset, source };
+
   // Avoid unnecessary updates if data structure hasn't changed
-  const cols = data[0]?.slice(1);
+  const cols = source[0]?.slice(1);
   const currentLegendData = opt.legend?.data;
 
   // Only update if legend data has actually changed

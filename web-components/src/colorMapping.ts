@@ -5,13 +5,13 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Light-mode marks use darker values so every essential series clears 3:1 on
-// the cool chart surface. Dark mode keeps the brighter 400-weight family.
+// Light mode sits each hue at the brightest point that still clears 3:1 on the
+// chart surface. Dark mode keeps the lighter 400-weight family.
 const LIGHT_THEME_COLORS = [
-  '#2563eb', '#dc2626', '#15803d', '#b45309', '#9333ea', '#0f766e',
-  '#c2410c', '#0369a1', '#e11d48', '#4d7c0f', '#4f46e5', '#a16207',
-  '#be185d', '#047857', '#7c3aed', '#0e7490', '#a21caf', '#475569',
-  '#1d4ed8', '#b91c1c'
+  '#3b82f6', '#ef4444', '#16a34a', '#d97706', '#a855f7', '#0d9488',
+  '#ea580c', '#0284c7', '#f43f5e', '#5f9c0b', '#6366f1', '#bd7d00',
+  '#ec4899', '#059669', '#8b5cf6', '#0891b2', '#d946ef', '#64748b',
+  '#5470c6', '#e05d44'
 ];
 const DARK_THEME_COLORS = [
   '#60a5fa', '#f87171', '#4ade80', '#fbbf24', '#c084fc', '#2dd4bf',
@@ -100,10 +100,10 @@ function hashString(str: string): number {
 export function getStatusCodeColor(code: number | string): string {
   const grouped = typeof code === 'string' && /^[2-5]xx$/i.test(code) ? Number(code[0]) * 100 : Number(code);
   const dark = currentTheme() === 'dark';
-  if (grouped >= 200 && grouped < 300) return dark ? '#34d399' : '#047857';
-  if (grouped >= 300 && grouped < 400) return dark ? '#38bdf8' : '#0369a1';
-  if (grouped >= 400 && grouped < 500) return dark ? '#fbbf24' : '#b45309';
-  if (grouped >= 500 && grouped < 600) return dark ? '#f87171' : '#dc2626';
+  if (grouped >= 200 && grouped < 300) return dark ? '#34d399' : '#059669';
+  if (grouped >= 300 && grouped < 400) return dark ? '#38bdf8' : '#0284c7';
+  if (grouped >= 400 && grouped < 500) return dark ? '#fbbf24' : '#d97706';
+  if (grouped >= 500 && grouped < 600) return dark ? '#f87171' : '#ef4444';
   return themeColors()[4];
 }
 
@@ -113,7 +113,7 @@ export function getPercentileColor(percentile: string): string {
   const dark = currentTheme() === 'dark';
   const colors: Record<string, string> = dark
     ? { p50: '#4ade80', median: '#4ade80', p75: '#34d399', q1: '#34d399', p90: '#fbbf24', p95: '#fb923c', q3: '#fb923c', p99: '#f87171', p100: '#fb7185', max: '#fb7185', min: '#4ade80' }
-    : { p50: '#15803d', median: '#15803d', p75: '#047857', q1: '#047857', p90: '#a16207', p95: '#c2410c', q3: '#c2410c', p99: '#dc2626', p100: '#be123c', max: '#be123c', min: '#15803d' };
+    : { p50: '#16a34a', median: '#16a34a', p75: '#059669', q1: '#059669', p90: '#bd7d00', p95: '#ea580c', q3: '#ea580c', p99: '#ef4444', p100: '#f43f5e', max: '#f43f5e', min: '#16a34a' };
   const palette = themeColors();
   return colors[normalized] || palette[hashString(percentile) % palette.length];
 }
@@ -187,25 +187,25 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
 // Tailwind class to hex mapping for service colors. These values are the
 // light-mode equivalents of the server's stable class positions.
 export const TAILWIND_TO_HEX: Record<string, string> = {
-  'bg-blue-400': '#2563eb',
-  'bg-red-400': '#dc2626',
-  'bg-green-400': '#15803d',
-  'bg-amber-400': '#b45309',
-  'bg-purple-400': '#9333ea',
-  'bg-teal-400': '#0f766e',
-  'bg-orange-400': '#c2410c',
-  'bg-sky-400': '#0369a1',
-  'bg-rose-400': '#e11d48',
-  'bg-lime-400': '#4d7c0f',
-  'bg-indigo-400': '#4f46e5',
-  'bg-yellow-400': '#a16207',
-  'bg-pink-400': '#be185d',
-  'bg-emerald-400': '#047857',
-  'bg-violet-400': '#7c3aed',
-  'bg-cyan-400': '#0e7490',
-  'bg-fuchsia-400': '#a21caf',
-  'bg-slate-400': '#475569',
-  'bg-gray-500': '#4b5563',
+  'bg-blue-400': '#3b82f6',
+  'bg-red-400': '#ef4444',
+  'bg-green-400': '#16a34a',
+  'bg-amber-400': '#d97706',
+  'bg-purple-400': '#a855f7',
+  'bg-teal-400': '#0d9488',
+  'bg-orange-400': '#ea580c',
+  'bg-sky-400': '#0284c7',
+  'bg-rose-400': '#f43f5e',
+  'bg-lime-400': '#5f9c0b',
+  'bg-indigo-400': '#6366f1',
+  'bg-yellow-400': '#bd7d00',
+  'bg-pink-400': '#ec4899',
+  'bg-emerald-400': '#059669',
+  'bg-violet-400': '#8b5cf6',
+  'bg-cyan-400': '#0891b2',
+  'bg-fuchsia-400': '#d946ef',
+  'bg-slate-400': '#64748b',
+  'bg-gray-500': '#64748b',
 };
 
 const DARK_TAILWIND_TO_HEX: Record<string, string> = Object.fromEntries(

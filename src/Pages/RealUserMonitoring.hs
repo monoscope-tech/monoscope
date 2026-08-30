@@ -13,6 +13,7 @@ module Pages.RealUserMonitoring (
   classifyVital,
 ) where
 
+import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -30,7 +31,9 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.RUM (ReplaySession (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), RumSummary (..), RumTrend (..), VitalSample (..))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..))
 import Pages.Components qualified as Components
@@ -43,14 +46,11 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (faSprite_, toUriStr)
+import Utils (LoadingSize (LdMD), LoadingType (LdDots), faSprite_, loadingIndicator_, toUriStr)
 
 
 data RumTab = Overview | Sessions | Performance
   deriving stock (Eq, Show)
-
-
-data RumBucket = FiveMinutes | OneHour | SixHours
 
 
 data SessionFilter = AllSessionRows | ErrorSessionRows | ReplaySessionRows
@@ -94,96 +94,6 @@ sessionFilterParam = \case
   AllSessionRows -> Nothing
   ErrorSessionRows -> Just "errors"
   ReplaySessionRows -> Just "replays"
-
-
-data RumSummary = RumSummary
-  { sessions :: Int64
-  , pageViews :: Int64
-  , users :: Int64
-  , errors :: Int64
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumTrend = RumTrend
-  { bucket :: UTCTime
-  , pageViews :: Int64
-  , errors :: Int64
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumPage = RumPage
-  { path :: Text
-  , views :: Int64
-  , p75LoadMs :: Maybe Double
-  , lastSeen :: UTCTime
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumError = RumError
-  { timestamp :: UTCTime
-  , errorType :: Text
-  , message :: Text
-  , sessionId :: Maybe Text
-  , userId :: Maybe Text
-  , path :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data ReplaySession = ReplaySession
-  { id :: UUID.UUID
-  , startedAt :: UTCTime
-  , endedAt :: UTCTime
-  , userId :: Maybe Text
-  , userName :: Maybe Text
-  , userEmail :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumSession = RumSession
-  { id :: Text
-  , startedAt :: UTCTime
-  , endedAt :: UTCTime
-  , events :: Int64
-  , errors :: Int64
-  , views :: Int64
-  , userId :: Maybe Text
-  , userName :: Maybe Text
-  , userEmail :: Maybe Text
-  , service :: Maybe Text
-  , lastPage :: Maybe Text
-  , hasReplay :: Bool
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumQueryResult
-  = SummaryResult RumSummary
-  | TrendResult [RumTrend]
-  | PagesResult [RumPage]
-  | ErrorsResult [RumError]
-  | SessionsResult [RumSession]
-  | ReplaySessionsResult [ReplaySession]
-  | VitalSamplesResult [VitalSample]
-
-
-data VitalSample = VitalSample
-  { metricName :: Text
-  , value :: Double
-  , samples :: Int64
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
 
 
 data VitalRating = Good | NeedsImprovement | Poor | Unknown
@@ -367,6 +277,8 @@ replaySessions pid fromTime toTime =
     |]
 
 
+-- A recent 2,000-point sample keeps field-vital navigation bounded. Returning the previous
+-- 10,000 raw rows made this one panel dominate the page while adding negligible p75 precision.
 vitalSamples :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Maybe Text -> Eff es [VitalSample]
 vitalSamples useTf pid fromTime toTime environment =
   Hasql.withHasqlTimefusion useTf
@@ -381,7 +293,7 @@ vitalSamples useTf pid fromTime toTime environment =
           AND (#{environment}::text IS NULL OR resource___deployment___environment___name = #{environment})
           AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.cls', 'browser.web_vital.fcp', 'browser.web_vital.ttfb')
           AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
-        ORDER BY timestamp DESC LIMIT 10000
+        ORDER BY timestamp DESC LIMIT 2000
       |]
 
 
@@ -434,16 +346,29 @@ data RumData = RumData
   }
 
 
-newtype RumGet = RumGet (PageCtx RumData)
+data RumLoading = RumLoading
+  { contentUrl :: Text
+  , rumTab :: RumTab
+  }
+
+
+data RumGet = RumGet (PageCtx RumData) | RumLoadingGet (PageCtx RumLoading)
 
 
 instance ToHtml RumGet where
-  toHtml (RumGet page) = toHtml page
+  toHtml = \case
+    RumGet page -> toHtml page
+    RumLoadingGet page -> toHtml page
   toHtmlRaw = toHtml
 
 
-rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
-rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
+instance ToHtml RumLoading where
+  toHtml = toHtmlRaw . rumLoading_
+  toHtmlRaw = toHtml
+
+
+rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> ATAuthCtx (RespHeaders RumGet)
+rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM load = do
   (session, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
@@ -452,33 +377,6 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
       window = TimePicker.mkTimeWindow now fromM toM (sinceM <|> Just "24H")
       environment = session.environment
       useTf = appCtx.env.enableTimefusionReads
-      bucket
-        | diffUTCTime window.toTime window.fromTime <= 6 * 3600 = FiveMinutes
-        | diffUTCTime window.toTime window.fromTime <= 3 * 86400 = OneHour
-        | otherwise = SixHours
-      summaryQ = ("summary", SummaryResult <$> rumSummary useTf pid window.fromTime window.toTime environment)
-      trendQ = ("activity", TrendResult <$> rumTrend useTf pid window.fromTime window.toTime environment bucket)
-      pagesQ = ("pages", PagesResult <$> rumPages useTf pid window.fromTime window.toTime environment)
-      errorsQ = ("errors", ErrorsResult <$> rumErrors useTf pid window.fromTime window.toTime environment)
-      sessionsQ = ("sessions", SessionsResult <$> otelSessions useTf pid window.fromTime window.toTime environment)
-      replaysQ = ("replays", ReplaySessionsResult <$> replaySessions pid window.fromTime window.toTime)
-      vitalsQ = ("web vitals", VitalSamplesResult <$> vitalSamples useTf pid window.fromTime window.toTime environment)
-      tabQueries = case tab of
-        Overview -> [summaryQ, trendQ, pagesQ, errorsQ, sessionsQ, replaysQ, vitalsQ]
-        Sessions -> [sessionsQ, replaysQ]
-        Performance -> [pagesQ, errorsQ, vitalsQ]
-      runQuery (label, action) =
-        tryAny action >>= either (\err -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)) (pure . Right)
-  outcomes <- pooledForConcurrently tabQueries runQuery
-  let results = rights outcomes
-      degradedPanels = lefts outcomes
-      summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
-      trend = fold [value | TrendResult value <- results]
-      pages = fold [value | PagesResult value <- results]
-      errors = fold [value | ErrorsResult value <- results]
-      sessions = mergeSessions (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
-      vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
-      data' = RumData{pid, tab, summary, trend, pages, errors, sessions, vitals, window, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
       conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -487,7 +385,66 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM = do
           , pageActions = Just $ rumActions_ pid window
           , docsLink = Just "https://monoscope.tech/docs/sdks/browser/"
           }
-  addRespHeaders $ RumGet $ PageCtx conf data'
+      contentUrl =
+        TimePicker.windowUrl
+          ("/p/" <> pid.toText <> "/rum")
+          ( [("load", "true"), ("tab", tabParam tab)]
+              <> [("q", query) | query <- maybeToList queryM]
+              <> [("filter", value) | value <- maybeToList $ sessionFilterParam sessionFilter]
+              <> [("session", selected) | selected <- maybeToList selectedM]
+          )
+          window
+      bucket
+        | diffUTCTime window.toTime window.fromTime <= 6 * 3600 = FiveMinutes
+        | diffUTCTime window.toTime window.fromTime <= 3 * 86400 = OneHour
+        | otherwise = SixHours
+      cacheKey query = RumCacheKey pid query environment fromM toM (sinceM <|> Just "24H")
+      summaryQ = ("summary" :: Text, cacheKey SummaryQuery, SummaryResult <$> rumSummary useTf pid window.fromTime window.toTime environment)
+      trendQ = ("activity" :: Text, cacheKey $ TrendQuery bucket, TrendResult <$> rumTrend useTf pid window.fromTime window.toTime environment bucket)
+      pagesQ = ("pages" :: Text, cacheKey PagesQuery, PagesResult <$> rumPages useTf pid window.fromTime window.toTime environment)
+      errorsQ = ("errors" :: Text, cacheKey ErrorsQuery, ErrorsResult <$> rumErrors useTf pid window.fromTime window.toTime environment)
+      sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, SessionsResult <$> otelSessions useTf pid window.fromTime window.toTime environment)
+      replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, ReplaySessionsResult <$> replaySessions pid window.fromTime window.toTime)
+      vitalsQ = ("web vitals" :: Text, cacheKey VitalSamplesQuery, VitalSamplesResult <$> vitalSamples useTf pid window.fromTime window.toTime environment)
+      -- TimeFusion slows down sharply when all seven scans compete at once. Two at a time
+      -- finishes the cold overview sooner while the cache makes subsequent tab changes instant.
+      tabQueryBatches = case tab of
+        Overview -> [[vitalsQ, summaryQ], [sessionsQ, trendQ], [pagesQ, errorsQ], [replaysQ]]
+        Sessions -> [[sessionsQ, replaysQ]]
+        Performance -> [[vitalsQ, pagesQ], [errorsQ]]
+      runQuery (label, key, action) =
+        tryAny
+          ( liftIO (Cache.lookup appCtx.rumCache key)
+              >>= maybe (action >>= \fresh -> fresh <$ when (cacheableRumResult fresh) (liftIO $ Cache.insert appCtx.rumCache key fresh)) pure
+          )
+          >>= either (\err -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)) (pure . Right)
+  if not load
+    then addRespHeaders $ RumLoadingGet $ PageCtx conf RumLoading{contentUrl, rumTab = tab}
+    else do
+      outcomes <- concat <$> traverse (`pooledForConcurrently` runQuery) tabQueryBatches
+      let results = rights outcomes
+          degradedPanels = lefts outcomes
+          summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
+          trend = fold [value | TrendResult value <- results]
+          pages = fold [value | PagesResult value <- results]
+          errors = fold [value | ErrorsResult value <- results]
+          sessions = mergeSessions (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
+          vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
+          data' = RumData{pid, tab, summary, trend, pages, errors, sessions, vitals, window, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
+      addRespHeaders $ RumGet $ PageCtx conf data'
+
+
+-- Empty panels are not cached: browser telemetry can arrive immediately after SDK setup, and
+-- pinning an empty first visit would hide it until expiry.
+cacheableRumResult :: RumQueryResult -> Bool
+cacheableRumResult = \case
+  SummaryResult summary -> summary.sessions > 0 || summary.pageViews > 0 || summary.users > 0 || summary.errors > 0
+  TrendResult rows -> not $ null rows
+  PagesResult rows -> not $ null rows
+  ErrorsResult rows -> not $ null rows
+  SessionsResult rows -> not $ null rows
+  ReplaySessionsResult rows -> not $ null rows
+  VitalSamplesResult rows -> not $ null rows
 
 
 rumNavTabs_ :: Projects.ProjectId -> RumTab -> TimePicker.TimeWindow -> Html ()
@@ -517,6 +474,61 @@ rumActions_ pid window = div_ [class_ "inline-flex items-center gap-2", data_ "d
 instance ToHtml RumData where
   toHtml = toHtmlRaw . rumPage_
   toHtmlRaw = toHtml
+
+
+rumLoading_ :: RumLoading -> Html ()
+rumLoading_ RumLoading{contentUrl, rumTab} =
+  main_
+    [ id_ "rum-page"
+    , class_ $ "min-h-full bg-bgSunken" <> bool " p-4 max-md:p-3" "" (rumTab == Sessions)
+    , hxGet_ contentUrl
+    , hxTrigger_ "load"
+    , hxSelect_ "#rum-page"
+    , hxSwap_ "outerHTML"
+    , term "hx-preload" "false"
+    , Aria.busy_ "true"
+    ]
+    $ rumLoadingSkeleton_ rumTab
+
+
+-- Keep the shell's geometry close to its destination tab to avoid layout shifts, while
+-- using the shared dots indicator used by Log Explorer for the actual loading affordance.
+rumLoadingSkeleton_ :: RumTab -> Html ()
+rumLoadingSkeleton_ tab = do
+  case tab of
+    Overview -> div_ [class_ "space-y-5"] do
+      div_ [class_ "grid grid-cols-4 divide-x divide-strokeWeak border-y border-strokeWeak bg-bgBase max-md:grid-cols-2 max-md:divide-x-0"] $ replicateM_ 4 $ div_ [class_ "h-16 border-b border-strokeWeak p-4"] $ rumSkeleton_ "h-4 w-24"
+      div_ [class_ "grid grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)] gap-4 max-xl:grid-cols-1"] do
+        div_ [class_ "space-y-4"] $ rumLoadingPanel_ "h-52" >> rumLoadingPanel_ "h-48"
+        div_ [class_ "space-y-4"] $ rumLoadingPanel_ "h-64" >> rumLoadingPanel_ "h-40"
+      rumLoadingPanel_ "h-52"
+      rumLoadingStatus_
+    Sessions -> div_ [class_ "grid h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase max-xl:h-auto"] do
+      section_ [class_ "col-span-2 overflow-hidden border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"] do
+        div_ [class_ "space-y-3 border-b border-strokeWeak p-3"] $ rumSkeleton_ "h-8 w-full" >> rumSkeleton_ "h-7 w-52"
+        replicateM_ 12 $ div_ [class_ "grid h-16 grid-cols-[1.4fr_1fr_.8fr_.5fr_2rem] items-center gap-3 border-b border-strokeWeak px-3"] $ replicateM_ 5 $ rumSkeleton_ "h-3 w-full"
+      section_ [class_ "col-span-3 flex min-h-[34rem] flex-col items-center justify-center gap-4 bg-bgSunken max-xl:col-span-5"] do
+        rumSkeleton_ "h-64 w-4/5"
+        rumLoadingStatus_
+    Performance -> div_ [class_ "space-y-4"] do
+      rumLoadingPanel_ "h-80"
+      div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] $ rumLoadingPanel_ "h-52" >> rumLoadingPanel_ "h-52"
+      rumLoadingStatus_
+  span_ [class_ "sr-only"] "Loading Real User Monitoring data"
+
+
+rumLoadingStatus_ :: Html ()
+rumLoadingStatus_ = div_ [class_ "flex justify-center py-4"] $ loadingIndicator_ LdMD LdDots
+
+
+rumLoadingPanel_ :: Text -> Html ()
+rumLoadingPanel_ height = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
+  div_ [class_ "border-b border-strokeWeak p-3"] $ rumSkeleton_ "h-4 w-40"
+  div_ [class_ $ "p-4 " <> height] $ rumSkeleton_ "h-full w-full"
+
+
+rumSkeleton_ :: Text -> Html ()
+rumSkeleton_ classes = div_ [class_ $ classes <> " animate-pulse rounded bg-fillWeak motion-reduce:animate-none"] mempty
 
 
 rumPage_ :: RumData -> Html ()
@@ -665,18 +677,22 @@ recentErrors_ pid errors window = section_ [class_ "rounded-lg border border-str
 recentSessions_ :: RumData -> Html ()
 recentSessions_ page = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
   panelHeader_ "Recent sessions" "Open a recording or inspect its correlated telemetry" $ Just ("View all sessions", sessionsUrl page.pid page.window Nothing AllSessionRows Nothing)
-  sessionTable_ page.pid page.window (take 8 page.sessions) Nothing AllSessionRows
+  sessionTable_ page.pid page.window (take 8 page.sessions) Nothing AllSessionRows False
 
 
 sessions_ :: RumData -> Html ()
 sessions_ page = do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
-  div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
-    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"] do
+  div_ [class_ "grid h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase max-xl:h-auto"] do
+    section_ [class_ "col-span-2 min-w-0 overflow-y-auto border-r border-strokeWeak max-xl:col-span-5 max-xl:overflow-visible max-xl:border-b max-xl:border-r-0"] do
       sessionsToolbar_ page.pid page.window page.query page.sessionFilter (length filtered)
-      sessionTable_ page.pid page.window filtered page.query page.sessionFilter
-    section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgSunken max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.pid page.window selected
+      sessionTable_ page.pid page.window filtered page.query page.sessionFilter True
+    section_ [id_ "rum-replay-workspace", class_ "relative col-span-3 min-w-0 overflow-y-auto bg-bgSunken max-xl:col-span-5 max-xl:overflow-visible", Aria.label_ "Session replay workspace"] do
+      div_ [class_ "absolute inset-0 z-10 hidden items-center justify-center bg-bgSunken/60 [.htmx-request>&]:flex"] do
+        loadingIndicator_ LdMD LdDots
+        span_ [class_ "sr-only"] "Loading session"
+      replayWorkspace_ page.pid page.window selected
 
 
 sessionsToolbar_ :: Projects.ProjectId -> TimePicker.TimeWindow -> Maybe Text -> SessionFilter -> Int -> Html ()
@@ -719,15 +735,18 @@ filterSessions query sessionFilter = filter (\s -> matchesQuery s && matchesFilt
       ReplaySessionRows -> session.hasReplay
 
 
-sessionTable_ :: Projects.ProjectId -> TimePicker.TimeWindow -> [RumSession] -> Maybe Text -> SessionFilter -> Html ()
-sessionTable_ pid window sessions query sessionFilter =
+-- Selecting a row swaps only the replay workspace (its queries are cache-warm), so the
+-- table and scroll position survive. `workspace` is False where no workspace is on screen
+-- (the overview's recent-sessions panel), and the links stay plain navigations.
+sessionTable_ :: Projects.ProjectId -> TimePicker.TimeWindow -> [RumSession] -> Maybe Text -> SessionFilter -> Bool -> Html ()
+sessionTable_ pid window sessions query sessionFilter workspace =
   if null sessions
     then panelEmpty_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows)
     else div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
       thead_ $ tr_ $ th_ "User / session" >> th_ "Last page" >> th_ [class_ "text-right"] "Signals" >> th_ [class_ "text-right"] "Duration" >> th_ [class_ "w-12"] ""
       tbody_ $ forM_ sessions \session -> tr_ [class_ "hover:bg-fillHover"] do
         td_ [class_ "max-w-64"] do
-          a_ [href_ $ sessionsUrl pid window query sessionFilter (Just session.id), class_ "block truncate font-medium text-textStrong hover:text-textBrand"] $ toHtml $ sessionIdentity session
+          a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
           span_ [class_ "block truncate font-mono text-xs text-textWeak"] $ toHtml session.id
         td_ [class_ "max-w-56"] do
           span_ [class_ "block truncate text-xs text-textStrong"] $ toHtml $ fromMaybe "Unknown page" session.lastPage
@@ -740,8 +759,23 @@ sessionTable_ pid window sessions query sessionFilter =
         td_ [class_ "text-right text-xs tabular-nums text-textWeak"] $ toHtml $ formatSessionDuration session
         td_ [class_ "text-right"] do
           if session.hasReplay
-            then a_ [href_ $ sessionsUrl pid window query sessionFilter (Just session.id), class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"] $ faSprite_ "circle-play" "regular" "h-4 w-4"
+            then a_ (sessionLinkAttrs session.id <> [class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"]) $ faSprite_ "circle-play" "regular" "h-4 w-4"
             else a_ [href_ $ logsUrl pid ("attributes.session.id == " <> kqlValue session.id) window, class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
+  where
+    sessionLinkAttrs sid =
+      let url = sessionsUrl pid window query sessionFilter $ Just sid
+       in href_ url
+            : if workspace
+              then
+                [ hxGet_ $ url <> "&load=true"
+                , hxTarget_ "#rum-replay-workspace"
+                , hxSelect_ "#rum-replay-workspace"
+                , hxSwap_ "outerHTML"
+                , hxPushUrl_ url
+                , hxIndicator_ "#rum-replay-workspace"
+                , term "hx-sync" "#rum-replay-workspace:replace"
+                ]
+              else []
 
 
 replayWorkspace_ :: Projects.ProjectId -> TimePicker.TimeWindow -> Maybe RumSession -> Html ()

@@ -670,30 +670,30 @@ getServiceColors :: V.Vector Text -> HashMap Text Text
 getServiceColors = V.foldl' (\m s -> HM.insert s (serviceFillColor s) m) HM.empty
 
 
--- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
+-- | Light-theme ECharts colors; matches colorMapping.ts LIGHT_THEME_COLORS.
 themeColorsHex :: V.Vector Text
 themeColorsHex =
   V.fromList
-    [ "#1A74A8"
-    , "#91cc75"
-    , "#fac858"
-    , "#ee6666"
-    , "#73c0de"
-    , "#3ba272"
-    , "#fc8452"
-    , "#9a60b4"
-    , "#c71585"
-    , "#37a2da"
-    , "#32c5e9"
-    , "#20b2aa"
-    , "#228b22"
-    , "#ff8c00"
-    , "#ff6347"
-    , "#dc143c"
-    , "#8b008b"
-    , "#4b0082"
-    , "#6a5acd"
-    , "#4169e1"
+    [ "#3b82f6"
+    , "#ef4444"
+    , "#16a34a"
+    , "#d97706"
+    , "#a855f7"
+    , "#0d9488"
+    , "#ea580c"
+    , "#0284c7"
+    , "#f43f5e"
+    , "#5f9c0b"
+    , "#6366f1"
+    , "#bd7d00"
+    , "#ec4899"
+    , "#059669"
+    , "#8b5cf6"
+    , "#0891b2"
+    , "#d946ef"
+    , "#64748b"
+    , "#5470c6"
+    , "#e05d44"
     ]
 
 
@@ -716,23 +716,23 @@ getSeriesColorHex name
     isPercentile t = T.isPrefixOf "p" (T.toLower t) || HS.member (T.toLower t) percentileNames
     hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
     statusCodeColorHex code
-      | code >= 200 && code < 300 = "#1A74A8"
-      | code >= 300 && code < 400 = "#73c0de"
-      | code >= 400 && code < 500 = "#fac858"
-      | code >= 500 = "#ee6666"
-      | otherwise = "#9d96f5"
+      | code >= 200 && code < 300 = "#059669"
+      | code >= 300 && code < 400 = "#0284c7"
+      | code >= 400 && code < 500 = "#d97706"
+      | code >= 500 = "#ef4444"
+      | otherwise = "#a855f7"
     percentileColorHex p = case T.toLower p of
-      "p50" -> "#91cc75"
-      "median" -> "#91cc75"
-      "min" -> "#91cc75"
-      "p75" -> "#3ba272"
-      "q1" -> "#3ba272"
-      "p90" -> "#fac858"
-      "p95" -> "#fc8452"
-      "q3" -> "#fc8452"
-      "p99" -> "#dc2626"
-      "p100" -> "#991b1b"
-      "max" -> "#991b1b"
+      "p50" -> "#16a34a"
+      "median" -> "#16a34a"
+      "min" -> "#16a34a"
+      "p75" -> "#059669"
+      "q1" -> "#059669"
+      "p90" -> "#bd7d00"
+      "p95" -> "#ea580c"
+      "q3" -> "#ea580c"
+      "p99" -> "#ef4444"
+      "p100" -> "#f43f5e"
+      "max" -> "#f43f5e"
       _ -> themeColorsHex V.! hashTextToIndex p
 
 
