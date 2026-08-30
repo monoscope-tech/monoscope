@@ -39,6 +39,25 @@ browserSpan apiKey trId spId extras name sid parentM service tr =
   ingestSpanReq tr $ mkSpanRequest trId spId parentM name [] Nothing (map (uncurry mkAttr) $ ("session.id", sid) : extras) (mkResource apiKey [mkAttr "telemetry.sdk.language" "webjs", mkAttr "service.name" service]) frozenTime
 
 
+-- | A page load exactly as the OpenTelemetry browser SDK sends it, which is what production
+-- actually looks like: span named @documentLoad@, the page in @url.full@ rather than
+-- @url.path@, a user agent on the resource, and — the part that broke RUM — no
+-- @telemetry.sdk.language@ at all.
+otelBrowserSpan :: Text -> Text -> Text -> Text -> Text -> TestResources -> IO ()
+otelBrowserSpan apiKey trId spId sid service tr =
+  ingestSpanReq tr
+    $ mkSpanRequest
+      trId
+      spId
+      Nothing
+      "documentLoad"
+      []
+      Nothing
+      [mkAttr "session.id" sid, mkAttr "url.full" "https://shop.example/cart"]
+      (mkResource apiKey [mkAttr "service.name" service, mkAttr "user_agent.original" "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"])
+      frozenTime
+
+
 renderPage :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderPage tr tab query sessionFilterM selected = renderScoped tr tab query sessionFilterM selected Nothing
 
@@ -117,7 +136,10 @@ spec = sequential $ aroundAll withTestResources do
       -- ships a double-escaped query: a space arrives as %2520, the Explorer sees one
       -- meaningless token, and the link silently returns nothing.
       overview <- renderPage tr Nothing Nothing Nothing Nothing
-      overview `shouldContainAll` ["/log_explorer?since=24H&amp;query=resource.telemetry.sdk.language%20%3D%3D%20%22webjs%22%20and%20name%20startswith%20%22Pageview%20%C2%B7%20%22"]
+      -- Pinned as the property rather than one exact query string: a space encoded once as
+      -- %20, a quote once as %22, and no %25 anywhere on the page — %25 is the signature of a
+      -- second pass, since it is what a literal % becomes.
+      overview `shouldContainAll` ["/log_explorer?since=24H&amp;query=", "%20and%20", "%22documentLoad%22"]
       T.isInfixOf "%25" overview `shouldBe` False
 
     it "serviceFilter_scopesEveryPanelToOneBrowserService" \tr -> do
@@ -151,3 +173,19 @@ spec = sequential $ aroundAll withTestResources do
       ghost <- renderScoped tr Nothing Nothing Nothing Nothing (Just "ghost-service")
       ghost `shouldContainAll` ["No browser telemetry for ghost-service in this range", "Show all services", "All services", ">ghost-service<"]
       T.isInfixOf "Install the browser SDK" ghost `shouldBe` False
+
+    it "browserSdkWithoutSdkLanguage_isStillSeenAndPickable" \tr -> do
+      -- The OpenTelemetry browser SDKs leave telemetry.sdk.language unset, and RUM used to
+      -- filter on that alone. Every browser application in production was therefore invisible:
+      -- no page views, no sessions, and an empty service picker with nothing to narrow to.
+      Cache.purge tr.trATCtx.rumCache
+      apiKey <- createTestAPIKey tr testPid "rum-otel-browser-key"
+      otelBrowserSpan apiKey "40000000000000000000000000000004" "4000000000000001" "session-otel" "checkout-web" tr
+
+      page <- renderPage tr Nothing Nothing Nothing Nothing
+      page `shouldContainAll` [">checkout-web<", "https://shop.example/cart"]
+
+      -- And it is narrowable, which is the whole point of the picker.
+      scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "checkout-web")
+      scoped `shouldContainAll` ["Every panel below is scoped to checkout-web.", "https://shop.example/cart"]
+      T.isInfixOf "/admin/users" scoped `shouldBe` False

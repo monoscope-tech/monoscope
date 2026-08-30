@@ -192,10 +192,42 @@ scopePredicate scope =
         AND (#{service}::text IS NULL OR resource___service___name = #{service})|]
 
 
--- | The span tables additionally have to be narrowed to what a browser SDK sent; the metrics
--- table identifies its browser data by metric name instead.
+-- | The span tables additionally have to be narrowed to what a browser sent; the metrics table
+-- identifies its browser data by metric name instead.
+--
+-- Laddered, because no single marker covers real browser telemetry. @telemetry.sdk.language@
+-- alone — which every RUM query used to filter on by itself — matches /nothing/ in production:
+-- the OpenTelemetry browser SDKs leave it unset, so the page was scoped to the empty set while
+-- three browser applications were reporting. The remaining rungs are what those three actually
+-- carry: the browser resource detector's user agent, the standard browser instrumentation span
+-- names, and our own SDK's page-view naming.
+--
+-- @resourceFetch@ is deliberately absent: it is one span per script, stylesheet and image, 40%
+-- of all browser rows here, and it carries nothing RUM shows — its sessions and users are
+-- already on the page-level spans beside it.
 browserScope :: RumScope -> HI.Sql
-browserScope scope = scopePredicate scope <> [HI.sql| AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')|]
+browserScope scope =
+  scopePredicate scope
+    <> [HI.sql| AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
+         OR resource___user_agent___original IS NOT NULL
+         OR name IN ('documentLoad', 'documentFetch')
+         OR |]
+    <> pageViewPredicate
+    <> [HI.sql|)|]
+
+
+-- | The page a browser event was on. Our SDK sets @url.path@; the OpenTelemetry browser SDK
+-- sets only @url.full@ and leaves @url.path@ null, which would otherwise collapse every row of
+-- the Top Pages table onto a single blank path.
+pagePath :: HI.Sql
+pagePath = [HI.sql|COALESCE(NULLIF(attributes___url___path, ''), NULLIF(attributes___url___full, ''), replace(name, 'Pageview · ', ''))|]
+
+
+-- | What counts as one page view. @documentLoad@ is the OpenTelemetry browser SDK's page-load
+-- span; @Pageview ·@ is ours. Shared so the summary, the trend, the table and the per-session
+-- counts cannot disagree about what they are counting.
+pageViewPredicate :: HI.Sql
+pageViewPredicate = [HI.sql|(name LIKE 'Pageview %' OR name = 'documentLoad')|]
 
 
 -- | Services that actually emit browser telemetry in this window, busiest first. Deliberately
@@ -224,7 +256,9 @@ rumSummary scope =
           ( [HI.sql|
             SELECT
               COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
-              COUNT(*) FILTER (WHERE name LIKE 'Pageview · %')::bigint,
+              COUNT(*) FILTER (WHERE |]
+              <> pageViewPredicate
+              <> [HI.sql|)::bigint,
               COUNT(DISTINCT NULLIF(COALESCE(attributes___user___id, attributes___user___email), ''))::bigint,
               COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint
             FROM otel_logs_and_spans
@@ -241,7 +275,9 @@ rumTrend scope bucket =
       ( [HI.sql|SELECT time_bucket(|]
           <> fromString (toString $ "'" <> renderBucket bucket <> "'")
           <> [HI.sql|, timestamp),
-          COUNT(*) FILTER (WHERE name LIKE 'Pageview · %')::bigint,
+          COUNT(*) FILTER (WHERE |]
+          <> pageViewPredicate
+          <> [HI.sql|)::bigint,
           COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint
         FROM otel_logs_and_spans
         WHERE |]
@@ -256,14 +292,18 @@ rumPages scope =
     $ Hasql.interp
       ( [HI.sql|
         SELECT
-          COALESCE(NULLIF(attributes___url___path, ''), replace(name, 'Pageview · ', '')),
+          |]
+          <> pagePath
+          <> [HI.sql|,
           COUNT(*)::bigint,
           (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float8,
           MAX(timestamp)
         FROM otel_logs_and_spans
         WHERE |]
           <> browserScope scope
-          <> [HI.sql| AND name LIKE 'Pageview · %' AND duration IS NOT NULL
+          <> [HI.sql| AND |]
+          <> pageViewPredicate
+          <> [HI.sql| AND duration IS NOT NULL
         GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 20|]
       )
 
@@ -278,7 +318,9 @@ rumErrors scope =
           COALESCE(attributes___exception___message, status_message, name, 'No error message'),
           attributes___session___id,
           COALESCE(attributes___user___id, attributes___user___email),
-          attributes___url___path
+          |]
+          <> pagePath
+          <> [HI.sql|
         FROM otel_logs_and_spans
         WHERE |]
           <> browserScope scope
@@ -295,9 +337,13 @@ otelSessions scope =
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
           COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint,
-          COUNT(*) FILTER (WHERE name LIKE 'Pageview · %')::bigint,
+          COUNT(*) FILTER (WHERE |]
+          <> pageViewPredicate
+          <> [HI.sql|)::bigint,
           MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
-          MAX(resource___service___name), MAX(attributes___url___path),
+          MAX(resource___service___name), MAX(|]
+          <> pagePath
+          <> [HI.sql|),
           false
         FROM otel_logs_and_spans
         WHERE |]
@@ -479,12 +525,15 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
       -- Keyed unscoped, matching the query: the option list is the same whichever service is
       -- selected, so scoping the key would cache one identical list per service.
       servicesQ = ("services" :: Text, RumCacheKey pid ServicesQuery environment Nothing fromM toM (sinceM <|> Just "24H"), ServicesResult <$> rumServices scope)
-      -- TimeFusion slows down sharply when all the scans compete at once. Two at a time
-      -- finishes the cold overview sooner while the cache makes subsequent tab changes instant.
-      tabQueryBatches = case tab of
-        Overview -> [[vitalsQ, summaryQ], [sessionsQ, trendQ], [pagesQ, errorsQ], [replaysQ, servicesQ]]
-        Sessions -> [[sessionsQ, replaysQ], [servicesQ]]
-        Performance -> [[vitalsQ, pagesQ], [errorsQ, servicesQ]]
+      -- Run together. These were once batched two at a time on the finding that TimeFusion
+      -- degrades when they compete — but that was measured while every one of them matched
+      -- zero rows, because the browser filter was broken. Re-measured against real data, four
+      -- concurrent scans finish in 7.4s and the same four in two batches take 8.1s: the
+      -- contention is real but far cheaper than serialising.
+      tabQueries = case tab of
+        Overview -> [summaryQ, trendQ, pagesQ, errorsQ, sessionsQ, replaysQ, vitalsQ, servicesQ]
+        Sessions -> [sessionsQ, replaysQ, servicesQ]
+        Performance -> [pagesQ, errorsQ, vitalsQ, servicesQ]
       runQuery (label, key, action) =
         tryAny
           ( liftIO (Cache.lookup appCtx.rumCache key)
@@ -497,7 +546,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM defer
           ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM), ("service", serviceFilter)]] <> [("deferred", "1")])
           window
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
-    outcomes <- concat <$> traverse (`pooledForConcurrently` runQuery) tabQueryBatches
+    outcomes <- pooledForConcurrently tabQueries runQuery
     let results = rights outcomes
         degradedPanels = lefts outcomes
         summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
@@ -684,13 +733,13 @@ trendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak bg-bg
 
 topPages_ :: RumLinks -> [RumPage] -> Html ()
 topPages_ links pages = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
-  panelHeader_ "Top pages" "Traffic and real-user load latency" $ Just ("Explore all events", logsUrl links "resource.telemetry.sdk.language == \"webjs\" and name startswith \"Pageview · \"")
+  panelHeader_ "Top pages" "Traffic and real-user load latency" $ Just ("Explore all events", logsUrl links browserPageViewKql)
   if null pages
     then panelEmpty_ "No page views in this time range"
     else div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
       thead_ $ tr_ $ th_ "Page" >> th_ [class_ "text-right"] "Views" >> th_ [class_ "text-right"] "P75 load" >> th_ [class_ "text-right max-sm:hidden"] "Last seen"
       tbody_ $ forM_ pages \page -> tr_ do
-        td_ [class_ "max-w-xl"] $ a_ [href_ $ logsUrl links ("resource.telemetry.sdk.language == \"webjs\" and attributes.url.path == " <> kqlValue page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path
+        td_ [class_ "max-w-xl"] $ a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> pagePathKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path
         td_ [class_ "text-right tabular-nums"] $ toHtml $ show page.views
         td_ [class_ "text-right tabular-nums"] $ toHtml $ maybe "—" formatMilliseconds page.p75LoadMs
         td_ [class_ "text-right text-xs text-textWeak max-sm:hidden"] $ toHtml $ fmtDate "%d %b %H:%M" page.lastSeen
@@ -723,7 +772,7 @@ ratingBand band active = span_ [class_ $ "h-1.5 rounded-full " <> if band == act
 
 recentErrors_ :: RumLinks -> [RumError] -> Html ()
 recentErrors_ links errors = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
-  panelHeader_ "Recent browser errors" "Errors stay linked to user and session context" $ Just ("View errors", logsUrl links "resource.telemetry.sdk.language == \"webjs\" and status_code == \"ERROR\"")
+  panelHeader_ "Recent browser errors" "Errors stay linked to user and session context" $ Just ("View errors", logsUrl links (browserKql <> " and status_code == \"ERROR\""))
   if null errors
     then div_ [class_ "flex items-center gap-2 px-3 py-5 text-sm text-textWeak"] $ faSprite_ "circle-check" "regular" "h-4 w-4 text-textSuccess" >> "No browser errors in this range"
     else ul_ [class_ "divide-y divide-strokeWeak"] $ forM_ (take 6 errors) \err -> li_ [class_ "px-3 py-2.5"] do
@@ -940,6 +989,22 @@ ratingStyle = \case
   NeedsImprovement -> RatingStyle "Needs improvement" "text-textWarning" "bg-fillWarning-strong" "bg-fillWarning-weak text-textWarning"
   Poor -> RatingStyle "Poor" "text-textError" "bg-fillError-strong" "bg-fillError-weak text-textError"
   Unknown -> RatingStyle "No data" "text-textWeak" "bg-fillNeutral-strong" "bg-fillWeak text-textWeak"
+
+
+-- | The KQL counterparts of 'browserScope' and 'pageViewPredicate'. A link that filtered on
+-- @telemetry.sdk.language == "webjs"@ sent the user to an Explorer view of nothing, because no
+-- browser SDK in production sets it — the same mistake the queries themselves made.
+browserKql :: Text
+browserKql = "(resource.telemetry.sdk.language == \"webjs\" or resource.user_agent.original != \"\" or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
+
+
+browserPageViewKql :: Text
+browserPageViewKql = browserKql <> " and (name == \"documentLoad\" or name startswith \"Pageview \")"
+
+
+-- | Matches 'pagePath': our SDK sets url.path, the browser SDK only url.full.
+pagePathKql :: Text -> Text
+pagePathKql path = "(attributes.url.path == " <> kqlValue path <> " or attributes.url.full == " <> kqlValue path <> ")"
 
 
 -- | KQL string literal: backslashes first, then quotes, so a value can't break out of the literal.
