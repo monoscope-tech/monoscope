@@ -130,3 +130,9 @@ spec = sequential $ aroundAll withTestResources do
       -- the session in this service — attached to that row, never added as a row of its own.
       scoped `shouldContainAll` ["Replay"]
       T.isInfixOf "No recording" scoped `shouldBe` False
+
+      -- A stale selection still resolves: the picker keeps offering it, and an empty result
+      -- must read as "this filter matched nothing", never as "you never installed the SDK".
+      ghost <- renderScoped tr Nothing Nothing Nothing Nothing (Just "ghost-service")
+      ghost `shouldContainAll` ["No browser telemetry for ghost-service in this range", "Show all services", "All services", ">ghost-service<"]
+      T.isInfixOf "Install the browser SDK" ghost `shouldBe` False

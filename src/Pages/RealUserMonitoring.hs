@@ -618,7 +618,7 @@ rumPage_ page = main_ [id_ "rum-page", class_ "min-h-full bg-bgSunken"] do
       Overview -> overview_ page
       Sessions -> sessions_ page
       Performance -> performance_ page
-    else rumEmptyState_ page.links.pid
+    else maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
 
 
 -- | Scopes every panel to one browser service. A project with several teams reports several
@@ -657,6 +657,19 @@ servicePicker_ page
 
 hasRumData :: RumData -> Bool
 hasRumData page = page.summary.sessions > 0 || page.summary.pageViews > 0 || any (isJust . (.value)) page.vitals || any (.hasReplay) page.sessions
+
+
+-- | A service filter that matched nothing is not an uninstrumented project. The unscoped
+-- empty state pitches installing the browser SDK, which here would tell a user with working
+-- telemetry to re-instrument a working app. The way out is to widen the scope, so that is
+-- what this offers.
+scopedEmptyState_ :: RumLinks -> Text -> Html ()
+scopedEmptyState_ links name =
+  div_ [class_ "mx-auto flex min-h-[40vh] max-w-2xl flex-col justify-center px-6 py-12"]
+    $ Components.emptyState_
+      def{icon = Just "web", action = ESLink (rumUrl links{service = Nothing} []) "Show all services"}
+      ("No browser telemetry for " <> name <> " in this range")
+      "This service reported no page views, errors or Web Vitals in the selected window. Widen the time range, or choose another service."
 
 
 rumEmptyState_ :: Projects.ProjectId -> Html ()
