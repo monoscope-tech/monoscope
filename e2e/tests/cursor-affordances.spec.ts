@@ -19,6 +19,9 @@ test("visible controls use a pointer cursor across the app", async ({ page }) =>
 
   for (const route of routes) {
     await page.goto(`/p/${DEMO_PROJECT}/${route}`, { waitUntil: "domcontentloaded" });
+    // Pages whose body is deferred answer first with a skeleton. Auditing that would check
+    // nothing, so wait for the real body before looking at any control.
+    await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
     await page.waitForTimeout(500);
     failures.push(
       ...(await page.evaluate(() => {

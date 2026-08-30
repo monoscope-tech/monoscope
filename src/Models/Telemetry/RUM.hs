@@ -112,6 +112,7 @@ data RumQueryResult
   | SessionsResult [RumSession]
   | ReplaySessionsResult [ReplaySession]
   | VitalSamplesResult [VitalSample]
+  | ServicesResult [Text]
 
 
 data RumQuery
@@ -122,14 +123,19 @@ data RumQuery
   | SessionsQuery
   | ReplaySessionsQuery
   | VitalSamplesQuery
+  | ServicesQuery
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
 
 
+-- | @service@ is part of the key, not a filter applied after it. Without it a page scoped to
+-- one service would be served another service's cached rows — the cache would hand back
+-- exactly the cross-team mixing the scope exists to prevent.
 data RumCacheKey = RumCacheKey
   { project :: Projects.ProjectId
   , query :: RumQuery
   , environment :: Maybe Text
+  , service :: Maybe Text
   , from :: Maybe Text
   , to :: Maybe Text
   , since :: Maybe Text

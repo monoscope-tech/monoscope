@@ -47,6 +47,7 @@ test.describe("Host map", () => {
   test("the mobile inspector uses the full viewport and replaces the log table", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(HOST_MAP_URL, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
     for (const select of await page.locator("main form select").all()) {
       expect((await select.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     }

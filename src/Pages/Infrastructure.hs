@@ -29,7 +29,7 @@ import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (factGrid_, metaChip_)
+import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
@@ -44,6 +44,13 @@ import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, infrastructureNavTab
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
 infraUrl pid path = TimePicker.windowUrl ("/p/" <> pid.toText <> path)
+
+
+-- | The URL a shell re-fetches itself with: the request it was serving, plus @deferred@.
+-- Every filter has to survive the round trip, or the rows that arrive would not be the rows
+-- the visible filter chips claim.
+deferUrl :: Projects.ProjectId -> Text -> [(Text, Maybe Text)] -> TimePicker.TimeWindow -> Text
+deferUrl pid path params = infraUrl pid path $ [(key, value) | (key, Just value) <- params] <> [("deferred", "1")]
 
 
 data InfraIntegration = OpenTelemetryIntegration | KubernetesIntegration | DockerIntegration
@@ -164,21 +171,22 @@ hostEntries grouping = V.fromList . concatMap renderGroup . M.toAscList . V.fold
       GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
 
 
-hostsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostsGet)
-hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceParam = do
+hostsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostsGet)
+hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  snapshot <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let filters = HostFilters providerM regionM osM integrationM
-      hosts = applyHostFilters filters $ hostsFromRows snapshot
+      filters = HostFilters providerM regionM osM integrationM
       grouping = parseHostGroup groupM
-      table = hostsTable pid window filters grouping hosts (hostsFromRows snapshot)
-  addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) table
+      url = deferUrl pid "/infrastructure/hosts" [("provider", providerM), ("region", regionM), ("os", osM), ("integration", integrationM), ("group", groupM)] window
+  body <- withDeferredBody deferredM "hostsContainer" url (tableSkeleton_ 8) do
+    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    pure $ hostsTable pid window filters grouping (applyHostFilters filters allHosts) allHosts
+  addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) body
 
 
-newtype HostsGet = HostsPage (PageCtx (Table HostListRow))
+newtype HostsGet = HostsPage (PageCtx (Deferred (Table HostListRow)))
 
 
 instance ToHtml HostsGet where
@@ -309,6 +317,9 @@ hostDetailGet_ HostDetailMissing = div_ [class_ "flex min-h-64 flex-col items-ce
 hostDetailGet_ (HostDetail pid host) = hostDetail_ pid host
 
 
+-- | The drawer reads the same window the table row was rendered from. Anything else shows a
+-- host's usage from a range the user did not pick, and re-runs the snapshot query the page
+-- has already run instead of reusing it.
 hostDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostDetailGet)
 hostDetailGetH pid hostM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
@@ -465,19 +476,21 @@ imageRegistry image = case T.breakOn "/" image of
   _ -> "Docker Hub"
 
 
-imagesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ImagesGet)
-imagesGetH pid runtimeM registryM fromParam toParam sinceParam = do
+imagesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ImagesGet)
+imagesGetH pid runtimeM registryM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let images = V.filter (\image -> maybe True (\wanted -> any ((== wanted) . Containers.runtimeLabel) image.runtimes) runtimeM && maybe True (== image.registry) registryM) allImages
-      table = imagesTable pid window runtimeM registryM images allImages
-  addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) table
+      url = deferUrl pid "/infrastructure/images" [("runtime", runtimeM), ("registry", registryM)] window
+  body <- withDeferredBody deferredM "imagesContainer" url (tableSkeleton_ 8) do
+    allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    let images = V.filter (\image -> maybe True (\wanted -> any ((== wanted) . Containers.runtimeLabel) image.runtimes) runtimeM && maybe True (== image.registry) registryM) allImages
+    pure $ imagesTable pid window runtimeM registryM images allImages
+  addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) body
 
 
-newtype ImagesGet = ImagesPage (PageCtx (Table ImageRow))
+newtype ImagesGet = ImagesPage (PageCtx (Deferred (Table ImageRow)))
 
 
 instance ToHtml ImagesGet where
@@ -669,22 +682,24 @@ kubeRowsFromRows resource = V.fromList . map build . M.toAscList . V.foldl' add 
     firstJust f = listToMaybe . mapMaybe f
 
 
-kubernetesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders KubernetesGet)
-kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam sinceParam = do
+kubernetesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders KubernetesGet)
+kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let resource = parseKubeResource resourceM
       window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let rows = V.filter (\row -> matches clusterM row.cluster && matches namespaceM row.namespace && maybe True (\wanted -> wanted == kubeStatusLabel row.status) statusM) allRows
-      table = kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
-  addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) table
+      url = deferUrl pid "/infrastructure/kubernetes" [("resource", resourceM), ("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)] window
+  body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
+    allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    let rows = V.filter (\row -> matches clusterM row.cluster && matches namespaceM row.namespace && maybe True (\wanted -> wanted == kubeStatusLabel row.status) statusM) allRows
+    pure $ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
+  addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) body
   where
     matches selected actual = maybe True (\value -> T.null value || Just value == actual) selected
 
 
-newtype KubernetesGet = KubernetesPage (PageCtx (Table KubeRow))
+newtype KubernetesGet = KubernetesPage (PageCtx (Deferred (Table KubeRow)))
 
 
 instance ToHtml KubernetesGet where
@@ -834,7 +849,7 @@ data HostMapData = HostMapData
   }
 
 
-newtype HostMapGet = HostMapPage (PageCtx HostMapData)
+newtype HostMapGet = HostMapPage (PageCtx (Deferred HostMapData))
 
 
 instance ToHtml HostMapGet where
@@ -847,19 +862,30 @@ instance ToHtml HostMapData where
   toHtmlRaw = toHtml
 
 
-hostMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostMapGet)
-hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam = do
+hostMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostMapGet)
+hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  snapshot <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let allHosts = hostsFromRows snapshot
       filters = HostFilters providerM regionM osM Nothing
-      hosts = applyHostFilters filters allHosts
       grouping = parseHostGroup groupM
-      groups = hostMapGroups grouping hosts
-  addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) HostMapData{pid, window, fill = parseHostMapFill fillM, grouping, filters, allHosts, groups}
+      url = deferUrl pid "/infrastructure/host-map" [("fill", fillM), ("group", groupM), ("provider", providerM), ("region", regionM), ("os", osM)] window
+  body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
+    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    let groups = hostMapGroups grouping $ applyHostFilters filters allHosts
+    pure HostMapData{pid, window, fill = parseHostMapFill fillM, grouping, filters, allHosts, groups}
+  addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
+
+
+hostMapSkeleton_ :: Html ()
+hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgSunken", role_ "status", Aria.label_ "Loading host map"] do
+  div_ [class_ "flex flex-wrap gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"]
+    $ replicateM_ 4
+    $ div_ [class_ "h-9 w-44 rounded-lg skeleton-shimmer"] ""
+  div_ [class_ "m-4 flex flex-wrap gap-2 rounded-lg border border-strokeWeak bg-bgRaised p-3"]
+    $ replicateM_ 18
+    $ div_ [class_ "h-11 w-10 skeleton-shimmer", style_ "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"] ""
 
 
 hostMapGroups :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
@@ -876,7 +902,7 @@ hostMapGroups grouping hosts = M.toAscList $ V.foldl' (\acc host -> M.insertWith
 
 
 hostMap_ :: HostMapData -> Html ()
-hostMap_ page = div_ [class_ "flex min-h-full flex-col bg-bgSunken"] do
+hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgSunken"] do
   form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (hostMapFillParam page.fill) [("cpu", "CPU usage"), ("memory", "Memory usage"), ("storage", "Storage usage")]

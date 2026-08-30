@@ -12,6 +12,7 @@ import Data.Vector qualified as V
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (Deferred (..))
 import Pages.Containers qualified as Containers
 import Pages.Infrastructure qualified as Infrastructure
 import Pkg.Components.Table (Table (..))
@@ -39,8 +40,21 @@ noContainerFilters :: ContainerQuery
 noContainerFilters = ContainerQuery Nothing Nothing Nothing Nothing Nothing
 
 
+-- | The loaded body of a deferred response. A shell here means the handler skipped the query
+-- the test is asserting on, which is a failure worth naming rather than a pattern-match crash.
+deferredBody :: Deferred a -> IO a
+deferredBody = \case
+  DeferredBody body -> pure body
+  DeferredShell{} -> fail "handler answered with the deferred shell; expected the loaded body"
+
+
+-- | What a first, non-deferred request answers with: page chrome and a skeleton, no query.
+shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
+shellHtml tr render = LT.toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
+
+
 containersPage :: ContainerQuery -> ATAuthCtx (RespHeaders Containers.ContainersGet)
-containersPage q = Containers.containersGetH testPid q.runtime q.namespace q.node q.image q.cluster Nothing Nothing Nothing
+containersPage q = Containers.containersGetH testPid q.runtime q.namespace q.node q.image q.cluster Nothing Nothing Nothing (Just "1")
 
 
 -- | A pod from the OpenTelemetry demo, as kubeletstats + k8s_cluster describe it: usage in
@@ -197,13 +211,14 @@ spec = sequential $ aroundAll withTestResources do
       V.toList rows `shouldBe` []
 
       (_, page) <- testServant tr $ containersPage noContainerFilters
-      let Containers.ContainersPage (PageCtx conf table) = page
+      let Containers.ContainersPage (PageCtx conf body) = page
+      table <- deferredBody body
       conf.pageTitle `shouldBe` "Containers"
       V.length table.rows `shouldBe` 0
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["No containers reporting"]
 
-      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hostMap)
         `shouldContainAll` ["No hosts reporting", "Set up host monitoring"]
 
@@ -303,14 +318,15 @@ spec = sequential $ aroundAll withTestResources do
 
     it "facets_narrowTheListAndTheHandlerRendersBothRuntimes" \tr -> do
       (_, page) <- testServant tr $ containersPage noContainerFilters
-      let Containers.ContainersPage (PageCtx _ table) = page
+      let Containers.ContainersPage (PageCtx _ body) = page
+      table <- deferredBody body
       V.length table.rows `shouldBe` 7
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
           cacheKey = (testPid, Nothing, Nothing, Just "5M") :: ContainerSnapshotKey
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 7
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "border border-strokeStrong bg-bgRaised", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "flex min-w-0 items-center text-textStrong max-md:hidden", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "flex min-w-0 items-center text-textStrong max-md:hidden", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
       T.isInfixOf "group/summary" html `shouldBe` False
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
@@ -328,7 +344,8 @@ spec = sequential $ aroundAll withTestResources do
       -- than silently falling back to "all".
       let listWith f = do
             (_, p) <- testServant tr f
-            let Containers.ContainersPage (PageCtx _ t) = p
+            let Containers.ContainersPage (PageCtx _ b) = p
+            t <- deferredBody b
             pure $ V.toList $ V.map (\vm -> vm.row.containerName) t.rows
       listWith (containersPage noContainerFilters{namespace = Just "default"}) >>= (`shouldBe` ["checkout"])
       listWith (containersPage noContainerFilters{runtime = Just "docker"}) >>= (`shouldMatchList` ["srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c", "srv-captain--redpanda-0.1.tt13bkp5"])
@@ -362,21 +379,21 @@ spec = sequential $ aroundAll withTestResources do
                            ]
 
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
-      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
         `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "/infrastructure/hosts/detail?since=5M"]
       Icons.lookupIcon "solid" "download" `shouldSatisfy` isJust
       Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
-      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing
+      (_, images) <- testServant tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "1")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml images)
         `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
-      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
         `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail"]
 
-      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
       hostMapHtml
         `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\""]
@@ -404,6 +421,24 @@ spec = sequential $ aroundAll withTestResources do
       (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
+
+    it "firstRequest_rendersChromeAndASelfFetchingSkeleton_notRows" \tr -> do
+      -- Every infrastructure view is one multi-second metrics pivot. The request that paints
+      -- the page must not wait for it: it answers with nav, tabs and a skeleton that fetches
+      -- the body itself. Rows appearing here again would mean the deferral was undone and
+      -- navigating the section is back to seconds per click.
+      hostsShell <- shellHtml tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load\"", "/infrastructure/hosts?", "deferred=1"]
+      hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
+
+      containersShell <- shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      containersShell `shouldContainAll` ["id=\"containersContainer\"", "hx-trigger=\"load\"", "deferred=1"]
+      containersShell `shouldNotSatisfy` T.isInfixOf "checkout-7fb5b4f859-nlcjs"
+
+      -- The filters the shell was asked for have to survive the round trip, or the rows that
+      -- arrive would not be the rows the visible filter chips claim.
+      filteredShell <- shellHtml tr $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing
+      filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1"]
 
     it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
       (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-d6d7e318") Nothing Nothing Nothing

@@ -21,7 +21,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (factGrid_, metaChip_)
+import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
@@ -82,62 +82,69 @@ applyFilters f = V.filter \r ->
     matches selected actual = all (\s -> T.null s || Just s == actual) selected
 
 
-containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
-containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam sinceParam = do
+containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
+containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
+      filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
+      baseUrl = TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window
+      deferredUrl =
+        TimePicker.windowUrl
+          ("/p/" <> pid.toText <> "/infrastructure/containers")
+          ([(key, value) | (key, Just value) <- [("runtime", runtimeM), ("namespace", namespaceM), ("node", nodeM), ("image", imageM), ("cluster", clusterM)]] <> [("deferred", "1")])
+          window
+  body <- withDeferredBody deferredM "containersContainer" deferredUrl (tableSkeleton_ 10) do
+    allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    let
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
-      baseUrl = TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window
       -- Facet values come from the unfiltered result, so choosing a namespace never empties
       -- the node or image menus — the way a facet bar is expected to behave.
       menu label param selected fromRow = singleSelectFilter label param selected $ facetValues fromRow allRows
-      table =
-        Table
-          { -- bulkActionsInHeader is what puts the header action group — and with it the whole
-            -- filter dropdown — into a column header. Leaving it unset renders no facet menus
-            -- at all, however many are configured.
-            config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-          , columns = containerColumns
-          , rows = V.fromList $ map (ContainerVM pid window) rows
-          , features =
-              def
-                { search = Just ClientSide
-                , searchPlaceholder = Just "Search containers"
-                , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
-                , tableHeaderActions =
-                    Just
-                      $ facetActions
-                        baseUrl
-                        "containersContainer"
-                        [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
-                        , -- Falls back to k8s.cluster.uid, so the menu is populated even
-                          -- before a collector sets the human-readable cluster name.
-                          menu "Cluster" "cluster" filters.cluster (.cluster)
-                        , menu "Namespace" "namespace" filters.namespace (.namespace)
-                        , menu "Node" "node" filters.node (.nodeName)
-                        , menu "Image" "image" filters.image (.image)
-                        ]
-                , header = Just $ containerCharts_ pid
-                , showFilterRail = True
-                , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers"
-                , exportName = Just "containers"
-                , zeroState =
-                    Just
-                      ZeroState
-                        { icon = "cube"
-                        , title = "No containers reporting"
-                        , description = "Point an OpenTelemetry Collector with the kubeletstats, k8s_cluster or docker_stats receivers at this project and your containers appear here."
-                        , actionText = "Collector setup guide"
-                        , destination = Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes"
-                        }
-                }
-          }
-      bwconf =
+    pure
+      Table
+        { -- bulkActionsInHeader is what puts the header action group — and with it the whole
+          -- filter dropdown — into a column header. Leaving it unset renders no facet menus
+          -- at all, however many are configured.
+          config = def{elemID = "containersForm", containerId = Just "containersContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+        , columns = containerColumns
+        , rows = V.fromList $ map (ContainerVM pid window) rows
+        , features =
+            def
+              { search = Just ClientSide
+              , searchPlaceholder = Just "Search containers"
+              , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
+              , tableHeaderActions =
+                  Just
+                    $ facetActions
+                      baseUrl
+                      "containersContainer"
+                      [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
+                      , -- Falls back to k8s.cluster.uid, so the menu is populated even
+                        -- before a collector sets the human-readable cluster name.
+                        menu "Cluster" "cluster" filters.cluster (.cluster)
+                      , menu "Namespace" "namespace" filters.namespace (.namespace)
+                      , menu "Node" "node" filters.node (.nodeName)
+                      , menu "Image" "image" filters.image (.image)
+                      ]
+              , header = Just $ containerCharts_ pid
+              , showFilterRail = True
+              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers"
+              , exportName = Just "containers"
+              , zeroState =
+                  Just
+                    ZeroState
+                      { icon = "cube"
+                      , title = "No containers reporting"
+                      , description = "Point an OpenTelemetry Collector with the kubeletstats, k8s_cluster or docker_stats receivers at this project and your containers appear here."
+                      , actionText = "Collector setup guide"
+                      , destination = Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes"
+                      }
+              }
+        }
+  let bwconf =
         bw
           { prePageTitle = Just "Infrastructure"
           , pageTitle = "Containers"
@@ -148,10 +155,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
               TimePicker.refreshButton_
           , needsGridStack = True
           }
-  addRespHeaders $ ContainersPage $ PageCtx bwconf table
+  addRespHeaders $ ContainersPage $ PageCtx bwconf body
 
 
-newtype ContainersGet = ContainersPage (PageCtx (Table ContainerVM))
+newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
 
 
 instance ToHtml ContainersGet where
@@ -255,6 +262,8 @@ shortImage :: Text -> Text
 shortImage = T.takeWhileEnd (/= '/')
 
 
+-- | The drawer reads the window the row was rendered from, so it shows the same numbers the
+-- row does and hits the same cached snapshot the list already fetched.
 detailUrl :: ContainerVM -> Text
 detailUrl vm =
   TimePicker.windowUrl
