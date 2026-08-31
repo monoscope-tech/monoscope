@@ -458,7 +458,12 @@ configToEnv config = do
       _ -> pass
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
-  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
+  -- 1800s idle, matching the hasql pools: at 30s a chart-heavy page reopened
+  -- TF connections continuously, and connect() eventually returned
+  -- EADDRNOTAVAIL ("Can't assign requested address") under widgetGetH. TF
+  -- queries are slow and bursty, so recycling an idle connection every 30s
+  -- costs a full TCP+startup round trip for no benefit.
+  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 1800 10 & setNumStripes (Just 2))
   let mainHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       tfHasqlSettings = tfParams
   hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings
@@ -558,22 +563,28 @@ getAppContext = do
   configToEnv config
 
 
--- | Query 'information_schema.columns' for @otel_logs_and_spans@ once at
--- startup and seed 'ParserExpr.setOtelColumns' (which splits the flattened
--- @___@ columns from the bare ones). Best-effort: any exception (missing table during
--- migration, lost pg conn) logs a warning and falls back to the hand-coded
--- builtin so the server still boots.
+-- | Query 'information_schema.columns' for each queryable telemetry table once
+-- at startup and seed its parser column cache (which splits the flattened
+-- @___@ columns from the bare ones). Best-effort per table: any exception
+-- (missing table during migration, lost pg conn) logs a warning and falls back
+-- to the hand-coded builtin so the server still boots.
+--
+-- Both tables are seeded because KQL validates against whichever one the query
+-- reads; before @otel_metrics@ had a column set of its own, metrics queries
+-- skipped validation entirely and shipped spans-only fields to TimeFusion.
 introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
-introspectAndCacheOtelColumns pool = do
-  result <- Safe.try $ Pool.withResource pool $ \conn -> do
-    rows <-
-      PG.query_
-        conn
-        "SELECT column_name::text FROM information_schema.columns \
-        \WHERE table_schema = 'public' AND table_name = 'otel_logs_and_spans'"
-        :: IO [PG.Only Text]
-    pure [c | PG.Only c <- rows]
-  case result of
-    Right cols -> ParserExpr.setOtelColumns cols
-    Left (e :: SomeException) ->
-      blueMessage $ "C1: otel_logs_and_spans introspection failed, using builtin attribute set: " <> show e
+introspectAndCacheOtelColumns pool =
+  forM_ ([("otel_logs_and_spans", ParserExpr.setOtelColumns), ("otel_metrics", ParserExpr.setMetricsColumns)] :: [(Text, [Text] -> IO ())]) \(table, seed) -> do
+    result <- Safe.try $ Pool.withResource pool $ \conn ->
+      map PG.fromOnly
+        <$> ( PG.query
+                conn
+                "SELECT column_name::text FROM information_schema.columns \
+                \WHERE table_schema = 'public' AND table_name = ?"
+                (PG.Only table)
+                :: IO [PG.Only Text]
+            )
+    case result of
+      Right cols -> seed cols
+      Left (e :: SomeException) ->
+        blueMessage $ "C1: " <> table <> " introspection failed, using builtin attribute set: " <> show e

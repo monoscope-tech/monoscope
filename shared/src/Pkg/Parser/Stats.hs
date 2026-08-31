@@ -64,7 +64,7 @@ import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), knownFieldRoot, kqlTimespanToTimeBucket, pExpr, pSubject, pValues, suggestFieldRoot)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -1158,6 +1158,22 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- >>> isLeft (parseQueryDiagnosed Nothing "| where metric_name == \"k8s.container.cpu_request\"")
 -- True
 --
+-- The exemption runs both ways: a metrics query naming a spans-only column is
+-- rejected here rather than shipped to TimeFusion, which answers a whole-query
+-- @No field named level@ and renders the widget empty (issue 74c3a90c,
+-- 2026-08-30). @metric_value@ is the same bug under a different column.
+--
+-- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
+-- Left "Unknown field \"level\""
+-- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "| summarize count(*) by coalesce(status_code, \"unknown\")"
+-- Left "Unknown field \"status_code\""
+--
+-- Metrics columns still parse, including the flattened resource dimensions
+-- charts group by:
+--
+-- >>> isRight (parseQueryDiagnosed (Just SMetrics) "| summarize avg(value) by bin_auto(timestamp), resource___service___name")
+-- True
+--
 -- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
 -- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
 -- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
@@ -1219,16 +1235,20 @@ validateFields = maybe (Right ()) (Left . snd) . unknownField
 -- | The first subject naming no column, as @(identifier, message)@ — the
 -- identifier lets callers locate it in the query text.
 unknownField :: [Section] -> Maybe (Text, Text)
-unknownField sections
-  | Source SMetrics `elem` sections = Nothing
-  | otherwise = listToMaybe (mapMaybe check (collectSubjects sections))
+unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
   where
+    -- Metrics read a different table, so they are checked against a different
+    -- column set — not skipped. Skipping is what shipped `level == …` to
+    -- TimeFusion as an unplannable `No field named level` (2026-08-30).
+    fieldUniverse
+      | Source SMetrics `elem` sections = metricsFieldUniverse
+      | otherwise = otelFieldUniverse
     -- A number written as a scalar argument (`coalesce(status_code, 0)`) parses
     -- as a subject but names no field; it reaches SQL as the literal it is.
     isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
     check (Subject entire root _)
-      | isNumericLiteral root || knownFieldRoot root || root `elem` definedNames sections = Nothing
-      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe "" (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot root))
+      | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames sections = Nothing
+      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe "" (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot fieldUniverse root))
 
 
 -- | Result-column names a query introduces: explicit @extend@/@project@ keys

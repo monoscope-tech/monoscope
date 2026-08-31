@@ -15,7 +15,7 @@ import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Deriving.Aeson.Stock qualified as DAE
-import Pkg.Parser.Expr (acceptedFieldRoots)
+import Pkg.Parser.Expr (acceptedFieldRoots, otelFieldUniverse)
 import Relude
 
 
@@ -303,7 +303,7 @@ popularOtelQueriesJson = AE.toJSON popularOtelQueries
 deriveSchema :: Set Text -> Schema
 deriveSchema liveAttrs =
   -- union is left-biased: hand-coded entries win over the bare live ones.
-  Schema{fields = Map.filterWithKey keepHand telemetrySchema.fields `Map.union` Map.fromSet (const bareDefault) (liveAttrs <> acceptedFieldRoots)}
+  Schema{fields = Map.filterWithKey keepHand telemetrySchema.fields `Map.union` Map.fromSet (const bareDefault) (liveAttrs <> acceptedFieldRoots otelFieldUniverse)}
   where
     bareDefault = FieldInfo "text" "" Nothing
     keepHand k _ = not ("." `T.isInfixOf` k) || k `S.member` liveAttrs

@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, topLevelOtelColumns, acceptedFieldRoots, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -680,9 +680,18 @@ flattenedOtelColumnsRef = unsafePerformIO (newIORef flattenedOtelAttributesBuilt
 -- rest the bare-column set. Both are unioned with their hand-coded fallbacks
 -- so a missing/partial introspection still behaves.
 setOtelColumns :: [T.Text] -> IO ()
-setOtelColumns cols = do
-  writeIORef flattenedOtelColumnsRef (fromList [T.replace "___" "." c | c <- flattened] <> flattenedOtelAttributesBuiltin)
-  writeIORef bareOtelColumnsRef (fromList bare <> bareOtelColumnsBuiltin)
+setOtelColumns = seedColumns flattenedOtelColumnsRef flattenedOtelAttributesBuiltin bareOtelColumnsRef bareOtelColumnsBuiltin
+
+
+-- | 'setOtelColumns' for @otel_metrics@.
+setMetricsColumns :: [T.Text] -> IO ()
+setMetricsColumns = seedColumns flattenedMetricsColumnsRef flattenedMetricsAttributesBuiltin bareMetricsColumnsRef bareMetricsColumnsBuiltin
+
+
+seedColumns :: IORef (Set T.Text) -> Set T.Text -> IORef (Set T.Text) -> Set T.Text -> [T.Text] -> IO ()
+seedColumns flatRef flatBuiltin bareRef bareBuiltin cols = do
+  writeIORef flatRef (fromList [T.replace "___" "." c | c <- flattened] <> flatBuiltin)
+  writeIORef bareRef (fromList bare <> bareBuiltin)
   where
     (flattened, bare) = partition (T.isInfixOf "___") cols
 
@@ -744,12 +753,152 @@ bareOtelColumns = unsafePerformIO (readIORef bareOtelColumnsRef)
 {-# NOINLINE bareOtelColumns #-}
 
 
+-- | Bare columns on @otel_metrics@ — the fallback until 'setMetricsColumns'
+-- reads the live schema. Nothing here overlaps the spans-only signal columns
+-- (@level@, @status_code@, @duration@, @name@, @kind@): a metrics query naming
+-- one is a real mistake and must be caught before it reaches TimeFusion.
+bareMetricsColumnsBuiltin :: Set T.Text
+bareMetricsColumnsBuiltin =
+  fromList
+    [ "timestamp"
+    , "start_timestamp"
+    , "ingested_at"
+    , "id"
+    , "series_id"
+    , "metric_name"
+    , "metric_description"
+    , "metric_unit"
+    , "metric_type"
+    , "aggregation_temporality"
+    , "is_monotonic"
+    , "flags"
+    , "resource"
+    , "resource_schema_url"
+    , "scope_name"
+    , "scope_version"
+    , "scope_schema_url"
+    , "attributes"
+    , "dropped_attributes_count"
+    , "exemplars"
+    , "value"
+    , "value_double"
+    , "value_int"
+    , "distribution_count"
+    , "distribution_sum"
+    , "distribution_min"
+    , "distribution_max"
+    , "hist_bucket_counts"
+    , "hist_explicit_bounds"
+    , "exp_hist_scale"
+    , "exp_hist_zero_count"
+    , "exp_hist_zero_threshold"
+    , "exp_hist_pos_offset"
+    , "exp_hist_pos_buckets"
+    , "exp_hist_neg_offset"
+    , "exp_hist_neg_buckets"
+    , "summary_quantiles"
+    , "summary_values"
+    , "message_size_bytes"
+    , "updated_at"
+    , "deleted"
+    , "project_id"
+    , "date"
+    ]
+
+
+-- | Flattened @___@ columns on @otel_metrics@, dotted. A strict subset of the
+-- spans set: metrics carry resource/RPC/DB/messaging dimensions but no span
+-- context (no @context.trace_id@), which is why @trace_id@ must not validate.
+flattenedMetricsAttributesBuiltin :: Set T.Text
+flattenedMetricsAttributesBuiltin =
+  fromList
+    [ "attributes.db.operation.name"
+    , "attributes.db.system.name"
+    , "attributes.error.type"
+    , "attributes.http.request.method"
+    , "attributes.http.response.status_code"
+    , "attributes.http.route"
+    , "attributes.messaging.destination.name"
+    , "attributes.messaging.operation"
+    , "attributes.messaging.system"
+    , "attributes.rpc.grpc.status_code"
+    , "attributes.rpc.method"
+    , "attributes.rpc.service"
+    , "resource.cloud.availability.zone"
+    , "resource.cloud.provider"
+    , "resource.cloud.region"
+    , "resource.container.name"
+    , "resource.deployment.environment.name"
+    , "resource.host.name"
+    , "resource.k8s.cluster.name"
+    , "resource.k8s.container.name"
+    , "resource.k8s.namespace.name"
+    , "resource.k8s.pod.name"
+    , "resource.service.instance.id"
+    , "resource.service.name"
+    , "resource.service.namespace"
+    , "resource.service.version"
+    ]
+
+
+{-# NOINLINE bareMetricsColumnsRef #-}
+bareMetricsColumnsRef :: IORef (Set T.Text)
+bareMetricsColumnsRef = unsafePerformIO (newIORef bareMetricsColumnsBuiltin)
+
+
+bareMetricsColumns :: Set T.Text
+bareMetricsColumns = unsafePerformIO (readIORef bareMetricsColumnsRef)
+{-# NOINLINE bareMetricsColumns #-}
+
+
+{-# NOINLINE flattenedMetricsColumnsRef #-}
+flattenedMetricsColumnsRef :: IORef (Set T.Text)
+flattenedMetricsColumnsRef = unsafePerformIO (newIORef flattenedMetricsAttributesBuiltin)
+
+
+flattenedMetricsAttributes :: Set T.Text
+flattenedMetricsAttributes = unsafePerformIO (readIORef flattenedMetricsColumnsRef)
+{-# NOINLINE flattenedMetricsAttributes #-}
+
+
+-- | The column universe a KQL subject is validated against. One per queryable
+-- table: @otel_logs_and_spans@ and @otel_metrics@ share the KQL grammar but not
+-- their columns, and validating a metrics query against the spans set is what
+-- let @level == …@ reach TimeFusion as an unplannable @No field named level@.
+data FieldUniverse = FieldUniverse
+  { bareCols :: Set T.Text
+  -- ^ Top-level columns, written as-is.
+  , flatCols :: Set T.Text
+  -- ^ Flattened @___@ columns, held in the dotted form users write.
+  }
+
+
+otelFieldUniverse :: FieldUniverse
+otelFieldUniverse = FieldUniverse bareOtelColumns flattenedOtelAttributes
+
+
+metricsFieldUniverse :: FieldUniverse
+metricsFieldUniverse = FieldUniverse bareMetricsColumns flattenedMetricsAttributes
+
+
+-- | Whether a real column name — bare or @___@-flattened — exists in a universe.
+resolvesIn :: FieldUniverse -> T.Text -> Bool
+resolvesIn u col = col `S.member` u.bareCols || T.replace "___" "." col `S.member` u.flatCols
+
+
 -- | Names a KQL subject may start with: a real bare column, a SELECT alias,
 -- or the @url_path@ shim 'transformFlattenedAttribute' rewrites. Also the set
 -- @/api/v1/schema@ advertises, so the query editor validates against exactly
 -- what the parser accepts.
-acceptedFieldRoots :: Set T.Text
-acceptedFieldRoots = bareOtelColumns <> M.keysSet outputFieldAliases <> one "url_path"
+--
+-- An alias is only accepted where the column it expands to actually exists:
+-- 'Display Subject' rewrites @trace_id@ to @context___trace_id@ unconditionally,
+-- so on the metrics table the alias would name a column that isn't there.
+acceptedFieldRoots :: FieldUniverse -> Set T.Text
+acceptedFieldRoots u =
+  u.bareCols
+    <> M.keysSet (M.filter (resolvesIn u) outputFieldAliases)
+    <> (if resolvesIn u "attributes___url___path" then one "url_path" else mempty)
 
 
 -- | Whether a subject's root names something queryable. @*@/@""@ come from
@@ -759,21 +908,29 @@ acceptedFieldRoots = bareOtelColumns <> M.keysSet outputFieldAliases <> one "url
 -- normally write: they are what the table actually calls those columns, they
 -- pass straight through to SQL, and saved queries do use them.
 --
--- >>> map knownFieldRoot ["attributes", "duration", "service", "url_path", "*"]
+-- >>> map (knownFieldRoot otelFieldUniverse) ["attributes", "duration", "service", "url_path", "*"]
 -- [True,True,True,True,True]
--- >>> map knownFieldRoot ["context___trace_id", "resource___service___name"]
+-- >>> map (knownFieldRoot otelFieldUniverse) ["context___trace_id", "resource___service___name"]
 -- [True,True]
--- >>> map knownFieldRoot ["attribute", "context___nosuch"]
+-- >>> map (knownFieldRoot otelFieldUniverse) ["attribute", "context___nosuch"]
 -- [False,False]
-knownFieldRoot :: T.Text -> Bool
-knownFieldRoot root =
+--
+-- The metrics universe accepts its own columns and rejects the spans-only ones
+-- that used to sail through unchecked:
+--
+-- >>> map (knownFieldRoot metricsFieldUniverse) ["metric_name", "value", "resource___service___name"]
+-- [True,True,True]
+-- >>> map (knownFieldRoot metricsFieldUniverse) ["level", "status_code", "duration", "trace_id"]
+-- [False,False,False,False]
+knownFieldRoot :: FieldUniverse -> T.Text -> Bool
+knownFieldRoot u root =
   T.null root
     || root
     == "*"
     || root
-    `S.member` acceptedFieldRoots
+    `S.member` acceptedFieldRoots u
     || T.replace "___" "." root
-    `S.member` flattenedOtelAttributes
+    `S.member` u.flatCols
 
 
 -- | Nearest known field for a typo'd one. A prefix relation catches the
@@ -782,23 +939,29 @@ knownFieldRoot root =
 -- which the prefix rule alone silently gave up on. Still conservative: beyond
 -- that, no suggestion beats a misleading one.
 --
--- >>> suggestFieldRoot "attribute"
+-- >>> suggestFieldRoot otelFieldUniverse "attribute"
 -- Just "attributes"
--- >>> suggestFieldRoot "attributs"
+-- >>> suggestFieldRoot otelFieldUniverse "attributs"
 -- Just "attributes"
--- >>> suggestFieldRoot "context___trace_ix"
+-- >>> suggestFieldRoot otelFieldUniverse "context___trace_ix"
 -- Just "context___trace_id"
--- >>> suggestFieldRoot "zzz"
+-- >>> suggestFieldRoot otelFieldUniverse "zzz"
 -- Nothing
-suggestFieldRoot :: T.Text -> Maybe T.Text
-suggestFieldRoot root =
+--
+-- Suggestions come from the universe being validated, so a metrics typo is
+-- answered with a metrics column:
+--
+-- >>> suggestFieldRoot metricsFieldUniverse "metric_nam"
+-- Just "metric_name"
+suggestFieldRoot :: FieldUniverse -> T.Text -> Maybe T.Text
+suggestFieldRoot u root =
   viaNonEmpty head . map snd . sortWith fst $ [(d, c) | c <- candidates, Just d <- [rank c]]
   where
     -- Suggest in the notation the user is already writing, so a mistyped
     -- `context___trace_ix` is not answered with the dotted form.
     candidates
-      | "___" `T.isInfixOf` root = map (T.replace "." "___") (toList flattenedOtelAttributes)
-      | otherwise = toList acceptedFieldRoots
+      | "___" `T.isInfixOf` root = map (T.replace "." "___") (toList u.flatCols)
+      | otherwise = toList (acceptedFieldRoots u)
     rank c
       | T.isPrefixOf c root || T.isPrefixOf root c = Just (0 :: Int, T.length c)
       | d <- editDistance root c, d <= 2 = Just (d, T.length c)
