@@ -327,7 +327,11 @@ refreshButton_ =
   div_
     [ class_ "join min-h-9"
     , data_ "time-transport" ""
-    , [__|on load call window.initTimeTransport(me)|]
+    , -- Guarded: the web-components bundle is deferred, so this hook can fire
+      -- before `window.initTimeTransport` is assigned. main.ts adopts any
+      -- transport that lands here early, so skipping the call is safe — an
+      -- unguarded one only threw and left the transport uninitialised anyway.
+      [__|on load if window.initTimeTransport call window.initTimeTransport(me) end|]
     ]
     do
       transportBtn "Previous time window" "" [onclick_ "window.shiftTimeRange(-1, this.closest('[data-time-transport]'))"]

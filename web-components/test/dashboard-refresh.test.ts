@@ -122,6 +122,26 @@ describe('auto-refresh interval', () => {
     expect(window.dashboardRefreshTimer).toBeNull();
   });
 
+  // The bundle is deferred, so a transport rendered above it fires `on load`
+  // before window.initTimeTransport exists — three "'window.initTimeTransport'
+  // is null" criticals on 2026-08-28, each one a dashboard that then never
+  // refreshed. Adoption is what makes the missed hook harmless.
+  test('a transport whose on-load hook never ran is adopted, and one that ran is not re-initialised', () => {
+    const transport = mountTransport(true); // mounted WITHOUT calling initTimeTransport
+    expect(transport.dataset.live).toBeUndefined();
+
+    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+
+    expect(transport.dataset.live).toBe('true');
+    vi.advanceTimersByTime(15_000);
+    expect(refreshes).toBe(1);
+
+    // Already initialised: a second swap must not restart or double the timer.
+    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+    vi.advanceTimersByTime(15_000);
+    expect(refreshes).toBe(2);
+  });
+
   test('entering a historical window stops the live timer and updates its controls', () => {
     window.initTimeTransport(mountTransport(true));
     vi.advanceTimersByTime(15_000);

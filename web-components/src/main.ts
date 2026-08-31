@@ -233,6 +233,7 @@ window.setTimeRefreshInterval = (_transport, interval) => {
 
 document.addEventListener('htmx:after:swap', () => {
   if (!document.querySelector('[data-time-transport]')) window.setTimeRefreshInterval(null, 0);
+  else adoptTimeTransports();
 });
 
 window.initTimeTransport = (transport) => {
@@ -242,6 +243,20 @@ window.initTimeTransport = (transport) => {
   else if (!window.dashboardRefreshTimer) window.setTimeRefreshInterval(transport, 15000);
   else syncTimeTransports();
 };
+
+// This bundle is a deferred module, so a transport rendered above it can fire
+// its `on load` hook before the assignment above exists — that is the
+// "'window.initTimeTransport' is null" critical, and a swap that re-renders the
+// transport without re-running the hook leaves it dead the same way. Adopt any
+// transport that missed it. `dataset.live` is the marker initTimeTransport
+// itself sets, so one that DID reach the hook is never initialised twice.
+const adoptTimeTransports = () =>
+  document.querySelectorAll<HTMLElement>('[data-time-transport]').forEach((transport) => {
+    if (transport.dataset.live === undefined) window.initTimeTransport(transport);
+  });
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', adoptTimeTransports);
+else adoptTimeTransports();
 
 const defaultTimeWindow = (transport?: HTMLElement | null) =>
   transport?.closest<HTMLElement>('[data-default-window]')?.dataset.defaultWindow || '15M';
