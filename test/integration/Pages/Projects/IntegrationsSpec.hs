@@ -30,7 +30,11 @@ spec = sequential $ aroundAll withTestResources $ do
             cases :: [(Text, Text, IO (), [Notification] -> IO ())]
             cases =
               [ ("email", "runtime_exception", setupEmail tr testPid "alerts@example.com", \ns -> [(d.receiver, "[Test]" `T.isPrefixOf` d.subject) | EmailNotification d <- ns] `shouldBe` [("alerts@example.com", True)])
-              , ("slack", "runtime_exception", setupSlackData tr testPid "T_SLACK_TEST", \ns -> [(d.channelId, T.isInfixOf "🧪 TEST" $ payloadText d.payload) | SlackNotification d <- ns] `shouldBe` [("C_NOTIF_CHANNEL", True)])
+              , -- Also assert Slack would accept the shape: the test alert is the only
+                -- Slack message many projects ever saw succeed, because it is rendered
+                -- through the same builder but reached the default channel over the
+                -- webhook transport, which never validates Block Kit.
+                ("slack", "runtime_exception", setupSlackData tr testPid "T_SLACK_TEST", \ns -> [(d.channelId, T.isInfixOf "🧪 TEST" $ payloadText d.payload, slackPayloadViolations d.payload) | SlackNotification d <- ns] `shouldBe` [("C_NOTIF_CHANNEL", True, [])])
               , ("discord", "api_change", setupDiscordDataWithChannel tr testPid "G_DISCORD_TEST" "C_DISCORD_NOTIF", \ns -> [T.isInfixOf "🧪 TEST" $ payloadText d.payload | DiscordNotification d <- ns] `shouldBe` [True])
               , ("whatsapp", "runtime_exception", setupWhatsappNumber tr testPid whatsappNum, \ns -> [Notify.to d | WhatsAppNotification d <- ns] `shouldBe` [whatsappNum])
               , ("pagerduty", "runtime_exception", setupPagerdutyData tr testPid pagerdutyKey, \ns -> [(Notify.integrationKey d, Notify.eventAction d) | PagerdutyNotification d <- ns] `shouldBe` [(pagerdutyKey, Notify.PDTrigger)])

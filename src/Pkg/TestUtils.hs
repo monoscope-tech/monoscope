@@ -79,6 +79,7 @@ module Pkg.TestUtils (
   mkAttr,
   -- MinIO test helpers
   requireMinio,
+  slackPayloadViolations,
 )
 where
 
@@ -1814,3 +1815,26 @@ createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktr
       -- No http.request.method: exception spans shouldn't match the HTTP span filter (attributes___http___request___method IS NOT NULL)
       attrs = [mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
   pure $ mkSpanRequest trIdText spanIdText Nothing spanName [exceptionEvent] (Just spanStatus) attrs resource timestamp
+
+
+-- | Slack Block Kit constraints that have actually cost us delivered alerts.
+-- Slack rejects the WHOLE message (@invalid_attachments@) when any one of these
+-- is violated, so a payload with a stray field silently delivers nothing:
+--
+--   * button @style@ is an enum of exactly @primary@ / @danger@ — @default@ is
+--     not "unstyled", it is invalid;
+--   * @image_url@ must be at most 3000 characters (our signed widget URLs can
+--     be far longer);
+--   * section text is capped at 3000 characters.
+--
+-- Returns one message per violation; @[]@ means Slack would accept the shape.
+slackPayloadViolations :: AE.Value -> [Text]
+slackPayloadViolations = go
+  where
+    go (AE.Object o) = concatMap check (AEKM.toList o) <> concatMap go (AEKM.elems o)
+    go (AE.Array xs) = concatMap go (toList xs)
+    go _ = []
+    check ("style", AE.String s) | s `notElem` ["primary", "danger"] = ["invalid button style: " <> s]
+    check ("image_url", AE.String u) | T.length u > 3000 = ["image_url over 3000 chars: " <> show (T.length u)]
+    check ("text", AE.String t) | T.length t > 3000 = ["text over 3000 chars: " <> show (T.length t)]
+    check _ = []

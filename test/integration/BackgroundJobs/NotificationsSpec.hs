@@ -2,7 +2,7 @@ module BackgroundJobs.NotificationsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -13,6 +13,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Projects qualified as ProjectPages
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.EmailTemplates qualified as ET
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -212,7 +213,52 @@ spec = around withTestResources do
       notifs `shouldSatisfy` (not . null)
 
 
+    -- sendNewEndpointAlerts claimed apis.issues.last_notified_at *before* checking
+    -- project.endpointAlerts, so a project with new-endpoint alerts off had its
+    -- issues stamped as notified and could never be alerted on them afterwards —
+    -- turning the toggle back on recovered nothing.
+    it "6. New-endpoint alerts off: nothing dispatched and last_notified_at untouched" \tr -> do
+      seedSlackChannel tr
+      saveEndpointAlerts tr False
+      iid <- insertApiChangeIssue tr "endpoint-gate-hash"
+      let row = ET.EndpointAlertRow{label = "GET /gated", host = Nothing, service = Nothing, environment = Nothing}
+          send = fst <$> captureNotifs tr (BackgroundJobs.sendNewEndpointAlerts pid "endpoint-gate-hash" [(iid, row)])
+
+      send `shouldReturn` []
+      notifiedAt tr iid `shouldReturn` [PGS.Only Nothing]
+
+      saveEndpointAlerts tr True
+      send >>= (`shouldSatisfy` (not . null))
+      notifiedAt tr iid >>= (`shouldSatisfy` \case [PGS.Only x] -> isJust x; _ -> False)
+
+
 saveErrorAlerts :: TestResources -> Bool -> IO ()
-saveErrorAlerts tr enabled = do
+saveErrorAlerts tr = saveAlertToggle tr \form v -> form{ProjectPages.errorAlerts = v}
+
+
+saveEndpointAlerts :: TestResources -> Bool -> IO ()
+saveEndpointAlerts tr = saveAlertToggle tr \form v -> form{ProjectPages.endpointAlerts = v}
+
+
+-- Round-trips the real settings form so the toggle is written the way the UI writes it.
+saveAlertToggle :: TestResources -> (ProjectPages.CreateProjectForm -> Maybe Text -> ProjectPages.CreateProjectForm) -> Bool -> IO ()
+saveAlertToggle tr set enabled = do
   (_, ProjectPages.CreateProject (PageCtx _ (_, _, _, _, _, form, _, _))) <- testServant tr $ ProjectPages.projectSettingsGetH pid
-  void $ testServant tr $ ProjectPages.createProjectPostH pid form{ProjectPages.errorAlerts = bool Nothing (Just "on") enabled}
+  void $ testServant tr $ ProjectPages.createProjectPostH pid $ set form $ bool Nothing (Just "on") enabled
+
+
+insertApiChangeIssue :: TestResources -> Text -> IO Issues.IssueId
+insertApiChangeIssue tr hash = withResource tr.trPool \conn ->
+  PGS.query
+    conn
+    [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, endpoint_hash)
+          VALUES (?, 'api_change', 'GET /gated', ?, ?) RETURNING id |]
+    (pid, hash, hash)
+    <&> \case
+      [PGS.Only iid] -> iid
+      _ -> error "insertApiChangeIssue returned no row"
+
+
+notifiedAt :: TestResources -> Issues.IssueId -> IO [PGS.Only (Maybe UTCTime)]
+notifiedAt tr iid = withResource tr.trPool \conn ->
+  PGS.query conn [sql| SELECT last_notified_at FROM apis.issues WHERE id = ? |] (PGS.Only iid)

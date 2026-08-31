@@ -461,7 +461,19 @@ window.tagifyTemplateFunc = tagifyTemplateFunc;
 // Auto-initialize tagify inputs from data attributes
 // Uses data-tagify-* prefix to avoid collision with Tagify's built-in data attribute handling
 function initTagifyElement(el: HTMLElement) {
-  if ((el as any)._tagifyInstance) return;
+  const existing = (el as any)._tagifyInstance;
+  // An htmx morph can swap Tagify's wrapper out from under the textarea while the
+  // textarea itself is reused, leaving a live instance bound to detached DOM: the
+  // field still accepts typing but shows no suggestions. Re-init when that happens.
+  if (existing) {
+    if (existing.DOM?.scope?.isConnected) return;
+    try {
+      existing.destroy();
+    } catch {
+      /* already gone */
+    }
+    (el as any)._tagifyInstance = null;
+  }
   try {
     const options: any = {};
     const wl = el.getAttribute('data-tagify-whitelist');

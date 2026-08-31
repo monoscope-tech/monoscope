@@ -288,12 +288,22 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
         , field "Runtime" (fromMaybe "" err.runtime)
         , field "Trace" (T.take 16 $ fromMaybe "" err.traceId)
         ]
-    btn label style url = AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (label :: Text), "emoji" AE..= True], "url" AE..= url, "style" AE..= (style :: Text)]
+    -- Slack's button `style` is an enum of exactly "primary" and "danger". A
+    -- "default" style is not "no style" — it makes chat.postMessage reject the
+    -- ENTIRE message with invalid_attachments, so every error alert carrying a
+    -- trace id silently failed to any channel reached over the chat API (the
+    -- webhook transport renders buttons as mrkdwn links, which is why the
+    -- install's default channel kept working and only extra channels went dark).
+    -- Omit the key instead: `styleM = Nothing` is the unstyled button.
+    btn label styleM url =
+      AE.object
+        $ ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (label :: Text), "emoji" AE..= True], "url" AE..= url]
+        <> maybeToList (("style" AE..=) <$> (styleM :: Maybe Text))
     traceBtn =
       err.traceId >>= \tid ->
         guard (not (T.null tid))
-          $> btn "View trace" "default" (traceExplorerUrl projectUrl tid err.when)
-    buttons = btn "🔍 Investigate" "primary" targetUrl : maybeToList traceBtn
+          $> btn "View trace" Nothing (traceExplorerUrl projectUrl tid err.when)
+    buttons = btn "🔍 Investigate" (Just "primary") targetUrl : maybeToList traceBtn
 
 
 -- | First non-empty line of a stack trace that isn't a repeat of the error-type header

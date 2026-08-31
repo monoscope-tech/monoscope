@@ -3256,7 +3256,11 @@ sendNewEndpointAlerts :: Projects.ProjectId -> Text -> [(Issues.IssueId, ET.Endp
 sendNewEndpointAlerts _ _ [] = pass
 sendNewEndpointAlerts pid alertHash candidates = do
   authCtx <- ask @Config.AuthContext
-  unless authCtx.config.pauseNotifications do
+  projectM <- Projects.projectById pid
+  -- The endpointAlerts gate has to come before the claim below: stamping
+  -- last_notified_at on an issue we then decline to send marks it notified
+  -- forever, so re-enabling alerts can never recover it.
+  whenJust (mfilter (.endpointAlerts) projectM) \project -> unless authCtx.config.pauseNotifications do
     now <- Time.currentTime
     sentThisHour :: Int64 <-
       fromMaybe 0
@@ -3289,18 +3293,16 @@ sendNewEndpointAlerts pid alertHash candidates = do
             notifiableRows = claimedRows <> digest
         unless (null overflow)
           $ Log.logInfo "New-endpoint alerts truncated to hourly budget" ("project_id", pid.toText, "sent", length claimedRows, "rolled_up", length overflow)
-        unless (null claimedRows)
-          $ whenJustM (Projects.projectById pid) \project -> do
-            users <- Projects.usersByProjectId pid
-            when project.endpointAlerts do
-              let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = alertHash}
-              teamM <- ProjectMembers.getEveryoneTeam pid
-              broadcastToEveryone teamM alert pid project.title (projectUrl authCtx pid)
-              when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
-                $ forM_ users \u -> do
-                  let anomalyUrl = projectUrl authCtx pid <> "/issues"
-                      (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
-                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+        unless (null claimedRows) do
+          users <- Projects.usersByProjectId pid
+          let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = alertHash}
+          teamM <- ProjectMembers.getEveryoneTeam pid
+          broadcastToEveryone teamM alert pid project.title (projectUrl authCtx pid)
+          when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
+            $ forM_ users \u -> do
+              let anomalyUrl = projectUrl authCtx pid <> "/issues"
+                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
+              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Announce the new endpoints template discovery has just confirmed are

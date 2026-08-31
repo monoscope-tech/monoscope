@@ -211,6 +211,52 @@ pagerdutyNotification integrationKey eventAction dedupKey summary severity custo
   PagerdutyNotification PagerdutyData{..}
 
 
+-- | Rewrite every Block Kit block list in a Slack message — the top-level
+-- @blocks@ and the one nested in our legacy @attachments@ colour-bar wrapper.
+overBlocks :: ([AE.Value] -> [AE.Value]) -> AE.Value -> AE.Value
+overBlocks f (AE.Object o) = AE.Object $ AEK.mapWithKey rewrite o
+  where
+    rewrite "blocks" (AE.Array bs) = AE.Array $ V.fromList $ f $ toList bs
+    rewrite "attachments" (AE.Array atts) = AE.Array $ fmap (overBlocks f) atts
+    rewrite _ v = v
+overBlocks _ v = v
+
+
+-- | Slack rejects an @image_url@ of 3001+ characters with @invalid_attachments@
+-- — and rejects the whole message with it, chart and alert together. Our signed
+-- widget URLs are allowed to reach 8000 characters, so drop the image rather
+-- than lose the alert.
+--
+-- >>> let img u = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= (u :: Text)]
+-- >>> let txt = AE.object ["type" AE..= ("section" :: Text)]
+-- >>> let msg bs = AE.object ["attachments" AE..= ([AE.object ["blocks" AE..= (bs :: [AE.Value])]] :: [AE.Value])]
+-- >>> dropOversizedImages (msg [txt, img (T.replicate 3001 "x")]) == msg [txt]
+-- True
+-- >>> dropOversizedImages (msg [txt, img "https://short"]) == msg [txt, img "https://short"]
+-- True
+dropOversizedImages :: AE.Value -> AE.Value
+dropOversizedImages = overBlocks $ filter \b -> case imageUrl b of
+  Just u -> T.length u <= 3000
+  Nothing -> True
+
+
+-- | Strip image blocks entirely — the retry after Slack refuses to download a
+-- chart it would otherwise have embedded.
+--
+-- >>> let img = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= ("u" :: Text)]
+-- >>> let txt = AE.object ["type" AE..= ("section" :: Text)]
+-- >>> let blocks bs = AE.object ["blocks" AE..= (bs :: [AE.Value])]
+-- >>> dropImageBlocks (blocks [txt, img]) == blocks [txt]
+-- True
+dropImageBlocks :: AE.Value -> AE.Value
+dropImageBlocks = overBlocks $ filter (isNothing . imageUrl)
+
+
+imageUrl :: AE.Value -> Maybe Text
+imageUrl (AE.Object b) | Just (AE.String "image") <- AEK.lookup "type" b, Just (AE.String u) <- AEK.lookup "image_url" b = Just u
+imageUrl _ = Nothing
+
+
 -- Production interpreter
 runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
@@ -304,24 +350,41 @@ runNotifyProduction = interpret $ \_ -> \case
       Nothing -> sendSlackChatApi sd
 
     -- chat.postMessage: requires bot membership; supports threading.
+    --
+    -- Slack fetches every @image_url@ while validating the request, so a chart
+    -- our renderer is slow to produce (or serves with the wrong content type)
+    -- comes back as @invalid_attachments@ and takes the ENTIRE alert with it.
+    -- An alert without its chart still tells an on-call engineer what broke, so
+    -- a rejection that mentions the attachments is retried once with the image
+    -- blocks stripped rather than dropped.
     sendSlackChatApi sd = case sd.payload of
       AE.Object obj -> do
         let withThread = maybe obj (\ts -> AEK.insert "thread_ts" (AE.String ts) obj) sd.threadTs
             msg = AE.Object $ AEK.insert "channel" (AE.String sd.channelId) withThread
             opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
             fail_ tag extra = Nothing <$ Log.logAttention ("Slack chat.postMessage " <> tag) (chatApiLog sd extra)
-        -- Slack always returns HTTP 200; the real success flag is in the JSON body.
-        -- not_in_channel / channel_not_found / is_archived all come back as 200 with
-        -- ok:false. Treating 200 as success hides the "bot not invited" class of bug.
-        liftIO (try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" msg) >>= \case
-          Right re
-            | statusIsSuccessful (re ^. responseStatus) ->
-                let body = AE.decode (re ^. responseBody) :: Maybe AE.Value
-                 in case body >>= (^? key "ok" . _Bool) of
-                      Just True -> pure $ body >>= (^? key "ts" . _String)
-                      _ -> fail_ "rejected by API" ["error" AE..= fromMaybe "unknown" (body >>= (^? key "error" . _String))]
-          Right re -> fail_ "HTTP failure" ["status" AE..= show @Text (re ^. responseStatus)]
-          Left ex -> fail_ "exception" ["error" AE..= displayException ex]
+            -- Slack always returns HTTP 200; the real success flag is in the JSON body.
+            -- not_in_channel / channel_not_found / is_archived all come back as 200 with
+            -- ok:false. Treating 200 as success hides the "bot not invited" class of bug.
+            post body = liftIO (try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" body)
+            outcome = \case
+              Right re
+                | statusIsSuccessful (re ^. responseStatus) ->
+                    let b = AE.decode (re ^. responseBody) :: Maybe AE.Value
+                     in Right (b >>= (^? key "ok" . _Bool), b >>= (^? key "ts" . _String), fromMaybe "unknown" (b >>= (^? key "error" . _String)))
+              Right re -> Left ("HTTP failure" :: Text, ["status" AE..= show @Text (re ^. responseStatus)])
+              Left ex -> Left ("exception", ["error" AE..= displayException ex])
+        post (dropOversizedImages msg) >>= \r -> case outcome r of
+          Left (tag, extra) -> fail_ tag extra
+          Right (Just True, ts, _) -> pure ts
+          Right (_, _, err)
+            | err == "invalid_attachments" -> do
+                Log.logAttention "Slack chat.postMessage rejected the chart image; retrying without it" (chatApiLog sd ["error" AE..= err])
+                post (dropImageBlocks msg) >>= \r2 -> case outcome r2 of
+                  Right (Just True, ts, _) -> pure ts
+                  Right (_, _, err2) -> fail_ "rejected by API" ["error" AE..= err2, "retried_without_image" AE..= True]
+                  Left (tag, extra) -> fail_ tag extra
+            | otherwise -> fail_ "rejected by API" ["error" AE..= err]
       _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
 
     -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
@@ -335,7 +398,7 @@ runNotifyProduction = interpret $ \_ -> \case
       -- checkResponse = nop: wreq otherwise throws on 4xx and we lose the body
       -- which is where Slack tells us which block/field it rejected.
       let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pass)
-          cleaned = flattenForWebhook sd.payload
+          cleaned = flattenForWebhook $ dropOversizedImages sd.payload
           fail_ tag extra = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= cleaned) : extra))
       liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case
         Right re
@@ -374,17 +437,17 @@ runNotifyProduction = interpret $ \_ -> \case
       let blocks = extractBlocks payload
           rendered = T.intercalate "\n\n" $ mapMaybe renderBlock blocks
           text = if T.null rendered then "Monoscope alert" else rendered
-          imageUrl = listToMaybe [u | AE.Object b <- blocks, Just (AE.String "image") <- [AEK.lookup "type" b], Just (AE.String u) <- [AEK.lookup "image_url" b]]
+          imgUrl = listToMaybe $ mapMaybe imageUrl blocks
           color = extractColor payload
           attachment =
             AE.object
               $ catMaybes
                 [ Just $ "fallback" AE..= ("Monoscope alert" :: Text)
                 , ("color" AE..=) <$> color
-                , ("image_url" AE..=) <$> imageUrl
+                , ("image_url" AE..=) <$> imgUrl
                 ]
           base = ["text" AE..= text]
-       in AE.object $ case (imageUrl, color) of
+       in AE.object $ case (imgUrl, color) of
             (Nothing, Nothing) -> base
             _ -> base <> ["attachments" AE..= AE.Array (V.singleton attachment)]
 

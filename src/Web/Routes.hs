@@ -190,6 +190,22 @@ instance MimeRender OTLPProto BS.ByteString where
   mimeRender _ = fromStrict
 
 
+-- | PNG responses. Servant renders the Content-Type from this instance, so the
+-- handler must NOT add one itself: two Content-Type headers make nginx keep the
+-- first and drop the rest, and a chart served as application/octet-stream is a
+-- chart Slack refuses to download — which rejects the whole alert message
+-- (invalid_attachments), not just the image.
+data PNG
+
+
+instance Accept PNG where
+  contentType _ = "image/png"
+
+
+instance MimeRender PNG LBS.ByteString where
+  mimeRender _ = id
+
+
 -- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
 -- importing Opentelemetry.OtlpServer would drag proto-lens's orphan IsLabel
 -- instances into scope and break the generic-lens #labels used by widget code.
@@ -426,7 +442,7 @@ data Routes mode = Routes
           :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -1173,7 +1189,7 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
-widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text] LBS.ByteString)
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- ask @AuthContext
   let fallback = fromMaybe "" widgetJsonM
@@ -1206,7 +1222,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
       Just (ExitSuccess, bytes, _) -> pure bytes
       Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id])
 
-  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) $ addHeader @"Content-Type" "image/png" pngBytes
+  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 
 
 -- =============================================================================

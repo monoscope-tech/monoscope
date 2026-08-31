@@ -578,6 +578,10 @@ spec = sequential $ aroundAll withTestResources do
             let payloadText = show @Text sd.payload
             payloadText `shouldSatisfy` T.isInfixOf pat.errorType
             payloadText `shouldSatisfy` T.isInfixOf "log_explorer?query=trace_id"
+            -- The "View trace" button carried style:"default" — not a Slack enum
+            -- value — so chat.postMessage rejected every trace-bearing error alert
+            -- with invalid_attachments and delivered nothing.
+            slackPayloadViolations sd.payload `shouldBe` []
 
           pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           let slackTs1 = pat1 >>= (.slackThreadTs)

@@ -239,7 +239,8 @@ integrationsSettingsGetH pid = do
   appCtx <- ask @AuthContext
   slackInfo <- getProjectSlackData pid
   discordInfo <- getDiscordDataByProjectId pid
-  channels <- resolveSlackChannels slackInfo
+  channelsE <- resolveSlackChannels slackInfo
+  let channels = fromRight [] channelsE
   -- Converge @everyone.slack_channels with the OAuth-time default on every render.
   -- Idempotent (addSlackChannelToEveryoneTeam no-ops when present). Covers legacy
   -- installs that pre-date the OAuth-side add, plus out-of-band updates to
@@ -256,6 +257,7 @@ integrationsSettingsGetH pid = do
       seededIds = S.fromList $ map BotUtils.channelId seededExtras
       missingIds = filter (\c -> not (S.member c knownChannelIds) && not (S.member c seededIds)) $ V.toList existingSlackChannels
   fetchedExtras <- maybe (pure []) (\d -> catMaybes <$> traverse (SlackP.getSlackChannelInfo d.botToken) missingIds) slackInfo
+  projectM <- Projects.projectById pid
   let extraSlackChannels = seededExtras <> fetchedExtras
       bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders
@@ -274,6 +276,8 @@ integrationsSettingsGetH pid = do
         , extraSlackChannels
         , existingSlackChannels
         , everyoneTeamId = (.id) <$> everyoneTeamM
+        , slackChannelsError = leftToMaybe channelsE
+        , alertsOff = maybe [] (\p -> [l | (l, enabled) <- [("Runtime error alerts", p.errorAlerts), ("New endpoint alerts", p.endpointAlerts)], not enabled]) projectM
         }
 
 
@@ -353,12 +357,24 @@ validateNotificationChannels pid enabledChannels phones = do
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.
-resolveSlackChannels :: Maybe SlackData -> ATAuthCtx [BotUtils.Channel]
-resolveSlackChannels = maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
+--
+-- @Left@ carries Slack's error code so callers can tell "this workspace has no
+-- channels we can see" apart from "this install can no longer talk to Slack" —
+-- an empty list means both otherwise, which is how 34 installs sat on the
+-- settings page reading "Connected" while every alert was rejected.
+resolveSlackChannels :: Maybe SlackData -> ATAuthCtx (Either Text [BotUtils.Channel])
+resolveSlackChannels = maybe (pure $ Right []) \d ->
+  if T.null d.botToken
+    then pure $ Left "not_authed"
+    else
+      SlackP.getSlackChannels d.botToken d.teamId <&> \case
+        Nothing -> Left "unreachable"
+        Just r | r.ok -> Right $ fromMaybe [] r.channels
+        Just r -> Left $ fromMaybe "unknown" r.error
 
 
 projectSlackChannels :: Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
-projectSlackChannels pid = getProjectSlackData pid >>= resolveSlackChannels
+projectSlackChannels pid = fromRight [] <$> (getProjectSlackData pid >>= resolveSlackChannels)
 
 
 projectDiscordChannels :: EnvConfig -> Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
@@ -440,6 +456,12 @@ data IntegrationsConfig = IntegrationsConfig
   , extraSlackChannels :: [BotUtils.Channel]
   , existingSlackChannels :: V.Vector Text
   , everyoneTeamId :: Maybe UUID.UUID
+  , -- \| Slack's error code when the channel list couldn't be fetched. Present ⇒
+    -- the install can't reach Slack's API, so chat.postMessage delivery is dead too.
+    slackChannelsError :: Maybe Text
+  , -- \| Labels of the project-level alert toggles that are switched off. A
+    -- connected Slack with these off delivers nothing, which is invisible here otherwise.
+    alertsOff :: [Text]
   }
 
 
@@ -465,7 +487,7 @@ integrationsBody IntegrationsConfig{..} = do
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-              , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
+              , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
               , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
               , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
               , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
@@ -553,18 +575,33 @@ renderWhatsappIntegration :: Text -> Html ()
 renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_input" False $ Just $ tagInput_ "phones_input" "Enter phone numbers" [data_ "tagify-initial" tgs]
 
 
-renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Html ()
-renderSlackIntegration envCfg pid slackData channels extraChannels existingChannels = do
+renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Maybe Text -> [Text] -> Html ()
+renderSlackIntegration envCfg pid slackData channels extraChannels existingChannels channelsError alertsOff = do
   let stateParam = if T.null pid then "" else "&state=" <> pid
       oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
 
   case slackData of
     Just sd -> do
-      div_ [class_ "rounded-lg bg-fillBrand-weak p-2.5 text-xs mb-3"] do
+      -- A stored install is not a working one. When Slack rejects our token the
+      -- only channel that can still receive anything is the OAuth-time default,
+      -- via its incoming webhook — say so instead of a green "Connected".
+      let deadToken = isJust channelsError
+          webhookAlive = isJust sd.webhookUrl
+      div_ [class_ $ "rounded-lg p-2.5 text-xs mb-3 " <> if deadToken then "bg-fillWarning-weak" else "bg-fillBrand-weak"] do
         div_ [class_ "flex items-center gap-1.5"] do
-          faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
+          if deadToken
+            then faSprite_ "triangle-exclamation" "regular" "w-3.5 h-3.5 text-iconWarning"
+            else faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
           span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected (Team ID: " <> sd.teamId <> ")") ("Workspace: " <>) sd.teamName
         when (isNothing sd.teamName) $ p_ [class_ "text-textWeak ml-5"] "Reconnect to see workspace name"
+        whenJust channelsError \err -> p_ [class_ "text-textWeak ml-5 mt-1"] do
+          toHtml
+            $ if webhookAlive
+              then "Slack rejected this app's token (" <> err <> "), so alerts only reach the channel picked at install. Reconnect to post to other channels."
+              else "Slack rejected this app's token (" <> err <> "). No alerts are being delivered — click Reconnect to restore them."
+        unless (null alertsOff) $ p_ [class_ "text-textWeak ml-5 mt-1"] do
+          toHtml (T.intercalate " and " alertsOff <> " are switched off for this project — those alerts never reach Slack. ")
+          a_ [href_ ("/p/" <> pid <> "/settings"), class_ "font-medium text-textBrand underline"] "Project settings"
 
       -- Always include saved channels in the whitelist so enforceWhitelist + resolve
       -- render the chip. `extraChannels` covers names we could fetch via
@@ -574,7 +611,10 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
           unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, not (S.member c knownIds)]
           slackWhitelist = decodeUtf8 $ AE.encode $ map channelJSON (channels <> extraChannels) <> unresolved
           existingJSON = decodeUtf8 $ AE.encode $ V.toList existingChannels
-      div_ [class_ "mb-3"] $ formField_ FieldSm def "Slack channels" "slack-channels-input" False $ Just $ tagInput_ "slack-channels-input" "Add Slack channels" [data_ "tagify-whitelist" slackWhitelist, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" existingJSON, data_ "tagify-resolve" ""]
+          -- Enforcing a whitelist we couldn't fetch leaves the user unable to type
+          -- anything at all; fall back to accepting a pasted channel id.
+          enforce = [data_ "tagify-enforce-whitelist" "" | isNothing channelsError]
+      div_ [class_ "mb-3"] $ formField_ FieldSm def "Slack channels" "slack-channels-input" False $ Just $ tagInput_ "slack-channels-input" (if isJust channelsError then "Paste a Slack channel ID" else "Add Slack channels") ([data_ "tagify-whitelist" slackWhitelist, data_ "tagify-text-prop" "name", data_ "tagify-initial" existingJSON, data_ "tagify-resolve" ""] <> enforce)
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Reconnect"
