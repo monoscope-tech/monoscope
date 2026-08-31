@@ -317,6 +317,7 @@ describe('Live Tail fields and details', () => {
     await el.updateComplete;
     const prompt = el.querySelector('[aria-label="AI search prompt"]') as HTMLInputElement;
     expect(prompt).not.toBeNull();
+    expect(prompt.autocomplete).toBe('new-password');
     prompt.value = 'errors in checkout';
     prompt.dispatchEvent(new Event('input'));
     await el.updateComplete;

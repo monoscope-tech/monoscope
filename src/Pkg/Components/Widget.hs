@@ -1102,7 +1102,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then (28 :: Int) else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
+              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then if fromMaybe "sm" widget.legendSize == "xs" then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
               , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False

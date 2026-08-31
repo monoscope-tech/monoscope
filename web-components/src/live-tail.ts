@@ -722,6 +722,7 @@ export class LiveTail extends LitElement {
                 <input
                   class="min-w-0 flex-1 border-0 bg-transparent p-1 text-sm no-focus-ring"
                   aria-label="AI search prompt"
+                  autocomplete="new-password"
                   placeholder="Ask in plain English — e.g. errors in payment service"
                   .value=${this.aiPrompt}
                   @input=${(event: Event) => (this.aiPrompt = (event.target as HTMLInputElement).value)}
