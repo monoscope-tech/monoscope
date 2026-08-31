@@ -210,6 +210,10 @@ export const scrollHarness = (el: LogList, { viewportHeight = 560, virtualizerSc
     if (changed.has('virtualizerEpoch')) {
       remounting = true;
       scrollTop = 0; // the browser clamps to a zero-height scroll range
+      // …and a clamp is a scroll, so the browser fires the scroll event too. Omitting it
+      // gave every scroll-position test a list whose edge handlers never saw the collapsed
+      // frame — the one frame on which "the reader is parked at the newest edge" is a lie.
+      el.handleListScroll?.();
       requestAnimationFrame(settle); // the new virtualizer lays out on the next frame
     }
     origUpdated(changed);

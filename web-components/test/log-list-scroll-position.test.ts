@@ -12,7 +12,7 @@
 // for one frame, and the browser clamps scrollTop to 0 on that frame.
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, deferredTransport, logPage, treeFromLogs, mountList, scrollHarness, flushFrames, fireSentinel, ROW_H, ids } from './log-list-harness';
-import { MAX_RETAINED_ROWS } from '../src/log-list';
+import { MAX_RETAINED_ROWS, RETENTION_LIMIT } from '../src/log-list';
 
 // The row the reader is looking at: first data row at the top of the viewport.
 const topRowId = (el: any, sim: any): string | undefined => {
@@ -51,7 +51,7 @@ describe('LogList — the reader keeps their place across a load-more', () => {
   });
 
   test('a load-more that evicts the retained window keeps the reader on the same row', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     const anchorId = topRowId(el, sim);
@@ -68,7 +68,7 @@ describe('LogList — the reader keeps their place across a load-more', () => {
   });
 
   test('restores after the real virtualizer leaves scrollToIndex a no-op', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el, { virtualizerScrollToIndexWorks: false });
     sim.scrollToBottom();
     const anchorId = topRowId(el, sim);
@@ -82,7 +82,7 @@ describe('LogList — the reader keeps their place across a load-more', () => {
   });
 
   test('does not trust stale pre-remount row geometry', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     const anchorId = topRowId(el, sim);
@@ -101,7 +101,7 @@ describe('LogList — the reader keeps their place across a load-more', () => {
 
   test('"Show earlier events" continues the list instead of jumping to the top', async () => {
     // hasMore=false is what swaps the load-more row for "Show earlier events".
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     (el as any).hasMore = false;
     (el as any).expandTimeRange = true;
     (el as any).updateVisibleItems();
@@ -291,7 +291,7 @@ describe('LogList — automatic fetches stand down while the list is repositioni
   // live *because* of that eviction — fires on the one frame where the remounted
   // virtualizer has no height and therefore has both edges inside the viewport.
   test('the eviction remount does not fire the top load-newer sentinel', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     const anchorId = topRowId(el, sim);
@@ -309,24 +309,25 @@ describe('LogList — automatic fetches stand down while the list is repositioni
     expect(topRowId(el, sim)).toBe(anchorId);
   });
 
-  test('an auto-loaded newer page never yanks the viewport to the top', async () => {
-    // Only an explicit click on "Load newer events" should reveal the new rows;
-    // the observer firing means the reader is already at that edge.
+  test('newer-sentinel visibility never replays a history gap', async () => {
     const el = await seeded(400);
     (el as any).hasNewer = true;
     const sim = scrollHarness(el);
     sim.scrollTo(120 * ROW_H);
-    el.transport = serverTransport(logPage(['n1', 'n2']));
+    const before = { id: topRowId(el, sim), scrollTop: sim.scrollTop };
+    const fetch = vi.spyOn(el, 'fetchData');
     const sentinels = await sim.mountSentinels();
 
     fireSentinel(sentinels.recent);
     await flushFrames();
 
-    expect(sim.atTop).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(topRowId(el, sim)).toBe(before.id);
+    expect(sim.scrollTop).toBe(before.scrollTop);
   });
 
   test('proximity prefetch does not fire off the collapsed post-eviction range', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     sim.emitVisibility();
@@ -341,7 +342,7 @@ describe('LogList — automatic fetches stand down while the list is repositioni
   });
 
   test('the remount recovery range is not mistaken for another page of user scrolling', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     sim.emitVisibility();
@@ -358,25 +359,24 @@ describe('LogList — automatic fetches stand down while the list is repositioni
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('once the list has settled, the top sentinel loads newer events again', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+  test('Jump to latest replaces a large history gap in one explicit request', async () => {
+    const el = await seeded(RETENTION_LIMIT);
+    (el as any).hasNewer = true;
     const sim = scrollHarness(el);
-    sim.scrollToBottom();
-    el.transport = serverTransport(olderPage(0, 400));
-    await el.fetchData('older', false, false, true);
-    await flushFrames();
-
-    const recent = vi.spyOn(el as any, 'buildRecentFetchUrl').mockReturnValue('newer');
-    sim.scrollTo(0);
+    sim.scrollTo(120 * ROW_H);
+    el.transport = serverTransport(logPage(['latest-1', 'latest-2']));
     const sentinels = await sim.mountSentinels();
-    fireSentinel(sentinels.recent);
+
+    (sentinels.recent!.querySelector('[aria-label="Jump to latest events"]') as HTMLButtonElement).click();
     await flushFrames();
 
-    expect(recent).toHaveBeenCalled(); // suspension is a frame, not a permanent latch
+    expect((el.transport as any).urls).toHaveLength(1);
+    expect(ids(el)).toEqual(['latest-1', 'latest-2']);
+    expect(sim.atTop).toBe(true);
   });
 
   test('the bottom sentinel still pages history after an eviction settles', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     el.transport = serverTransport(olderPage(0, 400), olderPage(400, 100));
@@ -413,7 +413,7 @@ describe('LogList — eviction that removes the row the reader was anchored to',
   test('live-tail eviction at the history edge does not dump the reader at the top', async () => {
     // Newest-first: a recent fetch prepends newer rows and evicts the OLDEST ones —
     // exactly where a reader who has paged deep into history is sitting.
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     (el as any).recentFetchUrl = 'newer';
     const sim = scrollHarness(el);
     sim.scrollToBottom();
@@ -444,7 +444,7 @@ describe('LogList — the repositioning guard always releases', () => {
   });
 
   test('returns to zero after an eviction remount', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     el.transport = serverTransport(olderPage(0, 400));
@@ -514,7 +514,7 @@ describe('LogList — a load-more eviction never abandons the reader at the top'
     // The eviction cuts the newest 400 rows; the captured anchor is one of them. During a
     // fast scroll the capture runs after the network await against a lagging rendered range,
     // so the id it returns can be a row the merge is about to drop.
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue({ id: 'r00001', offset: 0 });
@@ -527,7 +527,7 @@ describe('LogList — a load-more eviction never abandons the reader at the top'
   });
 
   test('restores position when no anchor could be captured at all', async () => {
-    const el = await seeded(MAX_RETAINED_ROWS);
+    const el = await seeded(RETENTION_LIMIT);
     const sim = scrollHarness(el);
     sim.scrollToBottom();
     sim.emitVisibility(); // the rendered range is the only record of where they were
@@ -538,5 +538,93 @@ describe('LogList — a load-more eviction never abandons the reader at the top'
     await flushFrames();
 
     expect(sim.atTop).toBe(false);
+  });
+});
+
+// "Scrolling down, I get pushed back to the latest logs, usually after the 15 second live
+// update." Traced in a real browser: 17 eviction remounts in 76s of scrolling, and each one
+// clamps scrollTop to 0 and fires a scroll event. `resumeLiveTailAtEdge` read that clamp as
+// "the reader is parked at the newest edge" and flushed the buffered background rows into
+// someone deep in history — which evicted the history they were reading, remounted again,
+// and left them at the top on the newest rows. The buffer exists precisely so that cannot
+// happen; a frame of collapsed geometry must never be mistaken for the reader's intent.
+describe('LogList — a background tick never reaches a reader who is scrolled away', () => {
+  const newerPage = (count: number) => logPage(Array.from({ length: count }, (_, i) => `n${String(i).padStart(5, '0')}`));
+
+  const readerDeepInHistoryWithBufferedRows = async () => {
+    const el = await seeded(RETENTION_LIMIT);
+    (el as any).recentFetchUrl = 'newer';
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    el.transport = serverTransport(newerPage(400));
+    await el.fetchData('newer', false, true, false, false, 'auto-refresh');
+    await flushFrames();
+    return { el, sim, anchorId: topRowId(el, sim) };
+  };
+
+  test('the auto-refresh tick buffers rather than moving a reader who has scrolled away', async () => {
+    const { el, sim, anchorId } = await readerDeepInHistoryWithBufferedRows();
+
+    expect((el as any).recentDataToBeAdded).toHaveLength(400);
+    expect(ids(el)).not.toContain('n00000');
+    expect(sim.atTop).toBe(false);
+    expect(topRowId(el, sim)).toBe(anchorId);
+  });
+
+  test('the eviction remount does not flush the buffer into the reader', async () => {
+    const { el, sim, anchorId } = await readerDeepInHistoryWithBufferedRows();
+    el.transport = serverTransport(olderPage(0, 400));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames();
+
+    expect((el as any).recentDataToBeAdded).toHaveLength(400); // still buffered
+    expect(sim.atTop).toBe(false);
+    expect(topRowId(el, sim)).toBe(anchorId);
+  });
+
+  test('the reader returning to the top still gets their buffered rows', async () => {
+    const { el, sim } = await readerDeepInHistoryWithBufferedRows();
+
+    sim.scrollTo(0);
+    await flushFrames();
+
+    expect((el as any).recentDataToBeAdded).toHaveLength(0);
+    expect(ids(el)).toContain('n00000');
+  });
+});
+
+// Every load-more page used to overflow the retention window, so every page remounted the
+// virtualizer: a full re-render of the runway plus an anchor restore, mid-scroll, once per
+// page. The window keeps a cut cheap by making it rare — several pages of headroom above
+// the size a cut restores to.
+describe('LogList — paging history does not remount the virtualizer on every page', () => {
+  test('consecutive pages inside the retention headroom cause no remount', async () => {
+    const el = await seeded(MAX_RETAINED_ROWS);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    const epoch = (el as any).virtualizerEpoch;
+    el.transport = serverTransport(olderPage(0, 300), olderPage(300, 300), olderPage(600, 300));
+
+    for (const _ of [0, 1, 2]) {
+      await el.fetchData('older', false, false, true);
+      await flushFrames();
+    }
+
+    expect((el as any).virtualizerEpoch).toBe(epoch);
+    expect(ids(el).length).toBeGreaterThan(MAX_RETAINED_ROWS);
+  });
+
+  test('crossing the limit cuts back to the retained size, leaving headroom again', async () => {
+    const el = await seeded(RETENTION_LIMIT);
+    const sim = scrollHarness(el);
+    sim.scrollToBottom();
+    el.transport = serverTransport(olderPage(0, 300));
+
+    await el.fetchData('older', false, false, true);
+    await flushFrames();
+
+    expect(ids(el).length).toBeLessThanOrEqual(MAX_RETAINED_ROWS + 300);
+    expect(RETENTION_LIMIT - MAX_RETAINED_ROWS).toBeGreaterThan(300); // a page of headroom
   });
 });
