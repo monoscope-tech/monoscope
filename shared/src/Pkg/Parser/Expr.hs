@@ -1125,6 +1125,12 @@ parseTimespan t
 -- >>> map kqlTimespanToTimeBucket ["30s", "5m", "1h", "7d", "1w", "500ms"]
 -- [Just "30 seconds",Just "5 minutes",Just "1 hours",Just "7 days",Just "1 weeks",Just "500 milliseconds"]
 --
+-- A unitless number is seconds — the reading the shipped README assumes when it
+-- writes @bin(timestamp, 86400)@ for a daily bucket:
+--
+-- >>> map kqlTimespanToTimeBucket ["60", "300", "86400"]
+-- [Just "60 seconds",Just "300 seconds",Just "86400 seconds"]
+--
 -- Everything else is REFUSED rather than guessed at — calendar units because
 -- @time_bucket@ has no fixed width for them, longhand aliases because they did
 -- not survive the trip to SQL intact (see 'timespanSuffixes'):
@@ -1134,9 +1140,15 @@ parseTimespan t
 --
 -- SECURITY: never passes user input through — always reconstructs the string.
 kqlTimespanToTimeBucket :: Text -> Maybe T.Text
-kqlTimespanToTimeBucket timespan = parsePostgresInterval ts <|> parseKqlFormat ts
+kqlTimespanToTimeBucket timespan = parseBareSeconds ts <|> parsePostgresInterval ts <|> parseKqlFormat ts
   where
     ts = T.strip timespan
+    -- A unitless number is SECONDS, which is what the shipped README means by
+    -- `bin(timestamp, 86400)` — one day. It used to fall through to the
+    -- five-minute default, so that documented example silently drew 5-minute
+    -- buckets. `bin(timestamp, 300)` is unaffected: 300 seconds IS five
+    -- minutes, which is why the old default hid this for so long.
+    parseBareSeconds t = (<> " seconds") . show @Text @Int <$> (readMaybe (toString t) >>= \n -> guard (n > 0) $> n)
     validUnits = S.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
     -- Parse and reconstruct PostgreSQL interval format (returns validated string, not original input)
     parsePostgresInterval t = case words t of

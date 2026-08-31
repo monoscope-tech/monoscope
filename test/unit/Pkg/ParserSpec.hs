@@ -87,11 +87,14 @@ spec = do
 SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', count(*)::float AS count_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('1 days', timestamp) ORDER BY time_bucket('1 days', timestamp) DESC
       |]
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
+    -- `bin(timestamp, 60)` is 60 SECONDS. These two previously asserted
+    -- `5 minutes`, which was the silent fallback for any width the parser could
+    -- not read — the bug, encoded as the expectation.
     it "summarize with bin()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp) ORDER BY time_bucket('60 seconds', timestamp) DESC |]
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by kind"
@@ -104,7 +107,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC limit 1000 |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp) ORDER BY time_bucket('60 seconds', timestamp) DESC limit 1000 |]
       normT query `shouldBe` normT expected
 
     it "summarize with bin_auto()" do
