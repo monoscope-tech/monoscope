@@ -64,7 +64,7 @@ import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -821,7 +821,12 @@ instance ToQueryText BinFunction where
 
 
 instance Display BinFunction where
-  displayPrec _prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> kqlTimespanToTimeBucket interval <> "', " <> display subj <> ")"
+  -- 'validateTimespans' rejects a width this cannot render, so the fallback is
+  -- unreachable for any query that reached SQL generation. It stays a named
+  -- constant rather than a bare literal so a future caller that skips
+  -- validation degrades to the documented default instead of a silent one.
+  displayPrec _prec (Bin subj interval) =
+    displayBuilder $ "time_bucket('" <> fromMaybe defaultBinWidth (kqlTimespanToTimeBucket interval) <> "', " <> display subj <> ")"
   -- No "as bin_timestamp" here: it causes syntax errors in GROUP BY
   displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
@@ -1211,6 +1216,20 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- >>> isRight (parseQueryDiagnosed (Just SMetrics) "| summarize avg(value) by bin_auto(timestamp), resource___service___name")
 -- True
 --
+-- A @bin()@ width we cannot bucket by is rejected, positioned at the width
+-- itself. It used to become five minutes in silence, so a chart asked for
+-- 30-second buckets and drew 5-minute ones:
+--
+-- >>> parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 1mo)"
+-- Left (QueryError {message = "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width.", column = 40, width = 3})
+--
+-- The KQL spellings keep working, and are now the only ones accepted:
+--
+-- >>> isRight (parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 30s)")
+-- True
+-- >>> isLeft (parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 30sec)")
+-- True
+--
 -- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
 -- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
 -- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
@@ -1218,13 +1237,21 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 parseQueryDiagnosed :: Maybe Sources -> Text -> Either QueryError [Section]
 parseQueryDiagnosed srcM (T.strip -> q) = do
   ast <- first (renderParseError q) (parse parseQuery "" q)
-  case unknownField (maybe ast ((: ast) . Source) srcM) of
-    Nothing -> Right ast
-    Just (field, msg) ->
-      -- Point at the identifier itself; T.breakOn finds its first occurrence,
-      -- which is where a reader looks even if the name repeats later.
-      let before = fst (T.breakOn field q)
-       in Left QueryError{message = msg, column = T.length before + 1, width = T.length field}
+  -- Point at the offending token; T.breakOn finds its first occurrence, which
+  -- is where a reader looks even if the name repeats later.
+  let at (tok, msg) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok}
+  first at $ maybeToLeft ast (unknownField (maybe ast ((: ast) . Source) srcM) <|> badTimespan ast)
+
+
+-- | The first @bin()@ width we cannot bucket by, as @(token, message)@.
+--
+-- Without this the width silently became five minutes, so
+-- @summarize count(*) by bin(timestamp, 30sec)@ drew 5-minute buckets and said
+-- nothing — the chart answered a different question than the one asked.
+badTimespan :: [Section] -> Maybe (Text, Text)
+badTimespan sections = listToMaybe [(t, msg) | SummarizeCommand _ by <- sections, Bin _ t <- binsOf by, Just msg <- [unsupportedTimespan t]]
+  where
+    binsOf by = [b | SummarizeByClause items <- maybeToList by, ByBinFunc b <- items]
 
 
 -- | One-line rendering of a megaparsec failure. 'errorBundlePretty' draws a

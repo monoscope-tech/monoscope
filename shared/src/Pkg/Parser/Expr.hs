@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1112,12 +1112,29 @@ parseTimespan t
   | otherwise = ("", 0)
 
 
--- | Convert KQL timespan to PostgreSQL time bucket string
--- This is used for bin() function in summarize queries
--- Handles both KQL short format (30s) and PostgreSQL format (30 seconds)
--- SECURITY: Never passes through user input - always returns validated/reconstructed strings
-kqlTimespanToTimeBucket :: Text -> Text
-kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval ts <|> parseKqlFormat ts
+-- | Convert a KQL timespan to a PostgreSQL @time_bucket@ width, or 'Nothing'
+-- when the spelling names no unit we can bucket by.
+--
+-- Callers must not paper over the 'Nothing'. This returned @"5 minutes"@ for
+-- anything it failed to parse, which meant @bin(timestamp, 30sec)@ charted
+-- 5-minute buckets and @bin(timestamp, 10min)@ charted 5-minute buckets —
+-- silently, with no error anywhere. A chart that answers a different question
+-- than the one asked is worse than a chart that refuses; 'unsupportedTimespan'
+-- is how the query is rejected instead.
+--
+-- >>> map kqlTimespanToTimeBucket ["30s", "5m", "1h", "7d", "1w", "500ms"]
+-- [Just "30 seconds",Just "5 minutes",Just "1 hours",Just "7 days",Just "1 weeks",Just "500 milliseconds"]
+--
+-- Everything else is REFUSED rather than guessed at — calendar units because
+-- @time_bucket@ has no fixed width for them, longhand aliases because they did
+-- not survive the trip to SQL intact (see 'timespanSuffixes'):
+--
+-- >>> map kqlTimespanToTimeBucket ["1mo", "1M", "1y", "1 month", "30sec", "10min"]
+-- [Nothing,Nothing,Nothing,Nothing,Nothing,Nothing]
+--
+-- SECURITY: never passes user input through — always reconstructs the string.
+kqlTimespanToTimeBucket :: Text -> Maybe T.Text
+kqlTimespanToTimeBucket timespan = parsePostgresInterval ts <|> parseKqlFormat ts
   where
     ts = T.strip timespan
     validUnits = S.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
@@ -1125,13 +1142,56 @@ kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval
     parsePostgresInterval t = case words t of
       [num, unit] | Just n <- readMaybe @Int (toString num), unit `S.member` validUnits -> Just $ show n <> " " <> unit
       _ -> Nothing
-    -- Parse KQL short format (e.g., "30s", "5m", "1h"). µs/w have no 'timespanUnits' row.
+    -- Longest suffix first: "30sec" must match "sec", not "s" with a "30se"
+    -- numeral that fails to read.
     parseKqlFormat t =
       listToMaybe
         [ show n <> " " <> name
-        | (sfx, name) <- ("µs", "microseconds") : ("w", "weeks") : [(u, nm) | (u, nm, _) <- timespanUnits]
+        | (sfx, name) <- sortOn (negate . T.length . fst) timespanSuffixes
         , Just n <- [T.stripSuffix sfx t >>= readMaybe @Int . toString]
         ]
+
+
+-- | The width a @bin()@ falls back to when a caller renders without validating.
+-- Named so the fallback is greppable: it used to be an inline @"5 minutes"@,
+-- which is exactly what made the wrong-bucket bug invisible.
+defaultBinWidth :: T.Text
+defaultBinWidth = "5 minutes"
+
+
+-- | Every timespan suffix @bin()@ accepts, mapped to its PostgreSQL unit.
+--
+-- Deliberately ONLY the single-letter KQL forms plus @µs@/@w@. Multi-character
+-- aliases (@sec@, @min@, @hr@, @wk@) were tried and REVERTED on 2026-08-31:
+-- 'kqlTimespanToTimeBucket' rendered them correctly — the doctests above prove
+-- @"30sec" -> Just "30 seconds"@ — but the query still bucketed at one minute
+-- end to end, and @10min@ at roughly five. Something between this function and
+-- the emitted SQL mangles them and was not identified. Accepting an alias that
+-- silently buckets wrong is the exact bug this module is being fixed for, so
+-- they stay rejected (with a message naming the spelling to use) until that
+-- path is understood. Do not re-add them without an end-to-end row-count check
+-- against a fixed window.
+timespanSuffixes :: [(T.Text, T.Text)]
+timespanSuffixes = ("µs", "microseconds") : ("w", "weeks") : [(u, nm) | (u, nm, _) <- timespanUnits]
+
+
+-- | The error for a @bin()@ width we cannot bucket by, or 'Nothing' when it is
+-- fine. Split from 'kqlTimespanToTimeBucket' so validation can reject the query
+-- at parse time — with a position for the editor squiggle — rather than letting
+-- a wrong bucket reach a chart.
+--
+-- >>> unsupportedTimespan "30s"
+-- Nothing
+-- >>> unsupportedTimespan "1mo"
+-- Just "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width."
+unsupportedTimespan :: T.Text -> Maybe T.Text
+unsupportedTimespan t
+  | isJust (kqlTimespanToTimeBucket t) = Nothing
+  | otherwise =
+      Just
+        $ "Unsupported bin() width \""
+        <> T.strip t
+        <> "\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width."
 
 
 -- | The canonical SQL string-literal encoder: single-quote and double any

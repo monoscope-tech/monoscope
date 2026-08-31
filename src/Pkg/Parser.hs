@@ -241,7 +241,8 @@ applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
   qc
     { finalSummarizeQuery =
         listToMaybe [b | ByBinFunc b <- items] <&> \case
-          Bin _ interval -> kqlTimespanToTimeBucket interval
+          -- Unreachable default: validateTimespans rejects unrenderable widths.
+          Bin _ interval -> fromMaybe defaultBinWidth (kqlTimespanToTimeBucket interval)
           BinAuto _ -> autoBinWidth sqlCfg
     , groupByClause = qc.groupByClause <> [display item | item <- items, not (isBinFunc item)]
     }
