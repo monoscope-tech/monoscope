@@ -1068,19 +1068,56 @@ parseQuery = do
 --
 -- >>> transformAST [WhereClause (Eq (Subject "a" "a" []) (Str "1")), WhereClause (Eq (Subject "b" "b" []) (Str "2"))]
 -- [WhereClause (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+--
+-- A post-summarize filter is a HAVING only when it names an aggregate output.
+-- On a raw column it becomes a WHERE, hoisted above the summarize — emitting
+-- @HAVING metric_name = ?@ for a column that is neither grouped nor aggregated
+-- is invalid SQL and TimeFusion rejected the whole query:
+--
+-- >>> let secs q = either (const []) id (parseQueryToAST q)
+-- >>> [c | HavingClause c <- secs "metrics | summarize count(*) by bin_auto(timestamp) | where metric_name == \"x\""]
+-- []
+-- >>> [() | WhereClause _ <- secs "metrics | summarize count(*) by bin_auto(timestamp) | where metric_name == \"x\""]
+-- [()]
+--
+-- An aggregate alias still lands in HAVING, and a mixed filter splits:
+--
+-- >>> [() | HavingClause _ <- secs "| summarize count() by kind | where count_ > 5"]
+-- [()]
+-- >>> [(length [() | WhereClause _ <- s], length [() | HavingClause _ <- s]) | let s = secs "| summarize count() by kind | where name == \"a\" and count_ > 5"]
+-- [(1,1)]
 transformAST :: [Section] -> [Section]
 transformAST = reorderSections . combineWheres . markPostSummarizeFilters
   where
     -- Position is meaningful only until reorderSections runs, so the after-a-
     -- summarize filters are re-tagged first and keep their meaning thereafter.
-    markPostSummarizeFilters = go False
+    --
+    -- Only a filter that names one of the summarize's own outputs can be a
+    -- HAVING. A post-summarize filter on a RAW column became
+    -- @HAVING metric_name = ?@ — a column that is neither grouped nor
+    -- aggregated, which the backend rejects outright. Filtering such a column
+    -- before the aggregate is the same answer and is always valid SQL, so those
+    -- conjuncts become a WhereClause that 'reorderSections' hoists above the
+    -- summarize. Conjuncts are split first because a query mixes the two:
+    -- @… | where metric_name == "x" and count_ > 5@.
+    markPostSummarizeFilters = go Nothing
       where
         go _ [] = []
-        go seen (s : rest) = case s of
-          SummarizeCommand{} -> s : go True rest
-          Search e | seen -> HavingClause e : go seen rest
-          WhereClause e | seen -> HavingClause e : go seen rest
-          _ -> s : go seen rest
+        go outs (s : rest) = case s of
+          SummarizeCommand{} -> s : go (Just (definedNames [s])) rest
+          Search e | Just o <- outs -> split o e <> go outs rest
+          WhereClause e | Just o <- outs -> split o e <> go outs rest
+          _ -> s : go outs rest
+        -- An Or spanning both kinds stays a HavingClause: it cannot be
+        -- evaluated in either place alone, and it is rare enough not to earn
+        -- rejection machinery.
+        split :: [Text] -> Expr -> [Section]
+        split outs e =
+          let namesOutput c = or [r `elem` outs | Subject _ r _ <- collectSubjects [WhereClause c]]
+              (having, wheres) = partitionEithers [if namesOutput c then Left c else Right c | c <- conjuncts e]
+           in [HavingClause c | c <- having] <> [WhereClause c | c <- wheres]
+        conjuncts (And a b) = conjuncts a <> conjuncts b
+        conjuncts e = [e]
 
     -- Combine consecutive Search or WhereClause sections into single And expressions
     combineWheres :: [Section] -> [Section]
