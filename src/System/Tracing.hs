@@ -7,6 +7,7 @@ module System.Tracing (
   addAttribute,
   setStatus,
   SpanStatus (..),
+  isExpectedClientErrorText,
 
   -- * Cross-thread context propagation
   forkWithCtx,
@@ -18,6 +19,7 @@ module System.Tracing (
 
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent (Concurrent, forkIO)
 import Effectful.Dispatch.Dynamic
@@ -68,13 +70,42 @@ runTracing tp = interpret $ \env -> \case
       -- Mark the span Error on exception, then always close it + restore
       -- context (otherwise failed operations show as green spans and we
       -- silently leak unclosed spans).
-      withException (unlift (f sp)) (\(e :: SomeException) -> Trace.setStatus sp (Error (toText (displayException e))))
+      withException (unlift (f sp)) (\(e :: SomeException) -> let rendered = toText (displayException e) in unless (isExpectedClientErrorText rendered) $ Trace.setStatus sp (Error rendered))
         `finally` do
           Context.adjustContext (const ctx)
           Trace.endSpan sp Nothing
   AddEvent span event attrs -> liftIO $ Trace.addEvent span $ Trace.NewEvent event (HM.fromList attrs) Nothing
   AddAttribute span k v -> liftIO $ Trace.addAttribute span k v
   SetStatus span status -> liftIO $ Trace.setStatus span status
+
+
+-- | Is this a Servant 4xx thrown through the 'Error' effect — i.e. the client asking for
+-- something it may not have, rather than us failing?
+--
+-- OpenTelemetry's own convention for a SERVER span is that 4xx leaves the status Unset:
+-- the caller erred, the server answered correctly. We marked every one of them @Error@,
+-- so deliberate, well-formed refusals became runtime-exception issues — "This live tail
+-- has expired", "This project already has 2 live tails open", "The complete record is not
+-- available yet" accounted for ~870 open issues on their own. 5xx still marks the span.
+--
+-- Matched on the rendered exception rather than 'fromException': the value in flight is
+-- effectful's @ErrorWrapper@, which hides its payload behind an unsafely-coerced 'Any',
+-- so there is no 'ServerError' to downcast to until @runErrorNoCallStack@ unwraps it —
+-- and that happens above this span, in 'System.Types.effToHandler'.
+--
+-- A real one, verbatim from issue 7442b733 (the live-tail lease 404):
+--
+-- >>> isExpectedClientErrorText "Effectful.Error.Static.ErrorWrapper: ServerError {errHTTPCode = 404, errReasonPhrase = \"Not Found\", errBody = \"{\\\"error\\\":\\\"This live tail has expired.\\\"}\"}"
+-- True
+--
+-- Every 4xx stays quiet; 5xx and ordinary exceptions still mark the span.
+--
+-- >>> map isExpectedClientErrorText ["ServerError {errHTTPCode = 400,", "ServerError {errHTTPCode = 409,", "ServerError {errHTTPCode = 422,"]
+-- [True,True,True]
+-- >>> map isExpectedClientErrorText ["ServerError {errHTTPCode = 500,", "ServerError {errHTTPCode = 503,", "connection reset by peer"]
+-- [False,False,False]
+isExpectedClientErrorText :: Text -> Bool
+isExpectedClientErrorText = T.isInfixOf "errHTTPCode = 4"
 
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a
