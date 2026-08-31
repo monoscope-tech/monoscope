@@ -454,3 +454,22 @@ spec = sequential $ aroundAll withTestResources do
       -- A container that stopped reporting must say so, not render a blank panel.
       (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml gone) `shouldContainAll` ["no longer reporting"]
+
+
+    -- The pivot reads the newest datapoint per series, so scanning the picker's whole window
+    -- can only turn up older points it then discards -- while paying to sort every one. Over a
+    -- day that cost the statement timeout, which meant the snapshot never cached and every load
+    -- failed. It now reads a freshness slice at the END of the window instead.
+    it "wideWindow_readsOnlyTheFreshnessSlice_soStaleContainersDoNotLingerWithStaleNumbers" \tr -> do
+      key <- createTestAPIKey tr testPid "containers-stale-key"
+      -- Reported three hours ago and never since: outside the freshness slice of any window.
+      ingestMetric tr key (dockerResource "long-gone") [] "container.cpu.usage" 9 (addUTCTime (-10800) frozenTime)
+
+      -- A day-wide window contains that datapoint, but the slice at its end does not.
+      dayRows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-86400) frozenTime) frozenTime
+      map fst (rowsByName dayRows) `shouldNotContain` ["long-gone"]
+
+      -- ...and a window that ENDS when it reported still shows it, which is what makes this a
+      -- slice of the selected range rather than a hard-coded "last 15 minutes from now".
+      thenRows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-86400) frozenTime) (addUTCTime (-10800) frozenTime)
+      map fst (rowsByName thenRows) `shouldContain` ["long-gone"]

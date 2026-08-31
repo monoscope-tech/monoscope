@@ -37,6 +37,7 @@ module Models.Telemetry.Containers (
   ContainerSnapshotKey,
   containersInWindowCached,
   containersInWindow,
+  freshnessWindow,
 ) where
 
 import Data.Cache (Cache)
@@ -46,7 +47,7 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
@@ -277,8 +278,27 @@ containersInWindowCached cache key ttl useTimefusion pid fromTime toTime =
       pure
 
 
--- | Every container, stand-in pod and bare host seen in the trailing window, newest datapoint
--- per series.
+-- | How far back the pivot looks for each series' newest datapoint.
+--
+-- The values this page shows are, by definition, the newest datapoint per series, and a series
+-- that still exists reports every 15-60s. Scanning further back can only turn up older points
+-- that @rn = 1@ then throws away — but it pays for sorting every one of them, with ~15
+-- @variant_get@ lookups per row on the way. Over a day that is the difference between 0.7s and
+-- not completing at all: the pivot hit the statement timeout at 24h, so nothing was ever
+-- cached and every load paid the full timeout (measured 2026-09-01,
+-- @plans/infra-sessions-rum-performance.md@).
+--
+-- Consequence, and it is the intended one: a container that stopped reporting hours ago drops
+-- off a wide window rather than appearing with hours-old numbers sorted among the live ones.
+-- Keeping it would need presence over the whole window, which measured 25s at 24h — the scan
+-- is the cost, not the pivot. The page says so rather than implying otherwise; see
+-- 'Pages.Containers.freshnessLabel'.
+freshnessWindow :: NominalDiffTime
+freshnessWindow = 15 * 60
+
+
+-- | Every container, stand-in pod and bare host reporting at the end of the window, newest
+-- datapoint per series.
 --
 -- One pass: a window function picks the latest datapoint per series, then conditional
 -- aggregates pivot the metrics into columns. No self-join — that is the shape that kills
@@ -296,7 +316,7 @@ containersInWindowCached cache key ttl useTimefusion pid fromTime toTime =
 containersInWindow
   :: (DB es, Labeled "timefusion" Hasql :> es)
   => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
-containersInWindow useTimefusion pid fromTime toTime =
+containersInWindow useTimefusion pid fromTime' toTime =
   Hasql.withHasqlTimefusion useTimefusion
     $ V.fromList
     . dropShadowed
@@ -453,6 +473,10 @@ containersInWindow useTimefusion pid fromTime toTime =
       LIMIT #{containerListLimit}|]
       )
   where
+    -- Anchored on the window's end, not on `now`: a historical from/to range then reports the
+    -- state at the end of the range it selected, and a window shorter than the freshness
+    -- window still only reads itself.
+    fromTime = max fromTime' (addUTCTime (-freshnessWindow) toTime)
     raw = fromString . toString
     isHost = "metric_name LIKE 'system.%'"
     isPod = "metric_name LIKE 'k8s.pod.%'"

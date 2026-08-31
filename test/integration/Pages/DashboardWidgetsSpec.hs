@@ -18,6 +18,7 @@ import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards (DashboardFilters (..))
+import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
@@ -362,3 +363,30 @@ spec = sequential $ aroundAll withTestResources do
     it "reports a clear message instead of blank/failing when no query is given" \tr -> do
       (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing
       sql `shouldBe` "No query provided"
+
+  -- A raw-SQL widget renders whatever its query selects, so the text decoder must accept
+  -- whatever the column types happen to be. It used to demand `text` for every column, and
+  -- postgresql-simple's FromField Text rejects anything else — so one uncast column failed
+  -- the *whole* widget with `Incompatible {errSQLType = "int4", errHaskellType = "Text"}`
+  -- and the user got an error overlay instead of their table.
+  describe "Raw-SQL widget column types" do
+    let runSql tr q = runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
+
+    it "renders a non-text column instead of failing the widget" \tr -> do
+      md <- runSql tr "SELECT 1::int4 AS n, 'ok'::text AS s"
+      md.error `shouldBe` Nothing
+      md.dataText `shouldBe` V.singleton (V.fromList ["1", "ok"])
+
+    it "accepts the column types a real widget actually selects" \tr -> do
+      -- bigint/float8/bool/timestamptz all reached us uncast from user dashboards; the
+      -- reported failure was date_part(EPOCH, time_bucket(...)), which comes back float8.
+      md <- runSql tr "SELECT 42::bigint, 1.5::float8, true, '2026-01-02 03:04:05+00'::timestamptz"
+      md.error `shouldBe` Nothing
+      (md.dataText V.!? 0) `shouldSatisfy` \case
+        Just row -> V.length row == 4 && V.head row == "42"
+        Nothing -> False
+
+    it "renders NULL as empty rather than failing the widget" \tr -> do
+      md <- runSql tr "SELECT NULL::int4 AS n, 'after'::text AS s"
+      md.error `shouldBe` Nothing
+      md.dataText `shouldBe` V.singleton (V.fromList ["", "after"])

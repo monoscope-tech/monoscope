@@ -2665,9 +2665,15 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   color: var(--color-textBrand) !important;
 }
 
+/* The aspect ratio alone collapsed these below readability: side by side on a 1600px viewport
+   each box is ~578px wide, so 4/1 leaves 144px, and once the widget's title and padding are
+   taken out the canvas gets 56px. A multi-series line chart with a top-right legend has no plot
+   area left at that size — the panels measured as empty. The ratio still governs how the strip
+   grows on wide screens; the floor keeps it a chart on narrow ones. */
 .container-usage-chart {
   min-width: 0;
   aspect-ratio: 4 / 1;
+  min-height: 13rem;
 }
 .container-usage-chart > .grid-stack-item {
   height: 100% !important;

@@ -18,7 +18,7 @@ import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
@@ -131,7 +131,10 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       ]
               , header = Just $ containerCharts_ pid
               , showFilterRail = True
-              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers"
+              , -- Says the freshness window, not the picker's: the pivot reads the newest
+                -- datapoint per series from the last few minutes of the range, so a wide
+                -- picker window does not mean a wide inventory. See 'Containers.freshnessWindow'.
+                resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the last " <> freshnessLabel
               , exportName = Just "containers"
               , zeroState =
                   Just
@@ -195,6 +198,15 @@ containerColumns =
 
 -- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
 -- "cannot infer the usage percentage", and a fabricated 0% read at 3 AM is worse than a blank.
+-- | 'freshnessWindow' rendered for the result summary, so the number the page quotes and the
+-- window the query actually read can never drift apart.
+--
+-- >>> freshnessLabel
+-- "15m"
+freshnessLabel :: Text
+freshnessLabel = show (round (freshnessWindow / 60) :: Int) <> "m"
+
+
 emDash_ :: Html ()
 emDash_ = span_ [class_ "text-textWeak"] "—"
 
