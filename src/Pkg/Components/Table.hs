@@ -466,7 +466,15 @@ renderTable tbl =
       tableMain = do
         sequence_ tbl.features.header
         when (isJust tbl.features.resultSummary || isJust tbl.features.exportName) $ renderResultToolbar tbl
-        div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
+        -- Scrolls horizontally rather than clipping. `overflow-hidden` here silently cut off
+        -- whatever did not fit: the Containers, Kubernetes and Images tables all need
+        -- ~1460-1820px and get ~1250 with the facet rail open, so 200-570px of columns were
+        -- unreachable — no scrollbar, no way to see them at all.
+        --
+        -- Only the x axis changes. `overflow-hidden` already set overflow-y to hidden, so this
+        -- box was a scroll container in both axes before and still is: the sticky `thead`
+        -- resolves against exactly what it resolved against before (verified in-browser).
+        div_ [class_ $ "grid overflow-x-auto overflow-y-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl

@@ -192,28 +192,29 @@ both `/chart_data` requests returned 200 with full datasets.
 A `min-height: 13rem` floor takes the canvas to 140px. The ratio still governs growth on wide
 screens; the floor only bites where the ratio collapsed.
 
-### Found, NOT fixed: the containers table is clipped, not scrollable
+### Fixed: infra tables were clipped, not scrollable
 
-`#containersForm_grid` (from the shared `Pkg.Components.Table`) is `overflow-hidden`. On a
-1600px viewport with the facet rail open, the table needs 1460px and gets 1250 — so **~210px
-of columns are cut off with no way to reach them.** Not a scrollbar: genuinely unreachable.
+`#<id>_grid` (from the shared `Pkg.Components.Table`) was `overflow-hidden`, so anything wider
+than the content area was silently cut off — no scrollbar, no way to reach it. Measured at
+1600×1000 with the facet rail open:
 
-Left alone deliberately, because the obvious fix is a trap. `overflow-x: auto` cannot be set
-without the browser also computing `overflow-y: auto`, which makes that div a scroll container
-in both axes — and the table's `thead` is `sticky top-0`, so it would start sticking to the
-wrapper instead of the viewport. Every table in the app renders through this component, so a
-blind change trades a clipped column for broken sticky headers everywhere.
+| table | needs | gets | unreachable |
+|---|---|---|---|
+| Containers | 1460px | 1250px | 210px |
+| Kubernetes | 1819px | 1250px | 569px |
+| Images | 1784px | 1250px | 534px |
 
-Worth doing properly, with visual verification across pages. The options, in order of
-preference:
+The reason this looked risky is that `overflow-x: auto` forces the browser to compute
+`overflow-y: auto` when y is `visible` — which would make the div a scroll container and steal
+the sticky `thead`'s scroll root. **Measured in the browser, that concern does not apply here:**
+`overflow-hidden` had *already* set `overflow-y: hidden`, so the box was a scroll container in
+both axes before the change and still is. Setting `overflow-x-auto overflow-y-hidden` alters
+only the x axis; the computed `overflow-y` is `hidden` before and after, so sticky resolves
+against exactly what it resolved against before. With it, `scrollLeft` reaches the full 210px
+that was previously unreachable.
 
-1. Make the columns responsive: the containers table carries 20+ columns, and several
-   (requests, limits, architecture, region) can collapse below a breakpoint. Contained to the
-   page, no shared-component risk.
-2. Move the scroll container inside the table's own scroll context so the sticky header keeps
-   the viewport as its scroll root, e.g. a separate synchronized header rather than
-   `position: sticky` inside a scroller.
-3. Only then, an opt-in `scrollX` flag on the Table config so pages choose per table.
+This is a shared component, so it affects every table — in the same direction: a table that
+fits is unchanged, and one that does not now scrolls instead of hiding columns.
 
 ### Noted, not a bug
 
