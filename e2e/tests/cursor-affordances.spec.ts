@@ -26,7 +26,11 @@ test("visible controls use a pointer cursor across the app", async ({ page }) =>
     failures.push(
       ...(await page.evaluate(() => {
         const selector = [
-          "button:not([disabled]):not(.cursor-not-allowed):not(.cursor-default)",
+          // `aria-disabled` counts as disabled here exactly as it does for `role="button"`
+          // below: a control in that state correctly renders `cursor-not-allowed`, and it
+          // does so through the `aria-disabled:` variant, which the `.cursor-not-allowed`
+          // class exclusion cannot see.
+          'button:not([disabled]):not([aria-disabled="true"]):not(.cursor-not-allowed):not(.cursor-default)',
           "summary",
           "select:not([disabled])",
           '[role="button"]:not([aria-disabled="true"]):not(.cursor-not-allowed):not(.cursor-default)',
