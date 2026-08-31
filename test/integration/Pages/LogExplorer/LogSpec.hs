@@ -686,6 +686,19 @@ spec = around withTestResources do
       find (T.isInfixOf "id=\"log_details_container\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "hx-sync=\"this:replace\"")
 
+  describe "Trace fullscreen scrolling" do
+    it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      find (T.isInfixOf "id=\"trace_expanded_view\"") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "overflow-hidden")
+
+  describe "Query editor skeleton" do
+    it "apiLogH_rendersAnEmptyQueryAsAMutedPlaceholder" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      find (T.isInfixOf "level ==") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "opacity-60")
   describe "Trace Tree" do
     -- Regression: startNs was folded with a 0 seed, so every synthetic orphan
     -- header started at 0 and its duration spanned from the epoch to the last span.

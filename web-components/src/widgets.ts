@@ -455,19 +455,29 @@ const takePrefetched = async (chartId: string, url: string): Promise<any> => {
 ((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
 (window as any).__chartPrefetch = { push: prefetchChartData };
 
-const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal) => {
+const updateChartData = async (
+  chart: any,
+  opt: any,
+  shouldFetch: boolean,
+  widgetData: WidGetData,
+  signal: AbortSignal,
+  showLoading = true,
+) => {
   if (!shouldFetch || signal.aborted) return;
 
   const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
-  // Batch DOM updates before fetch
-  requestAnimationFrame(() => {
-    const loader = $(`${chartId}_loader`);
-    const borderedItem = $(`${chartId}_bordered`);
+  // Background refreshes preserve the last successful chart instead of flashing a
+  // loader twice every tick on Log Explorer's two summary widgets.
+  if (showLoading) {
+    requestAnimationFrame(() => {
+      const loader = $(`${chartId}_loader`);
+      const borderedItem = $(`${chartId}_bordered`);
 
-    if (loader) loader.classList.remove('hidden');
-    if (borderedItem) borderedItem.classList.add('spotlight-border');
-  });
+      if (loader) loader.classList.remove('hidden');
+      if (borderedItem) borderedItem.classList.add('spotlight-border');
+    });
+  }
 
   try {
     const url = chartDataUrl(widgetData);
@@ -532,14 +542,15 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       setStatValue(widgetData, null); // clear the stat spinner on fetch failure
     }
   } finally {
-    // Batch DOM updates after fetch completes
-    requestAnimationFrame(() => {
-      const loader = $(`${chartId}_loader`);
-      const borderedItem = $(`${chartId}_bordered`);
+    if (showLoading) {
+      requestAnimationFrame(() => {
+        const loader = $(`${chartId}_loader`);
+        const borderedItem = $(`${chartId}_bordered`);
 
-      if (loader) loader.classList.add('hidden');
-      if (borderedItem) borderedItem.classList.remove('spotlight-border');
-    });
+        if (loader) loader.classList.add('hidden');
+        if (borderedItem) borderedItem.classList.remove('spotlight-border');
+      });
+    }
   }
 };
 
@@ -815,7 +826,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   liveStreamCheckbox?.addEventListener('change', () => {
     if (liveStreamCheckbox.checked) {
-      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal), INITIAL_FETCH_INTERVAL);
+      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal, false), INITIAL_FETCH_INTERVAL);
     } else if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;
@@ -845,19 +856,18 @@ const chartWidget = (widgetData: WidGetData) => {
 
   ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
-    document.querySelector(selector)?.addEventListener(event, (e: any) => {
+    document.querySelector(selector)?.addEventListener(event, () => {
       updateQuery();
-      if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
-      updateChartData(chart, opt, true, widgetData, controller.signal);
+      updateChartData(chart, opt, true, widgetData, controller.signal, false);
     }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: any) => {
     updateQuery();
     if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
-    if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
-      (window.logListTable as any).refetchLogs();
-    updateChartData(chart, opt, true, widgetData, controller.signal);
+    // The list handles this event itself. Two chart listeners must not turn one
+    // background tick into two full list refetches that reset the reader's anchor.
+    updateChartData(chart, opt, true, widgetData, controller.signal, false);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver

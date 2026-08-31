@@ -87,6 +87,16 @@ describe('Log Worker Functions', () => {
       expect(result[0].type).toBe('log');
     });
 
+    test('should root alerts by id when they have no latency breakdown', () => {
+      const colIdxMap = createSampleColIdxMap();
+      const data = [createSampleSpan({ 1: null, 7: 'alert', 8: 'alert-id-1' })];
+      const serverTraces = [
+        { trace_id: 'trace-123', start_time: 1000000000, duration: 1000000, trace_start_time: '2024-01-01T00:00:00Z', root: 'alert-id-1', children: {} },
+      ];
+
+      expect(groupSpans(data, colIdxMap, {}, false, serverTraces)).toHaveLength(1);
+    });
+
     test('should sort traces by startTime descending by default', () => {
       const colIdxMap = createSampleColIdxMap();
       const data = [

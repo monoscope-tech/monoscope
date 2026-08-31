@@ -49,6 +49,32 @@ describe('verdictToError translates the server verdict', () => {
   });
 });
 
+describe('the AI search trigger', () => {
+  test('keeps Ask AI out of the Monaco editor except in standalone mode', async () => {
+    const mount = async (standalone = false) => {
+      const el = new QueryEditorComponent();
+      el.setAttribute('project-id', '00000000-0000-0000-0000-000000000000');
+      if (standalone) el.setAttribute('standalone-ai-search', '');
+      document.body.appendChild(el);
+      await el.updateComplete;
+      await new Promise((resolve) => setTimeout(resolve));
+      return el;
+    };
+    const editor = await mount();
+    const standalone = await mount(true);
+
+    try {
+      expect(editor.querySelector('label[for="ai-search-chkbox"]')).toBeNull();
+      const trigger = standalone.querySelector('[aria-label="Ask AI"]')!;
+      expect(trigger.textContent).toContain('Ask AI');
+      expect(trigger.classList).toContain('px-2');
+    } finally {
+      editor.remove();
+      standalone.remove();
+    }
+  });
+});
+
 describe('the editor asks the server and marks the answer', () => {
   const INVALID: Verdict = { valid: false, message: 'Unknown field "attribut". Did you mean "attributes"?', column: 1, width: 8 };
   let fetchMock: ReturnType<typeof vi.fn>;

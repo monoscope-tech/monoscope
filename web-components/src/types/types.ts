@@ -14,7 +14,6 @@ declare global {
       projectId: string;
     } | null;
     testVariables: any;
-    logListTable?: Element | null;
     collectionResults: any[] | undefined;
     dashboardRefreshInterval: number;
     dashboardRefreshTimer: ReturnType<typeof setInterval> | null;

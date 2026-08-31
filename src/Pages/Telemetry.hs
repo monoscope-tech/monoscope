@@ -1131,7 +1131,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       (traceHops, traceDurationNs) = ServiceGraph.traceEdgeSamples spanRecords
       traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap ServiceGraph.CollapseOff (Just traceDurationNs) traceHops
   div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
-    div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden c-scroll"] $ do
+    div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden overscroll-y-contain c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
         div_ [class_ "flex items-center gap-3"] $ do
           button_
