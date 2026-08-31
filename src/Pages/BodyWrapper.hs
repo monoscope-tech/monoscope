@@ -314,15 +314,24 @@ bodyWrapper bcfg child = do
         twq('config','om5gt');
         |]
 
-      let swURI = assetUrl "/public/sw.js"
+      -- The service worker was deleted on 2026-08-31. It was a checked-in workbox
+      -- bundle regenerated only by a manual `make update-service-worker`, so its
+      -- precache manifest pinned content-hashed chunk URLs from whenever someone last
+      -- ran it (2026-08-06). 20 of its 104 entries no longer existed, and workbox
+      -- fails the whole install if any precache entry 404s — so it had not installed
+      -- successfully in three weeks, and could never self-correct. Precaching hashed
+      -- chunks is also the wrong strategy here: they are already immutable by hash,
+      -- so the SW added no caching benefit and one more way to serve a dead chunk.
+      --
+      -- Clients that installed it before then still have a live worker, and an
+      -- unregistered SW is not removed by deleting the script. Keep this sweep until
+      -- ~2026-12 so returning tabs drop theirs.
       script_
         [text|
-        if("serviceWorker" in navigator) {
-            window.addEventListener("load", () => {
-              navigator.serviceWorker.register("${swURI}").then(swReg => {}).catch(err => {
-                  console.error('Service Worker Error', err);
-              });
-          });
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.getRegistrations()
+            .then(rs => rs.forEach(r => r.unregister()))
+            .catch(() => {});
         }
           |]
       script_

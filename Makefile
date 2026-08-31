@@ -292,9 +292,6 @@ minio-local:
 	MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
 	  minio server .local/minio-data --address ":9000" --console-address ":9001"
 
-update-service-worker:
-	npx workbox generateSW config/workbox-config.js
-
 show-os-arch:
 	@echo "OS and Architecture: $(OS_ARCH)"
 

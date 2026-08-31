@@ -242,7 +242,11 @@ instance ToHtml TraceDetailsGet where
           unless embedded
             $ button_
               [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
-              , [__|on click send closeTraceView to #trace_expanded_view|]
+              , -- Only the log explorer renders #trace_expanded_view (Log.hs). Reached
+                -- standalone (/p/<pid>/traces/<tid>) this panel still renders, and the
+                -- unguarded send threw "'#trace_expanded_view' is null"; there the browser's
+                -- own history is the way back.
+                [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
               ]
               "Back to search results"
         unless embedded
@@ -921,7 +925,7 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
         -- DaisyUI radio tabs: the checked input drives which `.tab-content`
         -- shows, in CSS. No global JS, and the state survives an htmx morph
         -- because it lives in the DOM rather than in a class a script applied.
-        div_ [role_ "tablist", class_ "tabs tabs-border", [__|on click halt the bubbling|]] $ do
+        div_ [role_ "tablist", class_ "tabs tabs-border", [__|on click halt the event's bubbling|]] $ do
           input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
           div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ "ov-content"] $ do
             div_ [class_ "flex flex-col gap-4"] do
@@ -1134,7 +1138,9 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
             [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
             , term "data-share-hide" ""
             , term "aria-label" "Back to event details"
-            , [__|on click send closeTraceView to #trace_expanded_view|]
+            , -- Same guard as the fallback panel's Back button above: CSS only hides this
+              -- outside #apiLogsPage, which is not a guarantee the target element exists.
+              [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
             ]
             (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back")
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Breakdown"
@@ -1171,7 +1177,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 -- build and the waterfall re-render until their panel is shown.
                 let traceTab (tabId, panelId, lbl, isActive) =
                       label_ [class_ "a-tab cursor-pointer text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-                        input_ $ [type_ "radio", name_ "trace-tabs", id_ tabId, class_ "sr-only", term "_" $ "on change send tab-visible to " <> panelId] <> [checked_ | isActive]
+                        input_ $ [type_ "radio", name_ "trace-tabs", id_ tabId, class_ "sr-only", term "_" $ "on change send \"tab-visible\" to " <> panelId] <> [checked_ | isActive]
                         toHtml lbl
                  in forM_
                       ( [ ("tab-waterfall", "#water_fall", "Waterfall", True)

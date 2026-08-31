@@ -9,6 +9,11 @@ import './charts';
 // Page chrome (tabs, cookies, tooltips, toasts, HTMX progress). Needed on every page, and
 // publishes globals that inline Lucid attributes call, so it must be eager too.
 import './page-chrome';
+import { installStaleChunkReload } from './stale-chunk-reload';
+
+// Must be armed before the first loadComponents() below, or the very import that
+// races a deploy is the one we miss.
+installStaleChunkReload();
 
 const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-chart-widget], [data-widget]', () => import('./widgets')],

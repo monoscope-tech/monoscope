@@ -280,8 +280,10 @@ logQueryBox_ config = do
                    on change if me.checked
                      set #viz-timeseries.checked to true
                      call updateVizTypeInUrl('timeseries', true)
-                     set widgetJSON.type to 'timeseries'
-                     send 'update-widget' to #visualization-widget-container
+                     if window.widgetJSON
+                       set widgetJSON.type to 'timeseries'
+                       send 'update-widget' to #visualization-widget-container
+                     end
                    end|]
                 ]
               <> [checked_ | config.alert]

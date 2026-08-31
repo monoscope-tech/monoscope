@@ -343,6 +343,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       [text|
       document.addEventListener('DOMContentLoaded', () => {
         window.interpolateVarTemplates = window.interpolateVarTemplates || function() {};
+        // Local, not window.debounce: that global is published by the lazily-imported
+        // widgets chunk, so initializeGrids raced it and threw "debounce is not defined"
+        // mid-setup — skipping grid-stack-initialized, setAnimation and gridStackInstance.
+        const debounce = (fn, wait) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), wait); }; };
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
