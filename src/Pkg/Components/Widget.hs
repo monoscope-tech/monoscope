@@ -77,6 +77,25 @@ data Layout = Layout
   deriving (FromHttpApiData) via JSONHttpApiData Layout
 
 
+-- | The kind of visualisation a widget renders.
+--
+-- Regression guard for the query-param parsing. This type used to get its
+-- 'FromHttpApiData' from a blanket @FromJSON a => FromHttpApiData a@ orphan in this
+-- module, which ran the raw parameter through 'AE.eitherDecodeStrict' — so
+-- @widget_type=top_list@, which is what a form actually submits, did not parse, and only
+-- the quoted @"top_list"@ did. It now derives via 'WrappedEnumSC', matching the JSON
+-- encoding above.
+--
+-- >>> import Web.HttpApiData (parseQueryParam)
+-- >>> parseQueryParam "top_list" :: Either Text WidgetType
+-- Right WTTopList
+-- >>> parseQueryParam "timeseries_line" :: Either Text WidgetType
+-- Right WTTimeseriesLine
+--
+-- An unknown spelling is rejected rather than silently defaulting:
+--
+-- >>> isLeft (parseQueryParam "not_a_widget" :: Either Text WidgetType)
+-- True
 data WidgetType
   = WTGroup
   | WTLogs

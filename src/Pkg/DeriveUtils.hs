@@ -12,7 +12,6 @@ module Pkg.DeriveUtils (
   PGTextArray (..),
   UUIDId (..),
   WrappedEnum (..),
-  WrappedEnumInt (..),
   WrappedEnumShow (..),
   addKeepaliveParams,
   appendConnParams,
@@ -84,7 +83,6 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.AssetManifestFingerprint (assetManifestFingerprint)
 import Pkg.Deriving
 import Relude
-import Relude.Extra.Enum (safeToEnum)
 import Servant (FromHttpApiData (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO.Unsafe (unsafePerformIO)
@@ -266,33 +264,6 @@ instance Show a => HI.EncodeValue (WrappedEnumShow a) where
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
   decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
-
-
--- | Encode a @Bounded@/@Enum@ type as its 'fromEnum' 'Int' for INT columns / JSON-less
--- DB round-trips. Use via @deriving (ToField, FromField, HI.EncodeValue, HI.DecodeValue) via WrappedEnumInt Foo@.
-newtype WrappedEnumInt a = WrappedEnumInt a
-  deriving (Generic)
-
-
-instance Enum a => ToField (WrappedEnumInt a) where
-  toField (WrappedEnumInt a) = toField (fromEnum a)
-
-
-instance (Bounded a, Enum a, Typeable a) => FromField (WrappedEnumInt a) where
-  fromField f bs =
-    fromField @Int f bs
-      >>= \n -> maybe (returnError ConversionFailed f ("Invalid enum int: " <> show n)) (pure . WrappedEnumInt) (safeToEnum n)
-
-
-instance Enum a => HI.EncodeValue (WrappedEnumInt a) where
-  encodeValue = contramap (\(WrappedEnumInt a) -> fromEnum a) HI.encodeValue
-
-
--- Fails the decode on an out-of-range int rather than silently yielding the first
--- constructor, matching the 'FromField' instance above. The former @fromMaybe minBound@
--- turned a bad DB value into a valid-looking domain value with no signal anywhere.
-instance (Bounded a, Enum a) => HI.DecodeValue (WrappedEnumInt a) where
-  decodeValue = D.refine (\n -> maybeToRight ("Invalid enum int: " <> show n) (WrappedEnumInt <$> safeToEnum n)) (HI.decodeValue @Int)
 
 
 -- | OpenApi half of the shared deriving wrappers. Kept out of 'Pkg.Deriving' so
