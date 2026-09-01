@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { statScalar, formatStatValue, formatNumber } from '../src/stat-value';
+import { statScalar, formatStatValue, formatNumber, formatBytes } from '../src/stat-value';
 
 // Regression for the golden-signals overview bug: the big number was a blind
 // sum of every per-bin value (mislabeled "120k req/min", "1.5m" p99), instead
@@ -48,7 +48,9 @@ describe('formatStatValue', () => {
 
   test('unitless and bytes suffixes', () => {
     expect(formatStatValue(1500, '')).toBe('1.5K');
-    expect(formatStatValue(2048, 'By')).toBe('2.0K bytes');
+    // Was '2.0K bytes', which reads as 2000 bytes for a value that is 2 KiB. Byte units get
+    // binary multiples now, matching the tables these numbers sit next to.
+    expect(formatStatValue(2048, 'By')).toBe('2 KiB');
   });
 });
 
@@ -68,5 +70,32 @@ describe('formatNumber NaN/null guard', () => {
   });
   test('duration units also guard NaN (no "NaNns")', () => {
     expect(formatStatValue(NaN, 'ms')).toBe('N/A');
+  });
+});
+
+// A memory chart's axis used to run through formatNumber and read "1.0B" for a gigabyte —
+// B for "billion" — directly above a table reading "1 GiB" for the same value, on a widget
+// that had declared its unit as bytes. Binary multiples, matching Pages.Containers.formatBytes.
+describe('formatBytes', () => {
+  test('uses binary multiples and drops a bare .0', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1024)).toBe('1 KiB');
+    expect(formatBytes(536870912)).toBe('512 MiB');
+    expect(formatBytes(1073741824)).toBe('1 GiB');
+    expect(formatBytes(483183820)).toBe('460.8 MiB');
+  });
+
+  test('never renders NaN or null into the DOM', () => {
+    expect(formatBytes(NaN)).toBe('N/A');
+    expect(formatBytes(null)).toBe('N/A');
+    expect(formatBytes(undefined)).toBe('N/A');
+  });
+
+  test('a byte-united stat tile formats as bytes, not as a decimal magnitude', () => {
+    expect(formatStatValue(1073741824, 'bytes')).toBe('1 GiB');
+    expect(formatStatValue(1073741824, 'By')).toBe('1 GiB');
+    // Non-byte units keep the old behaviour.
+    expect(formatStatValue(1073741824, '')).toBe('1.1B');
   });
 });

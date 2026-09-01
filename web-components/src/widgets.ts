@@ -2,7 +2,7 @@
 import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
-import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
+import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
 import { echartsUrls } from './assets';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
@@ -580,6 +580,7 @@ export const sumTimeseriesValues = (dataset: unknown): number | null => {
 declare global {
   interface Window {
     formatNumber: (num: number) => string;
+    formatBytes: (num: number) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
     setVariable: (key: string, value: string) => void;
@@ -929,6 +930,7 @@ const chartWidget = (widgetData: WidGetData) => {
 window.formatNumber = formatNumber;
 window.convertToNanoseconds = convertToNanoseconds;
 window.formatDuration = formatDuration;
+window.formatBytes = formatBytes;
 
 // Recursively build the widget order from a grid container.
 // It looks for direct children with the class "grid-stack-item" and
