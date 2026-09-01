@@ -370,6 +370,17 @@ testing your revert. Note also that a `--mode production` vite build empties
 `dist/` and changes the manifest hash that `BodyWrapper.hs` TH-splices, so the
 server must be rebuilt after one or *every* spec fails on a broken page.
 
+### Fixed: the query editor's text sat a pixel high
+
+Monaco was configured `padding: { top: 8, bottom: 8 }` against `lineHeight: 20`, so a single
+line came to 36px of content inside the 38px the shell reserves with `min-h-[38px]`. The wrapper
+is a block, so nothing centred the slack and it all fell below the text: 9px of space above the
+line, 11px below, in a box meant to line up with the control beside it. `9 + 20 + 9` makes one
+line exactly 38. Measured against the real served stylesheet: 10 and 10.
+
+The two numbers are coupled — change `lineHeight` or the shell's `min-h-[38px]` and the padding
+has to follow. The comment at the call site says so.
+
 ## Local e2e environment is damaged (CI is not)
 
 I deleted `static/public/assets/web-components/dist` to test whether a stale bundle explained a
