@@ -27,7 +27,7 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pages.Containers qualified as Containers
@@ -979,14 +979,6 @@ infrastructureBW pid title window bw =
 
 sumPresent :: (a -> Maybe Double) -> [a] -> Maybe Double
 sumPresent getter values = case mapMaybe getter values of [] -> Nothing; present -> Just $ sum present
-
-
-ratio :: Maybe Double -> Maybe Double -> Maybe Double
-ratio usage limit = do
-  used <- usage
-  capacity <- limit
-  guard $ capacity > 0
-  pure $ used / capacity
 
 
 plainCell :: Maybe Text -> Html ()

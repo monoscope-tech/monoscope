@@ -12,7 +12,6 @@ module Models.Apis.Endpoints (
   archiveHosts,
   unarchiveHosts,
   endpointRequestStatsByProject,
-  countEndpointInbox,
   listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
@@ -418,19 +417,6 @@ unarchiveHosts pid outgoingM hosts =
        WHERE project_id = #{pid}
          AND host = ANY(#{hosts}::text[])
          AND archived_at IS NOT NULL ^{directionClauseSql outgoingM} |]
-
-
-countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int
-countEndpointInbox pid host requestType =
-  let isOutgoing = requestType == "Outgoing"
-   in fromMaybe 0
-        <$> Hasql.interpOne
-          [HI.sql|
-            SELECT coalesce(COUNT(*)::BIGINT, 0)
-            FROM apis.endpoints enp
-            LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
-            WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing}
-              AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host} |]
 
 
 -- | Count of endpoints under a (project, direction), under the same row filters as

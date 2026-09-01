@@ -1012,23 +1012,6 @@ pct1 :: Double -> Text
 pct1 x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
 
--- | Projects whose TimeFusion count is more than @driftPct@ behind Timescale,
--- ignoring projects below the @minRows@ Timescale floor (absolute-count noise).
--- Returns (project, tsCount, tfCount, drift%). TF ahead of TS (dedup/dupes)
--- yields negative drift and is dropped — only TF-behind is a loss signal.
---
--- >>> parityDrift 1.0 500 [("a", 1000, 1000), ("b", 1000, 750), ("small", 100, 0)]
--- [("b",1000,750,25.0)]
-parityDrift :: Double -> Int64 -> [(Text, Int64, Int64)] -> [(Text, Int64, Int64, Double)]
-parityDrift driftPct minRows rows =
-  [ (pid, tsN, tfN, pct)
-  | (pid, tsN, tfN) <- rows
-  , tsN >= minRows
-  , let pct = fromIntegral (tsN - tfN) / fromIntegral tsN * 100 :: Double
-  , pct > driftPct
-  ]
-
-
 -- | Per-project row-count parity, TimescaleDB (source of truth) vs TimeFusion,
 -- over @[start,end)@. Only high-volume projects are drift-checked; a TF query
 -- failure or a zero TF total is itself an alarm. Returns (alerts, info-lines).
@@ -1061,23 +1044,30 @@ checkParity start end = do
       tfTotal = sum [tfN | (_, _, tfN) <- okRows]
       driftAlerts =
         [ "🔴 TF behind TS by " <> pct1 pct <> "% (-" <> show (tsN - tfN) <> " rows) for " <> pid <> " (TS=" <> show tsN <> " TF=" <> show tfN <> ")"
-        | (pid, tsN, tfN, pct) <- parityDrift driftPct minRows okRows
+        | (pid, tsN, tfN, pct) <- continuityDrop driftPct minRows okRows
         ]
       errAlert = ["🔴 TF unreachable/errored for " <> show (length tfErrs) <> " projects (e.g. " <> T.intercalate ", " (take 3 tfErrs) <> ")" | not (null tfErrs)]
       stallAlert = ["🔴 TF INGEST STALLED: TS=" <> show tsTotal <> " rows, TF=0 over top " <> show (length okRows) <> " projects" | tsTotal > 0, tfTotal == 0, null tfErrs]
   pure (errAlert <> stallAlert <> driftAlerts, ["parity: TS=" <> show tsTotal <> " TF=" <> show tfTotal <> " over top " <> show (length okRows) <> " projects"])
 
 
--- | Projects whose current-window row count collapsed against their OWN recent
--- baseline. The single-store replacement for 'parityDrift': with Timescale
--- writes off there is no second store to compare against, so a project's own
--- recent throughput becomes the reference.
+-- | Rows whose current count collapsed more than @dropPct@ below a reference
+-- count, ignoring references below the @minRows@ floor (absolute-count noise).
+-- Input rows are @(project, reference, current)@.
 --
--- Only a DROP is a loss signal — a spike is a traffic change, not missing data.
--- @minRows@ is applied to the baseline so a quiet project going quieter can't
--- alarm. Input rows are @(project, baselinePerWindow, current)@.
+-- Only a DROP is a loss signal — a spike is a traffic change, not missing data,
+-- so a negative drift is dropped rather than alarmed on.
+--
+-- Two callers supply two different references. 'checkParity' passes Timescale as
+-- the reference and TimeFusion as the current count, making this a cross-store
+-- parity check. 'checkIngestContinuity' and 'checkReadConsistency' pass a
+-- project's OWN recent throughput, which is the only reference available once
+-- Timescale writes are off.
 --
 -- The 2026-07-27 gap: ~25k rows/min collapsed to ~1k for nine minutes.
+--
+-- >>> continuityDrop 1.0 500 [("a", 1000, 1000), ("b", 1000, 750), ("small", 100, 0)]
+-- [("b",1000,750,25.0)]
 --
 -- >>> continuityDrop 60.0 500 [("steady", 1000, 980), ("gap", 25000, 1000), ("quiet", 100, 0)]
 -- [("gap",25000,1000,96.0)]

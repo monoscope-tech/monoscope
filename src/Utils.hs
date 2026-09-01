@@ -28,7 +28,6 @@ module Utils (
   FreeTierStatus (..),
   freeTierUsageBanner,
   checkFreeTierStatus,
-  checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
   displayTimestamp,
@@ -636,10 +635,6 @@ checkFreeTierStatus pid paymentPlan =
           | count >= (limit * 80) `div` 100 -> FreeTierWarning count limit
           | otherwise -> FreeTierOk
     else pure NotFreeTier
-
-
-checkFreeTierExceeded :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
-checkFreeTierExceeded pid pp = (\case FreeTierExceeded{} -> True; _ -> False) <$> checkFreeTierStatus pid pp
 
 
 serviceColors :: V.Vector Text
