@@ -214,6 +214,29 @@ wrong, not the code; ~15 consumers follow the code and are fine.
   itself and should just go. `Pkg/Parser/ExprSpec.hs`'s only assertion is
   `True \`shouldBe\` True` with the real one commented out.
 
+### Rejected after inspection: gutting `RequestMessagesSpec` (~250 lines)
+
+The test survey's largest single item, and I decided against it. Reasons:
+
+1. **The line saving isn't there.** The bloat is *horizontal* — `RequestMessages.valueToFormatStr`
+   repeated 94 times — not vertical. Each assertion is already one line, so a table-driven
+   rewrite saves characters, not lines. A per-case doctest (`-- >>> expr` + expected) is
+   **two** lines per case, i.e. 358 lines for the 179 cases I extracted — worse than the 309
+   it replaces. Only the dense `map f [..]` form is shorter, and that mangles the long
+   inputs and drops the per-case comments.
+2. **The proposed saving comes from deleting assertions, not relocating them.** "Keep one
+   representative case per family" means dropping ~150 of 179. Those cover
+   `replaceAllFormats`, which redacts **PII** — SSNs, credit cards, JWTs, emails. Thinning
+   a redactor's test matrix to save lines is a bad trade at any line count.
+3. **The comments are the documentation.** `"-42" -> Nothing -- Negative integers not
+   supported with sign`, `"999" -> {integer} -- Not valid HTTP status`, `"1111111111111111"
+   -> {hex_id} -- Not a valid card` record precedence rules that are genuinely surprising.
+   That knowledge lives nowhere else.
+
+I extracted all 179 cases mechanically to check this rather than eyeballing it. If someone
+still wants it moved, the honest framing is "improve locality", not "delete 250 lines" —
+and it should keep every case.
+
 ### Explicitly ruled out — do not re-propose
 
 Modals, charts/widgets and time pickers are healthy. `Web/ApiHandlers.hs` is genuinely
