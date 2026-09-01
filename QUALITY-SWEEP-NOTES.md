@@ -225,6 +225,44 @@ head` is used throughout, and two past `fromJust` crashes are recorded in commen
 The PG/TimeFusion `Bool` threaded through 63 sites should be **deleted at parity**, not
 abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 
+## Landed
+
+| commit | what | net |
+|---|---|---|
+| `a40cdbda` | notes + `ghcid-wait.sh` | — |
+| `9e46edab` | three unreferenced web-component exports | −61 |
+| `c7c187d6` | `parityDrift`→`continuityDrop`, `ratio` deduped, 3 dead functions | −41 |
+| `7625d7de` | the blanket `FromHttpApiData` orphan replaced by narrow instances | +22 |
+| `5a6315f3` | `WrappedEnumInt` no longer decodes a bad int to `minBound` | +3 |
+
+The last two are net-positive on lines and were worth it anyway: both were live
+correctness bugs, and the tree now compiles with **zero warnings** (`All good`),
+which it did not at the start — two redundant imports in `Pages/Charts/Charts.hs`
+would have failed CI's `-Werror`.
+
+### The blanket-orphan investigation, since the survey's one-line fix was wrong
+
+The survey said the instance was unneeded and `JSONHttpApiData` should replace it at
+route captures. Removing it produced a cascade — `[Query]`, then `[Text]`, then
+`WidgetType`, `SummarizeBy`, `Layout`, `AE.Value`, `Charts.MetricsStats`, and finally
+`V.Vector Projects.UserId` over in `Pages/Projects.hs`. So it *was* load-bearing, just
+not in the shape it was written: `FromForm` derivation needs container instances plus
+per-type ones, never a blanket. Final shape: `[a]`, `V.Vector a` and `AE.Value` in
+`Utils` beside `JSONHttpApiData`; the four record types derive via `JSONHttpApiData`;
+the two enums derive via `WrappedEnumSC`.
+
+That last part is a behaviour **fix**, not just a refactor: the old instance ran the raw
+param through `AE.eitherDecodeStrict`, so `widget_type=top_list` — what a form actually
+submits — never parsed; only `widget_type="top_list"` did.
+
+### A build-verification trap worth remembering
+
+`ghcid-wait.sh` first reported green on a broken tree. ghcid rewrites the terminal title
+after each reload, and grepping the tail for a success word matched the *previous*
+reload's title. It now reads only the last title and treats `N errors, …` as failure.
+Any verdict from before that fix should be distrusted — this is exactly the phantom-error
+class the "one cabal process" memory warns about, arriving from the opposite direction.
+
 ## Progress log
 
 - **22:40** — watcher was dead and `build.log` stale since 12 Aug; restarted via
