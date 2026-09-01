@@ -225,6 +225,31 @@ head` is used throughout, and two past `fromJust` crashes are recorded in commen
 The PG/TimeFusion `Bool` threaded through 63 sites should be **deleted at parity**, not
 abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 
+## Verification status
+
+| lane | state |
+|---|---|
+| library (`ghcid`) | **green**, 128 modules, zero warnings |
+| `make test-unit` | **green** — 271 examples, 0 failures |
+| `make test-doctests` | 1348 examples, **0 errors, 1 failure — pre-existing** (below) |
+| `make test-integration` | **not run** (see below) |
+| browser / running app | **not run** — port 8080 belongs to the other checkout |
+
+The library watcher compiles `src/` only, so it cannot catch a broken spec. Running the
+unit suite immediately found one: moving the retry helpers had broken
+`Opentelemetry/TimefusionWriteFailureSpec`. Fixed in `6021f9b6`. **Do not treat a green
+watcher as a green tree** — the spec tree needs its own run.
+
+The single doctest failure is at `BackgroundJobs.hs:3246` and is **not** from this work:
+the block is byte-identical at the fork point `823431ef` and this branch's diff to that
+file never touches it. It fails because the example mixes a package-qualified
+`import "monoscope" BackgroundJobs` with a source-tree `import Pkg.EmailTemplates`, so
+`System.Types` is loaded twice and its `AuthServerData` family instances collide. Worth
+fixing on its own, separately from a refactor branch.
+
+Doctests need `cabal build lib:monoscope` first, or the runner dies with
+`cannot satisfy -package monoscope`.
+
 ## Landed
 
 | commit | what | net |
