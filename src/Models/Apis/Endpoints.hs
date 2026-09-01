@@ -24,7 +24,6 @@ module Models.Apis.Endpoints (
   getGroupReviews,
   markGroupApplied,
   revertGroupApply,
-  quarantinedCanonicalHashes,
   getQuarantinedMerges,
   appliedCanonicalHashes,
   fleetShapeReport,

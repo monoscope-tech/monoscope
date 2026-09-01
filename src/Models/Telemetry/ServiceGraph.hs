@@ -17,7 +17,6 @@ module Models.Telemetry.ServiceGraph (
   EdgeSample (..),
   LatencyHist (..),
   singletonLatency,
-  latencyPercentile,
   buildServiceGraph,
   Collapse (..),
   serviceMapFanout,
@@ -30,6 +29,7 @@ module Models.Telemetry.ServiceGraph (
   rollupServiceEdges,
   upsertServiceDependencyEdges,
   serviceGraphForRange,
+  latencyPercentile,
 ) where
 
 import Data.Aeson qualified as AE

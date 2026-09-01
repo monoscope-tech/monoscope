@@ -8,7 +8,6 @@ module Models.Telemetry.Telemetry (
   convertOtelLogsAndSpansToSpanRecord,
   getTotalEventsToReport,
   getUsageTotals,
-  dayWindows,
   SpanRecord (..),
   getAllATErrors,
   isErrorRecord,
@@ -22,7 +21,6 @@ module Models.Telemetry.Telemetry (
   MetricRecord (..),
   MetricCatalogBuffer,
   newMetricCatalogBuffer,
-  enqueueMetricCatalog,
   flushMetricCatalog,
   reconcileMetricCatalog,
   ExponentialHistogram (..),
@@ -67,7 +65,6 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
-  maxWriteAttempts,
   maxReadAttempts,
   handOffBatches,
   mintOtelLogIds,
@@ -78,7 +75,6 @@ module Models.Telemetry.Telemetry (
   getMetricServiceNames,
   getMetricNames,
   projectsWithRecentMetrics,
-  resourceServiceName,
   metricServiceNameFromResource,
   SpanEvent (..),
   atMapText,
@@ -94,6 +90,7 @@ module Models.Telemetry.Telemetry (
   rowIdentity,
   otelSpanColsSql,
   roundUTCToMicros,
+  dayWindows,
 )
 where
 

@@ -11,7 +11,6 @@ module Utils (
   loadingIndicator_,
   loadingIndicatorWith_,
   htmxIndicator_,
-  htmxIndicatorWith_,
   htmxOverlayIndicator_,
   lookupVecIntByKey,
   lookupVecBoolByKey,
@@ -38,7 +37,6 @@ module Utils (
   getServiceColors,
   serviceFillColor,
   -- Hex color mapping for ECharts server-side rendering
-  themeColorsHex,
   getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
@@ -79,7 +77,6 @@ module Utils (
   summaryForDetailView,
   calculateCycleStartDate,
   usageWindowStart,
-  usageCountableDays,
   -- NUL-byte scrubbing for PG `jsonb` ingest paths.
   scrubNulText,
   scrubNulValue,

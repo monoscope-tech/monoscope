@@ -9,7 +9,6 @@ module Models.Apis.LogQueries (
   SqlSource (..),
   SecuredSql (..),
   selectLogTable,
-  sessionTagId,
   executeSecuredQuery,
   LogEndpoint (..),
   logExplorerUrlPath,
@@ -25,6 +24,7 @@ module Models.Apis.LogQueries (
   bucketRange,
   densifyBuckets,
   aggregatePageSize,
+  sessionTagId,
 )
 where
 
