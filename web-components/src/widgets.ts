@@ -41,7 +41,10 @@ const limitedFetch = (url: string, signal?: AbortSignal): Promise<Response> => {
         return;
       }
       activeFetches++;
-      fetch(url, { signal }).then(resolve, reject).finally(() => {
+      // Accept marks this as a data request, so an expired session answers 401 JSON
+      // instead of 302-ing to the login page — which fetch follows transparently,
+      // handing us 200 HTML that res.json() then chokes on. See Web.Auth.challengeFor.
+      fetch(url, { signal, headers: { Accept: 'application/json' } }).then(resolve, reject).finally(() => {
         activeFetches--;
         if (fetchQueue.length > 0) fetchQueue.shift()!();
       });
@@ -484,6 +487,13 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
         // "The string did not match the expected pattern" — which is what the catch below
         // logged, with no status to act on. Guarded by the non-2xx test in
         // widgets-auto-refresh.test.ts; if you revert this file wholesale, that test tells you.
+        // A 401 means the session expired while the tab sat open. Reloading lands on
+        // the login page and comes back here, instead of every refresh tick painting
+        // the same error over a chart that will never recover on its own.
+        if (res.status === 401) {
+          window.location.reload();
+          throw new Error('session expired');
+        }
         if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
         return res.json();
       }));

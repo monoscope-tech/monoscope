@@ -5,6 +5,8 @@ module Web.Auth (
   authCallbackH,
   setLanguageH,
   sessionByID,
+  AuthChallenge (..),
+  challengeFor,
   authHandler,
   apiKeyAuthHandler,
   ApiKeyAuthContext,
@@ -29,6 +31,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (ToJSON)
+import Data.ByteString qualified as BS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
@@ -62,7 +65,7 @@ import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (hAuthorization, hCookie, urlEncode)
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, urlEncode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -126,7 +129,7 @@ authHandler logger env =
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme lang (envFromCookie $ getCookies req) Nothing env.config.basicAuthEnabled
+              sessionByID (Just sessId) requestID isSidebarClosed theme lang (envFromCookie $ getCookies req) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -158,11 +161,60 @@ authHandler logger env =
       let theme = themeFromCookie cookies
       let lang = I18n.languageFromCookies cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (envFromCookie cookies) (Just $ getRequestUrl req) basicAuthEnabledFlag
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (envFromCookie cookies) (Just $ getRequestUrl req) (challengeFor basicAuthEnabledFlag (requestHeaders req))
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment url basicAuthEnabled = do
+-- | How to tell an unauthenticated request to authenticate.
+--
+-- A browser navigation can be redirected. A @fetch@/XHR cannot: it follows the
+-- 302 transparently and hands JavaScript a __200 HTML login page__, so every
+-- @res.json()@ in the app throws @Unexpected token \'<\', "\<!DOCTYPE "@ with no
+-- status to act on. That is one hour-long alert per stale tab, and it ran for
+-- 133 days before anyone traced it back to the auth wall.
+data AuthChallenge
+  = -- | Basic auth is on; ask for credentials whatever the client is.
+    ChallengeBasic
+  | -- | A top-level navigation: 302 to the login page, as before.
+    ChallengeRedirect
+  | -- | An htmx swap: 401 + @HX-Redirect@, which htmx navigates on. A 302 here
+    -- swaps the login page into whatever fragment asked.
+    ChallengeHtmx
+  | -- | fetch/XHR: 401 JSON, so the caller sees a status instead of HTML.
+    ChallengeJson
+  deriving stock (Eq, Show)
+
+
+-- | Classify a request by how it was issued. @Sec-Fetch-Mode@ is the reliable
+-- signal (browsers set it on every request and script cannot forge it); a client
+-- too old to send it falls through to the redirect that has always been served.
+--
+-- >>> challengeFor True [("Sec-Fetch-Mode", "cors")]
+-- ChallengeBasic
+-- >>> challengeFor False [("Sec-Fetch-Mode", "navigate")]
+-- ChallengeRedirect
+-- >>> challengeFor False [("HX-Request", "true"), ("Sec-Fetch-Mode", "cors")]
+-- ChallengeHtmx
+-- >>> challengeFor False [("Sec-Fetch-Mode", "cors")]
+-- ChallengeJson
+-- >>> challengeFor False [("Accept", "application/json")]
+-- ChallengeJson
+--
+-- No @Sec-Fetch-*@ and no JSON @Accept@ (an old browser, or curl) keeps the old
+-- behaviour rather than breaking navigation for it:
+--
+-- >>> challengeFor False []
+-- ChallengeRedirect
+challengeFor :: Bool -> RequestHeaders -> AuthChallenge
+challengeFor basicAuthEnabled headers
+  | basicAuthEnabled = ChallengeBasic
+  | isJust (L.lookup "HX-Request" headers) = ChallengeHtmx
+  | Just mode <- L.lookup "Sec-Fetch-Mode" headers = if mode == "navigate" then ChallengeRedirect else ChallengeJson
+  | maybe False ("application/json" `BS.isInfixOf`) (L.lookup "Accept" headers) = ChallengeJson
+  | otherwise = ChallengeRedirect
+
+
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment url challenge = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -177,20 +229,26 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
                 (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
-                _ ->
-                  if basicAuthEnabled
-                    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-                    else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
-            else
-              if basicAuthEnabled
-                then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-                else throwError $ err302{errHeaders = [("Location", "/login?redirect_to=" <> fromMaybe "" url)]}
-        Nothing ->
-          if basicAuthEnabled
-            then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-            else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
+                _ -> throwError $ unauthenticated "/to_login"
+            else throwError $ unauthenticated "/login"
+        Nothing -> throwError $ unauthenticated "/to_login"
   let sessionCookie = Projects.craftSessionCookie sessionId False
   pure $ Projects.addCookie sessionCookie (Projects.Session{persistentSession, ..})
+  where
+    -- The whole URL is one query *value*, so it needs value-escaping, not
+    -- URI-escaping: `escapedQueryPartial` leaves `&` alone, which truncated
+    -- `redirect_to=/chart_data?pid=…&since=1H` at the `&` and landed the user on
+    -- a URL missing everything after the first parameter.
+    loginUrl path = path <> "?redirect_to=" <> decodeUtf8 (urlEncode True (fromMaybe "" url))
+    unauthenticated path = case challenge of
+      ChallengeBasic -> err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+      ChallengeRedirect -> err302{errHeaders = [("Location", encodeUtf8 (loginUrl path))]}
+      ChallengeHtmx -> err401{errHeaders = [("HX-Redirect", encodeUtf8 (loginUrl path))]}
+      ChallengeJson ->
+        err401
+          { errBody = AE.encode $ AE.object ["error" AE..= ("unauthenticated" :: Text), "login" AE..= loginUrl path]
+          , errHeaders = [("Content-Type", "application/json")]
+          }
 
 
 getCookies :: Request -> Cookies
