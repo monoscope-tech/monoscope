@@ -559,9 +559,6 @@ anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime)
 anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
-      severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-      severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-      severityBadge _ = pass
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
     -- LEFT: scrollable main content
     div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
@@ -593,7 +590,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
               (renderSample . div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] . V.mapM_ (summaryToken_ True))
               (mfilter (not . V.null) sampleOverride)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
-        severityBadge (display issue.severity)
+        severityBadge_ (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
         case issue.issueType of
           Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
