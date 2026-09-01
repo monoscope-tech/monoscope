@@ -152,7 +152,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, formatBytes, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
 
 -- $setup
@@ -164,7 +164,7 @@ getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
 getNestedValue [] _ = Nothing
 getNestedValue [k] m = Map.lookup k m
 getNestedValue ks@(k : rest) m =
-  Map.lookup (T.intercalate "." ks) m <|> (getNestedValue rest =<< objectToMap =<< Map.lookup k m)
+  Map.lookup (T.intercalate "." ks) m <|> (getNestedValue rest =<< jsonToMap =<< Map.lookup k m)
 
 
 -- | Render a JSON leaf as Text (strings scrubbed of NULs, numbers shown).
@@ -201,13 +201,9 @@ asTextRaw = \case
   _ -> Nothing
 
 
-objectToMap :: AE.Value -> Maybe (Map Text AE.Value)
-objectToMap = \case AE.Object o -> Just $ KEM.toMapText o; _ -> Nothing
-
-
 -- | Look up a top-level key of a JSON object and render its leaf as Text.
 scopeField :: Text -> AE.Value -> Maybe Text
-scopeField k v = valText =<< Map.lookup k =<< objectToMap v
+scopeField k v = valText =<< Map.lookup k =<< jsonToMap v
 
 
 -- Lens-like access helpers for Map Text AE.Value fields
@@ -1292,8 +1288,8 @@ projectsWithRecentMetrics since =
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
-    $ resourceServiceName (objectToMap resource)
-    <|> (valText =<< getNestedValue ["container", "name"] =<< objectToMap resource)
+    $ resourceServiceName (jsonToMap resource)
+    <|> (valText =<< getNestedValue ["container", "name"] =<< jsonToMap resource)
     <|> lookupValueText resource "compose_service"
     <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
 
@@ -2111,7 +2107,7 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
       maybe False (\n -> "exception" `T.isInfixOf` n || "error" `T.isInfixOf` n)
         $ asTextRaw
         =<< Map.lookup "event_name"
-        =<< objectToMap v
+        =<< jsonToMap v
 getErrorEvents _ = []
 
 
@@ -2165,7 +2161,7 @@ extractATError _ _ = Nothing
 extractATErrorFromRecord :: OtelLogsAndSpans -> Maybe ErrorPatterns.ATError
 extractATErrorFromRecord spanObj =
   let attrs = unAesonTextMaybe spanObj.attributes
-      excAttr k = asTextRaw =<< Map.lookup k =<< objectToMap =<< Map.lookup "exception" =<< attrs
+      excAttr k = asTextRaw =<< Map.lookup k =<< jsonToMap =<< Map.lookup "exception" =<< attrs
       bodyTxt = asTextRaw =<< unAesonTextMaybe spanObj.body
       typ = fromMaybe "Error" (excAttr "type")
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
@@ -2182,11 +2178,11 @@ atErrorFrom spanObj typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
       getSpanAttr k = attrs >>= Map.lookup k >>= valText
-      getUserAttrM k v = valText =<< Map.lookup k =<< objectToMap =<< Map.lookup v =<< resc
+      getUserAttrM k v = valText =<< Map.lookup k =<< jsonToMap =<< Map.lookup v =<< resc
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
       -- TODO: parse telemetry.sdk.name to SDKTypes
-      tech = asTextRaw =<< Map.lookup "language" =<< objectToMap =<< Map.lookup "sdk" =<< objectToMap =<< Map.lookup "telemetry" =<< resc
+      tech = asTextRaw =<< Map.lookup "language" =<< jsonToMap =<< Map.lookup "sdk" =<< jsonToMap =<< Map.lookup "telemetry" =<< resc
       serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
@@ -2847,8 +2843,8 @@ mkMetricRow :: MetricRecord -> MetricRow
 mkMetricRow r =
   MetricRow
     { rec = r
-    , attrs = objectToMap r.attributes
-    , resourceMap = objectToMap r.resource
+    , attrs = jsonToMap r.attributes
+    , resourceMap = jsonToMap r.resource
     , native = metricValueToNative r.metricValue
     }
 
