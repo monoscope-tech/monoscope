@@ -116,6 +116,8 @@ each is a known DataFusion limitation already documented:
   `unnest(t.col)`.
 - `6dcbee7e` — `Conflicting ordering requirements in aggregate functions` — one
   `GROUP BY` cannot carry aggregates with differing `ORDER BY`.
-- `f077c73c` — `time_bucket does not support month or year intervals`. This one
-  is genuinely user-facing if anyone writes a monthly `bin()`; the error message
-  is good, but the KQL layer should reject it before TimeFusion does.
+- `f077c73c` — `time_bucket does not support month or year intervals`. Checked:
+  the KQL layer **already** rejects this before it reaches TimeFusion —
+  `Unsupported bin() width "1mo". Use a KQL unit: ms, s, m, h, d, w …`
+  (`Pkg.Parser.Stats`, shipped in `6a23360e0`). So this can only come from a raw
+  SQL widget, and one event is consistent with that. No action.
