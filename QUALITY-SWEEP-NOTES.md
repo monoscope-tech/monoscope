@@ -121,6 +121,31 @@ Findings, ordered by lines deleted:
 
 Reported healthy, no action: modals, charts/widgets, time pickers.
 
+## Where to pick this up
+
+In rough order of value per unit of risk. Everything here is backed by a file:line map
+further down; none of it needs re-surveying.
+
+1. **Adopt enums that already exist** (`visualizationType` → `WidgetType`, `alertStatus` →
+   `MonitorStatus`, `severity` → `IssueSeverity`, `disabledChannels` →
+   `NotificationChannel`, `direction` → `ThresholdDirection`). Pure substitution, no new
+   types, and each buys `-Wincomplete-patterns` coverage. **Needs the integration suite
+   green before and after** — these fields are DB-stored, so an encoding mismatch is silent
+   data corruption, not a compile error. That is why I did not do them tonight.
+2. **`Issue.issueData :: AE.Value` → a sum type.** All five payload records already exist
+   (`APIChangeData`, `RuntimeExceptionData`, `QueryAlertData`, `LogPatternData`,
+   `LogPatternRateChangeData`); `issueType` is already the discriminant. This is adoption,
+   not design, and it deletes every ad-hoc `AE.fromJSON`-with-fallback at the call sites.
+3. **The nine list-filter and twelve clipboard duplicates** → one hyperscript behaviour each,
+   next to `Copy` in `BodyWrapper.hs:372`. Wants someone who can click through it.
+4. **`Dashboards.hs:249` tab bar** → `navTabAttrs`, deleting the `/content` endpoint and the
+   hyperscript active-class juggling. Fix CLAUDE.md:400 first — it disagrees with the
+   canonical helper it points at (see below).
+5. **`Pkg/Mail.hs` Slack/Discord renderer pairs** (~200-250 lines, the single biggest
+   remaining item). Deliberately deferred: it touches alert delivery, which had a
+   production incident this month (`007deaec`, invalid button style rejected every
+   message). Wants the integration suite as a net.
+
 ## Consolidated plan — all five surveys
 
 Rough total identified: **~2,400 lines removable** plus ~935 relocatable, across five areas.
