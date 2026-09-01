@@ -29,6 +29,8 @@ module ProcessMessage (
   tokenIsGenerated,
   isBracedPlaceholder,
   isRoutePlaceholder,
+  normalizeHttpRoute,
+  routeIsAuthoritative,
   percentDecodeLenient,
   matchCanonicalPath,
   pathMatchesTemplate,
@@ -54,6 +56,7 @@ import Data.Char (digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HashSet
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
@@ -155,6 +158,10 @@ data HttpKey = HttpKey
   -- ^ canonical path: SDK-normalised, dyn-param-rewritten, canonical-template-matched.
   , statusCode :: !Int
   , isHttpSpan :: !Bool
+  , fromRoute :: !Bool
+  -- ^ 'urlPath' is a template the framework's router supplied, not one derived
+  -- from a concrete URL. Such a path is not a guess and must not be re-guessed:
+  -- see 'frameworkCanonicalHashes'.
   }
 
 
@@ -164,10 +171,11 @@ httpKeyOf canonicalTemplates otelSpan =
       !attrValue = AE.Object $ AEKM.fromMapText attributes
       !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
-      !routePath =
-        fromMaybe "/"
-          $ (attrValue ^? key "http" . key "route" . _String)
-          <|> (attrValue ^? key "url" . key "path" . _String)
+      -- An empty @http.route@ means the router matched nothing (Django writes
+      -- one for every unrouted request), so it is absence, not a route.
+      !routeAttr = normalizeHttpRoute <$> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null))
+      !authoritativeRoute = maybe False routeIsAuthoritative routeAttr
+      !routePath = fromMaybe "/" $ routeAttr <|> (attrValue ^? key "url" . key "path" . _String)
       !statusCode =
         fromMaybe 200
           $ ( (attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString)
@@ -201,11 +209,29 @@ httpKeyOf canonicalTemplates otelSpan =
       -- 'pathMatchesTemplate' treats either spelling as a wildcard, so once a
       -- template exists ingest settles on it.
       !candidate = bool urlPath' urlPathDyn hasDyn
-      !urlPath = fromMaybe candidate $ matchCanonicalPath canonicalTemplates.templates method host candidate
-   in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
+      -- An authoritative route skips the id heuristics — there is nothing left to
+      -- infer, and inferring anyway would let a literal segment that merely looks
+      -- generated (@\/v1\/{id}\/SHO3KOOWWN@) be collapsed out of a route the
+      -- router just told us about.
+      !routeCandidate = fromMaybe candidate $ guard authoritativeRoute >> routeAttr
+      -- Adopting the framework's parameter names renames every endpoint of every
+      -- project already sending routes — 13 of them, 1,540 rows — and a rename is
+      -- a new hash, so each would re-mint and re-notify. So the named form only
+      -- wins where the project has nothing already: an existing row under either
+      -- spelling keeps its hash, and only genuinely new routes arrive named.
+      !flattened = classifyUrlPathWith canonicalTemplates.idPrefixes routeCandidate
+      hashFor p = toXXHash $ otelSpan.project_id <> host <> method <> p
+      !urlPath
+        | not authoritativeRoute = fromMaybe candidate $ matchCanonicalPath canonicalTemplates.templates method host candidate
+        | HashSet.member (hashFor routeCandidate) canonicalTemplates.knownHashes = routeCandidate
+        | Just t <- matchCanonicalPath canonicalTemplates.templates method host routeCandidate = t
+        | HashSet.member (hashFor flattened) canonicalTemplates.knownHashes = flattened
+        | otherwise = routeCandidate
+   in HttpKey{method, host, urlPath, statusCode, isHttpSpan, fromRoute = authoritativeRoute && urlPath == routeCandidate}
 
 
--- | Extract entities for hash-stamping. Returns @(mkEndpoint, hashes, normalizedPath)@ —
+-- | Extract entities for hash-stamping. Returns
+-- @(mkEndpoint, hashes, normalizedPath, frameworkHash)@ —
 -- the endpoint is returned as a function of its row id so hash-only callers
 -- ('stampHashesAtIngest') never have to conjure a placeholder UUID;
 -- the normalized path (@Just@ for HTTP spans) is stamped back onto the span's
@@ -213,13 +239,16 @@ httpKeyOf canonicalTemplates otelSpan =
 -- queries match the template stored in @apis.endpoints@. Schema learning flows
 -- through 'extractObservation' instead; this only does endpoint discovery.
 --
+-- @frameworkHash@ is set only for a /new/ endpoint whose path came from
+-- @http.route@; 'frameworkCanonicalHashes' turns those into self-canonical rows.
+--
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
-processSpanToEntities :: PathClassifier -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities :: PathClassifier -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
-      HttpKey{method, host, urlPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
+      HttpKey{method, host, urlPath, statusCode, isHttpSpan, fromRoute} = httpKeyOf canonicalTemplates otelSpan
 
       -- Resolve service and environment from OTel resource attrs, falling back to span
       -- attributes for SDKs that put them there.
@@ -231,8 +260,10 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
 
+      !isNewEndpoint = notElem endpointHash pjc.endpointHashes && statusCode /= 404
+
       endpoint dumpId =
-        if endpointHash `elem` pjc.endpointHashes || statusCode == 404
+        if not isNewEndpoint
           then Nothing
           else
             Just
@@ -255,7 +286,11 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
       -- the schema-learning catalog. The normalized path goes back into both
       -- attributes.http.route and attributes.url.path so notification links and the
       -- catalog UI filter by the same template stored in apis.endpoints.
-      (endpoint, V.singleton endpointHash, if isHttpSpan then Just urlPath else Nothing)
+      ( endpoint
+      , V.singleton endpointHash
+      , if isHttpSpan then Just urlPath else Nothing
+      , guard (fromRoute && isNewEndpoint) $> endpointHash
+      )
 
 
 -- | Stamp each record's hashes (endpoint identity + error fingerprints) before the
@@ -269,7 +304,7 @@ stampHashesAtIngest :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.
 stampHashesAtIngest caches = V.map \r -> fromMaybe r do
   pid <- Projects.projectIdFromText r.project_id
   pjc <- HM.lookup pid caches
-  let (_, spanHashes, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
+  let (_, spanHashes, _, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
       errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
   pure r{hashes = Just $ spanHashes <> errHashes}
   where
@@ -902,6 +937,107 @@ isBracedPlaceholder :: Text -> Bool
 isBracedPlaceholder t = T.length t > 2 && T.isPrefixOf "{" t && T.isSuffixOf "}" t
 
 
+-- | Rewrite a framework's @http.route@ into the template form the rest of this
+-- module speaks: leading slash, no regex anchors, one @{name}@ per parameter.
+--
+-- @http.route@ is the only place a template arrives as /fact/ rather than
+-- inference — the router matched the request against it. We were already
+-- preferring it over @url.path@ and then feeding it, unparsed, to machinery that
+-- expects a URL. Every framework spells a route differently, so what reached the
+-- product was the framework's own syntax. On prod that is 1,540 endpoints
+-- carrying @:name@ across 13 projects, 673 ending in a regex @$@, and 162
+-- truncated mid-pattern — Django's @(?P\<pk\>[^\/.]+)@ contains a @?@, and
+-- 'LogQueries.normalizeUrlPath' strips a URL's query string at the first one:
+--
+-- >>> normalizeHttpRoute "api/v1/wallets/(?P<pk>[^/.]+)/initiate_bank_transfer/$"
+-- "/api/v1/wallets/{pk}/initiate_bank_transfer/"
+--
+-- >>> normalizeHttpRoute "^api/v1/exchange_rates/get_exchange_rate/$"
+-- "/api/v1/exchange_rates/get_exchange_rate/"
+--
+-- The named-group rewrite runs before any @\/@ split on purpose: the character
+-- class @[^\/.]@ contains a slash, so splitting first shreds the pattern — which
+-- is how @api\/v1\/wallets\/(@ came to be an endpoint.
+--
+-- Every other router syntax we see, normalising to the same shape:
+--
+-- >>> map normalizeHttpRoute ["/v1/rates/:id/history", "/users/:userId?", "/a/{id}/b"]
+-- ["/v1/rates/{id}/history","/users/{userId}","/a/{id}/b"]
+--
+-- >>> map normalizeHttpRoute ["/o/{id:int}/x", "/l/{user?}", "/g/{rest...}", "/n/{*slug}"]
+-- ["/o/{id}/x","/l/{user}","/g/{rest}","/n/{slug}"]
+--
+-- >>> map normalizeHttpRoute ["/f/<int:page>", "/f/<name>", "/f/<path:sub>"]
+-- ["/f/{page}","/f/{name}","/f/{sub}"]
+--
+-- A concrete path is left alone — which is what keeps the legacy SDK bridge
+-- honest, since 'createSpanAttributes' synthesises @http.route@ from the raw
+-- URL. It carries no template, so it stays a URL and the id heuristics still get
+-- their turn at it:
+--
+-- >>> map normalizeHttpRoute ["/users/123/posts", "/ns:resource:123", ""]
+-- ["/users/123/posts","/ns:resource:123",""]
+--
+-- Only a whole segment counts as a parameter, so a colon inside one is data:
+-- @ns:resource@ above is an id, not a route named @resource@.
+--
+-- No @?@ survives, which is what lets the result keep flowing through
+-- 'LogQueries.normalizeUrlPath' (whose query-strip would otherwise truncate it)
+-- without that function having to learn the difference:
+--
+-- >>> T.any (== '?') $ normalizeHttpRoute "api/(?P<a>[^/.]+)/x/{b?}/:c?"
+-- False
+normalizeHttpRoute :: Text -> Text
+normalizeHttpRoute route
+  | T.null route = route
+  | otherwise = leadingSlash $ T.intercalate "/" $ map routeSegment $ T.splitOn "/" anchorless
+  where
+    anchorless = T.dropWhileEnd (== '$') $ T.dropWhile (== '^') $ namedGroups route
+    leadingSlash p = if T.isPrefixOf "/" p then p else "/" <> p
+    -- Django writes its parameters as Python named capture groups.
+    namedGroups t = case T.breakOn "(?P<" t of
+      (before, rest)
+        | T.null rest -> before
+        | (name, rest') <- T.breakOn ">" (T.drop 4 rest)
+        , (_, rest'') <- T.breakOn ")" (T.drop 1 rest')
+        , not (T.null rest')
+        , not (T.null rest'') ->
+            before <> "{" <> name <> "}" <> namedGroups (T.drop 1 rest'')
+        -- Unbalanced: hand the rest back verbatim rather than invent a parameter.
+        | otherwise -> t
+    routeSegment s = case T.uncons s of
+      -- Express, Gin, Rails, Fastify.
+      Just (':', name) | isIdentifier (T.dropWhileEnd (== '?') name) -> brace name
+      -- Flask/Werkzeug, optionally with a converter (@\<int:page\>@).
+      Just ('<', _) | T.isSuffixOf ">" s, T.length s > 2 -> brace $ snd $ T.breakOnEnd ":" $ T.init $ T.drop 1 s
+      -- ASP.NET, Laravel, Spring, Go 1.22 — already braced, but decorated.
+      Just ('{', _) | T.isSuffixOf "}" s, T.length s > 2 -> brace $ T.init $ T.drop 1 s
+      _ -> s
+    -- Strip the decorations every router hangs off a parameter name: optional
+    -- markers, catch-all stars, Go's ellipsis, and type constraints or defaults.
+    brace name = "{" <> T.takeWhile (\c -> c /= ':' && c /= '=') (T.dropWhileEnd (== '.') $ T.dropWhileEnd (== '?') $ T.dropWhile (== '*') name) <> "}"
+    isIdentifier n = not (T.null n) && T.all (\c -> isAlphaNum c || c == '_' || c == '-') n
+
+
+-- | Did the framework hand us a template we can trust over our own guessing?
+--
+-- Both halves matter. A route with no parameter is just a path and tells us
+-- nothing our heuristics would not have concluded anyway; a route with no
+-- literal segment is a catch-all (@\/{path}@, an SPA fallback, a proxy mount),
+-- and promoting one to a canonical template would let it swallow every path of
+-- its length in the project.
+--
+-- >>> map routeIsAuthoritative ["/users/{id}", "/a/{x}/b/{y}"]
+-- [True,True]
+--
+-- >>> map routeIsAuthoritative ["/users/list", "/{path}", "/{a}/{b}", ""]
+-- [False,False,False,False]
+routeIsAuthoritative :: Text -> Bool
+routeIsAuthoritative p = any isBracedPlaceholder segs && any (\s -> not (T.null s) && not (isBracedPlaceholder s)) segs
+  where
+    segs = T.splitOn "/" p
+
+
 -- | A path segment written by a web framework's router rather than a client,
 -- in any of the four syntaxes SDKs report: @:id@, @{id}@, @\<id\>@, @[id]@.
 --
@@ -1157,13 +1293,16 @@ type CanonicalPathIndex = HM.HashMap (Text, Text, Int) [([Text], Text)]
 data PathClassifier = PathClassifier
   { templates :: CanonicalPathIndex
   , idPrefixes :: [Text]
+  , knownHashes :: HashSet.HashSet Text
+  -- ^ Endpoint hashes the project already has. A set rather than the cache's
+  -- vector because this is consulted per span, twice, on the ingest path.
   }
 
 
 -- | A classifier that knows nothing about any project: no templates, no learned
 -- prefixes, so only the generic rules apply.
 emptyPathClassifier :: PathClassifier
-emptyPathClassifier = PathClassifier{templates = HM.empty, idPrefixes = []}
+emptyPathClassifier = PathClassifier{templates = HM.empty, idPrefixes = [], knownHashes = HashSet.empty}
 
 
 -- | Build the per-project classification context. Once per batch, not per span.
@@ -1172,6 +1311,7 @@ mkPathClassifier pjc =
   PathClassifier
     { templates = parseCanonicalPaths pjc.canonicalPaths
     , idPrefixes = V.toList pjc.idRulePrefixes
+    , knownHashes = HashSet.fromList $ V.toList pjc.endpointHashes
     }
 
 
