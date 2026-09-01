@@ -311,3 +311,35 @@ constant and the new pair.
 explicit post-restore signal rather than a bounded `scrollSettling` poll — and
 then bisect. Do not spend more time on local reverts; they are not measuring
 what they appear to measure.
+
+## Retraction (2026-09-01 ~04:50) — the correction above was wrong, and so was the bisect it corrected
+
+**`scripts/e2e.sh` does not build anything.** It runs whatever
+`cabal list-bin monoscope-server` already points at (line 40-41). So every
+Haskell-side revert in both bisects — `LogQueryBox.hs`, `Log.hs`,
+`Components.hs`, `Table.hs`, `Widget.hs` — changed nothing about the server the
+browser was talking to. Only the TS and CSS reverts took effect, because those
+are served as static files.
+
+That is why "reverting to last-green still fails": the Haskell half of
+last-green was never actually under test.
+
+**After `cabal build monoscope-server`, the current tree is green: 43 passed, 0
+failed, 5 skipped.** `611d1aa82`'s revert of the query-box wrapper fixed both
+failures — `query-editor.spec.ts` and `log-list-virtual-scroll.spec.ts` — which
+also confirms the query-box chrome, not the log-list work, was the cause of
+both.
+
+**Rule for anyone bisecting an e2e failure here:**
+
+```bash
+cabal build monoscope-server     # REQUIRED after any .hs change
+make post-css                    # after any CSS change
+cd web-components && npx vite build --mode development   # after any TS change
+scripts/e2e.sh tests/<spec>
+```
+
+Skip the first line and you are testing a stale binary while believing you are
+testing your revert. Note also that a `--mode production` vite build empties
+`dist/` and changes the manifest hash that `BodyWrapper.hs` TH-splices, so the
+server must be rebuilt after one or *every* spec fails on a broken page.

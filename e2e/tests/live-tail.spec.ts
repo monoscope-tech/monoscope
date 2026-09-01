@@ -101,9 +101,7 @@ test.describe("Live Tail", () => {
     await page.goto(LIVE_TAIL_URL, { waitUntil: "domcontentloaded" });
     const component = page.locator("live-tail");
     await component.locator("query-editor").click();
-    // Renamed from "Open AI search" when the control became the "Ask AI" affordance; it is
-    // still the same standalone-ai-search button, still keyboard-reachable.
-    await component.getByRole("button", { name: "Ask AI" }).click();
+    await component.getByRole("button", { name: "Open AI search" }).click();
     await component.getByLabel("AI search prompt").fill("errors in checkout");
     await component.getByRole("button", { name: "Submit AI search" }).click();
 
