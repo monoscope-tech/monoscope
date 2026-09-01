@@ -288,8 +288,11 @@ instance Enum a => HI.EncodeValue (WrappedEnumInt a) where
   encodeValue = contramap (\(WrappedEnumInt a) -> fromEnum a) HI.encodeValue
 
 
+-- Fails the decode on an out-of-range int rather than silently yielding the first
+-- constructor, matching the 'FromField' instance above. The former @fromMaybe minBound@
+-- turned a bad DB value into a valid-looking domain value with no signal anywhere.
 instance (Bounded a, Enum a) => HI.DecodeValue (WrappedEnumInt a) where
-  decodeValue = WrappedEnumInt . fromMaybe minBound . safeToEnum <$> HI.decodeValue
+  decodeValue = D.refine (\n -> maybeToRight ("Invalid enum int: " <> show n) (WrappedEnumInt <$> safeToEnum n)) (HI.decodeValue @Int)
 
 
 -- | OpenApi half of the shared deriving wrappers. Kept out of 'Pkg.Deriving' so
