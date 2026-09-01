@@ -369,3 +369,18 @@ Skip the first line and you are testing a stale binary while believing you are
 testing your revert. Note also that a `--mode production` vite build empties
 `dist/` and changes the manifest hash that `BodyWrapper.hs` TH-splices, so the
 server must be rebuilt after one or *every* spec fails on a broken page.
+
+## Local e2e environment is damaged (CI is not)
+
+I deleted `static/public/assets/web-components/dist` to test whether a stale bundle explained a
+local/CI disagreement. Rebuilding it (`npm run watch`, which is `vite build --watch --mode
+development`) regenerates every directory and the manifest, and the globals the tests look for
+(`filterByField`, `viewFieldPatterns`) are present in `js/index.*.js` — but the local e2e server
+still serves a page where they never reach `window`, and 16 specs now fail locally that CI
+passes. Recompiling the asset-hash splice (`touch src/Pages/BodyWrapper.hs`) did not fix it.
+
+**CI is unaffected** — its `Build Frontend` job builds from source and has been green on every
+run. Trust CI over a local e2e run until this is sorted. Whoever picks it up: the likely culprit
+is the server binary's TH-spliced asset hashes not being invalidated by a manifest change in the
+path `scripts/e2e.sh` builds through, so start by confirming which `index.*.js` the e2e server
+puts in the page against `dist/manifest.json`.
