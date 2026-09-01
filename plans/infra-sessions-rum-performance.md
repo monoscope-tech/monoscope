@@ -268,3 +268,46 @@ this by adjusting insets would be fixing the wrong layer.
 
 Left for the owner of that work — the query-box/editor changes are an active workstream and this
 is their area, not the infra/RUM one.
+
+---
+
+## Correction (2026-09-01 ~04:15) — the local bisect above does not hold for spec 1
+
+`log-list-virtual-scroll.spec.ts` **fails locally regardless of the source under
+test**, so a local revert cannot rule anything in or out for it.
+
+Measured, on a clean tree, reverting to `8a61f2e60` in widening circles and running
+`scripts/e2e.sh tests/log-list-virtual-scroll.spec.ts` after each:
+
+| reverted to `8a61f2e60` | result |
+|---|---|
+| `query-editor.ts`, `types.ts`, `log-worker-functions.ts` | same failure |
+| + `log-list.ts`, `widgets.ts`, `LogQueryBox.hs`, `Log.hs`, `Components.hs`, `tailwind.css` | same failure |
+| + `Table.hs`, `Widget.hs`, `stat-value.ts`, `chart-cli.ts` | same failure |
+| restored to HEAD | same failure |
+
+Every log-explorer-rendering file at the last-green commit, the spec itself
+unchanged since then (`git diff 8a61f2e60..HEAD -- e2e/` touches only
+`live-tail.spec.ts` and `query-editor.spec.ts`) — and it still reports
+`older-0-00100` for `seed-02495`, deterministically.
+
+So the conclusion above — "reverting only `log-list.ts` still fails, therefore the
+log-list work is not the cause" — is **unsupported**: that revert fails for the
+same reason every other revert does.
+
+**Database state is not the variable.** The spec stubs `**/log_explorer/data**`
+to an empty result and builds all 2,500 seed + 400 older rows synthetically via
+`makeRows`, driving `list.fetchData` directly. Local and CI see identical data.
+
+What is left is the environment: CI's Linux container Chromium vs local macOS
+Chromium, i.e. row metrics or the timing of the post-remount anchor restore
+(the spec polls `list.scrollSettling` for 20 × 25ms). Note `COUNT + PAGE`
+(2,900) exceeds `RETENTION_LIMIT` on the **first** load-more, so a retention cut
+and virtualizer remount fire immediately — under both the old single-threshold
+constant and the new pair.
+
+**Therefore:** only CI can discriminate for this spec. Either bisect through CI
+(~40 min per round trip), or first make the spec deterministic — wait on an
+explicit post-restore signal rather than a bounded `scrollSettling` poll — and
+then bisect. Do not spend more time on local reverts; they are not measuring
+what they appear to measure.
