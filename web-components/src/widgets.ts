@@ -472,7 +472,16 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   try {
     const url = chartDataUrl(widgetData);
     const { from, to, headers, dataset, rows_per_min, stats, error } =
-      (await takePrefetched(chartId, url)) ?? (await limitedFetch(url, signal).then((res) => res.json()));
+      (await takePrefetched(chartId, url)) ??
+      (await limitedFetch(url, signal).then((res) => {
+        // Not res.json() straight off: a non-2xx body is HTML (an error page, or a 404 from a
+        // route/chunk that moved in a deploy), and parsing that throws Safari's opaque
+        // "The string did not match the expected pattern" — which is what the catch below
+        // logged, with no status to act on. Guarded by the non-2xx test in
+        // widgets-auto-refresh.test.ts; if you revert this file wholesale, that test tells you.
+        if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
+        return res.json();
+      }));
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
