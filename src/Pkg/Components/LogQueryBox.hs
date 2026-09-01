@@ -166,7 +166,7 @@ logQueryBox_ config = do
               div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
-                  ([id_ "filterElement", class_ $ "w-full flex items-center min-h-8" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-8" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                       -- The editor validates against the server, which needs the same source the
                       -- query will run under: metrics live in another table, so without this the
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
@@ -557,13 +557,53 @@ popularSearchChips_ pid showChips =
 
 
 -- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
+-- | How many example values a field advertises for autocomplete, and how long one may be.
+--
+-- Uncapped, this was 93% of a 713KB response that every log-explorer session downloads,
+-- parses and holds for its lifetime: 1,610 timestamps on @events.[*].event_time@, 496 whole
+-- log lines on @attributes.log.original@ (100KB by itself), 500 opaque hex strings on
+-- @traceparent@. None of that is a suggestion anyone picks from — the completion list shows a
+-- handful, and a high-cardinality opaque field has no useful suggestions at all.
+--
+-- Kept by descending frequency, so what survives is what a reader is most likely to want.
+facetExamplesPerField :: Int
+facetExamplesPerField = 25
+
+
+facetExampleMaxLength :: Int
+facetExampleMaxLength = 120
+
+
+-- | The example values one field advertises for autocomplete, most frequent first.
+--
+-- Ordered by frequency and capped, whatever order they arrive in:
+--
+-- >>> facetExamples [FacetValue (show n) n | n <- [1 .. 100 :: Int]] == map show [100, 99 .. 76 :: Int]
+-- True
+--
+-- A value too long to be a suggestion is dropped rather than truncated — half a log line
+-- completes to nothing — however common it is:
+--
+-- >>> facetExamples [FacetValue (T.replicate 200 "x") 9999, FacetValue "cart" 1]
+-- ["cart"]
+--
+-- >>> facetExamples []
+-- []
+facetExamples :: [FacetValue] -> [Text]
+facetExamples =
+  take facetExamplesPerField
+    . map (.value)
+    . sortOn (Down . (.count))
+    . filter ((<= facetExampleMaxLength) . T.length . (.value))
+
+
 enrichSchemaWithFacets :: Schema.Schema -> FacetData -> AE.Value
 enrichSchemaWithFacets schema (FacetData facetMap) =
   AE.toJSON $ schema{Schema.fields = HM.foldlWithKey' mergeField schema.fields facetMap}
   where
     mergeField acc facetKey facetVals =
       let dotKey = T.replace "___" "." $ T.replace "severity___severity_" "severity." facetKey
-          vals = Just $ map (.value) facetVals
+          vals = Just $ facetExamples facetVals
        in Map.alter (Just . maybe (Schema.FieldInfo "string" "" vals) (\fi -> fi{Schema.examples = vals})) dotKey acc
 
 
