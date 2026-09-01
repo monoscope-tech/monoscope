@@ -222,3 +222,33 @@ fits is unchanged, and one that does not now scrolls instead of hiding columns.
 images, kubernetes and host-map are each their own route — so this is only reachable by typing
 the URL. A redirect to `/infrastructure/hosts` would be polite, but nothing in the product is
 broken by its absence.
+
+## CI state at hand-off (2026-09-01 ~03:00)
+
+**`Build and Test` is red on master, so `Deploy to CapRover` is skipped and none of tonight's
+work is live yet.** Two Playwright e2e tests fail, reproduced locally (41 passed, 2 failed,
+5 skipped — same as CI):
+
+1. `log-list-virtual-scroll.spec.ts:10` — "deep paging and live delivery preserve the row under
+   the reader". The reader's top row moves from `seed-02495` to `older-0-00100` on the first
+   load-more.
+2. `query-editor.spec.ts:41` — the query editor's top/bottom inset differs by 2px, not ≤1.
+
+**Neither is caused by the log-list or infra work.** Established by bisect, not assumed: on a
+clean tree at current master, reverting *only* `web-components/src/log-list.ts` to its
+last-green version (`8a61f2e60`) still fails the same way. The retention constants, the layout
+specifier hoist, the rAF-coalesced scroll handler and the `isRepositioning` buffer guard were
+each reverted individually as well — no change.
+
+What the timeline says instead: `8a61f2e60` was fully green (48 e2e tests, 43 passed, 5
+skipped). The next push carried two commits, and the *other* one — `6c092c2d8`, the in-flight
+query-box/query-editor/widgets work that was in the tree and got committed along with the log
+explorer fix — is where the query-box geometry changed. That matches failure 2 exactly, and
+failure 1 is on a spec that drives the real log-explorer page chrome. The same session has
+since pushed `471f57fba` ("point the AI-search and editor-geometry specs at what the markup now
+is"), which fixed a third failure but not these two.
+
+**Next step for whoever picks this up:** the repro is 6 seconds —
+`scripts/e2e.sh tests/log-list-virtual-scroll.spec.ts`. Bisect `6c092c2d8`'s frontend files
+(`query-editor.ts`, `widgets.ts`, `types.ts`, `log-worker-functions.ts`) and
+`src/Pkg/Components/LogQueryBox.hs` rather than the log-list, which is already ruled out.
