@@ -455,7 +455,6 @@ spec = sequential $ aroundAll withTestResources do
       (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml gone) `shouldContainAll` ["no longer reporting"]
 
-
     -- The pivot reads the newest datapoint per series, so scanning the picker's whole window
     -- can only turn up older points it then discards -- while paying to sort every one. Over a
     -- day that cost the statement timeout, which meant the snapshot never cached and every load
