@@ -3253,7 +3253,7 @@ processAPIChangeAnomalies pid targetHashes = do
 -- rendering collapses.
 --
 -- >>> import "monoscope" BackgroundJobs qualified as BJ
--- >>> import Pkg.EmailTemplates qualified as ET
+-- >>> import "monoscope" Pkg.EmailTemplates qualified as ET
 -- >>> let row l = ET.EndpointAlertRow l (Just "api") Nothing Nothing
 -- The reported incident, in miniature — and note that every member's id comes
 -- back on the collapsed row, so a single line still claims all of them and none
