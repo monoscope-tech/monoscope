@@ -1143,7 +1143,12 @@ export class QueryEditorComponent extends LitElement {
       wordWrapOverride2: 'on',
       glyphMargin: false,
       folding: false,
-      padding: { top: 8, bottom: 8 },
+      // 9, not 8, so that one line is exactly the 38px the shell reserves for it
+      // (`min-h-[38px]`): 9 + lineHeight 20 + 9. At 8 the editor's content came to 36, sat
+      // top-aligned in the 38px box — the wrapper is a block, so nothing centred it — and the
+      // text rendered a pixel high, 9px of space above it against 11px below. The two numbers
+      // are coupled: change lineHeight or the shell's min-height and this has to follow.
+      padding: { top: 9, bottom: 9 },
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
