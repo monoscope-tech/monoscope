@@ -280,7 +280,8 @@ abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 | library (`ghcid`) | **green**, 128 modules, zero warnings |
 | `make test-unit` | **green** — 271 examples, 0 failures |
 | `make test-doctests` | 1348 examples, **0 errors, 1 failure — pre-existing** (below) |
-| `make test-integration` | **partial** — 270 specs passed, 0 failures, then the run was terminated (see below) |
+| `make test-integration` (full) | **partial** — 270 examples, 0 failures, then terminated by a signal (see below) |
+| `test-integration` (targeted) | **148 examples, 1 failure — pre-existing, proven** (see below) |
 | browser / running app | **not run** — port 8080 belongs to the other checkout |
 
 The library watcher compiles `src/` only, so it cannot catch a broken spec. Running the
@@ -305,6 +306,27 @@ sweep (I checked its tree, `53177 → 56605 → 56613`, against every pid before
 signal, and it was still alive afterwards). The likely cause is memory pressure: swap was
 at 15.7 GB of 16.4 GB with three Claude instances and four GHC sessions resident.
 A targeted re-run over the areas this branch touches followed.
+
+**The targeted re-run** (`-m Timefusion -m Containers -m Infrastructure -m ServiceMap
+-m Anomalies -m Settings -m Widget -m LogExplorer`, i.e. every area this branch touches)
+gave 148 examples, 1 failure:
+
+`Pages.LogExplorer.Log › queryEditor_keepsRestingBoundariesQuietUntilFocus`
+(`test/integration/Pages/LogExplorer/LogSpec.hs:884`).
+
+**Pre-existing, and provably not from this work.** The failing assertion is
+`html \`shouldSatisfy\` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-full"`,
+and that string does not occur anywhere in `src` — not on this branch, not at the fork
+point `823431ef`, and not on `master`. The spec file is also byte-identical to the fork
+point (`git diff 823431ef HEAD -- …/LogSpec.hs` is empty). So the assertion was already
+red before the branch existed.
+
+This fits the recent history around the query editor — `c4265b23` ("restore the query box
+and trace overlay markup a bad commit reverted"), `52dc7e24`, `f67338f3`, `8b2802be`
+("the damaged local e2e environment"). A markup revert appears to have taken this class
+string with it and this assertion was never re-pointed. **Worth fixing on its own**: either
+restore the class on the element or update the assertion to whatever the shell now renders
+— but decide which is correct rather than just making it green.
 
 **If you re-run it:** watch swap first. The box was thrashing hard enough to show a load
 average of 220 on 10 cores, almost entirely paging I/O rather than CPU.
