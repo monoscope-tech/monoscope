@@ -70,7 +70,6 @@ import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (makeAttribute)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -964,7 +963,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
           span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
             faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-            input_ [type_ "text", placeholder_ searchPh, makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
+            input_ [type_ "text", placeholder_ searchPh, term "_" [text|on input show <tr/> in #${secId} when its textContent.toLowerCase() contains my value.toLowerCase()|]]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""

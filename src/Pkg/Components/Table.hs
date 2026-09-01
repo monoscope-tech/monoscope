@@ -45,6 +45,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import NeatInterpolation (text)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, facetOption_, facetRail_, facetSection_)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
@@ -726,7 +727,7 @@ renderSearch elemID searchPlaceholder searchMode =
       $ [type_ "text", class_ "grow", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
       <> case searchMode of
         ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
-        ClientSide -> [term "_" $ "on input show .itemsListItem in #" <> elemID <> "_page when its textContent.toLowerCase() contains my value.toLowerCase()"]
+        ClientSide -> [term "_" [text|on input show .itemsListItem in #${elemID}_page when its textContent.toLowerCase() contains my value.toLowerCase()|]]
 
 
 renderSortMenu :: SortConfig -> Html ()
