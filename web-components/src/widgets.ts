@@ -455,19 +455,24 @@ const takePrefetched = async (chartId: string, url: string): Promise<any> => {
 ((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
 (window as any).__chartPrefetch = { push: prefetchChartData };
 
-const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal) => {
+// `showLoader` is false for a refresh nobody asked for. A timer tick that swaps the loader in
+// over a chart that is already drawn reads as the page breaking, several times a minute, and it
+// tells the reader nothing they need — the previous rendering stays correct right up until the
+// new data replaces it. Loaders belong to the initial load and to explicit user actions.
+const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal, showLoader = true) => {
   if (!shouldFetch || signal.aborted) return;
 
   const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
   // Batch DOM updates before fetch
-  requestAnimationFrame(() => {
-    const loader = $(`${chartId}_loader`);
-    const borderedItem = $(`${chartId}_bordered`);
+  if (showLoader)
+    requestAnimationFrame(() => {
+      const loader = $(`${chartId}_loader`);
+      const borderedItem = $(`${chartId}_bordered`);
 
-    if (loader) loader.classList.remove('hidden');
-    if (borderedItem) borderedItem.classList.add('spotlight-border');
-  });
+      loader?.classList.remove('hidden');
+      borderedItem?.classList.add('spotlight-border');
+    });
 
   try {
     const url = chartDataUrl(widgetData);
@@ -853,21 +858,24 @@ const chartWidget = (widgetData: WidGetData) => {
     widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
   };
 
+  // A chart refreshes its own data and nothing else. It used to also call
+  // `logListTable.refetchLogs()`, which made every chart on the page order a full replacement of
+  // the log list: two charts, two replacements per event, each one throwing away the reader's
+  // rows and their scroll position. The list listens for these same events itself and knows
+  // which ones deserve an incremental newer-cursor fetch rather than a replacement — that
+  // decision belongs to it, not to whatever charts happen to be mounted beside it.
   ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
-    document.querySelector(selector)?.addEventListener(event, (e: any) => {
+    document.querySelector(selector)?.addEventListener(event, () => {
       updateQuery();
-      if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
-      updateChartData(chart, opt, true, widgetData, controller.signal);
+      updateChartData(chart, opt, true, widgetData, controller.signal, false);
     }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: any) => {
     updateQuery();
     if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
-    if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
-      (window.logListTable as any).refetchLogs();
-    updateChartData(chart, opt, true, widgetData, controller.signal);
+    updateChartData(chart, opt, true, widgetData, controller.signal, false);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
