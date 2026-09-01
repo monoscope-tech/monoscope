@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, infrastructureNavTabs_, kqlQuoted, toUriStr)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, toUriStr)
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -509,7 +509,7 @@ imagesTable pid window runtimeM registryM images allImages =
         , col "Tags" renderTags & withAttrs [class_ "w-64 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
         , col "CPU" (\image -> plainCell $ fmap (<> " cores") $ Containers.showFFloat' 2 <$> image.cpuCores) & withAttrs [class_ "w-24 text-right"]
-        , col "Memory" (\image -> plainCell $ Containers.formatBytes <$> image.memoryBytes) & withAttrs [class_ "w-24 text-right"]
+        , col "Memory" (\image -> plainCell $ formatBytes <$> image.memoryBytes) & withAttrs [class_ "w-24 text-right"]
         , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-md:hidden"]
         ]
     , rows = images
@@ -578,7 +578,7 @@ imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         "grid-cols-3 max-sm:grid-cols-1 max-sm:divide-x-0 max-sm:divide-y"
         [ ("Running containers", show image.running)
         , ("CPU used", maybe "—" (\value -> Containers.showFFloat' 2 value <> " cores") image.cpuCores)
-        , ("Memory used", maybe "—" Containers.formatBytes image.memoryBytes)
+        , ("Memory used", maybe "—" formatBytes image.memoryBytes)
         ]
     section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
       h3_ [class_ "font-semibold text-textStrong"] "Image tags"
@@ -720,7 +720,7 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
         , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right"]
         , col "CPU" (\row -> plainCell $ fmap (<> " cores") $ Containers.showFFloat' 2 <$> row.cpuCores) & withAttrs [class_ "w-24 text-right"]
         , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-36 max-md:hidden"]
-        , col "Memory" (\row -> plainCell $ Containers.formatBytes <$> row.memoryBytes) & withAttrs [class_ "w-24 text-right"]
+        , col "Memory" (\row -> plainCell $ formatBytes <$> row.memoryBytes) & withAttrs [class_ "w-24 text-right"]
         , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-40 max-md:hidden"]
         , col "Restarts" (\row -> plainCell $ Containers.showFFloat' 0 <$> row.restarts) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
@@ -806,7 +806,7 @@ kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         [ ("Containers", show row.containers)
         , ("CPU", maybe "—" (\value -> Containers.showFFloat' 2 value <> " cores") row.cpuCores)
         , ("CPU / limit", maybe "—" (\value -> Containers.showFFloat' 0 (value * 100) <> "%") row.cpuPct)
-        , ("Memory", maybe "—" Containers.formatBytes row.memoryBytes)
+        , ("Memory", maybe "—" formatBytes row.memoryBytes)
         , ("Restarts", maybe "—" (Containers.showFFloat' 0) row.restarts)
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."

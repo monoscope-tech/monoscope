@@ -19,7 +19,6 @@ import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
-import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
@@ -29,7 +28,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerRowAttrs_, faSprite_, infrastructureNavTabs_, toUriStr)
+import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat', toUriStr)
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -346,32 +345,6 @@ containerDetail_ pid r = div_ [class_ "min-h-full"] do
       [ ("View logs", "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr subject)
       , ("View metrics", "/p/" <> pid.toText <> "/metrics?metric_prefix=" <> toUriStr (maybe "container." (const "k8s.") r.podName))
       ]
-
-
--- | Fixed-decimal rendering.
---
--- >>> showFFloat' 3 0.0158
--- "0.016"
--- >>> showFFloat' 0 79.6
--- "80"
-showFFloat' :: Int -> Double -> Text
-showFFloat' places x = toText $ showFFloat (Just places) x ""
-
-
--- | Binary units, matching how a kubelet limit is written (@1Gi@, not @1GB@).
---
--- >>> formatBytes 0
--- "0 B"
--- >>> formatBytes 1536
--- "1.5 KiB"
--- >>> formatBytes 1073741824
--- "1 GiB"
-formatBytes :: Double -> Text
-formatBytes = go "B" ["KiB", "MiB", "GiB", "TiB", "PiB"]
-  where
-    go _ (next : rest) v | abs v >= 1024 = go next rest (v / 1024)
-    go unit _ v = trim v <> " " <> unit
-    trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 
 
 containerCharts_ :: Projects.ProjectId -> Html ()

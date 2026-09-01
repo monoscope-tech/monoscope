@@ -113,7 +113,7 @@ import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
 import UnliftIO.Exception (throwIO, try, tryAny)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatBytes, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -1246,7 +1246,7 @@ billingPage d = div_ [] do
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
         div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
-        let bytesSuffix = bool "" (" · " <> humanBytes d.totalBytes) (d.totalBytes > 0)
+        let bytesSuffix = bool "" (" · " <> formatBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
               if isFree || overageNum <= 0
                 then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
@@ -1288,18 +1288,6 @@ fmtDate :: FormatTime t => String -> t -> Text
 fmtDate f = toText . formatTime defaultTimeLocale f
 
 
--- | Format a byte count with the largest unit it fits into. KB-step decimal
--- (matches what most cloud billing pages render), one decimal past KB.
-humanBytes :: Int64 -> Text
-humanBytes b
-  | b < 1024 = show b <> " B"
-  | b < 1_048_576 = fmtNum (fromIntegral b / 1024 :: Double) <> " KB"
-  | b < 1_073_741_824 = fmtNum (fromIntegral b / 1_048_576 :: Double) <> " MB"
-  | otherwise = fmtNum (fromIntegral b / 1_073_741_824 :: Double) <> " GB"
-  where
-    fmtNum n = toText (printf "%.1f" n :: String)
-
-
 -- | Sticky table header cell: opaque background so scrolled rows can't show through.
 stickyTh_ :: Text -> Html () -> Html ()
 stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
@@ -1316,7 +1304,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
   let cycleRows = filter (\(d, _, _, _, _) -> d >= cycleStartDay) rows
       totalReqs = sum [n | (_, n, _, _, _) <- cycleRows]
       totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- cycleRows]
-      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> humanBytes totalBytes) (totalBytes > 0)
+      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0)
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
@@ -1366,7 +1354,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                   $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
                 when (bytes > 0)
                   $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
-                  $ toHtml @Text (humanBytes bytes)
+                  $ toHtml @Text (formatBytes bytes)
           tbody_ do
             forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
@@ -1432,7 +1420,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
           tr_ [class_ "border-t border-strokeWeak"] do
             td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
             td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (humanBytes bytes) (bytes > 0))
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (formatBytes bytes) (bytes > 0))
             td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml costText
   unless isFree
     $ div_ [class_ "text-xs text-textWeak"] "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."

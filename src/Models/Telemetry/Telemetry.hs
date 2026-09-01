@@ -154,7 +154,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (extractMessageFromLog, formatBytes, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
 
 -- $setup
@@ -2681,14 +2681,6 @@ clickTargetLabel attrs =
     $ map (`atMapText` attrs) ["target.aria_label", "aria.label", "target.text_content", "text_content", "target.element", "target_element", "target.tag_name", "target.xpath", "event_type"]
 
 
--- | Format a byte count compactly (e.g. 340000 → "340KB").
-humanBytes :: Int -> T.Text
-humanBytes n
-  | n < 1024 = show n <> "B"
-  | n < 1024 * 1024 = show (n `div` 1024) <> "KB"
-  | otherwise = show (n `div` (1024 * 1024)) <> "MB"
-
-
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
@@ -2786,7 +2778,7 @@ generateSpanSummary otel =
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
-        , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
+        , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (formatBytes n)
         , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration

@@ -43,6 +43,8 @@ module Utils (
   nestedJsonFromDotNotation,
   prettyPrintCount,
   formatWithCommas,
+  formatBytes,
+  showFFloat',
   sanitizeBackendError,
   extractMessageFromLog,
   nonEmptyT,
@@ -123,7 +125,7 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Numeric (showHex)
+import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
@@ -825,6 +827,32 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
 
 freeTierDailyMaxEvents :: Integer
 freeTierDailyMaxEvents = 10000
+
+
+-- | >>> showFFloat' 3 0.0158
+-- "0.016"
+-- >>> showFFloat' 0 79.6
+-- "80"
+showFFloat' :: Int -> Double -> Text
+showFFloat' places x = toText $ showFFloat (Just places) x ""
+
+
+-- | The one byte formatter. Binary units, matching how a kubelet limit is written
+-- (@1Gi@, not @1GB@) and what the chart axis formatter renders client-side (see
+-- @isBytes@ in "Pkg.Components.Widget").
+--
+-- 'Real' rather than a fixed width so the @Int@, @Int64@ and @Double@ call sites
+-- share it; it replaced three formatters that disagreed on both the divisor and
+-- the unit spelling.
+--
+-- >>> map formatBytes [0 :: Int, 1536, 1073741824]
+-- ["0 B","1.5 KiB","1 GiB"]
+formatBytes :: Real a => a -> Text
+formatBytes = go "B" ["KiB", "MiB", "GiB", "TiB", "PiB"] . realToFrac
+  where
+    go _ (next : rest) v | abs v >= 1024 = go next rest (v / 1024)
+    go unit _ v = trim v <> " " <> unit
+    trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 
 
 -- | Pretty print count numbers, converting large values to K/M/B format.
