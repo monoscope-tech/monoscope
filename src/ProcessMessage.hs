@@ -158,11 +158,20 @@ data HttpKey = HttpKey
   -- ^ canonical path: SDK-normalised, dyn-param-rewritten, canonical-template-matched.
   , statusCode :: !Int
   , isHttpSpan :: !Bool
-  , fromRoute :: !Bool
-  -- ^ 'urlPath' is a template the framework's router supplied, not one derived
-  -- from a concrete URL. Such a path is not a guess and must not be re-guessed:
-  -- see 'frameworkCanonicalHashes'.
+  , pathSource :: !PathSource
   }
+
+
+-- | Where 'HttpKey.urlPath' came from, which decides whether anything downstream
+-- is allowed to second-guess it.
+data PathSource
+  = -- | Inferred from a concrete URL by the id heuristics. A guess, and
+    -- discovery may merge it into something better.
+    DerivedFromUrl
+  | -- | A template the framework's router matched the request against. Not a
+    -- guess, so it becomes its own canonical row — see 'Endpoints.frameworkCanonicalHashes'.
+    DeclaredByRouter
+  deriving stock (Eq, Show)
 
 
 httpKeyOf :: PathClassifier -> Telemetry.OtelLogsAndSpans -> HttpKey
@@ -174,7 +183,9 @@ httpKeyOf canonicalTemplates otelSpan =
       -- An empty @http.route@ means the router matched nothing (Django writes
       -- one for every unrouted request), so it is absence, not a route.
       !routeAttr = normalizeHttpRoute <$> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null))
-      !authoritativeRoute = maybe False routeIsAuthoritative routeAttr
+      -- The route we are willing to take as authority — carrying both the
+      -- decision and the value, so neither can be read without the other.
+      !authoritative = routeAttr >>= guarded routeIsAuthoritative
       !routePath = fromMaybe "/" $ routeAttr <|> (attrValue ^? key "url" . key "path" . _String)
       !statusCode =
         fromMaybe 200
@@ -209,25 +220,26 @@ httpKeyOf canonicalTemplates otelSpan =
       -- 'pathMatchesTemplate' treats either spelling as a wildcard, so once a
       -- template exists ingest settles on it.
       !candidate = bool urlPath' urlPathDyn hasDyn
+      hashFor p = toXXHash $ otelSpan.project_id <> host <> method <> p
+      known p = HashSet.member (hashFor p) canonicalTemplates.knownHashes
       -- An authoritative route skips the id heuristics — there is nothing left to
       -- infer, and inferring anyway would let a literal segment that merely looks
       -- generated (@\/v1\/{id}\/SHO3KOOWWN@) be collapsed out of a route the
       -- router just told us about.
-      !routeCandidate = fromMaybe candidate $ guard authoritativeRoute >> routeAttr
+      --
       -- Adopting the framework's parameter names renames every endpoint of every
       -- project already sending routes — 13 of them, 1,540 rows — and a rename is
       -- a new hash, so each would re-mint and re-notify. So the named form only
       -- wins where the project has nothing already: an existing row under either
       -- spelling keeps its hash, and only genuinely new routes arrive named.
-      !flattened = classifyUrlPathWith canonicalTemplates.idPrefixes routeCandidate
-      hashFor p = toXXHash $ otelSpan.project_id <> host <> method <> p
-      !urlPath
-        | not authoritativeRoute = fromMaybe candidate $ matchCanonicalPath canonicalTemplates.templates method host candidate
-        | HashSet.member (hashFor routeCandidate) canonicalTemplates.knownHashes = routeCandidate
-        | Just t <- matchCanonicalPath canonicalTemplates.templates method host routeCandidate = t
-        | HashSet.member (hashFor flattened) canonicalTemplates.knownHashes = flattened
-        | otherwise = routeCandidate
-   in HttpKey{method, host, urlPath, statusCode, isHttpSpan, fromRoute = authoritativeRoute && urlPath == routeCandidate}
+      !urlPath = case authoritative of
+        Nothing -> fromMaybe candidate $ matchCanonicalPath canonicalTemplates.templates method host candidate
+        Just route
+          | known route -> route
+          | Just t <- matchCanonicalPath canonicalTemplates.templates method host route -> t
+          | flattened <- classifyUrlPathWith canonicalTemplates.idPrefixes route, known flattened -> flattened
+          | otherwise -> route
+   in HttpKey{method, host, urlPath, statusCode, isHttpSpan, pathSource = bool DerivedFromUrl DeclaredByRouter (authoritative == Just urlPath)}
 
 
 -- | Extract entities for hash-stamping. Returns
@@ -248,7 +260,7 @@ httpKeyOf canonicalTemplates otelSpan =
 processSpanToEntities :: PathClassifier -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
-      HttpKey{method, host, urlPath, statusCode, isHttpSpan, fromRoute} = httpKeyOf canonicalTemplates otelSpan
+      HttpKey{method, host, urlPath, statusCode, isHttpSpan, pathSource} = httpKeyOf canonicalTemplates otelSpan
 
       -- Resolve service and environment from OTel resource attrs, falling back to span
       -- attributes for SDKs that put them there.
@@ -289,7 +301,7 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
       ( endpoint
       , V.singleton endpointHash
       , if isHttpSpan then Just urlPath else Nothing
-      , guard (fromRoute && isNewEndpoint) $> endpointHash
+      , guard (pathSource == DeclaredByRouter && isNewEndpoint) $> endpointHash
       )
 
 
