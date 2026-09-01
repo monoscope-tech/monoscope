@@ -338,59 +338,6 @@ window.exportTableCsv = (selector, filename) => {
   URL.revokeObjectURL(url);
 };
 
-// Convert CSS color (including oklch) to hex via pixel rendering
-const _maCanvas = document.createElement('canvas');
-_maCanvas.width = 1;
-_maCanvas.height = 1;
-const _maCtx = _maCanvas.getContext('2d', { willReadFrequently: true })!;
-const cssToHex = (token: string, fallback: string): string => {
-  const val = getComputedStyle(document.body).getPropertyValue(token).trim() || fallback;
-  _maCtx.clearRect(0, 0, 1, 1);
-  _maCtx.fillStyle = val;
-  _maCtx.fillRect(0, 0, 1, 1);
-  const [r, g, b] = _maCtx.getImageData(0, 0, 1, 1).data;
-  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
-};
-
-window.updateMarkAreas = function (chartId: string, warningVal: string, incidentVal: string) {
-  const warning = parseInt(warningVal, 10),
-    incident = parseInt(incidentVal, 10),
-    myChart = (window as any).echarts.getInstanceByDom(document.getElementById(chartId)),
-    options = myChart.getOption(),
-    modAlpha = (window as any).echarts.color.modifyAlpha,
-    warningColor = modAlpha(cssToHex('--color-fillWarning-strong', '#ffd400'), 0.4),
-    errorColor = modAlpha(cssToHex('--color-fillError-strong', '#ffadb1'), 0.5);
-
-  options.series.forEach((series: any) => {
-    series.markArea = {
-      label: { show: false },
-      data: [
-        ...(!isNaN(warning)
-          ? [
-              [
-                {
-                  name: 'Warning',
-                  yAxis: warning,
-                  itemStyle: { color: warningColor },
-                },
-                { yAxis: incident },
-              ],
-            ]
-          : []),
-        [
-          {
-            name: 'Incident',
-            yAxis: incident,
-            itemStyle: { color: errorColor },
-          },
-          { yAxis: 'max' },
-        ],
-      ],
-    };
-  });
-  myChart.setOption({ series: options.series }, false);
-};
-
 function updateUrlState(key: string | string[], value: string, action: 'set' | 'delete' = 'set') {
   const params = new URLSearchParams(window.location.search);
   for (const k of Array.isArray(key) ? key : [key]) {

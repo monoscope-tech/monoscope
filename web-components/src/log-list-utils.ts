@@ -36,12 +36,6 @@ export const STYLE_MAPPINGS = {
 } as const;
 
 
-// Column width calculation constants
-export const COLUMN_DEFAULTS = {
-  summary: 450 * 8.5,
-  latency_breakdown: 100,
-} as const;
-
 export const CHAR_WIDTHS = {
   timestamp: 7.2, // Adjusted for better timestamp display
   created_at: 7.2, // Adjusted for better timestamp display

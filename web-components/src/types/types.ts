@@ -37,7 +37,6 @@ declare global {
     serviceMapChart: any;
     downloadJson: (event: any) => void;
     getTimeRange: () => { from: string; to: string; since: string } | undefined;
-    updateMarkAreas: (chartId: string, warningVal: string, incidentVal: string) => void;
     formatNumber: (num: number) => string;
     getUTCOffset: () => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;

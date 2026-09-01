@@ -716,4 +716,3 @@ async function render(
 }
 
 (window as any).serviceMapChart = serviceMapChart;
-(window as any).getServiceMapHandle = getServiceMapHandle;
