@@ -19,6 +19,7 @@ module Models.Apis.Endpoints (
   getUnmergedEndpoints,
   getCanonicalTemplateKeys,
   getReviewedGroupHashes,
+  ReviewedGroup (..),
   recordGroupReviews,
   GroupReview (..),
   getGroupReviews,
@@ -708,13 +709,35 @@ fleetShapeReport =
              GROUP BY shape ORDER BY 3 DESC LIMIT 40 |]
 
 
--- | Membership hash of every group already reviewed, so a group is re-asked
--- exactly when its members change and never merely because time passed.
-getReviewedGroupHashes :: DB es => Projects.ProjectId -> Eff es (HM.HashMap Text Text)
-getReviewedGroupHashes pid =
+-- | What a previous review settled, as far as deciding whether to ask again goes.
+data ReviewedGroup = ReviewedGroup
+  { membersHash :: Text
+  , dueForReconfirm :: Bool
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+-- | Membership hash of every group already reviewed, paired with whether the
+-- group is due to be asked again even though nothing about it has changed.
+--
+-- Membership change was once the only trigger, so that a stable project cost no
+-- tokens. It also made the second confirmation unreachable: a group is only
+-- re-asked when it changes, so a project whose routes have settled stays at one
+-- confirmation forever and can never clear 'BackgroundJobs.mergeEvidenceMet'.
+-- Measured on the fleet, that is 983 of 1,069 reviews. Re-confirmation is
+-- therefore offered on time as well, but only to the groups where a second pass
+-- can actually change an outcome: a @param@ verdict, large enough to merge, not
+-- merged yet.
+getReviewedGroupHashes :: (DB es, Time :> es) => Projects.ProjectId -> Eff es (HM.HashMap Text ReviewedGroup)
+getReviewedGroupHashes pid = do
+  now <- Time.currentTime
   HM.fromList
+    . map (\(k, h, due) -> (k, ReviewedGroup{membersHash = h, dueForReconfirm = due}))
     <$> Hasql.interp
-      [HI.sql| SELECT group_key, members_hash FROM apis.endpoint_group_reviews WHERE project_id = #{pid} |]
+      [HI.sql| SELECT group_key, members_hash,
+                      verdict = 'param' AND applied_at IS NULL AND member_count >= 8
+                        AND created_at < #{now}::timestamptz - INTERVAL '7 days'
+               FROM apis.endpoint_group_reviews WHERE project_id = #{pid} |]
 
 
 -- | Upsert group verdicts. A changed membership replaces the old verdict rather

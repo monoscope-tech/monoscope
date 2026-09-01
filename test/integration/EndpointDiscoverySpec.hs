@@ -238,21 +238,45 @@ spec = around withTestResources do
     -- that carry the weight: agreement across passes, and a population that is
     -- still growing.
     describe "Evidence required before an LLM verdict may merge" do
-      it "refuses a single verdict, a closed set, and a group containing a route word" \_ -> do
+      it "refuses a single verdict, a shrunken group, and a family of route words" \_ -> do
         -- one pass is not agreement, however large
         BackgroundJobs.mergeEvidenceMet 1 8 500 ["a1b2c3d4"] `shouldBe` False
-        -- confirmed repeatedly, but the family never grew: a closed set of verbs
-        BackgroundJobs.mergeEvidenceMet 9 20 20 ["a1b2c3d4"] `shouldBe` False
-        -- grew and was confirmed, but one member reads as a route
-        BackgroundJobs.mergeEvidenceMet 3 8 40 ["a1b2c3d4", "deactivate_user"] `shouldBe` False
+        -- the group is no longer the one the verdict was argued about
+        BackgroundJobs.mergeEvidenceMet 9 20 19 ["a1b2c3d4"] `shouldBe` False
+        -- confirmed and large, but the members are what a developer names routes
+        BackgroundJobs.mergeEvidenceMet 3 8 40 ["deactivate_user", "verify_phone", "a1b2c3d4"] `shouldBe` False
         -- too small to be a population
         BackgroundJobs.mergeEvidenceMet 3 2 5 ["a1b2c3d4"] `shouldBe` False
-        -- confirmed twice, grew, big enough, nothing word-like
+        -- confirmed twice, big enough, nothing word-like
         BackgroundJobs.mergeEvidenceMet 2 8 40 ["a1b2c3d4", "SHO3KOOWWN", "00Zj"] `shouldBe` True
+
+      -- A group that has stopped growing used to be refused forever, on the
+      -- theory that ids keep arriving while route words do not. Measured on the
+      -- fleet that refused 55 of 60 correct verdicts, because a group is only
+      -- re-asked when it changes — so a settled project could never reach the
+      -- second confirmation at all.
+      it "lets a settled group merge once it has been confirmed twice" \_ ->
+        BackgroundJobs.mergeEvidenceMet 2 20 20 ["a1b2c3d4"] `shouldBe` True
+
+      -- The reported bug: nine near-identical "new endpoint" alerts differing
+      -- only in a metric name. Metric names are word-like one at a time, so a
+      -- single one used to veto a family of two dozen.
+      it "does not let a word-like minority veto a family of identifiers" \_ -> do
+        let metrics = ["app.cart.get_cart.latency", "aspnetcore.routing.match_attempts", "k8s.container.cpu_limit", "app_recommendations_counter"]
+        BackgroundJobs.mergeEvidenceMet 3 17 24 metrics `shouldBe` True
+        BackgroundJobs.routeWordFraction metrics `shouldSatisfy` (< 0.35)
+        BackgroundJobs.routeWordFraction ["login", "settings", "activity-logs", "a1b2c3d4"] `shouldSatisfy` (> 0.35)
 
       it "will not veto ids that merely look like words to a naive test" \_ ->
         map BackgroundJobs.looksLikeRouteWord ["cus_QpeOrF3HMRjazD", "SHO3KOOWWN", "a-df0u-05mwux", "00Zj"]
           `shouldBe` [False, False, False, False]
+
+      -- One shape agrees with itself. A pure ratio said otherwise for every
+      -- group under ten members, so the gate rejected the most agreeable
+      -- groups there are.
+      it "accepts a small group that agrees perfectly, and rejects real disagreement" \_ ->
+        map (uncurry BackgroundJobs.shapeAgreementOk) [(9, 1), (532, 5), (311, 177), (0, 0)]
+          `shouldBe` [True, True, False, False]
 
     describe "Merge cleanup consolidates rather than colliding" do
       it "folds many endpoints' open issues onto one canonical issue per type" \tr -> do

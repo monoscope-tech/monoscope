@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -3219,20 +3219,90 @@ processAPIChangeAnomalies pid targetHashes = do
   -- A concrete path may still be an un-recognised id — template discovery
   -- decides, and it has not run yet. Announcing it now is how a single
   -- unknown id format turns into one "new endpoint" mail per id, for
-  -- endpoints that get merged away and deleted hours later. Paths that are
-  -- already templates cannot collapse further, so they go out immediately;
-  -- the rest wait for 'notifyDiscoveredEndpoints' to confirm them.
-  let (ready, deferred) =
-        L.partition
-          (\(_, row) -> T.isInfixOf "{" row.label)
-          [ (iid, row)
-          | (h, iid, row, unr) <- newEndpointInfos
-          , not unr
-          , not (HashSet.member (pid, h) preexisting)
-          ]
+  -- endpoints that get merged away and deleted hours later. So every one of
+  -- them waits for 'notifyDiscoveredEndpoints', a quarter of an hour at most.
+  --
+  -- Carrying a @{…}@ segment used to be treated as "already a template, cannot
+  -- collapse further" and sent straight out. It is no such thing: only /one/ of
+  -- a path's positions has to be templated for that test to pass, so
+  -- @\/p\/{uuid}\/metrics\/details\/app.cart.get_cart.latency\/exemplars@
+  -- skipped the wait on the strength of a @{uuid}@ five segments away from the
+  -- one still in question. Everything this deferral exists to prevent went out
+  -- through that hole.
+  let deferred =
+        [ (iid, row)
+        | (h, iid, row, unr) <- newEndpointInfos
+        , not unr
+        , not (HashSet.member (pid, h) preexisting)
+        ]
   unless (null deferred)
     $ Log.logInfo "Deferred new-endpoint notifications until template discovery confirms them" ("project_id", pid.toText, "deferred", length deferred)
-  sendNewEndpointAlerts pid (fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes) ready
+
+
+-- | Collapse siblings that differ at one path position into a single line.
+--
+-- Discovery decides whether a family of paths is one route; it needs two
+-- agreeing passes and a week to do it, and until then every member is a new
+-- endpoint in its own right. That is defensible as a data model and indefensible
+-- as a notification — nine near-identical lines that differ only in a metric
+-- name is what this looked like in a customer's Slack, and it reads as a broken
+-- feature whatever the table says.
+--
+-- So the reader gets the family whether or not the merge machinery has settled
+-- on it. Every member is still claimed, so nothing is announced twice; only the
+-- rendering collapses.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> import Pkg.EmailTemplates qualified as ET
+-- >>> let row l = ET.EndpointAlertRow l (Just "api") Nothing Nothing
+-- The reported incident, in miniature — and note that every member's id comes
+-- back on the collapsed row, so a single line still claims all of them and none
+-- is left to be announced again next pass:
+--
+-- >>> let mets = [(i, row ("GET /p/{uuid}/metrics/details/" <> m <> "/exemplars")) | (i, m) <- zip [1 :: Int ..] ["app.cart.get_cart.latency", "aspnetcore.routing.match_attempts", "app_recommendations_counter"]]
+-- >>> map (fmap (.label)) $ BJ.collapseEndpointAlertFamilies mets
+-- [([1,2,3],"GET /p/{uuid}/metrics/details/\8230/exemplars \183 3 endpoints")]
+--
+-- Below the threshold nothing is collapsed, and a row that joins no family is
+-- passed through untouched:
+--
+-- >>> map (fmap (.label)) $ BJ.collapseEndpointAlertFamilies [(1 :: Int, row "GET /a/x"), (2, row "GET /a/y"), (3, row "POST /b")]
+-- [([1],"GET /a/x"),([2],"GET /a/y"),([3],"POST /b")]
+--
+-- A family only forms where the differing position is the /same/ one, so paths
+-- that vary all over do not get folded into a meaningless template, and the
+-- method is never the varying position:
+--
+-- >>> map (fmap (.label)) $ BJ.collapseEndpointAlertFamilies [(i, row l) | (i, l) <- zip [1 :: Int ..] ["GET /a/x", "GET /a/y", "POST /a/x", "GET /b/1/z", "GET /c/2/z"]]
+-- [([1],"GET /a/x"),([2],"GET /a/y"),([3],"POST /a/x"),([4],"GET /b/1/z"),([5],"GET /c/2/z")]
+collapseEndpointAlertFamilies :: [(a, ET.EndpointAlertRow)] -> [([a], ET.EndpointAlertRow)]
+collapseEndpointAlertFamilies candidates =
+  [render key ms | key <- ordNub [familyOf r.label | (_, r) <- candidates], Just ms <- [HM.lookup key byFamily]]
+  where
+    -- Every way one path segment could be the varying one. The method is not a
+    -- position: holing it would fold @GET /x@ and @POST /x@ together, which is
+    -- two routes by anyone's reckoning.
+    holes label = [method <> T.intercalate "/" (take i segs <> ["\8230"] <> drop (i + 1) segs) | i <- [0 .. length segs - 1]]
+      where
+        (method, segs) = second (T.splitOn "/") $ T.breakOnEnd " " label
+    counts = HM.fromListWith (+) [(h, 1 :: Int) | (_, r) <- candidates, h <- holes r.label]
+    -- A family is the hole the most siblings agree on, so a label that varies
+    -- at two positions joins the larger family rather than being counted twice.
+    familyOf label = case maximum1 ((0 :: Int, label) :| [(HM.lookupDefault 0 h counts, h) | h <- holes label]) of
+      (n, key) | n >= endpointAlertFamilyMin -> key
+      _ -> label
+    byFamily = HM.fromListWith (flip (<>)) [(familyOf r.label, one c) | c@(_, r) <- candidates]
+    render key ms = (toList $ fmap fst ms, alertRow)
+      where
+        alertRow = case ms of
+          (_, r) :| [] -> r
+          _ -> ET.EndpointAlertRow{label = key <> " \183 " <> show (length ms) <> " endpoints", host = shared (.host), service = shared (.service), environment = shared (.environment)}
+        shared f = case ordNub [f r | (_, r) <- toList ms] of [v] -> v; _ -> Nothing
+
+
+-- | Siblings needed before a family is rendered as one line rather than several.
+endpointAlertFamilyMin :: Int
+endpointAlertFamilyMin = 3
 
 
 -- | New-endpoint notifications a project may send per hour before the rest are
@@ -3272,8 +3342,15 @@ sendNewEndpointAlerts pid alertHash candidates = do
     if budget <= 0
       then Log.logInfo "New-endpoint alerts over hourly budget, deferring" ("project_id", pid.toText, "pending", length candidates)
       else do
-        let (toSend, overflow) = splitAt budget candidates
-            claimIds = V.fromList $ map fst toSend
+        -- Spent in families, not rows: the cap exists to bound how much of a
+        -- reader's attention one project may take, and a collapsed family costs
+        -- one line however many endpoints it stands for. The count above still
+        -- measures issues, so a large family can spend the rest of the hour in
+        -- one go — which is the trade this is meant to make. The alternative is
+        -- what the reported incident looked like: the same family dripping out
+        -- ten lines an hour for days.
+        let (toSend, overflow) = splitAt budget $ collapseEndpointAlertFamilies candidates
+            claimIds = V.fromList $ concatMap fst toSend
         claimedIds :: V.Vector Issues.IssueId <-
           Hasql.interp
             [HI.sql|
@@ -3286,13 +3363,14 @@ sendNewEndpointAlerts pid alertHash candidates = do
               RETURNING id
             |]
         let claimedSet = HashSet.fromList (V.toList claimedIds)
-            claimedRows = [row | (iid, row) <- toSend, HashSet.member iid claimedSet]
+            claimedRows = [row | (iids, row) <- toSend, any (`HashSet.member` claimedSet) iids]
             -- The overflow is named, not silently swallowed: a reader who gets
             -- a truncated list must be able to tell it was truncated.
-            digest = [ET.EndpointAlertRow{label = "+" <> show (length overflow) <> " more new endpoints", host = Nothing, service = Nothing, environment = Nothing} | not (null overflow)]
+            overflowEndpoints = sum $ map (length . fst) overflow
+            digest = [ET.EndpointAlertRow{label = "+" <> show overflowEndpoints <> " more new endpoints", host = Nothing, service = Nothing, environment = Nothing} | not (null overflow)]
             notifiableRows = claimedRows <> digest
         unless (null overflow)
-          $ Log.logInfo "New-endpoint alerts truncated to hourly budget" ("project_id", pid.toText, "sent", length claimedRows, "rolled_up", length overflow)
+          $ Log.logInfo "New-endpoint alerts truncated to hourly budget" ("project_id", pid.toText, "sent", length claimedRows, "rolled_up", overflowEndpoints)
         unless (null claimedRows) do
           users <- Projects.usersByProjectId pid
           let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = alertHash}
@@ -3696,7 +3774,7 @@ reviewResidualEndpointGroups pid = do
     -- reaches the answer worth having.
     let fresh =
           take endpointGroupReviewBatch
-            $ sortOn (\(_, _, n, _, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _, _) <- keyed, HM.lookup gkey seen /= Just mhash]
+            $ sortOn (\(_, _, n, _, _, _) -> negate n) [g | g@(gkey, mhash, _, _, _, _) <- keyed, maybe True (\r -> r.dueForReconfirm || r.membersHash /= mhash) (HM.lookup gkey seen)]
     unless (null fresh) do
       reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildGroupReviewPrompt [(k, p, c) | (k, _, _, p, _, c) <- fresh]) ctx.config.openaiApiKey
       case reply of
@@ -3778,24 +3856,33 @@ applyConfirmedGroups pid confirmed = do
           -- Last gate, and the only one about behaviour rather than spelling:
           -- do these endpoints actually return the same shape? Route words do
           -- not, whatever their paths look like.
-          (observed, distinctShapes) <- Endpoints.endpointShapeAgreement pid (V.fromList [h | (h, _, _, _) <- touched])
-          if not (shapeAgreementOk observed distinctShapes)
-            then
-              Log.logInfo
-                "Declined a confirmed merge: members do not agree on response shape"
-                ("project_id", pid.toText, "group", gkey, "observed", observed, "distinct_shapes", distinctShapes)
-            else do
-              let byTemplate = HM.toList $ HM.fromListWith (<>) [((m, host, tp), [h]) | (h, m, host, tp) <- touched]
-                  canonOf method hst tp = toXXHash $ pid.toText <> hst <> method <> tp
-                  canonicals = [canonOf m hst tp | ((m, hst, tp), _) <- byTemplate]
-              void $ Endpoints.setEndpointCanonical [(h, canonOf m hst tp, tp) | ((m, hst, tp), hs) <- byTemplate, h <- hs]
-              Endpoints.insertCanonicalEndpoints [(pid, tp, m, hst, canonOf m hst tp) | ((m, hst, tp), _) <- byTemplate]
-              -- Every canonical this verdict produced, so the quarantine covers
-              -- all of them and a revert can find them all again.
-              Endpoints.markGroupApplied pid gkey (V.fromList canonicals)
-              Log.logInfo
-                "Applied an LLM-confirmed endpoint merge"
-                ("project_id", pid.toText, "group", gkey, "endpoints", length touched, "templates", length byTemplate)
+          --
+          -- Asked per template the merge would produce, not once across the
+          -- whole group. One verdict about a mid-path position covers every
+          -- suffix under it — @…/{param}/@, @…/{param}/exemplars@ and
+          -- @…/{param}/breakdown@ are three different routes — and pooling
+          -- their shapes charged the merge for a disagreement that was never
+          -- about the position being wildcarded. It guaranteed at least one
+          -- distinct shape per suffix, so the more suffixes a family had, the
+          -- less likely it was to pass.
+          let byTemplate = HM.toList $ HM.fromListWith (<>) [((m, host, tp), [h]) | (h, m, host, tp) <- touched]
+          agreeing <- filterM (\(_, hs) -> uncurry shapeAgreementOk <$> Endpoints.endpointShapeAgreement pid (V.fromList hs)) byTemplate
+          let declined = length byTemplate - length agreeing
+          when (declined > 0)
+            $ Log.logInfo
+              "Declined part of a confirmed merge: members do not agree on response shape"
+              ("project_id", pid.toText, "group", gkey, "declined_templates", declined, "of", length byTemplate)
+          unless (null agreeing) do
+            let canonOf method hst tp = toXXHash $ pid.toText <> hst <> method <> tp
+                canonicals = [canonOf m hst tp | ((m, hst, tp), _) <- agreeing]
+            void $ Endpoints.setEndpointCanonical [(h, canonOf m hst tp, tp) | ((m, hst, tp), hs) <- agreeing, h <- hs]
+            Endpoints.insertCanonicalEndpoints [(pid, tp, m, hst, canonOf m hst tp) | ((m, hst, tp), _) <- agreeing]
+            -- Every canonical this verdict produced, so the quarantine covers
+            -- all of them and a revert can find them all again.
+            Endpoints.markGroupApplied pid gkey (V.fromList canonicals)
+            Log.logInfo
+              "Applied an LLM-confirmed endpoint merge"
+              ("project_id", pid.toText, "group", gkey, "endpoints", sum (map (length . snd) agreeing), "templates", length agreeing)
 
 
 -- | Groups merged per run. Small on purpose: a bad rule should cost one group's
@@ -3934,22 +4021,32 @@ recheckQuarantinedMerges pid = do
 --
 -- * __Agreement.__ Two independent passes, each seeing the group among
 --   different neighbours, both said "param". One pass is a sample of one.
--- * __Open set.__ The group gained members between those passes. This is the
---   only signal that separates the two populations by their behaviour rather
---   than their appearance: ids keep arriving forever, whereas a family of verbs
---   (@verify_phone@, @deactivate_user@, @update_email@) is complete the day it
---   ships and never grows again. It is what the shape gate lacked.
+-- * __Not shrinking.__ The group is at least as large as when the verdict was
+--   first argued for. It used to have to /grow/ between passes, on the theory
+--   that ids keep arriving forever while a family of verbs is complete the day
+--   it ships. Measured on the fleet, that was the condition that made this gate
+--   unreachable: 55 of 60 correct @param@ verdicts were refused by it, because
+--   a group is only re-asked when its membership changes and a project whose
+--   routes have settled never grows again. A settled group is the /safest/ to
+--   merge, not the most suspect — so the closed-set defence now rests on the
+--   two conditions below, which do not need the population to keep moving.
 -- * __Population.__ At least eight members, so a coincidence of three is not
 --   enough.
--- * __No word among them.__ A mechanical veto. It cannot prove a value is an
+-- * __Few words among them.__ A mechanical veto. It cannot prove a value is an
 --   id, which is why it is useless as an approval — but it is sound in the
---   refusing direction, and it is exactly the case that has burned us.
+--   refusing direction, and it is exactly the case that has burned us. It is a
+--   /proportion/ rather than "any", because whole naming schemes are word-like:
+--   a metric name (@app_recommendations_counter@) reads as a route word to
+--   every shape rule, so one of them used to veto a family of two dozen. On the
+--   fleet the two populations barely overlap — @param@ groups sit at a median
+--   word fraction of 0.00 (p90 0.33) against 0.89 (p10 0.40) for @routes@ — so
+--   the threshold sits in the gap and does not need to be delicate.
 --
 -- >>> import "monoscope" BackgroundJobs qualified as BJ
 -- >>> BJ.mergeEvidenceMet 2 8 20 ["a1b2c3d4", "e5f6g7h8", "i9j0k1l2"]
 -- True
 --
--- An unrecorded starting size is not evidence of growth:
+-- An unrecorded starting size is not evidence of anything:
 --
 -- >>> BJ.mergeEvidenceMet 3 0 40 ["a1b2c3d4"]
 -- False
@@ -3959,27 +4056,53 @@ recheckQuarantinedMerges pid = do
 -- >>> BJ.mergeEvidenceMet 1 8 400 ["a1b2c3d4"]
 -- False
 --
--- A closed set is refused however often the model repeats itself:
+-- A group that has settled is now allowed to merge; one that has lost members
+-- is not the group the verdict was about:
 --
--- >>> BJ.mergeEvidenceMet 5 20 20 ["a1b2c3d4"]
+-- >>> map (\n -> BJ.mergeEvidenceMet 5 20 n ["a1b2c3d4"]) [20, 19]
+-- [True,False]
+--
+-- A family of route words is still refused, and one stray id does not rescue it:
+--
+-- >>> BJ.mergeEvidenceMet 3 8 40 ["deactivate_user", "verify_phone", "update_email", "a1b2c3d4"]
 -- False
 --
--- >>> BJ.mergeEvidenceMet 3 8 40 ["a1b2c3d4", "deactivate_user"]
--- False
+-- while the metric-name family this gate used to refuse forever now passes —
+-- word-like members are a minority of it:
+--
+-- >>> BJ.mergeEvidenceMet 3 17 24 ["app.cart.get_cart.latency", "aspnetcore.routing.match_attempts", "k8s.container.cpu_limit", "app_recommendations_counter"]
+-- True
 mergeEvidenceMet :: Int64 -> Int64 -> Int64 -> [Text] -> Bool
 mergeEvidenceMet confirmations firstCount nowCount members =
   confirmations
     >= 2
-    -- A zero starting size means nobody recorded one, not that the group grew
-    -- from nothing. Reading it as growth hands the strongest of these
-    -- conditions away for free to every row written before it was tracked.
+    -- A zero starting size means nobody recorded one, so there is nothing to
+    -- compare against and the population condition has no evidence behind it.
     && firstCount
     > 0
     && nowCount
-    > firstCount
+    >= firstCount
     && nowCount
     >= 8
-    && not (any looksLikeRouteWord members)
+    && routeWordFraction members
+    <= maxRouteWordFraction
+
+
+-- | Share of a group's members that read as route words. See 'mergeEvidenceMet'
+-- for the population this is calibrated against.
+--
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> map BJ.routeWordFraction [["login", "settings"], ["a1b2c3d4", "e5f6g7h8"], []]
+-- [1.0,0.0,0.0]
+routeWordFraction :: [Text] -> Double
+routeWordFraction [] = 0
+routeWordFraction members = fromIntegral (length $ filter looksLikeRouteWord members) / fromIntegral (length members)
+
+
+-- | Word fraction a group may carry and still merge. Sits in the gap between
+-- the two fleet populations (@param@ p90 0.33, @routes@ p10 0.40).
+maxRouteWordFraction :: Double
+maxRouteWordFraction = 0.35
 
 
 -- | Do the endpoints in a group behave like one route?
@@ -4007,9 +4130,25 @@ mergeEvidenceMet confirmations firstCount nowCount members =
 --
 -- >>> BJ.shapeAgreementOk 0 0
 -- False
+--
+-- One shape always agrees with itself. A pure ratio said otherwise for every
+-- group under ten members — nine endpoints returning one identical shape scored
+-- 1 > 0.9 and were refused — which is how a gate meant to catch disagreement
+-- came to reject the most agreeable groups there are.
+--
+-- >>> BJ.shapeAgreementOk 9 1
+-- True
+--
+-- The ratio itself is looser than it was, measured per merged template across
+-- the fleet: it now admits 68% of @param@-verdict buckets against 16% of
+-- @routes@-verdict ones, where 0.1 admitted 16% against 2% and so refused the
+-- true positives along with the false ones.
+--
+-- >>> map (BJ.shapeAgreementOk 22) [5, 6]
+-- [True,False]
 shapeAgreementOk :: Int64 -> Int64 -> Bool
 shapeAgreementOk observed distinctShapes =
-  observed >= 4 && fromIntegral distinctShapes <= (0.1 :: Double) * fromIntegral observed
+  observed >= 4 && fromIntegral distinctShapes <= max 1 (0.25 * fromIntegral observed :: Double)
 
 
 -- | Has auto-apply earned the right to keep running for this project?
