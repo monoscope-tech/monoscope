@@ -255,6 +255,34 @@ That last part is a behaviour **fix**, not just a refactor: the old instance ran
 param through `AE.eitherDecodeStrict`, so `widget_type=top_list` — what a form actually
 submits — never parsed; only `widget_type="top_list"` did.
 
+### `Models.Apis.LogQueries` → `Models.Telemetry.Telemetry` is a cycle
+
+Worth knowing before anyone tries the obvious consolidation again:
+`LogQueries → Telemetry → Models.Apis.ErrorPatterns → LogQueries`. GHCi answers with
+`Module graph contains a cycle` / `Failed, unloaded all modules`. Shared helpers between
+those two have to go **down** the graph — `Data.Effectful.Hasql` is the natural floor for
+anything Hasql-shaped, and both already import it.
+
+### Three ways ghcid reports green on a tree that does not compile
+
+All three were hit tonight, and each one nearly produced a bad commit:
+
+1. **Stale title.** Grepping the log tail for a success word matches the *previous*
+   reload's status line. Read only the last one.
+2. **In-flight reload.** ghcid prints the changed-file list, then goes quiet while
+   compiling. During that silence the previous verdict is still the last thing in the
+   log. Only read output produced *after* the final `Reloading...`.
+3. **Refused module graph.** On an import cycle ghcid prints `Failed, unloaded all
+   modules` and then, cheerfully, `All good (56 modules)` for the partial load — and
+   `All good (0 modules)` / `No files loaded` when it loses the session entirely.
+
+`scripts/local/ghcid-wait.sh` now handles all three, and `GHCID_MIN_MODULES=120` guards
+the module count. **Any verdict from that script before this was hardened should be
+distrusted.** The commits so far were each re-confirmed at the full 128 modules.
+
+Note the log wraps at ~76 columns and splits words mid-token (`[-Wredundant-cons\ntraints`),
+so grepping it for a phrase silently fails. Anchor on a short string that fits on one line.
+
 ### A build-verification trap worth remembering
 
 `ghcid-wait.sh` first reported green on a broken tree. ghcid rewrites the terminal title
