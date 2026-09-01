@@ -7,6 +7,7 @@
 -- this module exists.
 module Pages.CodeContext (codeContextH, codeMappingsGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..)) where
 
+import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
@@ -165,11 +166,19 @@ codeContextCredential pid = do
 -- token legitimately reaches exactly one repository, and a token with no listing scope reaches
 -- none it can enumerate. An empty list is therefore a valid answer rather than a failure, and
 -- the form keeps manual entry available for it.
+-- Cached because it is a token exchange plus a listing call — 1.5s in front of a page that
+-- otherwise renders in 0.2s. Only a success is stored, so a revoked grant is noticed on the
+-- next view rather than ten minutes later.
 credentialRepos :: Projects.ProjectId -> GitSync.GitHubCredential -> ATAuthCtx [Git.GitRepo]
 credentialRepos pid cred = do
-  cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
-  result <- W.runHTTPWreq $ runExceptT $ repoConn cfg cred >>= ExceptT . Git.listRepos
-  either (\err -> [] <$ Log.logWarn "Could not list repositories for code mappings" (pid, Git.hostSlug cred.host, err)) pure result
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  liftIO (Cache.lookup ctx.repoListCache cred.id) >>= \case
+    Just repos -> pure repos
+    Nothing -> do
+      result <- W.runHTTPWreq $ runExceptT $ repoConn ctx.config cred >>= ExceptT . Git.listRepos
+      case result of
+        Left err -> [] <$ Log.logWarn "Could not list repositories for code mappings" (pid, Git.hostSlug cred.host, err)
+        Right repos -> repos <$ liftIO (Cache.insert ctx.repoListCache cred.id repos)
 
 
 -- | A connection to the credential's host, minted per call because installation tokens expire.

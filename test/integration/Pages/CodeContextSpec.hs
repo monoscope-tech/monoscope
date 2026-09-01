@@ -3,20 +3,21 @@ module Pages.CodeContextSpec (spec) where
 import Data.Base64.Types (extractBase64)
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
+import Data.Cache qualified as Cache
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as LT
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
-import Network.HTTP.Types.Status (Status (..))
-import Network.HTTP.Types.Version (http11)
-import Data.Text.Lazy qualified as LT
 import Lucid qualified
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
-import Pkg.Git qualified as Git
+import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
+import Network.HTTP.Types.Status (Status (..))
+import Network.HTTP.Types.Version (http11)
 import Pages.CodeContext qualified as PageCodeContext
 import Pages.Components (stackTrace_)
+import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -121,10 +122,36 @@ snippetCacheSpec = around withTestResources do
       fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
 
 
+-- | Listing the picker's repositories is a token exchange plus a listing call against the git
+-- host, and it sat in front of a settings page that renders in 0.2s otherwise — measured at
+-- 1.5s every load. It is cached per credential now.
+--
+-- Nothing here can reach GitHub, so an uncached render offers the free-text fallback and no
+-- options at all. A seeded entry showing up in the markup is therefore proof the cache is what
+-- answered, with no request counting needed.
+repoListCacheSpec :: Spec
+repoListCacheSpec = around withTestResources do
+  it "renders the repository picker from the cache instead of calling the git host" \tr -> do
+    let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+    credM <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "acme" (Just 42) Nothing
+    cred <- maybe (fail "expected a credential") pure credM
+
+    uncached <- render . snd <$> testServant tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+    uncached `shouldNotSatisfy` T.isInfixOf "sentinel-repo"
+
+    Cache.insert tr.trATCtx.repoListCache cred.id [Git.GitRepo "acme/sentinel-repo" "sentinel-repo" False "trunk"]
+    cached <- render . snd <$> testServant tr (PageCodeContext.codeMappingsGetH testPid Nothing)
+    cached `shouldSatisfy` T.isInfixOf "sentinel-repo"
+    -- The option carries its own default branch, which is what lets the Branch field fill
+    -- itself in — a cache that dropped it would silently send every mapping to "main".
+    cached `shouldSatisfy` T.isInfixOf "trunk"
+
+
 spec :: Spec
 spec = do
   revisionWiringSpec
   snippetCacheSpec
+  repoListCacheSpec
   around withTestResources do
     describe "Source code settings (code mappings)" do
       -- Without a credential there is nothing to read repos through, so the page must point at

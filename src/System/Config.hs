@@ -29,6 +29,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
@@ -395,6 +396,13 @@ data AuthContext = AuthContext
   -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
   -- time — a rate-limit stall then presents as the panel silently not filling in. Only
   -- successful fetches are stored, so a 404 or a revoked token is never cached.
+  , repoListCache :: Cache (DeriveUtils.UUIDId "github_credential") [Git.GitRepo]
+  -- ^ The repository picker on the code-mappings settings page. Listing them mints an
+  -- installation token and calls the git host, which put a 1.5s round trip in front of a
+  -- settings page that renders in 0.2s otherwise. Keyed by credential, so re-granting or
+  -- revoking one is not masked by another's entry, and only successes are stored.
+  -- Spelled structurally rather than as @GitSync.GitHubCredentialId@: importing that module
+  -- here closes a cycle through 'Models.Projects.ProjectApiKeys'.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
@@ -484,6 +492,9 @@ configToEnv config = do
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
   -- tell the two apart, so the shorter bound wins.
   codeBlobCache <- liftIO $ newCache (Just $ TimeSpec (15 * 60) 0)
+  -- 10 min: the picker only has to be right by the time someone links a repo, and a repo
+  -- added to the installation while the page is open is one reload away either way.
+  repoListCache <- liftIO $ newCache (Just $ TimeSpec (10 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
@@ -531,6 +542,7 @@ configToEnv config = do
       , infrastructureCache
       , rumCache
       , codeBlobCache
+      , repoListCache
       , extractionWorker
       , traceSessionCache
       , tfCircuit

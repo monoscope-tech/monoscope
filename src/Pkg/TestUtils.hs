@@ -760,6 +760,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   infrastructureCache <- newCache (Just $ TimeSpec 15 0)
   rumCache <- newCache (Just $ TimeSpec 15 0)
   codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
+  repoListCache <- newCache (Just $ TimeSpec (10 * 60) 0)
   tp <- getGlobalTracerProvider
   -- Parallel hasql pools sharing the same test DB. When TIMEFUSION_PG_TEST_URL
   -- is set, point the labeled "timefusion" pool at that instance so the
@@ -834,6 +835,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           infrastructureCache
           rumCache
           codeBlobCache
+          repoListCache
           projectKeyCache
           extractionWorker
           traceSessionCache
