@@ -275,18 +275,37 @@ Doctests need `cabal build lib:monoscope` first, or the runner dies with
 
 ## Landed
 
-| commit | what | net |
-|---|---|---|
-| `a40cdbda` | notes + `ghcid-wait.sh` | — |
-| `9e46edab` | three unreferenced web-component exports | −61 |
-| `c7c187d6` | `parityDrift`→`continuityDrop`, `ratio` deduped, 3 dead functions | −41 |
-| `7625d7de` | the blanket `FromHttpApiData` orphan replaced by narrow instances | +22 |
-| `5a6315f3` | `WrappedEnumInt` no longer decodes a bad int to `minBound` | +3 |
+| commit | what |
+|---|---|
+| `a40cdbda` | notes + `ghcid-wait.sh` |
+| `9e46edab` | three unreferenced web-component exports |
+| `c7c187d6` | `parityDrift`→`continuityDrop`, `ratio` deduped, 3 dead functions |
+| `7625d7de` | the blanket `FromHttpApiData` orphan replaced by narrow instances |
+| `5a6315f3` | `WrappedEnumInt` no longer decodes a bad int to `minBound` |
+| `395641af` | two specs that assert nothing about production code |
+| `9885b7d1` | four unused `Pkg.TestUtils` helpers |
+| `55d4863d` | one byte formatter instead of three that disagreed |
+| `97fa8b79` | severity badge and empty state rendered two ways |
+| `776c36cc` | one transient-retry loop; `Concurrent` dropped from ~12 signatures |
+| `6021f9b6` | spec fix the library watcher could not catch |
+| `530d7137` | duplicate assertion + second copy of `jsonToMap` |
+| `73f726f9` | one TimeFusion top-projects query instead of three |
+| `099eeb19` | seven module-private helpers un-exported |
 
-The last two are net-positive on lines and were worth it anyway: both were live
-correctness bugs, and the tree now compiles with **zero warnings** (`All good`),
-which it did not at the start — two redundant imports in `Pages/Charts/Charts.hs`
-would have failed CI's `-Werror`.
+**Net −250 lines** of code (`src` + `test` + `web-components`: 217 added, 467 deleted).
+The notes file itself is the remaining +386.
+
+That is a real but modest reduction against a goal of "drastically reduce code size", and
+it is worth being plain about why. Most of the night went on things that had to happen
+first: this checkout had never been compiled, so the first green build was a from-scratch
+dependency build; the watcher then reported green on a broken tree three different ways,
+each of which had to be found and fixed before any verdict could be trusted; and I rejected
+the single largest proposed deletion on merit (see below). The durable output is as much
+the survey map and the verification harness as the diff.
+
+Two things improved that don't show up as lines: both correctness bugs are fixed, and the
+tree now compiles **zero-warning** where it started with two `-Werror`-class redundant
+imports in `Pages/Charts/Charts.hs`.
 
 ### The blanket-orphan investigation, since the survey's one-line fix was wrong
 
