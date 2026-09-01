@@ -1086,6 +1086,24 @@ continuityDrop dropPct minRows rows =
   ]
 
 
+-- | Top @topN@ projects by row count in @[s,e)@, read from TimeFusion, with an
+-- optional extra predicate.
+--
+-- ORDER BY count(*), not the ordinal: DataFusion can't resolve an ordinal that
+-- points at a cast-wrapped aggregate (count(*)::int8) and errors with "must
+-- appear in the GROUP BY clause". That caveat used to be recorded on only one of
+-- the copies of this query, which is how it would have been lost.
+tfTopProjectCounts :: Int64 -> HI.Sql -> UTCTime -> UTCTime -> ATBackgroundCtx [(Text, Int64)]
+tfTopProjectCounts topN extra s e =
+  withHasqlTimefusion
+    True
+    ( Hasql.interp
+        [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
+           WHERE timestamp >= #{s}::timestamptz AND timestamp < #{e}::timestamptz ^{extra}
+           GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
+    )
+
+
 -- | Single-store ingest continuity, TimeFusion against its own recent history.
 -- Runs when dual-write is off, where 'checkParity' has nothing to compare and
 -- would otherwise skip — which is exactly why the 2026-07-27 loss (~200k rows,
@@ -1101,17 +1119,7 @@ checkIngestContinuity start end = do
       topN = 30 :: Int64
       baselineHours = 6 :: Int64
       baseStart = addUTCTime (negate (fromIntegral baselineHours * 3600)) start
-      tfCounts s e =
-        withHasqlTimefusion
-          True
-          ( Hasql.interp
-              -- ORDER BY count(*), not the ordinal: DataFusion can't resolve an
-              -- ordinal that points at a cast-wrapped aggregate (count(*)::int8)
-              -- and errors with "must appear in the GROUP BY clause".
-              [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
-                 WHERE timestamp >= #{s}::timestamptz AND timestamp < #{e}::timestamptz
-                 GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
-          )
+      tfCounts = tfTopProjectCounts topN mempty
   baseRows :: [(Text, Int64)] <- tfCounts baseStart start
   curRows :: [(Text, Int64)] <- tfCounts start end
   let curMap = HM.fromList curRows
@@ -1164,23 +1172,10 @@ checkReadConsistency start end = do
       dayEnd = addUTCTime 86400 dayStart
   -- Ground truth: the hour pinned by date_trunc, read through a full-day range.
   truthRows :: [(Text, Int64)] <-
-    withHasqlTimefusion
-      True
-      ( Hasql.interp
-          [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
-             WHERE timestamp >= #{dayStart}::timestamptz AND timestamp < #{dayEnd}::timestamptz
-               AND date_trunc('hour', timestamp) = #{start}::timestamptz
-             GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
-      )
+    tfTopProjectCounts topN [HI.sql| AND date_trunc('hour', timestamp) = #{start}::timestamptz |] dayStart dayEnd
   -- What a dashboard actually asks for: a narrow range over the same hour.
   windowRows :: [(Text, Int64)] <-
-    withHasqlTimefusion
-      True
-      ( Hasql.interp
-          [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
-             WHERE timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz
-             GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
-      )
+    tfTopProjectCounts topN mempty start end
   let windowMap = HM.fromList windowRows
       rows = [(pid, truthN, HM.lookupDefault 0 pid windowMap) | (pid, truthN) <- truthRows]
       hidden = sum [t - w | (_, t, w, _) <- continuityDrop divergePct minRows rows]
