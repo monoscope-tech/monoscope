@@ -3151,6 +3151,7 @@ export class LogList extends LitElement {
           // Extract right-aligned badges from summary array
           const summaryArr = this.parseSummaryData(dataArr);
           const rightAlignedBadges: TemplateResult[] = [];
+          const sessionActions: TemplateResult[] = [];
 
           // Use optimized parsing for right-aligned badges
           let userEmail = '',
@@ -3178,7 +3179,7 @@ export class LogList extends LitElement {
               // session from their parent — repeating the button on every
               // resource row turns the whole right rail into noise.
               if (depth === 0 || (children && children > 0)) {
-                rightAlignedBadges.push(this.createSessionButton(value, !!hasErrors));
+                sessionActions.push(this.createSessionButton(value, !!hasErrors));
               }
             } else if (field === 'user email') {
               userEmail = value;
@@ -3204,19 +3205,13 @@ export class LogList extends LitElement {
             rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
           }
 
-          // Session roots have no trace waterfall. Duration (data) now lives in the
-          // summary line; this trailing column is a pure *actions* column holding
+          // Sessions have no trace waterfall. Duration now lives in the summary
+          // line; this trailing column is a pure *actions* column holding
           // only the replay button, so the header stays unlabeled (actions columns
-          // don't get a data label).
-          const isSessionRoot = this.mode === 'sessions' && depth === 0;
+          // aren't data and don't get a label).
           let latencyHtml;
-          if (isSessionRoot) {
-            latencyHtml = html`
-              <div class="flex justify-end items-center gap-1 pl-2 bg-bgBase group-hover:bg-fillWeaker" style="min-width:${currentWidth}px">
-                ${rightAlignedBadges}
-                <span class="w-1"></span>
-              </div>
-            `;
+          if (this.mode === 'sessions') {
+            latencyHtml = html`<div class="flex justify-end items-center">${sessionActions}</div>`;
           } else {
             latencyHtml = html`
               <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
@@ -3565,11 +3560,15 @@ export class LogList extends LitElement {
     // A phone stacks each row into a block (see rowClass), so no cell gets a fixed
     // column width — they are full-width lines, not columns sitting side by side.
     if (this.isNarrow) return undefined;
+    if (column === 'latency_breakdown' && this.mode === 'sessions') return 32;
     return this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
   }
 
   logTableHeading(column: string) {
     if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></td>`;
+    if (column === 'latency_breakdown' && this.mode === 'sessions') {
+      return html`<td aria-hidden="true" class="p-0 m-0 sticky right-0 max-md:static shrink-0 col-latency_breakdown"></td>`;
+    }
 
     const width = this.columnWidth(column);
     // Tailwind safelist: class="max-md:static"

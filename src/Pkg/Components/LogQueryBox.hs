@@ -70,12 +70,12 @@ logQueryBox_ config = do
     , [__| on keydown if event.key is 'Enter' halt |]
     ]
     do
-      div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
+      div_ [class_ "flex flex-col gap-0.5 items-stretch justify-center group/fltr"] do
         -- `data-query-state` is the single source of the error look: the border
         -- and the message row below both derive from it in CSS, so JS sets one
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
-        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-0.5 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
             $ [ class_ "sr-only ai-search"
               , type_ "checkbox"
@@ -109,7 +109,7 @@ logQueryBox_ config = do
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
-              [ class_ "border-0 w-full flex-1 p-1 no-focus-ring"
+              [ class_ "border-0 w-full flex-1 p-0.5 no-focus-ring"
               , placeholder_ "Ask in plain English — e.g. \"errors in payment service last hour\""
               , id_ "ai-search-input"
               , name_ "input"
@@ -162,11 +162,11 @@ logQueryBox_ config = do
               faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
               span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
-            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"] do
-              div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
+            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-8"] do
+              div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
-                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-[38px]" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                  ([id_ "filterElement", class_ $ "w-full flex items-center min-h-8" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                       -- The editor validates against the server, which needs the same source the
                       -- query will run under: metrics live in another table, so without this the
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
@@ -184,7 +184,7 @@ logQueryBox_ config = do
               div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
                 span_ [class_ "text-textWeak"] "in"
                 select_
-                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-bgBase border-strokeStrong"
+                  [ class_ "ml-1 select select-sm w-full max-w-xs h-8 bg-bgBase border-strokeStrong"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
                   , Aria.label_ "Target span type"
@@ -194,12 +194,12 @@ logQueryBox_ config = do
                     option_ (value_ v : [selected_ "true" | fromMaybe "all-spans" config.targetSpan == v]) $ toHtml label
 
               div_ [class_ "inline-block max-md:hidden"] do
-                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeWeak hover:border-strokeStrong h-full cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
+                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeWeak hover:border-strokeStrong h-8 cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
                 ul_ ([class_ "dropdown dropdown-end border border-strokeWeak menu bg-bgRaised rounded-box w-60 p-2 shadow-lg"] <> popoverPanel_ "save-query-pop") do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
               [ type_ "submit"
-              , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-auto btn btn-primary"
+              , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-8 btn btn-primary"
               , Aria.label_ "Run query"
               , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
               ]
@@ -363,7 +363,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
   div_ [class_ "relative overflow-x-hidden w-full flex-1"] do
-    div_ [class_ "w-full text-sm leading-5 py-2 truncate"]
+    div_ [class_ "w-full text-sm leading-5 py-1.5 truncate"]
       $ case query of
         Just q | not (T.null q) -> span_ [class_ "font-mono"] $ toHtml q
         -- Match the upgraded editor's placeholder so loading does not look like a query.

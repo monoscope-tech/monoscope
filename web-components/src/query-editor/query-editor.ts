@@ -1143,12 +1143,10 @@ export class QueryEditorComponent extends LitElement {
       wordWrapOverride2: 'on',
       glyphMargin: false,
       folding: false,
-      // 9, not 8, so that one line is exactly the 38px the shell reserves for it
-      // (`min-h-[38px]`): 9 + lineHeight 20 + 9. At 8 the editor's content came to 36, sat
-      // top-aligned in the 38px box — the wrapper is a block, so nothing centred it — and the
-      // text rendered a pixel high, 9px of space above it against 11px below. The two numbers
-      // are coupled: change lineHeight or the shell's min-height and this has to follow.
-      padding: { top: 9, bottom: 9 },
+      // 6px padding makes one 20px line exactly the 32px the shell reserves for it
+      // (`min-h-8`). Keep this coupled to the shell and loading placeholder so the
+      // text remains centred before and after Monaco loads.
+      padding: { top: 6, bottom: 6 },
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
@@ -1383,7 +1381,7 @@ export class QueryEditorComponent extends LitElement {
 
   private adjustEditorHeight(): void {
     if (!this.editor || !this._editorContainer) return;
-    const minHeight = 24; // Minimum height in pixels (single line + padding)
+    const minHeight = 20; // Minimum content height before Monaco applies its padding
     const height = Math.max(this.editor.getContentHeight(), minHeight);
 
     // OPTIMIZATION: Only update if height actually changed
@@ -1818,13 +1816,13 @@ export class QueryEditorComponent extends LitElement {
     return html`
       <div
         class=${this.hasAttribute('standalone-ai-search')
-          ? 'relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2'
-          : 'relative w-full min-h-[38px] flex'}
+          ? 'relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2'
+          : 'relative w-full min-h-8 flex'}
       >
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-5 py-2 pl-0 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-5 py-1.5 pl-0 hidden cursor-text"
           >
             <span class="opacity-60">level == "ERROR"</span>
             <span class="mx-1 opacity-30">·</span>

@@ -1,3 +1,4 @@
+import { render } from 'lit';
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport, stubContainer, stubVirtualizer } from './log-list-harness';
 import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, HISTORY_PREFETCH_ROWS } from '../src/log-list';
@@ -149,6 +150,15 @@ describe('LogList — LOWER', () => {
   test('unwrapped summaries are bounded instead of making every virtual row 3600px wide', async () => {
     const el = await mountList();
     expect((el as any).fixedColumnWidths.summary).toBeLessThanOrEqual(1200);
+  });
+
+  test('sessions reserve only a replay action, not a latency column', async () => {
+    const el = await mountList({ mode: 'sessions' } as any);
+    const header = document.createElement('div');
+    render((el as any).logTableHeading('latency_breakdown'), header);
+
+    expect((el as any).columnWidth('latency_breakdown')).toBe(32);
+    expect(header.querySelector('button')).toBeNull();
   });
 
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed
