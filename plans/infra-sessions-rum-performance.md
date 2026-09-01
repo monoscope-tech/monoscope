@@ -252,3 +252,19 @@ is"), which fixed a third failure but not these two.
 `scripts/e2e.sh tests/log-list-virtual-scroll.spec.ts`. Bisect `6c092c2d8`'s frontend files
 (`query-editor.ts`, `widgets.ts`, `types.ts`, `log-worker-functions.ts`) and
 `src/Pkg/Components/LogQueryBox.hs` rather than the log-list, which is already ruled out.
+
+### One more clue on the query-editor geometry failure
+
+Measured directly against the running dev server with the **freshly built** `tailwind.min.css`
+injected, the geometry is exactly right: shell 40px, control 40px, `topInset` 10, `bottomInset`
+10 — difference 0, comfortably inside the spec's ≤1. Under what the e2e server serves, the same
+assertion sees 2.
+
+So the markup and the current stylesheet source agree with the spec; something about the
+stylesheet the server actually serves does not. Worth checking before touching padding: compare
+the hashed CSS the e2e server references against `static/public/assets/css/tailwind.min.css` on
+disk, and confirm `make post-css` has run against the tree the e2e binary was built from. Chasing
+this by adjusting insets would be fixing the wrong layer.
+
+Left for the owner of that work — the query-box/editor changes are an active workstream and this
+is their area, not the infra/RUM one.

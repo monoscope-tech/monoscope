@@ -162,23 +162,18 @@ logQueryBox_ config = do
               faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
               span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
-            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"] do
-              div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
-                term
-                  "query-editor"
-                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-[38px]" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
-                      -- The editor validates against the server, which needs the same source the
-                      -- query will run under: metrics live in another table, so without this the
-                      -- Metrics page squiggles `metric_name` on a query it then runs happily.
-                      <> maybeToList (term "query-source" <$> config.source)
-                      <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
-                      <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
-                  )
-                  (queryEditorSkeleton_ config.query)
-                whenNothing_ config.targetWidgetPreview
-                  $ label_ [Lucid.for_ "ai-search-chkbox", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-0.5 inline-flex gap-1.5 items-center cursor-pointer rounded-sm text-textWeak hover:bg-fillWeak hover:text-textBrand group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English"] do
-                    faSprite_ "sparkles" "regular" "inline-block icon h-4 w-4 text-iconNeutral"
-                    "Ask AI"
+            div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"]
+              $ term
+                "query-editor"
+                ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                    -- The editor validates against the server, which needs the same source the
+                    -- query will run under: metrics live in another table, so without this the
+                    -- Metrics page squiggles `metric_name` on a query it then runs happily.
+                    <> maybeToList (term "query-source" <$> config.source)
+                    <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
+                    <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
+                )
+                (queryEditorSkeleton_ config.query)
 
             whenNothing_ config.targetWidgetPreview $ do
               div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
@@ -359,15 +354,23 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 -- and the element is empty until then — without this the search bar is a blank gap for the
 -- first second of every page load. Mirrors the component's own render() shell so the upgrade
 -- is not a visible jump; Lit clears these children on first render (the component renders
--- into its light DOM).
+-- into its light DOM), so nothing here needs to be interactive.
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
-  div_ [class_ "relative overflow-x-hidden w-full flex-1"] do
-    div_ [class_ "w-full text-sm leading-5 py-2 truncate"]
+  div_ [class_ "relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong bg-bgRaised"] do
+    div_ [class_ "relative overflow-x-hidden w-full flex-1"]
+      $ div_ [class_ "w-full text-sm leading-5 py-2 truncate font-mono"]
       $ case query of
-        Just q | not (T.null q) -> span_ [class_ "font-mono"] $ toHtml q
-        -- Match the upgraded editor's placeholder so loading does not look like a query.
-        _ -> span_ [class_ "text-textWeak opacity-60"] "level == \"ERROR\""
+        Just q | not (T.null q) -> toHtml q
+        -- No opacity dimming on top of the token: at 14px that lands under the contrast
+        -- floor in dark mode, and this is a stand-in nobody should have to squint at.
+        _ -> span_ [class_ "text-textWeak"] "level == \"ERROR\""
+    div_ [class_ "p-1"]
+      -- Same group-has variant as the real pill, or the skeleton shows an AI-search
+      -- button for the pre-upgrade moment on a page loaded with AI search already on.
+      $ span_ [class_ "px-3 py-0.5 h-full inline-flex gap-2 items-center border border-strokeBrand-strong text-textBrand rounded-sm group-has-[.ai-search:checked]/fltr:hidden"] do
+        faSprite_ "sparkles" "regular" "inline-block icon h-4 w-4 text-iconBrand"
+        "AI search"
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)

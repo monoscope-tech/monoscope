@@ -1737,7 +1737,7 @@ apiLogsPage page = do
     -- same immediate skeleton, request, and retry state.
     traceOverlay =
       div_
-        [ class_ $ "absolute top-0 right-0 w-full h-full overflow-hidden c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
+        [ class_ $ "absolute top-0 right-0 w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
         , id_ "trace_expanded_view"
         , term "aria-busy" "true"
         , term

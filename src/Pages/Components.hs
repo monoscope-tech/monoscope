@@ -71,12 +71,10 @@ emptyState_ cfg title subTxt =
 facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
 facetRail_ elemId extraClass searchLabel actions content =
   div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
-    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-full items-center gap-2 border-strokeWeak bg-bgBase"] do
+    label_ [class_ "input input-sm sticky top-0 z-10 flex w-full items-center gap-2 border-strokeWeak bg-bgBase"] do
       faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
       input_
         [ type_ "search"
-        , name_ "facet-search"
-        , class_ "grow py-1"
         , placeholder_ searchLabel
         , Aria.label_ searchLabel
         , oninput_ "const root=this.closest('[data-component=\"facet-rail\"]'),q=this.value.toLowerCase();root.querySelectorAll('[data-component=\"facet-option\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)));root.querySelectorAll('[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"

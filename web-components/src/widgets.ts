@@ -2,7 +2,7 @@
 import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
-import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
+import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
 import { echartsUrls } from './assets';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
@@ -455,42 +455,24 @@ const takePrefetched = async (chartId: string, url: string): Promise<any> => {
 ((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
 (window as any).__chartPrefetch = { push: prefetchChartData };
 
-const updateChartData = async (
-  chart: any,
-  opt: any,
-  shouldFetch: boolean,
-  widgetData: WidGetData,
-  signal: AbortSignal,
-  showLoading = true,
-) => {
+const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal) => {
   if (!shouldFetch || signal.aborted) return;
 
   const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
-  // Background refreshes preserve the last successful chart instead of flashing a
-  // loader twice every tick on Log Explorer's two summary widgets.
-  if (showLoading) {
-    requestAnimationFrame(() => {
-      const loader = $(`${chartId}_loader`);
-      const borderedItem = $(`${chartId}_bordered`);
+  // Batch DOM updates before fetch
+  requestAnimationFrame(() => {
+    const loader = $(`${chartId}_loader`);
+    const borderedItem = $(`${chartId}_bordered`);
 
-      if (loader) loader.classList.remove('hidden');
-      if (borderedItem) borderedItem.classList.add('spotlight-border');
-    });
-  }
+    if (loader) loader.classList.remove('hidden');
+    if (borderedItem) borderedItem.classList.add('spotlight-border');
+  });
 
   try {
     const url = chartDataUrl(widgetData);
     const { from, to, headers, dataset, rows_per_min, stats, error } =
-      (await takePrefetched(chartId, url)) ??
-      (await limitedFetch(url, signal).then((res) => {
-        // Not res.json() straight off: a non-2xx body is HTML (an error page, or a 404 from a
-        // route/chunk that moved in a deploy), and parsing that throws Safari's opaque
-        // "The string did not match the expected pattern" — which is what the catch below
-        // logged, with no status to act on.
-        if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
-        return res.json();
-      }));
+      (await takePrefetched(chartId, url)) ?? (await limitedFetch(url, signal).then((res) => res.json()));
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
@@ -550,15 +532,14 @@ const updateChartData = async (
       setStatValue(widgetData, null); // clear the stat spinner on fetch failure
     }
   } finally {
-    if (showLoading) {
-      requestAnimationFrame(() => {
-        const loader = $(`${chartId}_loader`);
-        const borderedItem = $(`${chartId}_bordered`);
+    // Batch DOM updates after fetch completes
+    requestAnimationFrame(() => {
+      const loader = $(`${chartId}_loader`);
+      const borderedItem = $(`${chartId}_bordered`);
 
-        if (loader) loader.classList.add('hidden');
-        if (borderedItem) borderedItem.classList.remove('spotlight-border');
-      });
-    }
+      if (loader) loader.classList.add('hidden');
+      if (borderedItem) borderedItem.classList.remove('spotlight-border');
+    });
   }
 };
 
@@ -580,7 +561,6 @@ export const sumTimeseriesValues = (dataset: unknown): number | null => {
 declare global {
   interface Window {
     formatNumber: (num: number) => string;
-    formatBytes: (num: number) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
     setVariable: (key: string, value: string) => void;
@@ -835,7 +815,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   liveStreamCheckbox?.addEventListener('change', () => {
     if (liveStreamCheckbox.checked) {
-      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal, false), INITIAL_FETCH_INTERVAL);
+      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal), INITIAL_FETCH_INTERVAL);
     } else if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;
@@ -865,18 +845,19 @@ const chartWidget = (widgetData: WidGetData) => {
 
   ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
-    document.querySelector(selector)?.addEventListener(event, () => {
+    document.querySelector(selector)?.addEventListener(event, (e: any) => {
       updateQuery();
-      updateChartData(chart, opt, true, widgetData, controller.signal, false);
+      if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
+      updateChartData(chart, opt, true, widgetData, controller.signal);
     }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: any) => {
     updateQuery();
     if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
-    // The list handles this event itself. Two chart listeners must not turn one
-    // background tick into two full list refetches that reset the reader's anchor.
-    updateChartData(chart, opt, true, widgetData, controller.signal, false);
+    if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
+      (window.logListTable as any).refetchLogs();
+    updateChartData(chart, opt, true, widgetData, controller.signal);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
@@ -930,7 +911,6 @@ const chartWidget = (widgetData: WidGetData) => {
 window.formatNumber = formatNumber;
 window.convertToNanoseconds = convertToNanoseconds;
 window.formatDuration = formatDuration;
-window.formatBytes = formatBytes;
 
 // Recursively build the widget order from a grid container.
 // It looks for direct children with the class "grid-stack-item" and

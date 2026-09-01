@@ -80,12 +80,10 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
   // Map raw arrays to APTEvent objects (still needed for rendering)
   const mapped = data.map((span) => {
     span[idx.trace_id] ||= generateId();
+    span[idx.latency_breakdown] ||= generateId();
     const isLog = span[idx.kind] === 'log';
     return {
-      // Alerts and other system events have a normal row id but no span id.
-      // Only spans are identified by latency_breakdown; otherwise the server's
-      // trace root cannot resolve this row and the virtual list is empty.
-      id: isLog ? span[idx.id] : span[idx.latency_breakdown] || span[idx.id] || generateId(),
+      id: isLog ? span[idx.id] : span[idx.latency_breakdown],
       startNs: span[idx.start_time_ns],
       hasErrors: rowHasError(span, idx, isLog),
       duration: isLog ? 0 : span[idx.duration],

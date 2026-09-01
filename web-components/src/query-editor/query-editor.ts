@@ -1806,15 +1806,13 @@ export class QueryEditorComponent extends LitElement {
 
   render(): TemplateResult {
     const dropdownTemplate = this.renderSuggestionDropdown();
-    const aiSearchIcon = html`<svg class="inline-block icon h-4 w-4" viewBox="0 0 512 512" aria-hidden="true">
+    const aiSearchIcon = html`<svg class="inline-block icon h-4 w-4 text-iconBrand" viewBox="0 0 512 512" aria-hidden="true">
       <path fill="currentColor" d="M327.5 85.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 128l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 128l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 64 426.8 7.5C425.1 3 420.8 0 416 0s-9.1 3-10.8 7.5L384 64 327.5 85.2zM9.3 240C3.6 242.6 0 248.3 0 254.6s3.6 11.9 9.3 14.5l114 52.7 52.7 114c2.6 5.7 8.3 9.3 14.5 9.3s11.9-3.6 14.5-9.3l52.7-114 114-52.7c5.7-2.6 9.3-8.3 9.3-14.5s-3.6-11.9-9.3-14.5l-114-52.7-52.7-114c-2.6-5.7-8.3-9.3-14.5-9.3s-11.9 3.6-14.5 9.3l-52.7 114L9.3 240zm83 14.5 98.3-45.4 45.4 98.3-45.4 98.3-45.4-98.3-98.3-45.4zM384 384l-56.5 21.2c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L384 448l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L448 448l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L448 384l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L384 384z" />
     </svg>`;
 
     return html`
       <div
-        class=${this.hasAttribute('standalone-ai-search')
-          ? 'relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2'
-          : 'relative w-full min-h-[38px] flex'}
+        class="relative w-full min-h-[38px] pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2 "
       >
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
@@ -1826,19 +1824,25 @@ export class QueryEditorComponent extends LitElement {
             <span class="opacity-40"><kbd class="px-1 py-0.5 bg-fillWeak border border-strokeWeak rounded text-xs">/</kbd> to focus</span>
           </div>
         </div>
-        ${this.hasAttribute('standalone-ai-search')
-          ? html`<div class="p-1">
-              <button
+        <div class="p-1">
+          ${this.hasAttribute('standalone-ai-search')
+            ? html`<button
                 type="button"
-                class="px-2 py-0.5 inline-flex gap-1.5 items-center cursor-pointer rounded-sm text-textWeak hover:bg-fillWeak hover:text-textBrand focus-visible:outline-2 focus-visible:outline-offset-2"
-                data-tippy-content="Ask AI in plain English"
-                aria-label="Ask AI"
+                class="px-3 py-0.5 h-full inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm"
+                data-tippy-content="Search in plain English — describe what you're looking for"
+                aria-label="Open AI search"
                 @click=${() => this.dispatchEvent(new CustomEvent('open-ai-search', { bubbles: true }))}
               >
-                ${aiSearchIcon} Ask AI
-              </button>
-            </div>`
-          : null}
+                ${aiSearchIcon} AI search
+              </button>`
+            : html`<label
+                class="px-3 py-0.5 h-full inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
+                data-tippy-content="Search in plain English — describe what you're looking for"
+                for="ai-search-chkbox"
+              >
+                ${aiSearchIcon} AI search
+              </label>`}
+        </div>
         ${dropdownTemplate}
       </div>
     `;

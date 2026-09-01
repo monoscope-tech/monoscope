@@ -18,30 +18,6 @@ export const formatNumber = (n: number | null | undefined): string => {
   return n.toString();
 };
 
-/**
- * Format a byte count in binary units, matching `Pages.Containers.formatBytes` so a chart axis
- * and the table beneath it agree.
- *
- * Without this a memory chart's axis ran through formatNumber and read "1.0B" for a gigabyte —
- * B for "billion", directly under a table reading "1 GiB" for the same value, on a widget that
- * had declared its unit as bytes.
- */
-export const formatBytes = (n: number | null | undefined): string => {
-  if (n == null || Number.isNaN(n)) return 'N/A';
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
-  let v = n;
-  let i = 0;
-  while (Math.abs(v) >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  // One decimal, but never a bare ".0" — "1 GiB", not "1.0 GiB".
-  return `${parseFloat(v.toFixed(1))} ${units[i]}`;
-};
-
-/** Unit strings that mean "a count of bytes": OTel's `By` plus the spelling our widgets use. */
-export const BYTE_UNITS = new Set(['By', 'by', 'bytes', 'byte', 'B']);
-
 /** Convert a value in a time unit (h, m, s, ms, μs/us, ns) to nanoseconds. */
 export const convertToNanoseconds = (value: number, unit: string): number => {
   const f: Record<string, number> = { h: 3_600_000_000_000, m: 60_000_000_000, s: 1_000_000_000, ms: 1_000_000, μs: 1_000, us: 1_000, ns: 1 };
@@ -92,7 +68,6 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
 /** Format a stat scalar for display, appending the unit (duration-aware). */
 export const formatStatValue = (value: number, unit: string): string => {
   if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
-  if (BYTE_UNITS.has(unit)) return formatBytes(value);
   const suffix = ({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`;
   return `${formatNumber(value)}${suffix}`;
 };
