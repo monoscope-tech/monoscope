@@ -273,6 +273,42 @@ head` is used throughout, and two past `fromJust` crashes are recorded in commen
 The PG/TimeFusion `Bool` threaded through 63 sites should be **deleted at parity**, not
 abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 
+## /hs-evasion-review applied to this branch (823431ef..HEAD)
+
+Run against my own work, since the point of the skill is to catch the shortcuts the
+author cannot see. Findings by the skill's own categories:
+
+- **1. Warning/lint suppression** — clean. No `-Wno-*`, `HLINT ignore`, `fno-warn` or
+  `-Wwarn` added anywhere, including `package.yaml` and the cabal file. Verified by
+  grepping the diff directly.
+- **2. String stuffing** — clean.
+- **3. Field stuffing** — clean.
+- **4. Weakened / drifted types** — clean of the listed patterns: no `NonEmpty → []`, no
+  enum → `Text`, no typed id → bare `UUID`, no new `head`/`fromJust`/`error`/`!!`, no
+  dummy `_ -> pure ()` arms. See the Note below on the effect row, which is the one
+  judgement call.
+- **5. Code that should have changed but didn't — TWO FINDINGS, both fixed in `b29158d1`:**
+  - **Both bug fixes shipped with no regression guard.** The branch's entire test diff
+    was `+2 / −85` — pure deletion. CLAUDE.md's bug-fix workflow makes reproducing the
+    bug as a failing test mandatory and says in as many words that skipping it is not
+    acceptable because the fix looks obvious. Fixed: `WidgetType` now carries a doctest
+    pinning that the bare `widget_type=top_list` parses and an unknown spelling is
+    rejected.
+  - **`5a6315f3` fixed a bug in dead code.** `WrappedEnumInt` had zero users in `src`,
+    `test`, `cli` or `shared`, so the silent-`minBound` decode could not affect anything.
+    Deleted the wrapper outright (−28 lines), which is the honest resolution and also
+    serves the size goal. Siblings `WrappedEnum`/`WrappedEnumShow` are live and untouched.
+
+**Note (surfaced, not blocked):** `776c36cc` dropped `Concurrent :> es` from ~12
+signatures by having the retry loop call `liftIO . threadDelay` instead of the effect.
+Read strictly, that trades a precise capability constraint for `IOE`, which permits
+anything — the row got leaner but slightly less honest, and CLAUDE.md does say to prefer
+`Eff` effects over raw `IO`. The alternative was propagating `Concurrent` outward through
+`selectLogTable` into `Pkg/AI.hs` and the bot handlers. I chose the leaner row because
+the delay is an implementation detail of a retry loop that already requires `IOE`, and
+because `-Wredundant-constraints` is error-level here and made the constraint genuinely
+unused. Flagging it so the trade is a conscious one rather than an implicit one.
+
 ## Verification status
 
 | lane | state |
