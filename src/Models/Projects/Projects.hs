@@ -1365,7 +1365,10 @@ newPersistentSessionId = PersistentSessionId <$> genUUID
 
 
 insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
-insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (#{psId}, #{uid}, #{sd}) |]
+-- ON CONFLICT because one session id is fixed rather than generated: two concurrent first
+-- requests for the demo guest ('Web.Auth.demoGuestSession') would otherwise race, and the
+-- loser would 500 a page that is meant to need no account. For generated ids it cannot fire.
+insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (#{psId}, #{uid}, #{sd}) ON CONFLICT (id) DO NOTHING |]
 
 
 getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)

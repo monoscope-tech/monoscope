@@ -1,7 +1,10 @@
 module Web.AuthSpec (spec) where
 
+import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
+import Data.Vector qualified as V
+import Hasql.Interpolate qualified as HI
 import Pkg.TestUtils
 import Relude
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
@@ -46,6 +49,32 @@ spec = aroundAll withTestResources do
       Left nav <- challengeOf tr Auth.ChallengeRedirect
       let loc = decodeUtf8 @Text $ fromMaybe "" $ L.lookup "Location" nav.errHeaders
       loc `shouldSatisfy` T.isInfixOf "redirect_to=%2Fchart_data%3Fpid%3Dp%26since%3D1H"
+
+  -- The demo project is world-readable, so a cookie-less request is served under a shared
+  -- guest identity. That identity used to be minted per request — 'authorizeUserAndPersist'
+  -- inserted a session row every time, and since RespHeaders carries no Set-Cookie the browser
+  -- never got one back to reuse, so the next request inserted again. Prod reached 2,569,021
+  -- guest rows, 91% of users.persistent_sessions, at 324 MB.
+  describe "demo guest session" do
+    let demoUrl = Just "/p/00000000-0000-0000-0000-000000000000/log_explorer"
+        guestOf tr =
+          runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider
+            $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing demoUrl Auth.ChallengeRedirect
+        guestRows tr = do
+          rows :: V.Vector Int <-
+            runQueryEffect tr
+              $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM users.persistent_sessions ps JOIN users.users u ON u.id = ps.user_id WHERE u.email = 'hello@monoscope.tech' |]
+          pure $ V.head rows
+
+    it "serves every anonymous demo request from one session row" \tr -> do
+      Right _ <- guestOf tr
+      guestRows tr >>= \n -> n `shouldBe` 1
+
+      -- The regression is entirely in the repeats: under the old code each of these minted a
+      -- fresh id, which is exactly one more row in the table every time.
+      Right _ <- guestOf tr
+      Right _ <- guestOf tr
+      guestRows tr >>= \n -> n `shouldBe` 1
 
   describe "loginH" do
     -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so

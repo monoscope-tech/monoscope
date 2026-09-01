@@ -13,6 +13,7 @@ module Web.Auth (
   resolveApiKeyProject,
   APItoolkitAuthContext,
   authorizeUserAndPersist,
+  demoGuestSessionId,
   errorPageHtml,
   htmlServerError,
   ClientMetadata (..),
@@ -41,6 +42,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi qualified as UUIDQ
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -213,7 +215,7 @@ challengeFor basicAuthEnabled headers
   | otherwise = ChallengeRedirect
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
 sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment url challenge = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
@@ -224,8 +226,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
         Just u -> do
           if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
             then do
-              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@monoscope.tech"
-              mbPess <- join <$> mapM Projects.getPersistentSession (Just sessId)
+              mbPess <- demoGuestSession
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
                 (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
@@ -249,6 +250,36 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
           { errBody = AE.encode $ AE.object ["error" AE..= ("unauthenticated" :: Text), "login" AE..= loginUrl path]
           , errHeaders = [("Content-Type", "application/json")]
           }
+
+
+-- | The one session every anonymous demo visitor shares.
+--
+-- Fixed, not minted per request. It used to call 'authorizeUserAndPersist', which inserts a
+-- fresh session row every time — and because 'System.Types.RespHeaders' carries no
+-- @Set-Cookie@, the cookie crafted below never reached the browser, so the next request
+-- inserted again. That reached 2,569,021 rows, 91% of @users.persistent_sessions@, before it
+-- was noticed. At a fixed id the steady state is one SELECT and no write: what a signed-in
+-- request already costs.
+--
+-- The 'SessionData' map is therefore shared between anonymous visitors. That is what a public
+-- demo means, and it is not a regression: a per-request session could never carry anything
+-- across requests either.
+demoGuestSessionId :: Projects.PersistentSessionId
+demoGuestSessionId = Projects.PersistentSessionId [UUIDQ.uuid|d3305e55-1000-4000-8000-000000000001|]
+
+
+demoGuestSession :: (DB es, Time :> es, UUIDEff :> es) => Eff es (Maybe Projects.PersistentSession)
+demoGuestSession =
+  Projects.getPersistentSession demoGuestSessionId >>= \case
+    Just sess -> pure $ Just sess
+    Nothing -> do
+      uid <- userIdForEmail "Guest" "User" "" guestEmail
+      -- Two concurrent first-requests would both insert; the id is the primary key, so the
+      -- loser is a no-op rather than a 500 on a page that is meant to need no account.
+      Projects.insertSession demoGuestSessionId uid (Projects.SessionData Map.empty)
+      Projects.getPersistentSession demoGuestSessionId
+  where
+    guestEmail = "hello@monoscope.tech"
 
 
 getCookies :: Request -> Cookies
@@ -462,21 +493,27 @@ authCallbackH codeM _ redirectToM = do
               a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
-authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Projects.PersistentSessionId
-authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
-  userM <- Projects.userByEmail email
-  userId <- case userM of
+-- | The user behind an email address, created on first sight.
+--
+-- Split out of 'authorizeUserAndPersist' so the demo guest can resolve its user without also
+-- minting a session row — the whole point of 'demoGuestSession' is that it does not.
+userIdForEmail :: (DB es, Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es Projects.UserId
+userIdForEmail firstName lastName picture email =
+  Projects.userByEmail email >>= \case
+    Just user -> pure user.id
     Nothing -> do
       user <- Projects.createUser firstName lastName picture email
-      -- Make basic auth users sudo for admin access
+      -- Basic-auth users are admins of their own deployment. The annotation disambiguates
+      -- 'isSudo', which 'Projects.PersistentSession' also has.
       let userWithSudo :: Projects.User
-          userWithSudo =
-            if T.isSuffixOf "@basic-auth.local" email
-              then user{Projects.isSudo = True}
-              else user
+          userWithSudo = if T.isSuffixOf "@basic-auth.local" email then user{Projects.isSudo = True} else user
       Projects.insertUser userWithSudo
       pure userWithSudo.id
-    Just user -> pure user.id
+
+
+authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Projects.PersistentSessionId
+authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
+  userId <- userIdForEmail firstName lastName picture email
   persistentSessId <- Projects.newPersistentSessionId
   Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
   _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
