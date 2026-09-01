@@ -8,8 +8,6 @@ import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
-import Data.Text.Encoding (decodeUtf8With)
-import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)

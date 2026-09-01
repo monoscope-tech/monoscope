@@ -37,6 +37,7 @@ import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -44,20 +45,15 @@ import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+import Web.HttpApiData (FromHttpApiData)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
--- Generic instance for parsing JSON arrays from form data
-instance AE.FromJSON a => FromHttpApiData [a] where
-  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
-
-
--- Generic instance for parsing JSON values from form data
-instance {-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a where
-  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+-- | 'Charts.MetricsStats' lives in @shared/@, which cannot see 'JSONHttpApiData',
+-- so the deriving-via is written here at the one place that needs it.
+deriving via JSONHttpApiData Charts.MetricsStats instance FromHttpApiData Charts.MetricsStats
 
 
 data Query = Query
@@ -78,6 +74,7 @@ data Layout = Layout
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Layout
+  deriving (FromHttpApiData) via JSONHttpApiData Layout
 
 
 data WidgetType
@@ -103,9 +100,13 @@ data WidgetType
   -- Bounded so every widget type can be enumerated ([minBound ..]) rather than listed by
   -- hand: adding a constructor then extends the round-trip/render specs automatically
   -- instead of silently shipping untested.
-  deriving stock (Bounded, Enum, Eq, Generic, Show, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
+  -- Parses the bare snake_case spelling a form actually submits (@widget_type=top_list@).
+  -- The blanket orphan this replaces ran the raw param through 'AE.eitherDecodeStrict',
+  -- so it only ever accepted a *quoted* JSON string.
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
 
 
 data SummarizeBy
@@ -115,9 +116,10 @@ data SummarizeBy
   | SBCount
   | SBMean
   | SBRate
-  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "SB" SummarizeBy
 
 
 -- | Prefix shown before a stat's big number. The value itself is computed and
@@ -222,6 +224,7 @@ data WidgetDataset = WidgetDataset
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetDataset
+  deriving (FromHttpApiData) via JSONHttpApiData WidgetDataset
 
 
 -- | The query to run for a widget, paired with the row shape it decodes into.
@@ -281,6 +284,7 @@ data WidgetAxis = WidgetAxis
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetAxis
+  deriving (FromHttpApiData) via JSONHttpApiData WidgetAxis
 
 
 data TableColumn = TableColumn
@@ -308,6 +312,7 @@ data RowClickAction = RowClickAction
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RowClickAction
+  deriving (FromHttpApiData) via JSONHttpApiData RowClickAction
 
 
 -- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)

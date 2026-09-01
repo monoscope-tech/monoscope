@@ -791,6 +791,25 @@ insertIfNotExist x vec
 newtype JSONHttpApiData a = JSONHttpApiData a
 
 
+-- Container form fields arrive as one JSON array in a single value, so @FromForm@
+-- derivation needs these. They are deliberately narrow: they replaced a
+-- @{-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a@ orphan in
+-- 'Pkg.Components.Widget' that rerouted query-param parsing for *every*
+-- JSON-decodable type through JSON decoding, in every module transitively
+-- importing it. For a single JSON-encoded param, use 'JSONHttpApiData' instead of
+-- widening these.
+instance AE.FromJSON a => FromHttpApiData [a] where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
+instance AE.FromJSON a => FromHttpApiData (V.Vector a) where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
+instance FromHttpApiData AE.Value where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
 instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
   -- Parse as raw JSON; on failure retry quoted, so bare strings work unquoted in URLs.
   parseUrlPiece t = bimap fromString JSONHttpApiData $ case AE.eitherDecodeStrict' (encodeUtf8 t) of
