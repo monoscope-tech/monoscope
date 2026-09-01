@@ -28,7 +28,6 @@ module Models.Apis.LogQueries (
 )
 where
 
-import Control.Concurrent qualified as IO
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -67,7 +66,6 @@ import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
-import UnliftIO (throwIO, tryAny)
 import Utils (listToIndexHashMap, lookupVecTextByKey, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -295,7 +293,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
       ]
       $ try @SomeException
-      $ retryLogExplorerRead
+      $ Hasql.retryTransientEff 3 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
       $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
@@ -371,23 +369,6 @@ sessionTagId :: Text -> Maybe UUID.UUID
 sessionTagId el
   | "session;" `T.isPrefixOf` el = UUID.fromText $ T.drop 1 $ T.dropWhile (/= '⇒') el
   | otherwise = Nothing
-
-
--- | Retries connection and pool blips, but never retries a malformed query.
-retryLogExplorerRead :: (IOE :> es, Log :> es) => Eff es a -> Eff es a
-retryLogExplorerRead = go (1 :: Int)
-  where
-    maxAttempts = 3
-    go attempt action =
-      tryAny action >>= \case
-        Right value -> pure value
-        Left err
-          | attempt < maxAttempts && Hasql.isTransientException err -> do
-              let delay = 100000 * (2 ^ (attempt - 1))
-              Log.logAttention "log-explorer.data transient query failure, retrying" $ AE.object ["attempt" AE..= attempt, "max_attempts" AE..= maxAttempts, "backoff_us" AE..= delay, "error" AE..= show @Text err]
-              liftIO $ IO.threadDelay delay
-              go (attempt + 1) action
-          | otherwise -> throwIO err
 
 
 -- | Return spans that are transitive descendants of @seedSpanIds@ within

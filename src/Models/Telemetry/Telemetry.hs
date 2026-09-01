@@ -67,7 +67,6 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
-  retryTransientEff,
   maxWriteAttempts,
   maxReadAttempts,
   handOffBatches,
@@ -105,7 +104,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
-import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
@@ -131,7 +130,6 @@ import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
@@ -1469,12 +1467,6 @@ maxWriteAttempts :: Int
 maxWriteAttempts = 10
 
 
--- | Exponential backoff schedule shared by the write ('retryHasqlWrite') and
--- read ('retryTransientEff') retry loops: 100ms, 200ms, 400ms … capped at 5s.
-transientBackoffMicros :: Int -> Int
-transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
-
-
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential
 -- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
@@ -1484,7 +1476,7 @@ transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
 -- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
 -- exceptions (non-Hasql) propagate as Left without retry.
 retryHasqlWrite
-  :: (Concurrent :> es, IOE :> es, Log :> es, Monoid a)
+  :: (IOE :> es, Log :> es, Monoid a)
   => Int
   -- ^ max attempts (must be >= 1)
   -> Text
@@ -1512,50 +1504,11 @@ retryHasqlWrite maxAttempts store act =
         | otherwise -> throwIO e
 
 
--- | Retry @act@ on transient Hasql errors with exponential backoff
--- ('transientBackoffMicros'), yielding the last exception once the budget is
--- spent or the error is non-transient. @msg@/@key@/@label@ shape the retry log
--- line so the write and read wrappers keep their distinct log identities.
-retryTransientLoop :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
-retryTransientLoop maxAttempts msg key label act = go 1
-  where
-    go attempt =
-      tryAny act >>= \case
-        Right a -> pure (Right a)
-        Left e
-          | attempt < maxAttempts
-          , Hasql.isTransientException e -> do
-              let delayMicros = transientBackoffMicros attempt
-              Log.logAttention msg
-                $ AE.object
-                  [ AEK.fromText key AE..= label
-                  , "attempt" AE..= attempt
-                  , "max_attempts" AE..= maxAttempts
-                  , "backoff_us" AE..= delayMicros
-                  , "error" AE..= show @Text e
-                  ]
-              threadDelay delayMicros
-              go (attempt + 1)
-          | otherwise -> pure (Left e)
-
-
 -- | Read-side transient-retry budget. Smaller than 'maxWriteAttempts' (10):
 -- a read blip blocking the consumer for the full ~25s write budget would stall
 -- the partition, and the DLQ is a fine backstop for a read that won't recover.
 maxReadAttempts :: Int
 maxReadAttempts = 5
-
-
--- | Retry a read action on transient Hasql errors (dropped connection, empty
--- SQLSTATE from a pgdog/pgwire reset — see 'Data.Effectful.Hasql.isTransientUsageError')
--- with the same 100ms→5s backoff as 'retryHasqlWrite'. Rethrows the final
--- exception when the budget is exhausted or the error is non-transient, so the
--- caller's existing catch still routes the batch to the DLQ as the last resort.
--- Guards the per-batch project-id / cache lookups that previously dead-lettered
--- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
-retryTransientEff :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
-retryTransientEff maxAttempts op act =
-  either throwIO pure =<< retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op act
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
@@ -1566,8 +1519,7 @@ retryTransientEff maxAttempts op act =
 -- single-row failure can't occur, and if one ever did it's a systemic bug to
 -- surface loudly, not silently drop one row for.
 bulkInsertOtelLogsAndSpansTF
-  :: ( Concurrent :> es
-     , Hasql :> es
+  :: ( Hasql :> es
      , IOE :> es
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
@@ -1603,7 +1555,7 @@ bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
 -- whether at least one leg fully persisted the batch (for best-effort follow-on
 -- work like the metrics catalog).
 dualWrite
-  :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
   => Int
   -- ^ submitted row count
   -> WriteTarget
@@ -1660,8 +1612,7 @@ dualWrite submitted target writePg writeTf = case target of
 -- stores, `processed_at` stays NULL, and the hourly `SafetyNetReprocess` job
 -- re-submits it on the next tick.
 insertAndHandOff
-  :: ( Concurrent :> es
-     , Hasql :> es
+  :: ( Hasql :> es
      , IOE :> es
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
@@ -2443,7 +2394,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => Bool
   -- ^ enablePostgresTelemetryWrites
   -> Bool
@@ -2856,7 +2807,7 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- as logs and spans. The caller mints ids before calling this function; it is
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => MetricCatalogBuffer
   -> Bool
   -> WriteTarget

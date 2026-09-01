@@ -62,7 +62,6 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
@@ -90,7 +89,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
 
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
