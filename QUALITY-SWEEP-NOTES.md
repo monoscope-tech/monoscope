@@ -280,7 +280,7 @@ abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 | library (`ghcid`) | **green**, 128 modules, zero warnings |
 | `make test-unit` | **green** — 271 examples, 0 failures |
 | `make test-doctests` | 1348 examples, **0 errors, 1 failure — pre-existing** (below) |
-| `make test-integration` | **not run** (see below) |
+| `make test-integration` | **partial** — 270 specs passed, 0 failures, then the run was terminated (see below) |
 | browser / running app | **not run** — port 8080 belongs to the other checkout |
 
 The library watcher compiles `src/` only, so it cannot catch a broken spec. Running the
@@ -297,6 +297,17 @@ fixing on its own, separately from a refactor branch.
 
 Doctests need `cabal build lib:monoscope` first, or the runner dies with
 `cannot satisfy -package monoscope`.
+
+**Integration run, stated precisely:** it got ~19 minutes in and through 270 passing
+examples with **zero failures**, then died on `Terminated: 15` partway through
+`Pages.Bots.Workflows` — a signal, not a test failure. It was not killed by the orphan
+sweep (I checked its tree, `53177 → 56605 → 56613`, against every pid before sending a
+signal, and it was still alive afterwards). The likely cause is memory pressure: swap was
+at 15.7 GB of 16.4 GB with three Claude instances and four GHC sessions resident.
+A targeted re-run over the areas this branch touches followed.
+
+**If you re-run it:** watch swap first. The box was thrashing hard enough to show a load
+average of 220 on 10 cores, almost entirely paging I/O rather than CPU.
 
 ## Landed
 
