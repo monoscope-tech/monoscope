@@ -8,12 +8,15 @@ import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException, query_)
+import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -400,11 +403,35 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- V.fromList <$> runQ
+      -- Decoded through 'AnyText', not 'Text': a raw-SQL widget selects whatever its author
+      -- wrote, and demanding `text` for every column failed the *whole* widget on one
+      -- uncast value. Explicitly annotated because 'runQ' is polymorphic in the row type.
+      rows <- runQ :: IO [V.Vector AnyText]
+      let chartData = coerce (V.fromList rows) :: V.Vector (V.Vector Text)
       pure baseMetricsData{dataText = chartData, rowsCount = fromIntegral $ V.length chartData}
     DTJson -> do
       chartData <- V.fromList <$> runQ
       pure baseMetricsData{dataJSON = chartData, rowsCount = fromIntegral $ V.length chartData}
+
+
+-- | Any column, as the text Postgres already sent for it.
+--
+-- The @DTText@ path feeds tables, trace tables and stat labels — every consumer only ever
+-- prints these. Decoding them as 'Text' meant @FromField Text@ rejected any other column
+-- type, so a single uncast column failed the entire widget with
+-- @Incompatible {errSQLType = "int4", errHaskellType = "Text"}@ and the user got an error
+-- overlay instead of their data. Widget SQL is author-written, so requiring a @::text@ cast
+-- on every column was a trap rather than a contract.
+--
+-- Sound because postgresql-simple requests results in **text format**: the bytes handed to
+-- 'fromField' are already the rendering @::text@ would have produced. Decoded leniently —
+-- a decode error here would just trade one whole-widget failure for another — and NULL
+-- becomes @""@, which previously threw 'UnexpectedNull' and killed the widget too.
+newtype AnyText = AnyText Text
+
+
+instance FromField AnyText where
+  fromField _ = pure . AnyText . maybe "" (decodeUtf8With lenientDecode)
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
