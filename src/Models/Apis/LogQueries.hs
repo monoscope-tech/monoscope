@@ -9,6 +9,7 @@ module Models.Apis.LogQueries (
   SqlSource (..),
   SecuredSql (..),
   selectLogTable,
+  sessionTagId,
   executeSecuredQuery,
   LogEndpoint (..),
   logExplorerUrlPath,
@@ -36,6 +37,7 @@ import Data.Default
 import Data.Effectful.Hasql (Hasql, SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.List (elemIndex)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
@@ -298,23 +300,77 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
         pure $ jsonArrayRows rows
-  pure case result of
-    Left e -> Left $ show e
-    Right logItemsV
-      | queryComponents.hasCountOver ->
-          let count = fromMaybe 0 do
-                firstRow <- logItemsV V.!? 0
-                AE.Number n <- firstRow V.!? (V.length firstRow - 1)
-                pure $ round n
-           in Right (canonicalOrder $ V.map (\v -> V.take (V.length v - 1) v) logItemsV, queryComponents.toColNames, count)
-      -- No count(*) OVER(): the overflow row detects hasMore, signalled by
-      -- returning count > rows length.
-      | otherwise ->
-          let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
-              hasOverflow = V.length logItemsV > limit
-              page = if hasOverflow then V.take limit logItemsV else logItemsV
-              rows = canonicalOrder page
-           in Right (rows, queryComponents.toColNames, V.length rows + bool 0 1 hasOverflow)
+  let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
+      paged = case result of
+        Left e -> Left $ show e
+        Right logItemsV
+          | queryComponents.hasCountOver ->
+              let count = fromMaybe 0 do
+                    firstRow <- logItemsV V.!? 0
+                    AE.Number n <- firstRow V.!? (V.length firstRow - 1)
+                    pure $ round n
+               in Right (canonicalOrder $ V.map (\v -> V.take (V.length v - 1) v) logItemsV, queryComponents.toColNames, count)
+          -- No count(*) OVER(): the overflow row detects hasMore, signalled by
+          -- returning count > rows length.
+          | otherwise ->
+              let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
+                  hasOverflow = V.length logItemsV > limit
+                  page = if hasOverflow then V.take limit logItemsV else logItemsV
+                  rows = canonicalOrder page
+               in Right (rows, queryComponents.toColNames, V.length rows + bool 0 1 hasOverflow)
+  forM paged \(rows, cols, count) -> (,cols,count) <$> gateReplayTags pid cols rows
+
+
+-- | Drop the @session;@ summary tag from rows whose session has no screen
+-- recording. That tag is what renders the Replay button in the log list, but
+-- 'Telemetry.generateSummary' stamps it at ingest time — before a recording can
+-- exist, and for every SDK that sets @session.id@ whether it records or not. The
+-- truth lives in @projects.replay_sessions@ (Postgres, never telemetry), so it
+-- is only knowable here, at read time. Without this every browser span offers a
+-- Replay that opens an empty player.
+--
+-- The detail panel is unaffected: it regenerates the summary from the row and
+-- already skips @session;@ (see 'Utils.summaryForDetailView').
+gateReplayTags :: DB es => Projects.ProjectId -> [Text] -> V.Vector (V.Vector AE.Value) -> Eff es (V.Vector (V.Vector AE.Value))
+gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colNames) of
+  Nothing -> pure rows
+  Just i -> case ordNub [sid | r <- V.toList rows, Just cell <- [r V.!? i], sid <- summarySessionIds cell] of
+    [] -> pure rows
+    sids -> do
+      -- Keyed on the parsed UUID, not its text: an SDK emitting an uppercase id
+      -- round-trips through UUID.toText as lowercase and would never match itself.
+      replayed :: [UUID.UUID] <- Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
+      let ok = S.fromList replayed
+          keep (AE.String s) = maybe True (`S.member` ok) (sessionTagId s)
+          keep _ = True
+          prune (AE.Array els) = AE.Array (V.filter keep els)
+          prune v = v
+      pure $ V.map (V.imap \j c -> if j == i then prune c else c) rows
+
+
+-- | Session ids carried by a row's @to_json(summary)@ cell.
+summarySessionIds :: AE.Value -> [UUID.UUID]
+summarySessionIds (AE.Array els) = mapMaybe (\case AE.String s -> sessionTagId s; _ -> Nothing) (V.toList els)
+summarySessionIds _ = []
+
+
+-- | The id in a @session;\<style\>⇒\<id\>@ summary element, when it is a UUID.
+-- Sessions derived from a user id\/email (backend SDKs without @setSession@) are
+-- not UUIDs and can never have a recording, so they parse as 'Nothing' and the
+-- tag is left alone.
+--
+-- >>> sessionTagId "session;right-badge-neutral⇒fb42636e-ef32-43ac-a2f8-89904e87ba0f"
+-- Just fb42636e-ef32-43ac-a2f8-89904e87ba0f
+--
+-- >>> sessionTagId "session;right-badge-neutral⇒anon@example.com"
+-- Nothing
+--
+-- >>> sessionTagId "user id;right-badge-neutral⇒fb42636e-ef32-43ac-a2f8-89904e87ba0f"
+-- Nothing
+sessionTagId :: Text -> Maybe UUID.UUID
+sessionTagId el
+  | "session;" `T.isPrefixOf` el = UUID.fromText $ T.drop 1 $ T.dropWhile (/= '⇒') el
+  | otherwise = Nothing
 
 
 -- | Retries connection and pool blips, but never retries a malformed query.

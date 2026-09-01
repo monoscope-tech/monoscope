@@ -262,7 +262,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       -- 504'd the whole issue. The Investigation panel now pulls it as its own
       -- HTMX fragment, and the only thing this page still needs from the trace is
       -- the session id for the replay section — one scalar, not 1300 rows.
-      replaySession <- flip foldMapM mTraceRef \(tId, tTs) ->
+      tracedSession <- flip foldMapM mTraceRef \(tId, tTs) ->
         Hasql.withHasqlTimefusion useTf
           $ listToMaybe @Text
           <$> Hasql.interp
@@ -272,6 +272,15 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                         AND context___trace_id = #{tId}
                         AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
                       LIMIT 1 |]
+      -- Having a session id is not having a recording: the id is telemetry, the
+      -- recording is Postgres. An SDK that sets session.id without recording gets
+      -- a player that can only say "no events found", so the panel is rendered
+      -- only once a recording exists. A non-UUID session key (backend SDKs
+      -- without setSession, where the session is derived from user identity)
+      -- can never have one, so it never reaches the lookup.
+      replaySession <- flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
+        listToMaybe @Text
+          <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
           then do

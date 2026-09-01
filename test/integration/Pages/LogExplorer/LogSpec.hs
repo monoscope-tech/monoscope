@@ -232,6 +232,40 @@ spec = around withTestResources do
       r <- fetchData tr Nothing (Just "id,timestamp,name,duration") Nothing Nothing fromTime toTime
       r.cols `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
 
+    -- 2026-09-01: every browser span carried a Replay button, because the
+    -- `session;` summary tag is stamped at ingest — before a recording can exist,
+    -- and for every SDK that sets session.id whether it records or not. Clicking it
+    -- opened an empty player. The affordance has to follow projects.replay_sessions,
+    -- which is only knowable at read time.
+    it "offers Replay on a session row only once that session has a recording" \tr -> do
+      pid <- createTestProject tr "log-explorer-replay-gate"
+      apiKey <- createTestAPIKey tr pid "replay-gate-key"
+      sessionId <- nextRandom
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+          spanName = "GET /replay-gate"
+      (trId, spanId) <- (,) <$> hexId <*> hexId
+      ingestSpanReq tr
+        $ mkSpanRequest trId spanId Nothing spanName [] Nothing [mkAttr "session.id" (UUID.toText sessionId)] (mkResource apiKey []) frozenTime
+
+      let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
+          -- (rows returned, session tags among their summaries)
+          summaries = do
+            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads pid [] "" Nothing range [] (Just SSpans) Nothing Nothing
+            (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+            -- Fails loudly rather than silently passing if the projection ever stops
+            -- carrying a bare `summary` column — the gate keys off exactly that name.
+            let idx = fromMaybe (error "summary not projected") $ V.elemIndex "summary" (V.fromList cols)
+            pure (length rows, [t | r <- V.toList rows, Just (AE.Array els) <- [r V.!? idx], AE.String t <- V.toList els, "session;" `T.isPrefixOf` t])
+
+      -- The span is there and carries session.id; the tag is not, because nothing
+      -- was recorded. Waiting on the row count first keeps "no tag yet" from
+      -- passing simply because the write had not landed.
+      eventually summaries ((> 0) . fst) `shouldReturn` (1, [])
+
+      void $ withPool tr.trPool $ DBT.execute [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] (sessionId, pid)
+      (_, tags) <- summaries
+      tags `shouldSatisfy` any (T.isSuffixOf (UUID.toText sessionId))
+
     it "returns only matched spans plus their descendants, not unrelated siblings" \tr -> do
       apiKey <- createTestAPIKey tr testPid "log-spec-tree-key"
       let ts = addUTCTime (-30) frozenTime
