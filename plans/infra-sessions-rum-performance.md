@@ -216,6 +216,32 @@ that was previously unreachable.
 This is a shared component, so it affects every table — in the same direction: a table that
 fits is unchanged, and one that does not now scrolls instead of hiding columns.
 
+### Fixed: RUM Web Vitals read "No data" while the metrics were in the store
+
+Both the Overview panel and the Performance tab reported `No data / 0 samples` for all five
+Core Web Vitals. The metrics were there the whole time — the query just did not match their
+names.
+
+`vitalSamples` filtered `metric_name IN ('browser.web_vital.lcp', …)`, the OpenTelemetry
+browser SDK's spelling. k6's browser module emits the same measurements as
+`k6.browser_web_vital_lcp` — dot-free, behind its own prefix — and that is what the demo
+project (and any k6-driven setup) actually sends. `vitalsFromSamples` had the same assumption
+baked in a second time: it derived a vital's key by stripping the literal prefix
+`browser.web_vital.`, so even if a k6 row had reached it, it would not have mapped to a vital.
+
+Both now handle either spelling. The name list is built from `vitalDefinitions` so it cannot
+drift from the vitals actually rendered, and the key is derived (everything after the last `.`
+or `_`, lowercased) rather than stripped per known prefix, so a third emitter maps itself.
+Verified at the query level against prod TF over 24h: LCP 394ms, INP 572ms, CLS 0.097,
+TTFB 172ms, FCP 621ms — 617k samples that previously rendered as "No data".
+
+### Audited and clean
+
+RUM Overview, Sessions and Performance were checked at 1600/1280/820px with the freshly built
+stylesheet: no horizontal overflow, no clipped tables, no collapsed canvases, no skeletons left
+after 11s, and no `NaN`/`undefined`/`Invalid Date` leaking into the copy. The layout is sound;
+the vitals bug above was the substantive defect.
+
 ### Noted, not a bug
 
 `/p/<pid>/infrastructure` has no route and 404s. Nothing links to it — hosts, containers,

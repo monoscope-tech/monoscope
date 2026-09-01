@@ -12,6 +12,7 @@ module Pages.RealUserMonitoring (
   Vital (..),
   VitalRating (..),
   classifyVital,
+  vitalKey,
 ) where
 
 import Data.Cache qualified as Cache
@@ -145,10 +146,31 @@ vitalDefinitions =
     mk name label description unit goodAt poorAt = Vital{name, label, description, unit, goodAt, poorAt, value = Nothing, samples = 0, rating = Unknown}
 
 
+-- | The metric names each emitter uses for a web vital.
+--
+-- The OpenTelemetry browser SDK dots them (@browser.web_vital.lcp@); k6's browser module
+-- underscores them behind its own prefix (@k6.browser_web_vital_lcp@). Only the first spelling
+-- was matched, so a project whose vitals come from k6 — which is what the demo emits — showed
+-- "No data, 0 samples" on both the Overview panel and the Performance table while the metrics
+-- sat in the store. Listed exactly rather than matched with LIKE, so the IN still routes.
+vitalMetricNames :: [Text]
+vitalMetricNames = [prefix <> v.name | v <- vitalDefinitions, prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
+
+
+-- | The vital a metric name refers to: everything after the last separator, lowercased.
+--
+-- Derived rather than stripped per known prefix, so a third emitter's spelling maps itself.
+--
+-- >>> map vitalKey ["browser.web_vital.lcp", "k6.browser_web_vital_ttfb", "CLS"]
+-- ["lcp","ttfb","cls"]
+vitalKey :: Text -> Text
+vitalKey = T.toLower . T.takeWhileEnd (\c -> c /= '.' && c /= '_')
+
+
 vitalsFromSamples :: [VitalSample] -> [Vital]
 vitalsFromSamples samples = map measure vitalDefinitions
   where
-    byName = M.fromListWith (<>) [(T.toLower $ fromMaybe s.metricName $ T.stripPrefix "browser.web_vital." s.metricName, [(s.value, s.samples)]) | s <- samples]
+    byName = M.fromListWith (<>) [(vitalKey s.metricName, [(s.value, s.samples)]) | s <- samples]
     measure vital =
       let points = M.findWithDefault [] vital.name byName
           measured = weightedPercentile 0.75 points
@@ -381,7 +403,9 @@ vitalSamples scope =
         FROM otel_metrics
         WHERE |]
           <> scopePredicate scope
-          <> [HI.sql| AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.cls', 'browser.web_vital.fcp', 'browser.web_vital.ttfb')
+          <> [HI.sql| AND metric_name IN |]
+          <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
+          <> [HI.sql|
           AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
         ORDER BY timestamp DESC LIMIT 2000|]
       )
