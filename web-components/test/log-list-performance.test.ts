@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { LogList } from '../src/log-list';
 import { logPage, serverTransport } from './log-list-harness';
-import { MAX_RETAINED_ROWS, RETENTION_LIMIT } from '../src/log-list';
+import { MAX_RETAINED_ROWS } from '../src/log-list';
 
 
 describe('LogList production-sized pagination', () => {
@@ -26,7 +26,7 @@ describe('LogList production-sized pagination', () => {
     const elapsedMs = performance.now() - started;
 
     // State as well as DOM is bounded: older rows are discarded past the retention window.
-    expect((list as any).spanListTree.length).toBeLessThanOrEqual(RETENTION_LIMIT);
+    expect((list as any).spanListTree.length).toBeLessThanOrEqual(MAX_RETAINED_ROWS);
     expect((list as any).spanListTree.length).toBeGreaterThanOrEqual(MAX_RETAINED_ROWS);
     expect((list as any).seenIds.size).toBe((list as any).spanListTree.length);
     // Generous CI guardrail: catches accidental quadratic merging without timing normal noise.

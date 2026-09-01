@@ -1044,9 +1044,16 @@ extractSeriesNamesFromDataset ds = case ds <&> (.source) of
 -- units convert+format, everything else uses formatNumber. Shared by the
 -- tooltip valueFormatter and the yAxis axisLabel formatter.
 unitValueExprJS :: Maybe Text -> Text
-unitValueExprJS unitM = case guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM of
-  Just u -> "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
-  Nothing -> "formatNumber(value)"
+unitValueExprJS unitM
+  | Just u <- durationUnit = "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
+  | isBytes = "formatBytes(value)"
+  | otherwise = "formatNumber(value)"
+  where
+    durationUnit = guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM
+    -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
+    -- chart's axis read "1.0B" for a gigabyte -- B for "billion" -- directly above a table
+    -- reading "1 GiB". formatBytes mirrors 'Pages.Containers.formatBytes'.
+    isBytes = maybe False (`elem` ["By", "by", "bytes", "byte", "B"]) unitM
 
 
 -- Function to convert Widget to ECharts options

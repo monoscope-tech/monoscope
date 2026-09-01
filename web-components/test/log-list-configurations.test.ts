@@ -8,7 +8,7 @@
 // axes, so adding a configuration costs one row rather than a new file.
 import { describe, test, expect } from 'vitest';
 import { serverTransport, serverTransportFlipped, logPage, mountList, scrollHarness, flushFrames, ids, ROW_H } from './log-list-harness';
-import { MAX_RETAINED_ROWS, RETENTION_LIMIT } from '../src/log-list';
+import { MAX_RETAINED_ROWS } from '../src/log-list';
 
 type Config = { name: string; props: Record<string, any>; aggregate?: boolean };
 
@@ -119,7 +119,7 @@ describe.each(CONFIGS)('LogList configuration: $name', (config) => {
 
   test('retention is bounded and reopens the edge it evicted', async () => {
     const el = await mountList(config.props as any);
-    const first = Array.from({ length: RETENTION_LIMIT }, (_, i) => `r${String(i).padStart(5, '0')}`);
+    const first = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => `r${String(i).padStart(5, '0')}`);
     el.transport = transportFor(config, page(first), page(Array.from({ length: 200 }, (_, i) => `o${i}`)));
     await el.fetchData('first', true);
     await el.fetchData('second', false, false, true);

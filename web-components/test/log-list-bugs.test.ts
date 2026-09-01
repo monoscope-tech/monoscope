@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport, stubContainer, stubVirtualizer } from './log-list-harness';
-import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, RETENTION_LIMIT, HISTORY_PREFETCH_ROWS } from '../src/log-list';
+import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, HISTORY_PREFETCH_ROWS } from '../src/log-list';
 import { shouldBufferRecent, atInsertionEdge, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -249,11 +249,11 @@ describe('LogList — MED correctness', () => {
 
   test('pagination bounds retained rows and reopens the evicted edge', async () => {
     const el = await mountList();
-    const initial = Array.from({ length: RETENTION_LIMIT }, (_, i) => row(`r${i}`));
+    const initial = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
 
-    // Crossing RETENTION_LIMIT cuts back to MAX_RETAINED_ROWS from the end opposite the fetch:
+    // Crossing MAX_RETAINED_ROWS cuts back to MAX_RETAINED_ROWS from the end opposite the fetch:
     // paging history discards the newest rows and keeps the page it just loaded.
     (el as any).spanListTree = (el as any).mergeIntoTree([row('older')], false);
     expect(ids(el)).toHaveLength(MAX_RETAINED_ROWS);
@@ -263,7 +263,7 @@ describe('LogList — MED correctness', () => {
     expect((el as any).seenIds.has('r0')).toBe(false);
 
     // And a recent fetch crossing the limit cuts the other end: newest rows kept, history dropped.
-    const newer = Array.from({ length: RETENTION_LIMIT }, (_, i) => row(`n${i}`));
+    const newer = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => row(`n${i}`));
     (el as any).spanListTree = (el as any).mergeIntoTree(newer, true);
     expect(ids(el)).toHaveLength(MAX_RETAINED_ROWS);
     expect(ids(el)[0]).toBe('n0');
@@ -273,10 +273,10 @@ describe('LogList — MED correctness', () => {
 
   test('window trimming captures and restores the visible row before loading', async () => {
     const el = await mountList();
-    const initial = Array.from({ length: RETENTION_LIMIT }, (_, i) => row(`r${i}`));
+    const initial = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
-    const anchor = { id: `r${RETENTION_LIMIT - 10}`, offset: 7 };
+    const anchor = { id: `r${MAX_RETAINED_ROWS - 10}`, offset: 7 };
     const capture = vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValueOnce(anchor).mockReturnValue(null);
     const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
     const transport = deferredTransport();
@@ -367,7 +367,7 @@ describe('LogList — MED correctness', () => {
 
   test('an oversized trace cannot collapse the retained window to zero rows', async () => {
     const el = await mountList();
-    const traceRows = Array.from({ length: RETENTION_LIMIT }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
+    const traceRows = Array.from({ length: MAX_RETAINED_ROWS }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
     (el as any).spanListTree = traceRows;
     (el as any).seenIds = new Set(traceRows.map((r) => r.id));
 

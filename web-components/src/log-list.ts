@@ -103,11 +103,17 @@ type RecentDelivery = 'manual' | 'auto-refresh';
 export const virtualItemKey = (item: VirtualListItem) =>
   'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
 
-// Retained rows are the scroll cost: measured at 4x CPU throttle, an identical scroll workload
-// blocks the main thread 4767ms at 5000 rows and 3660ms at 2500 (400 rows only reaches 2915ms,
-// so the rest is per-scroll work that shrinking the window cannot buy back). Evicting reopens
-// the edge — mergeIntoTree sets hasMore/hasNewer — so a smaller window costs a refetch when you
-// scroll back past it, not access to the rows.
+/**
+ * Retained rows are still virtualizer input: FlowLayout tracks their geometry even when their
+ * DOM nodes are recycled. Bounding them keeps the working set small on low-power hardware, and
+ * eviction reopens the edge, so crossing it costs a cursor refetch rather than losing history.
+ *
+ * One threshold, and a cut restores to it. A two-mark window (cross a limit, cut back to a
+ * smaller size) evicts far less often — every page overflowing this one is what makes the
+ * virtualizer remount, blank its runway and need a full anchor restore mid-scroll — but the
+ * larger cut it implies moves the reader, and the simulated-layout unit tests do not reproduce
+ * that. It needs a real browser and someone watching. See plans/log-list-performance.md.
+ */
 export const MAX_RETAINED_ROWS = 2500;
 // Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
@@ -134,6 +140,18 @@ export class DenseRowFlowLayout extends FlowLayout {
     this._overhang = 200;
   }
 }
+
+/**
+ * The two layout specifiers, hoisted rather than written inline in the template.
+ *
+ * The virtualizer treats the value it receives as a configuration it is being newly given: an
+ * object literal in the binding is a fresh object every render, so every render reassigned the
+ * layout's config and rescheduled a reflow. A trace of a scrolling list showed the consequence —
+ * the entire runway (~25 rows, ~850 elements) torn down and rebuilt every frame, which is what
+ * made style recalculation, at ~2,900 elements a pass, 70% of the whole scroll.
+ */
+const DENSE_LAYOUT = { type: DenseRowFlowLayout };
+const MEASURED_LAYOUT = {};
 
 /**
  * The dimension the latency bar attributes time to. `service` answers "which service ate the
@@ -304,7 +322,6 @@ export class LogList extends LitElement {
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
-  private _loadNewerObserver: IntersectionObserver | null = null;
   private _visibilityObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
@@ -1160,12 +1177,14 @@ export class LogList extends LitElement {
     // old `querySelector('tr')` check called that healthy even though the user saw an empty
     // list; scrolling upward happened to bring those misplaced rows back. Require a real data
     // row intersecting the viewport instead. Sentinel rows do not prove log content is visible.
+    //
+    // The mounted rows are one contiguous band — the virtualizer renders a range, not a
+    // scattering — so the first and last of them bound every other, and two rectangles answer
+    // the same question that measuring all ~50 did.
+    const rows = virtualizer.querySelectorAll<HTMLElement>('[data-row-id]');
     const viewport = container.getBoundingClientRect();
-    const hasVisibleDataRow = [...virtualizer.querySelectorAll<HTMLElement>('[data-row-id]')].some((row) => {
-      const rect = row.getBoundingClientRect();
-      return rect.bottom > viewport.top && rect.top < viewport.bottom;
-    });
-    if (hasVisibleDataRow) {
+    const band = rows.length && { top: rows[0].getBoundingClientRect().top, bottom: rows[rows.length - 1].getBoundingClientRect().bottom };
+    if (band && band.bottom > viewport.top && band.top < viewport.bottom) {
       this.blankHealAttempts = 0;
       return;
     }
@@ -1191,9 +1210,11 @@ export class LogList extends LitElement {
   }
 
   updated(changedProperties: Map<string, any>) {
-    // Deferred twice: once for the virtualizer to render off this update, once more so a
-    // legitimate mid-update empty frame is not mistaken for the stuck state.
-    requestAnimationFrame(() => requestAnimationFrame(() => this.healBlankVirtualizer()));
+    // The blank check is NOT run per update. It reads layout, and a render happens on every
+    // scroll batch, so doing it here put a forced style+layout flush in the frame path — the
+    // largest app-level cost in a CPU profile of a throttled scroll. The three triggers below
+    // and outside cover every way the list can go blank without paying that: the eviction
+    // timer (the known cause), the 2s watchdog, and the scroll-end timer in `markScrolling`.
     // An eviction is the one moment the virtualizer is known to get stuck, and once stuck it
     // renders nothing, so nothing changes and no further update ever arrives to notice. Give it
     // time to settle, then check on a timer rather than waiting for a render that never comes.
@@ -1258,10 +1279,6 @@ export class LogList extends LitElement {
     if (this._loadMoreObserver) {
       this._loadMoreObserver.disconnect();
       this._loadMoreObserver = null;
-    }
-    if (this._loadNewerObserver) {
-      this._loadNewerObserver.disconnect();
-      this._loadNewerObserver = null;
     }
     if (this._visibilityObserver) {
       this._visibilityObserver.disconnect();
@@ -2407,9 +2424,19 @@ export class LogList extends LitElement {
 
   // Flush buffered background rows if the viewport returns to their insertion edge.
   // Public so the visibility handler and any future scroll source share one rule.
+  //
+  // Skipped while repositioning, for the same reason as syncBottomPin and the prefetch: an
+  // eviction remount blanks the runway, and the browser clamps scrollTop to 0 and fires a
+  // scroll event for that frame. Reading that as "the reader came back to the newest edge"
+  // dumped a whole buffered tick onto someone deep in history — which evicted the history
+  // they were reading and remounted again, landing them at the top on the newest rows.
   resumeLiveTailAtEdge() {
+    // State before DOM: this runs on every scroll event and every visibility change, and both
+    // the `@query` container lookup and the scroll-geometry reads below force layout. With
+    // nothing buffered there is nothing to flush, which is the overwhelmingly common case.
+    if (this.recentDataToBeAdded.length === 0 || (!this.isLiveStreaming && !this.resumeBufferedRecentAtEdge)) return;
     const container = this.logsContainer;
-    if (!container || (!this.isLiveStreaming && !this.resumeBufferedRecentAtEdge) || this.recentDataToBeAdded.length === 0) return;
+    if (!container || this.isRepositioning) return;
     const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
     if (atInsertionEdge(container.scrollTop, scrolledToBottom, this.flipDirection)) this.handleRecentConcatenation();
   }
@@ -2444,10 +2471,27 @@ export class LogList extends LitElement {
     }, 80);
   }
 
+  /**
+   * Scroll events fire faster than frames, and reading scroll geometry after any DOM mutation
+   * forces a synchronous style+layout flush — several per frame on a list the virtualizer is
+   * already mutating. The buffer flush is coalesced to one rAF so it costs at most one read per
+   * frame, taken where layout is already clean.
+   *
+   * `markScrolling` and `syncBottomPin` stay synchronous, deliberately. The first only toggles
+   * a class, and the paint containment it applies must be in place for the frame being scrolled
+   * through. The second is the bottom pin for oldest-first lists: deferring it by a frame would
+   * let a render read a stale pin and throw the reader back to the bottom — the bug it exists to
+   * prevent. It costs nothing on a newest-first list, where it returns before touching the DOM.
+   */
+  private scrollFrame: number | null = null;
   private handleListScroll = () => {
     this.markScrolling();
     this.syncBottomPin();
-    this.resumeLiveTailAtEdge();
+    if (this.scrollFrame !== null) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      if (this.isConnected) this.resumeLiveTailAtEdge();
+    });
   };
 
   handleVisibilityChange = (e: any) => {
@@ -2790,7 +2834,7 @@ export class LogList extends LitElement {
                       .keyFunction=${virtualItemKey}
                       .renderItem=${this.renderVirtualItem}
                       @visibilityChanged=${this.handleVisibilityChange}
-                      .layout=${this.isAggregate || this.wrapsLines ? {} : { type: DenseRowFlowLayout }}
+                      .layout=${this.isAggregate || this.wrapsLines ? MEASURED_LAYOUT : DENSE_LAYOUT}
                     ></lit-virtualizer>`
                   )}
                 </tbody>
@@ -3450,40 +3494,43 @@ export class LogList extends LitElement {
     // Aggregate views (patterns) don't support live streaming or loading newer events
     if (this.isAggregate) return html`<tr></tr>`;
 
-    const fetchRecentRef = createRef<HTMLTableRowElement>();
-    if (this.hasNewer) {
-      requestAnimationFrame(() => {
-        if (!fetchRecentRef.value || this.isFetchingRecent || this.isLoading) return;
-        const observer = new IntersectionObserver(
-          ([entry]) => {
-            if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading && !this.isRepositioning) {
-              // No revealRecent: the observer fired because the reader is already at this edge,
-              // so the rows arrive in view on their own. Forcing scrollTop to 0 here is what
-              // teleported a reader who was paging history at the other end of the list.
-              this.fetchData(this.buildRecentFetchUrl(), false, true, false, false);
-              observer.disconnect();
-            }
-          },
-          { root: this.logsContainer, rootMargin: '100px', threshold: 0.1 }
-        );
-        observer.observe(fetchRecentRef.value);
-        this._loadNewerObserver?.disconnect();
-        this._loadNewerObserver = observer;
-      });
+    if (this.isLiveStreaming) {
+      return this.createLoadingRow(
+        'recent-logs',
+        html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>`,
+        this.isFetchingRecent,
+        () => {},
+      );
     }
 
-    return this.createLoadingRow(
-      'recent-logs',
-      this.isLiveStreaming
-        ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>`
-        : 'Load newer events',
-      this.isFetchingRecent,
-      () => {
-        if (this.isLiveStreaming) return;
-        this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
-      },
-      fetchRecentRef
-    );
+    // A large retention gap used to be replayed one page at a time because this row observed
+    // itself. Reaching the newest edge is navigation, not pagination: only an explicit click
+    // may fetch adjacent rows or replace the window with its latest page.
+    const loading = this.isFetchingRecent || this.isLoading;
+    return html`<tr id="recent-logs" class="w-full flex relative h-[28px]" aria-busy=${loading}>
+      <td colspan=${String(this.displayColumns.length)} class="relative w-full px-2">
+        <div class="h-7 flex items-center justify-center gap-3">
+          <button
+            class="min-h-6 px-1 text-textBrand underline font-semibold disabled:no-underline disabled:text-textWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
+            ?disabled=${loading}
+            @click=${() => this.fetchData(this.buildRecentFetchUrl(), false, true, false, true)}
+          >
+            Load newer events
+          </button>
+          ${this.hasNewer
+            ? html`<button
+                class="min-h-6 px-1 text-textBrand underline font-semibold disabled:no-underline disabled:text-textWeak focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
+                aria-label="Jump to latest events"
+                ?disabled=${loading}
+                @click=${() => this.fetchData(this.buildJsonUrl(), true)}
+              >
+                Jump to latest
+              </button>`
+            : nothing}
+          ${loading ? html`<span class="loading loading-dots loading-sm" role="status" aria-label="Loading newer events"></span>` : nothing}
+        </div>
+      </td>
+    </tr>`;
   };
 
   renderLoadMore() {
