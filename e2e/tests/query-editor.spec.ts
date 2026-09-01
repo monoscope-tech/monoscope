@@ -40,7 +40,11 @@ test.describe("Query editor", () => {
 
   test("matches the query controls' height and centers its text", async ({ page }) => {
     const geometry = await page.locator("#filterElement").evaluate((el) => {
-      const shell = el.firstElementChild!.getBoundingClientRect();
+      // The bordered box is the editor's *wrapper*, not a child of it: the border moved out
+      // so the Ask-AI affordance sits inside the same outline as the editor. What has to
+      // line up with the controls is that visible box — the editor itself is 2px shorter,
+      // being inside the border.
+      const shell = el.parentElement!.getBoundingClientRect();
       const line = el.querySelector(".view-line")!.getBoundingClientRect();
       const select = document.getElementById("spans-toggle")!.getBoundingClientRect();
       return {
