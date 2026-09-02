@@ -9,14 +9,21 @@ module Models.Apis.Endpoints (
   countEndpointsForHost,
   dependenciesAndEventsCount,
   StatsMode (..),
-  archiveHosts,
-  unarchiveHosts,
+  Direction (..),
+  Period (..),
+  Since (..),
+  EndpointQuery (..),
+  HostQuery (..),
+  HostArchiveOp (..),
+  setHostsArchived,
   endpointRequestStatsByProject,
   listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
   getUnmergedEndpoints,
+  UnmergedEndpoint (..),
   getCanonicalTemplateKeys,
+  TemplateKey (..),
   getReviewedGroupHashes,
   ReviewedGroup (..),
   recordGroupReviews,
@@ -25,8 +32,10 @@ module Models.Apis.Endpoints (
   markGroupApplied,
   revertGroupApply,
   getQuarantinedMerges,
+  QuarantinedMerge (..),
   appliedCanonicalHashes,
   fleetShapeReport,
+  FleetShape (..),
   endpointShapeAgreement,
   autoApplyAccuracy,
   knownStaticSegments,
@@ -51,6 +60,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -64,9 +74,11 @@ import Effectful.Labeled (Labeled)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Models.Apis.LogQueries (densifyBuckets)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB, UUIDId (..), rawSql)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql)
 import Relude
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 type EndpointId = UUIDId "endpoint"
@@ -181,20 +193,57 @@ data EndpointMetaRow = EndpointMetaRow
   deriving anyclass (HI.DecodeRow)
 
 
+-- | Which side of a request a row describes; @Incoming@ is the served side.
+--
+-- The tab labels the UI links on are the constructor names, so a shared link
+-- keeps parsing.
+--
+-- >>> map parseUrlPiece ["Outgoing", "incoming"] :: [Either Text Direction]
+-- [Right Outgoing,Right Incoming]
+-- >>> parseUrlPiece "Archived" :: Either Text Direction
+-- Left "Invalid  value: Archived"
+data Direction = Incoming | Outgoing
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
+
+
+-- | Activity window the period toggle offers, spelled as it appears in the URL.
+--
+-- >>> parseUrlPiece "7d" :: Either Text Period
+-- Right Window7d
+-- >>> parseUrlPiece "3d" :: Either Text Period
+-- Left "Invalid Window value: 3d"
+data Period = Window24h | Window7d
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Hashable)
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Window" Period
+
+
+-- | How far back the catalog's per-host aggregate scans. Independent of
+-- 'Period', which only sets the sparkline's bucketing.
+--
+-- >>> map parseUrlPiece ["24H", "14D"] :: [Either Text Since]
+-- [Right Since24h,Right Since14d]
+data Since = Since24h | Since14d
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Hashable)
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Since" Since
+
+
 -- | Rolling activity window for a period: (window start, bucket count, integer bucket
 -- width in seconds). Widths divide evenly (24h/24 = 3600, 7d/7 = 86400).
-periodWindow :: Text -> UTCTime -> (UTCTime, Int, Int)
+periodWindow :: Period -> UTCTime -> (UTCTime, Int, Int)
 periodWindow p now = (addUTCTime (negate $ fromIntegral (n * w)) now, n, w)
   where
-    (n, w) = if p == "7d" then (7, 86400) else (24, 3600)
+    (n, w) = case p of
+      Window24h -> (24, 3600)
+      Window7d -> (7, 86400)
 
 
 -- | Assemble a dense activity vector of @n@ buckets from sparse (bucketIdx, count)
 -- pairs. Indices outside @[0, n)@ (e.g. a boundary row) are simply dropped.
 denseBuckets :: Int -> [(Int, Int64)] -> V.Vector Int
-denseBuckets n pairs = V.generate n \i -> fromIntegral $ Map.findWithDefault 0 i m
-  where
-    m = Map.fromListWith (+) pairs
+denseBuckets n = V.fromList . densifyBuckets (0, n - 1) . map (second fromIntegral)
 
 
 -- Integer epoch seconds of a window start, for engine-portable time bucketing.
@@ -213,17 +262,44 @@ pickZoned cmp = viaNonEmpty (L.maximumBy (cmp `on` zonedTimeToUTC)) . catMaybes
 
 
 -- | @AND outgoing = ?@ when a direction is specified, empty otherwise.
-directionClauseSql :: Maybe Bool -> HI.Sql
-directionClauseSql = maybe [HI.sql| |] (\o -> [HI.sql| AND outgoing = #{o} |])
+directionClauseSql :: Maybe Direction -> HI.Sql
+directionClauseSql = foldMap \d -> let o = d == Outgoing in [HI.sql| AND outgoing = #{o} |]
+
+
+-- | Row filters + pagination for one read of the endpoints list. A record rather
+-- than eight positional arguments so 'endpointRequestStatsByProject' and
+-- 'countEndpointsForHost' provably paginate over the same rows.
+data EndpointQuery = EndpointQuery
+  { direction :: Direction
+  , archived :: Bool
+  , host :: Maybe Text
+  , search :: Maybe Text
+  , sort :: Maybe Text
+  , page :: Int
+  , perPage :: Int
+  , period :: Period
+  }
+
+
+-- | Row filters for one read of the host catalog. @direction = Nothing@ returns
+-- both directions (used by the combined Archived tab).
+data HostQuery = HostQuery
+  { direction :: Maybe Direction
+  , archived :: Bool
+  , sort :: Text
+  , skip :: Int
+  , since :: Since
+  , period :: Period
+  }
 
 
 -- | Row filters shared by 'endpointRequestStatsByProject' and 'countEndpointsForHost'
 -- (optional host, url_path search, archived state) so their paginators stay in sync.
-endpointFiltersSql :: Maybe Text -> Maybe Text -> Bool -> HI.Sql
-endpointFiltersSql pHostM searchM archived =
-  foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-    <> foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-    <> bool [HI.sql| AND h.archived_at IS NULL|] [HI.sql| AND h.archived_at IS NOT NULL|] archived
+endpointFiltersSql :: EndpointQuery -> HI.Sql
+endpointFiltersSql q =
+  foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) q.host
+    <> foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) q.search
+    <> bool [HI.sql| AND h.archived_at IS NULL|] [HI.sql| AND h.archived_at IS NOT NULL|] q.archived
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
@@ -232,11 +308,11 @@ endpointFiltersSql pHostM searchM archived =
 -- so the two are fetched separately and joined + sorted + paginated in Haskell.
 -- 'ShellOnly' skips the telemetry aggregate entirely: the page renders skeleton stat
 -- cells and defers the (seconds-long) stats fetch, mirroring 'dependenciesAndEventsCount'.
-endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject statsMode useTf pid archived pHostM sortM searchM page perPage requestType period = do
+endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject statsMode useTf pid q = do
   now <- Time.currentTime
-  let isOutgoing = requestType == "Outgoing"
-      (start, numBuckets, width) = periodWindow period now
+  let isOutgoing = q.direction == Outgoing
+      (start, numBuckets, width) = periodWindow q.period now
       startEpoch = epochSecs start
   metas :: [EndpointMetaRow] <-
     Hasql.interp
@@ -244,7 +320,7 @@ endpointRequestStatsByProject statsMode useTf pid archived pHostM sortM searchM 
         SELECT enp.id, enp.hash, enp.project_id, enp.url_path, enp.method, enp.host, enp.created_at
         FROM apis.endpoints enp
         JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
-        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{endpointFiltersSql pHostM searchM archived}|]
+        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{endpointFiltersSql q}|]
   -- Endpoint hashes are stamped onto telemetry by the extraction worker; grouping by
   -- the stamped hash (instead of re-deriving route/method per span, which forced the
   -- wide JSON @attributes@ blob to be materialised per span) more than halved the
@@ -288,11 +364,11 @@ endpointRequestStatsByProject statsMode useTf pid archived pHostM sortM searchM 
                 }
             )
       rows = map mk metas
-      ordered = case fromMaybe "" sortM of
+      ordered = case fromMaybe "" q.sort of
         "first_seen" -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
         "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
         _ -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
-  pure $ V.fromList $ map snd $ take perPage $ drop (page * perPage) ordered
+  pure $ V.fromList $ map snd $ take q.perPage $ drop (q.page * q.perPage) ordered
 
 
 data HostEvents = HostEvents
@@ -329,22 +405,21 @@ data StatsMode = ShellOnly | WithStats
   deriving stock (Eq, Show)
 
 
--- | When @outgoingM@ is @Nothing@, both directions are returned (used for the
--- combined Archived tab). Spans are attributed to a host using the same
--- coalesce that ProcessMessage applies at ingest to set @apis.endpoints.host@
--- (see 'src/ProcessMessage.hs:223'), so each row tallies only its own traffic.
-dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
-dependenciesAndEventsCount statsMode useTf pid outgoingM sortT skip timeF period showArchived = do
+-- | Spans are attributed to a host using the same coalesce that ProcessMessage
+-- applies at ingest to set @apis.endpoints.host@ (see 'src/ProcessMessage.hs:223'),
+-- so each row tallies only its own traffic.
+dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> HostQuery -> Eff es [HostEvents]
+dependenciesAndEventsCount statsMode useTf pid q = do
   now <- Time.currentTime
-  let windowStartSql = tsLit $ addUTCTime (bool (-1) (-14) (timeF == "14D") * 86400) now
-      (start, numBuckets, width) = periodWindow period now
+  let windowStartSql = tsLit $ addUTCTime ((case q.since of Since24h -> -1; Since14d -> -14) * 86400) now
+      (start, numBuckets, width) = periodWindow q.period now
       startEpoch = epochSecs start
   hosts :: [(Text, Bool)] <-
     Hasql.interp
       [HI.sql|
         SELECT host, outgoing FROM apis.hosts
-        WHERE project_id = #{pid} AND host != '' ^{directionClauseSql outgoingM}
-          AND ^{rawSql $ bool "archived_at IS NULL" "archived_at IS NOT NULL" showArchived}|]
+        WHERE project_id = #{pid} AND host != '' ^{directionClauseSql q.direction}
+          AND ^{rawSql $ bool "archived_at IS NULL" "archived_at IS NOT NULL" q.archived}|]
   tels :: [HostTelRow] <- case statsMode of
     ShellOnly -> pure []
     WithStats ->
@@ -385,44 +460,47 @@ dependenciesAndEventsCount statsMode useTf pid outgoingM sortT skip timeF period
       rows = map mk hosts
       -- Shell rows carry no counts, so the traffic sorts would be arbitrary; order by
       -- host instead to keep the placeholder stable until the stats swap arrives.
-      ordered = case (statsMode, sortT) of
+      ordered = case (statsMode, q.sort) of
         (ShellOnly, _) -> sortOn (.host) rows
         (WithStats, "first_seen") -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
         (WithStats, "last_seen") -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
         (WithStats, _) -> sortOn (Down . (.eventCount)) rows
-  pure $ take 200 $ drop skip ordered
+  pure $ take 200 $ drop q.skip ordered
 
 
--- | Mark hosts as archived. When @outgoingM@ is @Nothing@ both directions for
--- the host are archived (used by archive-all flows). Idempotent.
-archiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> Maybe Projects.UserId -> [Text] -> Eff es Int64
-archiveHosts _ _ _ [] = pure 0
-archiveHosts pid outgoingM byM hosts =
+-- | Archiving also records who did it, so the two directions of this update are a
+-- pair of columns rather than the lone timestamp 'Issues.setArchiveState' flips.
+data HostArchiveOp = ArchiveBy Projects.UserId | Unarchive
+
+
+-- | Move hosts into or out of the archive. When @direction@ is @Nothing@ both
+-- directions for the host are moved (used by archive-all flows).
+--
+-- The @archived_at@ guard keeps this idempotent /and/ makes the affected count
+-- mean "rows this call actually changed" — the bulk-action handler reports on
+-- that difference.
+setHostsArchived :: DB es => Projects.ProjectId -> Maybe Direction -> HostArchiveOp -> [Text] -> Eff es Int64
+setHostsArchived _ _ _ [] = pure 0
+setHostsArchived pid dirM op hosts =
   Hasql.interpExecute
     [HI.sql|
       UPDATE apis.hosts
-         SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
+         SET archived_at = CASE WHEN #{archiving} THEN NOW() ELSE NULL END,
+             archived_by = CASE WHEN #{archiving} THEN #{byM} ELSE NULL END,
+             updated_at = NOW()
        WHERE project_id = #{pid}
          AND host = ANY(#{hosts}::text[])
-         AND archived_at IS NULL ^{directionClauseSql outgoingM} |]
-
-
-unarchiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> [Text] -> Eff es Int64
-unarchiveHosts _ _ [] = pure 0
-unarchiveHosts pid outgoingM hosts =
-  Hasql.interpExecute
-    [HI.sql|
-      UPDATE apis.hosts
-         SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
-       WHERE project_id = #{pid}
-         AND host = ANY(#{hosts}::text[])
-         AND archived_at IS NOT NULL ^{directionClauseSql outgoingM} |]
+         AND (archived_at IS NULL) = #{archiving} ^{directionClauseSql dirM} |]
+  where
+    (archiving, byM) = case op of
+      ArchiveBy uid -> (True, Just uid)
+      Unarchive -> (False, Nothing)
 
 
 -- | Count of endpoints under a (project, direction), under the same row filters as
 -- 'endpointRequestStatsByProject'.
-countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
-countEndpointsForHost pid outgoing archived pHostM searchM =
+countEndpointsForHost :: DB es => Projects.ProjectId -> EndpointQuery -> Eff es Int
+countEndpointsForHost pid q =
   fromMaybe 0
     <$> Hasql.interpOne
       [HI.sql|
@@ -430,7 +508,9 @@ countEndpointsForHost pid outgoing archived pHostM searchM =
         FROM apis.endpoints enp
         JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
         WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}
-          ^{endpointFiltersSql pHostM searchM archived} |]
+          ^{endpointFiltersSql q} |]
+  where
+    outgoing = q.direction == Outgoing
 
 
 -- | Paginated endpoint list with optional url_path LIKE filter. Returns (rows, total count).
@@ -469,7 +549,18 @@ unmergedScanLimit :: Int
 unmergedScanLimit = 5000
 
 
-getUnmergedEndpoints :: DB es => Projects.ProjectId -> Eff es [(Text, Text, Text, Text)]
+-- | An endpoint discovery has not yet assigned to a canonical template.
+data UnmergedEndpoint = UnmergedEndpoint
+  { hash :: Text
+  , method :: Text
+  , host :: Text
+  , urlPath :: Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+getUnmergedEndpoints :: DB es => Projects.ProjectId -> Eff es [UnmergedEndpoint]
 getUnmergedEndpoints pid =
   Hasql.interp
     [HI.sql| SELECT hash, method, host, url_path FROM apis.endpoints
@@ -481,7 +572,18 @@ getUnmergedEndpoints pid =
 -- discovery can assign a lone straggler to a template the population already
 -- proved — without which a project re-inflates one row at a time after the
 -- bulk merge.
-getCanonicalTemplateKeys :: DB es => Projects.ProjectId -> Eff es (V.Vector (Text, Text, Text))
+-- | The identity of a canonical template: same three columns, in the one order
+-- the SQL and every caller agree on.
+data TemplateKey = TemplateKey
+  { method :: Text
+  , host :: Text
+  , canonicalPath :: Text
+  }
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (HI.DecodeRow, Hashable)
+
+
+getCanonicalTemplateKeys :: DB es => Projects.ProjectId -> Eff es (V.Vector TemplateKey)
 getCanonicalTemplateKeys pid =
   V.fromList
     <$> Hasql.interp
@@ -584,25 +686,40 @@ revertGroupApply pid gkey chashes = do
 -- | Canonical hashes from LLM-applied merges still inside their quarantine.
 -- Cleanup must not delete their sources yet: deletion is what makes a wrong
 -- merge permanent.
+-- | Is this review still inside its quarantine? One predicate, because the
+-- window is a policy: the cleanup that deletes merged-out rows and the re-check
+-- that can still take a merge back have to disagree about nothing.
+inQuarantineSql :: HI.Sql
+inQuarantineSql = [HI.sql| r.applied_at IS NOT NULL AND r.reverted_at IS NULL AND r.applied_at > NOW() - INTERVAL '24 hours' |]
+
+
 quarantinedCanonicalHashes :: DB es => Projects.ProjectId -> Eff es (V.Vector Text)
 quarantinedCanonicalHashes pid =
   V.fromList
     <$> Hasql.interp
-      [HI.sql| SELECT unnest(applied_canonical_hashes) FROM apis.endpoint_group_reviews
-               WHERE project_id = #{pid} AND applied_at IS NOT NULL
-                 AND reverted_at IS NULL AND applied_at > NOW() - INTERVAL '24 hours' |]
+      [HI.sql| SELECT unnest(r.applied_canonical_hashes) FROM apis.endpoint_group_reviews r
+               WHERE r.project_id = #{pid} AND ^{inQuarantineSql} |]
+
+
+-- | One applied merge still inside its quarantine, with the values it collapsed.
+data QuarantinedMerge = QuarantinedMerge
+  { groupKey :: Text
+  , canonicalPath :: Text
+  , urlPaths :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | Applied merges still inside their quarantine, with the values each one
 -- collapsed, so they can be challenged before deletion makes them permanent.
-getQuarantinedMerges :: DB es => Projects.ProjectId -> Eff es [(Text, Text, V.Vector Text)]
+getQuarantinedMerges :: DB es => Projects.ProjectId -> Eff es [QuarantinedMerge]
 getQuarantinedMerges pid =
   Hasql.interp
     [HI.sql| SELECT r.group_key, coalesce(min(e.canonical_path), ''), array_agg(DISTINCT e.url_path)
              FROM apis.endpoint_group_reviews r
              JOIN apis.endpoints e ON e.project_id = r.project_id AND e.canonical_hash = ANY(r.applied_canonical_hashes)
-             WHERE r.project_id = #{pid} AND r.applied_at IS NOT NULL AND r.reverted_at IS NULL
-               AND r.applied_at > NOW() - INTERVAL '24 hours'
+             WHERE r.project_id = #{pid} AND ^{inQuarantineSql}
                AND e.hash <> e.canonical_hash
              GROUP BY r.group_key
              LIMIT 20 |]
@@ -686,7 +803,16 @@ learnedIdRulesFor pid =
 
 -- | Value shapes the model has named, fleet-wide, ranked by how many endpoints
 -- they account for. The standing list of deterministic rules nobody has written.
-fleetShapeReport :: DB es => Eff es [(Text, Int64, Int64)]
+data FleetShape = FleetShape
+  { shape :: Text
+  , groups :: Int64
+  , endpoints :: Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+fleetShapeReport :: DB es => Eff es [FleetShape]
 fleetShapeReport =
   Hasql.interp
     [HI.sql| SELECT shape, count(*)::int8, sum(member_count)::int8
