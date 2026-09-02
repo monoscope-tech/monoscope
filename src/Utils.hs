@@ -373,6 +373,14 @@ faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
 -- shadow tree the page's CSS cannot reach, which is what @.icon { fill: currentColor }@ needs.
 -- The @\<g\>@ carrying the symbol's own presentation attributes is kept inside the symbol for
 -- the same reason it is kept inside the @\<svg\>@ in 'faSprite_'.
+--
+-- __The defs must be emitted by the same component that uses them.__ Same-document @\<use\>@
+-- resolves against the document it lands in, and an htmx fragment is swapped into a page whose
+-- shell this render never saw — so hoisting the defs into 'Pages.BodyWrapper.bodyWrapper' and
+-- calling 'faUse_' from a shared row helper would render nothing at all in every fragment
+-- response. Keep both halves inside one renderer, as 'Pages.Telemetry.dataPointsPage' does.
+-- That is also why this is not a drop-in replacement for 'faSprite_' everywhere: it pays off
+-- where one renderer repeats a few icons many times, and costs bytes anywhere else.
 faSymbolDefs_ :: Monad m => [(Text, Text)] -> HtmlT m ()
 faSymbolDefs_ icons =
   svg_ [term "aria-hidden" "true", style_ "display:none"]
