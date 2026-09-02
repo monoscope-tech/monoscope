@@ -152,21 +152,6 @@ window.animateContentEntrance = (container) => {
   container.addEventListener('animationend', () => container.classList.remove('animate-fadeIn'), { once: true })
 }
 
-/**
- * Update URL query parameter without page reload
- * @param {string} key - Parameter key
- * @param {string} value - Parameter value
- */
-window.updateUrlState = (key, value) => {
-  const url = new URL(window.location.href)
-  if (value === null || value === undefined || value === '') {
-    url.searchParams.delete(key)
-  } else {
-    url.searchParams.set(key, value)
-  }
-  history.replaceState(null, '', url.toString())
-}
-
 /** Label a drawer from the first heading in its loaded content. */
 window.labelDrawer = (drawer) => {
   if (!drawer) return
