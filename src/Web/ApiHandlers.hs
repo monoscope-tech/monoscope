@@ -139,6 +139,7 @@ import Servant (NoContent (..), ServerError (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Text.Slugify (slugify)
+import Utils (hostPath)
 import Web.ApiTypes
 import Web.FacetsFallback (facetsFallback)
 
@@ -717,7 +718,7 @@ apiShareLinkCreate pid req = do
   _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
   ShareEvents.createShareLink shareId pid req.eventId (fromMaybe "request" req.eventType) req.eventCreatedAt
-  let url = authCtx.config.hostUrl <> "/share/r/" <> UUID.toText shareId
+  let url = hostPath authCtx.config.hostUrl $ "share/r/" <> UUID.toText shareId
   pure ShareLinkCreated{id = shareId, url}
 
 

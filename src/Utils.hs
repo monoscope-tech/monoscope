@@ -18,6 +18,7 @@ module Utils (
   lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
+  hostPath,
   formatUTCMicros,
   fmtDate,
   encodeText,
@@ -617,6 +618,24 @@ formatUTCMicros = fmtDate "%Y-%m-%dT%H:%M:%S%6QZ"
 -- | Format any time value with a strftime-style pattern.
 fmtDate :: FormatTime t => String -> t -> Text
 fmtDate f = toText . formatTime defaultTimeLocale f
+
+
+-- | Join the configured @HOST_URL@ to a path with exactly one separating slash,
+-- whichever way either side is spelled. @HOST_URL@ carries a trailing slash in
+-- practice (@https://app.monoscope.tech/@), so sites that wrote @hostUrl <> "/p/"@
+-- emitted a double slash while sites that wrote @hostUrl <> "p/"@ depended on that
+-- trailing slash being present. Neither spelling is safe on its own; use this instead.
+--
+-- >>> hostPath "https://app.monoscope.tech/" "p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech" "/p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech/" "/p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech" ""
+-- "https://app.monoscope.tech/"
+hostPath :: Text -> Text -> Text
+hostPath host path = T.dropWhileEnd (== '/') host <> "/" <> T.dropWhile (== '/') path
 
 
 -- | Encode a value as JSON Text (data attributes, widget JSON, etc.)

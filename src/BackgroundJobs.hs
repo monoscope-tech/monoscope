@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -121,7 +121,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash, usageWindowStart)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
 
 
 data BgJobs
@@ -265,9 +265,18 @@ unlessStale jobName scheduledTime buffer action = do
 -- | Self-chained ticker: enqueue the next tick so a mid-run failure still
 -- produces a successor.
 rescheduleSelf :: Config.AuthContext -> (UTCTime -> BgJobs) -> UTCTime -> ATBackgroundCtx ()
-rescheduleSelf authCtx mkJob at =
-  liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ scheduleJob conn "background_jobs" (mkJob at) at
+rescheduleSelf authCtx mkJob at = enqueueAt authCtx at [mkJob at]
+
+
+-- | Enqueue background jobs for immediate execution. The pool checkout and the
+-- @"background_jobs"@ queue name were respelled at 22 call sites before this.
+enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
+enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (void . createJob conn "background_jobs") jobs
+
+
+-- | Enqueue background jobs to run at a given time.
+enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
+enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn "background_jobs" j at) jobs
 
 
 -- | Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
@@ -279,7 +288,7 @@ seedJobs conn from count step mkJob = forM_ [0 .. count - 1] \i -> do
 
 -- | URL for a project's main view.
 projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
-projectUrl ctx pid = ctx.env.hostUrl <> "p/" <> pid.toText
+projectUrl ctx pid = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -1340,13 +1349,9 @@ runHourlyJob scheduledTime hour = do
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
   let projectBatches = chunksOf 10 activeProjects
 
-  liftIO $ withResource ctx.jobsPool \conn -> do
-    forM_ projectBatches \batch ->
-      createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
-    forM_ activeProjects \pid -> do
-      void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage pid
-      void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
-      void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
+  enqueueJobs ctx
+    $ map (\batch -> BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
+    <> concatMap (\pid -> [BackgroundJobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1358,9 +1363,7 @@ runHourlyJob scheduledTime hour = do
   staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
   when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
-  liftIO $ withResource ctx.jobsPool \conn -> do
-    void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
-    void $ createJob conn "background_jobs" $ BackgroundJobs.DashboardsAutoProvision scheduledTime
+  enqueueJobs ctx [BackgroundJobs.CompressReplaySessions, BackgroundJobs.DashboardsAutoProvision scheduledTime]
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
@@ -2058,8 +2061,7 @@ processProjectErrors pid errors now = do
                   Log.logTrace "Pre-merged new error into canonical" (pid, err.id, canonicalId)
                 _ -> do
                   issue <- createIssueForError pid err
-                  liftIO $ withResource authCtx.jobsPool \conn ->
-                    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+                  enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
                   Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
                   whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
   where
@@ -2352,8 +2354,7 @@ processEagerBatch batch shard
           -- Legacy apis.shapes/fields/formats writes removed; the
           -- in-memory schema-learning catalog (observeSpans above) +
           -- runSchemaFlusherFiber replaces them.
-          forkNonEmpty allErrors \_ -> liftIO $ withResource ctx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ ProcessProjectErrorsJob pid allErrors now
+          forkNonEmpty allErrors \_ -> enqueueJobs ctx [ProcessProjectErrorsJob pid allErrors now]
           Ki.atomically $ Ki.awaitAll scope
 
         -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
@@ -2881,8 +2882,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
     when (not (V.null monitor.teams) && null teams)
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
-    let hostUrl = appCtx.env.hostUrl
-        monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
+    let monitorListUrl = projectUrl appCtx monitor.projectId <> "/monitors"
         thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
     now <- Time.currentTime
     let chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
@@ -2894,7 +2894,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
         else do
           issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
           Issues.insertIssue issue
-          let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/issues/" <> issue.id.toText
+          let issueUrl = projectUrl appCtx monitor.projectId <> "/issues/" <> issue.id.toText
           pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl, chartUrl = chartUrlM}, issueUrl)
     targetTeams <-
       if null teams
@@ -3181,8 +3181,7 @@ processAPIChangeAnomalies pid targetHashes = do
             else do
               issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
               Issues.insertIssue issue
-              void $ liftIO $ withResource authCtx.jobsPool \conn ->
-                createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              enqueueJobs authCtx [BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
               when unresolved
                 $ Log.logAttention
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
@@ -3430,10 +3429,9 @@ processIssuesEnhancement scheduledTime = do
   let issuesByProject = V.groupBy (\a b -> snd a == snd b) $ V.modify (VA.sortBy (comparing snd)) issuesToEnhance
 
   -- Create enhancement jobs for each project
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ issuesByProject \projectIssues ->
-      whenJust (V.uncons projectIssues) \((_, pid), _) ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) projectIssues)
+  enqueueJobs ctx
+    $ mapMaybe (\pis -> (\((_, pid), _) -> BackgroundJobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) pis)) <$> V.uncons pis)
+    $ toList issuesByProject
 
 
 -- | Enhance issues with LLM-generated titles and descriptions
@@ -4866,7 +4864,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   -- Gate: whitelist known error/warn levels (case-insensitive). Nothing is
   -- rejected — unknown level is not a reliable incident signal, and projects
   -- that don't attach `log.level` were the largest source of Inbox noise.
-  -- Mirrors the shape of `isIssueWorthy` for the new-pattern path.
+  -- `isIssueWorthy` gates the new-pattern path on this same predicate.
   let classify lpRate =
         guard (isAlertableLogLevel lpRate.logLevel)
           *> case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
@@ -4915,8 +4913,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   let firedPatternIds = V.fromList [lp.patternId | (lp, _) <- firesAllowed]
   unless (V.null firedPatternIds) $ LogPatterns.clearPendingAnomalies firedPatternIds
 
-  unless (null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
+  unless (null issueIds) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.fromList issueIds)]
   Log.logTrace
     "Finished log pattern spike detection"
     ( ("checked" :: Text, length patternsWithRates)
@@ -4943,7 +4940,7 @@ processNewLogPatterns pid authCtx = do
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
         -- Filter out infrastructure noise; errors/exceptions/app logs still create issues
-        let issueWorthy = V.fromList $ filter isIssueWorthy newPatterns
+        let issueWorthy = V.fromList $ filter (\lp -> isIssueWorthy lp.logLevel lp.logPattern) newPatterns
         projectM <- Projects.projectById pid
         users <- Projects.usersByProjectId pid
         results <- V.forM issueWorthy \lp -> do
@@ -4957,17 +4954,16 @@ processNewLogPatterns pid authCtx = do
                 (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
             void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
-        unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid results
+        unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 
 
--- | Should a new log pattern create an issue? Whitelist-based: only error/warn logs
--- and patterns with error status codes. Everything else is acknowledged but no issue created.
-isIssueWorthy :: LogPatterns.LogPattern -> Bool
-isIssueWorthy lp =
-  lp.logLevel
-    `elem` [Just "ERROR", Just "WARN" :: Maybe Text]
-    || any (`T.isInfixOf` lp.logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
+-- | Should a new log pattern create an issue? An alertable level (the same gate the
+-- rate-change path applies, so the two can't drift again) or an error status code.
+-- Everything else is acknowledged but no issue created.
+isIssueWorthy :: Maybe Text -> Text -> Bool
+isIssueWorthy logLevel logPattern =
+  isAlertableLogLevel logLevel
+    || any (`T.isInfixOf` logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
@@ -5052,8 +5048,7 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
   authCtx <- ask @Config.AuthContext
   now <- Time.currentTime
   Issues.insertIssue issue
-  liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+  enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
   whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
     users <- Projects.usersByProjectId pid
     let fromTime = addUTCTime (-(15 * 60)) now
