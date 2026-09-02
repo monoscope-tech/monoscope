@@ -10,6 +10,7 @@ module Models.Apis.Endpoints (
   dependenciesAndEventsCount,
   StatsMode (..),
   Direction (..),
+  EndpointSort (..),
   Period (..),
   Since (..),
   EndpointQuery (..),
@@ -213,6 +214,18 @@ data Direction = Incoming | Outgoing
 -- Right Window7d
 -- >>> parseUrlPiece "3d" :: Either Text Period
 -- Left "Invalid Window value: 3d"
+-- | Ordering for a catalog listing. The wire spellings are exactly what
+-- "Pages.Endpoints" sends and what shared URLs carry: @events@, @name@,
+-- @first_seen@, @last_seen@. This was 'Text', and the page sent @"name"@ while the
+-- model only matched @"first_seen"@/@"last_seen"@ before falling through to traffic
+-- order — so "Alphabetical" silently did nothing. An exhaustive case makes that
+-- class of mismatch a compile error.
+data EndpointSort = SortEvents | SortName | SortFirstSeen | SortLastSeen
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Hashable)
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" EndpointSort
+
+
 data Period = Window24h | Window7d
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
@@ -274,7 +287,7 @@ data EndpointQuery = EndpointQuery
   , archived :: Bool
   , host :: Maybe Text
   , search :: Maybe Text
-  , sort :: Maybe Text
+  , sort :: EndpointSort
   , page :: Int
   , perPage :: Int
   , period :: Period
@@ -286,7 +299,7 @@ data EndpointQuery = EndpointQuery
 data HostQuery = HostQuery
   { direction :: Maybe Direction
   , archived :: Bool
-  , sort :: Text
+  , sort :: EndpointSort
   , skip :: Int
   , since :: Since
   , period :: Period
@@ -364,10 +377,11 @@ endpointRequestStatsByProject statsMode useTf pid q = do
                 }
             )
       rows = map mk metas
-      ordered = case fromMaybe "" q.sort of
-        "first_seen" -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
-        "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
-        _ -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
+      ordered = case q.sort of
+        SortFirstSeen -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
+        SortLastSeen -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
+        SortName -> sortOn (\(m, _) -> m.urlPath) rows
+        SortEvents -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
   pure $ V.fromList $ map snd $ take q.perPage $ drop (q.page * q.perPage) ordered
 
 
@@ -462,9 +476,10 @@ dependenciesAndEventsCount statsMode useTf pid q = do
       -- host instead to keep the placeholder stable until the stats swap arrives.
       ordered = case (statsMode, q.sort) of
         (ShellOnly, _) -> sortOn (.host) rows
-        (WithStats, "first_seen") -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
-        (WithStats, "last_seen") -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
-        (WithStats, _) -> sortOn (Down . (.eventCount)) rows
+        (WithStats, SortFirstSeen) -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
+        (WithStats, SortLastSeen) -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
+        (WithStats, SortName) -> sortOn (.host) rows
+        (WithStats, SortEvents) -> sortOn (Down . (.eventCount)) rows
   pure $ take 200 $ drop q.skip ordered
 
 

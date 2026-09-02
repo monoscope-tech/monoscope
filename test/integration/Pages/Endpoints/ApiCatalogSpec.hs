@@ -522,6 +522,43 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       length all3 `shouldBe` 12
       length (ordNub all3) `shouldBe` 12 -- pages are disjoint
 
+    -- Regression: "Alphabetical" was a silent no-op. Pages/Endpoints.hs sends
+    -- sort="name" (and "events"), but the model only matched "first_seen"/"last_seen"
+    -- and fell through to traffic order -- so picking Alphabetical changed nothing.
+    -- The value asserted here is the one the page actually sends, not one the model
+    -- happens to understand.
+    it "endpointSort_alphabetical_ordersByPath_notTraffic" \(tr, testPid) -> do
+      let hostName = "alphasort.example"
+          mkEp path =
+            (def :: Endpoints.Endpoint)
+              { Endpoints.projectId = testPid
+              , Endpoints.urlPath = path
+              , Endpoints.urlParams = AE.object []
+              , Endpoints.method = "GET"
+              , Endpoints.host = hostName
+              , Endpoints.hash = toXXHash (testPid.toText <> hostName <> "GET" <> path)
+              , Endpoints.outgoing = False
+              }
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [mkEp "/zebra", mkEp "/alpha"]
+      withPool tr.trPool
+        $ for_ [("/zebra" :: Text, 9 :: Int), ("/alpha", 1)] \(path, n) ->
+          replicateM_ n
+            $ void
+            $ DBT.execute
+              [sql| INSERT INTO otel_logs_and_spans
+                    (id, project_id, timestamp, start_time,
+                     attributes___http___request___method, attributes___url___path,
+                     hashes, context, kind, status_code, summary)
+                  VALUES (gen_random_uuid(), ?, ?::timestamptz, ?::timestamptz,
+                          'GET', ?, ARRAY[?], '{}'::jsonb, 'SERVER', '200', '{}') |]
+              (testPid, frozenTime, frozenTime, path, (mkEp path).hash)
+      -- /zebra has 9x the traffic, so traffic order would put it first.
+      let q srt = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = srt, page = 0, perPage = 10, period = Endpoints.Window7d}
+      byTraffic <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortEvents)
+      map (.urlPath) (V.toList byTraffic) `shouldBe` ["/zebra", "/alpha"]
+      byName <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortName)
+      map (.urlPath) (V.toList byName) `shouldBe` ["/alpha", "/zebra"]
+
     -- Regression: the "last_seen" sort ordered by endpoint created_at (like
     -- first_seen, just reversed) instead of the row's actual lastSeen traffic time.
     it "last_seen sort orders by span recency, not endpoint created_at" \(tr, testPid) -> do
@@ -553,5 +590,5 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                   (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
         insertSpan "/old" 5
         insertSpan "/new" 120
-      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Just "last_seen", page = 0, perPage = 10, period = Endpoints.Window7d}
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d}
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]
