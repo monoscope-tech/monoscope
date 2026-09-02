@@ -347,7 +347,9 @@ function updateUrlState(key: string | string[], value: string, action: 'set' | '
       params.set(k, value);
     }
   }
-  window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
+  // Keep the fragment: log-list.ts does the same on its own replaceState calls, and
+  // dropping it here silently discarded any in-page anchor on every param update.
+  window.history.replaceState({}, '', `${window.location.pathname}?${params}${window.location.hash}`);
 }
 window.updateUrlState = updateUrlState;
 
