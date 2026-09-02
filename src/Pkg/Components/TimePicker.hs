@@ -29,7 +29,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, timeScopedUrl)
+import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl)
 
 
 -- $setup
@@ -120,20 +120,11 @@ parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT t
 -----------------------------------------------------------------------------------------------------
 -- Timepicker component. To be used at call site
 -----------------------------------------------------------------------------------------------------
+
+-- | Derived from 'Utils.sinceWindows' so the dropdown and the labels
+-- 'Utils.parseTime' resolves are the same strings by construction.
 timePickerItems :: [(Text, Text)]
-timePickerItems =
-  [ ("5M", "Last 5 mins")
-  , ("15M", "Last 15 mins")
-  , ("30M", "Last 30 mins")
-  , ("1H", "Last hour")
-  , ("3H", "Last 3 hours")
-  , ("6H", "Last 6 hours")
-  , ("12H", "Last 12 hours")
-  , ("24H", "Last 24 hours")
-  , ("3D", "Last 3 days")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
-  ]
+timePickerItems = map (second snd) sinceWindows
 
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()

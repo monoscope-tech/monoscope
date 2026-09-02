@@ -1,4 +1,5 @@
 module Utils (
+  sinceWindows,
   onpointerdown_,
   jsonValueToHtmlTree,
   freeTierDailyMaxEvents,
@@ -789,7 +790,7 @@ nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ nest (T.spl
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
-isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
+isDemoAndNotSudo pid isSudo = pid == Projects.demoProjectId && not isSudo
 
 
 toUriStr :: Text -> Text
@@ -797,19 +798,25 @@ toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 
 -- | Relative-window tokens accepted by 'parseTime': token → (window in seconds, display label).
+-- | The canonical since-window vocabulary: key, width in seconds, and the label the
+-- user sees. 'Pkg.Components.TimePicker.timePickerItems' is derived from this, so the
+-- two cannot drift. They had: every one of these eleven labels differed in case or
+-- plural from the picker's ("Last Hour" vs "Last hour", "Last 5 min" vs "Last 5 mins"),
+-- and since the picker resolves a label by looking the key up in its own list, the same
+-- control read differently depending on which parser the handler happened to use.
 sinceWindows :: [(Text, (Integer, Text))]
 sinceWindows =
-  [ ("5M", (300, "Last 5 min"))
-  , ("15M", (900, "Last 15 min"))
-  , ("30M", (1800, "Last 30 min"))
-  , ("1H", (3600, "Last Hour"))
-  , ("3H", (3600 * 3, "Last 3 Hours"))
-  , ("6H", (3600 * 6, "Last 6 Hours"))
-  , ("12H", (3600 * 12, "Last 12 Hours"))
-  , ("24H", (3600 * 24, "Last 24 Hours"))
-  , ("3D", (3600 * 24 * 3, "Last 3 Days"))
-  , ("7D", (3600 * 24 * 7, "Last 7 Days"))
-  , ("14D", (3600 * 24 * 14, "Last 14 Days"))
+  [ ("5M", (300, "Last 5 mins"))
+  , ("15M", (900, "Last 15 mins"))
+  , ("30M", (1800, "Last 30 mins"))
+  , ("1H", (3600, "Last hour"))
+  , ("3H", (3600 * 3, "Last 3 hours"))
+  , ("6H", (3600 * 6, "Last 6 hours"))
+  , ("12H", (3600 * 12, "Last 12 hours"))
+  , ("24H", (3600 * 24, "Last 24 hours"))
+  , ("3D", (3600 * 24 * 3, "Last 3 days"))
+  , ("7D", (3600 * 24 * 7, "Last 7 days"))
+  , ("14D", (3600 * 24 * 14, "Last 14 days"))
   ]
 
 
