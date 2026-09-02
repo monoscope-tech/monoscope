@@ -478,7 +478,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardTabContentGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "content" :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
@@ -919,7 +918,6 @@ cookieProtectedServer =
     , widgetAlertDelete = Dashboards.widgetAlertDeleteH
     , dashboardBulkActionPost = Dashboards.dashboardBulkActionPostH
     , dashboardTabGet = Dashboards.dashboardTabGetH
-    , dashboardTabContentGet = Dashboards.dashboardTabContentGetH
     , dashboardTabRenamePatch = Dashboards.dashboardTabRenamePatchH
     , dashboardYamlGet = Dashboards.dashboardYamlGetH
     , dashboardYamlPut = Dashboards.dashboardYamlPutH

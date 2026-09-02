@@ -88,6 +88,37 @@ spec = sequential $ aroundAll withTestResources do
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
 
+    -- CLAUDE.md's tab/nav swap rule: fetch the full page URL and hx-select the content
+    -- container out of it, morphing the tab strip out-of-band so the active class comes
+    -- across for free. These tabs had drifted to a separate /content partial endpoint plus
+    -- hyperscript that hand-moved .tab-active -- the exact pattern the rule forbids.
+    it "dashboardTabs_followTheProjectSwapPattern_notAContentPartial" \_ -> do
+      let mkTab n = (def :: DashboardModel.Tab){DashboardModel.name = n}
+          dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [mkTab "Overview", mkTab "Errors"]}
+          vm =
+            DashboardVM
+              { id = UUIDId UUID.nil
+              , projectId = testPid
+              , createdAt = frozenTime
+              , updatedAt = frozenTime
+              , createdBy = Projects.UserId UUID.nil
+              , baseTemplate = Nothing
+              , schema = Just dash
+              , starredSince = Nothing
+              , homepageSince = Nothing
+              , tags = V.empty
+              , title = "t"
+              , teams = V.empty
+              , filePath = Nothing
+              , fileSha = Nothing
+              }
+          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
+      for_ ["hx-select=\"#dashboard-tabs-content\"", "hx-select-oob=\"#dashboard-tabs-container:morph\"", "hx-swap=\"morph\"", "hx-push-url=\"true\""] \attr ->
+        html `shouldSatisfy` T.isInfixOf attr
+      -- No /content partial, and no hyperscript managing the active class.
+      html `shouldSatisfy` (not . T.isInfixOf "/content")
+      html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")
+
     -- Dashboard variables are backend-persisted schema, but their live values come from
     -- the URL. The precedence rule is what makes a dashboard shareable: a link carries the
     -- reader's selections, and clearing one must stay cleared rather than snapping back to
