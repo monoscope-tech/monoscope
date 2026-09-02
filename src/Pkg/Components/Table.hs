@@ -12,7 +12,7 @@ module Pkg.Components.Table (
   SortableConfig (..),
   TreeConfig (..),
   ZeroState (..),
-  SimpleZeroState (..),
+  EmptyStateAction (..),
   -- Pagination
   Pagination (..),
   -- Header actions (sort/filter dropdowns in header)
@@ -80,18 +80,10 @@ type role TableRows nominal
 data TableRows a = TableRows
   { columns :: [Column a]
   , rows :: V.Vector a
-  , emptyState :: Maybe SimpleZeroState
   , renderAsTable :: Bool
   , rowId :: Maybe (a -> Text)
   , rowAttrs :: Maybe (a -> [Attribute])
   , pagination :: Maybe Pagination
-  }
-
-
--- Simple zero state for TableRows (just icon and message)
-data SimpleZeroState = SimpleZeroState
-  { icon :: Text
-  , message :: Text
   }
 
 
@@ -188,8 +180,7 @@ data ZeroState = ZeroState
   { icon :: Text
   , title :: Text
   , description :: Text
-  , actionText :: Text
-  , destination :: Either Text Text
+  , action :: EmptyStateAction
   }
 
 
@@ -362,17 +353,15 @@ instance ToHtml (TableRows a) where
 
 {-# INLINE renderTableRows #-}
 renderTableRows :: forall a. TableRows a -> Html ()
-renderTableRows tr
-  | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
-  | otherwise = do
-      renderBody []
-        $ Table
-          { config = (def :: Config){renderAsTable = tr.renderAsTable}
-          , columns = tr.columns
-          , rows = tr.rows
-          , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs}
-          }
-      whenJust tr.pagination renderPaginationFooter
+renderTableRows tr = do
+  renderBody []
+    $ Table
+      { config = (def :: Config){renderAsTable = tr.renderAsTable}
+      , columns = tr.columns
+      , rows = tr.rows
+      , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs}
+      }
+  whenJust tr.pagination renderPaginationFooter
 
 
 -- Tab Filter ToHtml
@@ -479,7 +468,8 @@ renderTable tbl =
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
-            when isEmpty $ whenJust tbl.features.zeroState renderZeroState
+            when isEmpty $ whenJust tbl.features.zeroState \zs ->
+              emptyState_ def{icon = Just zs.icon, action = zs.action} zs.title zs.description
             unless isEmpty
               $ div_ [class_ "w-full flex-col"] do
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
@@ -777,17 +767,6 @@ renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-
     mkUrl page perPage = withQuery pg.baseUrl $ "page=" <> show page <> "&per_page=" <> show perPage
     pgAttrs = swapTarget_ pg.targetId
     navBtn icon enabled url = button_ ([class_ $ "p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
-
-
-renderZeroState :: ZeroState -> Html ()
-renderZeroState zs = emptyState_ def{icon = Just zs.icon, action = ESLink (either id id zs.destination) zs.actionText} zs.title zs.description
-
-
-renderSimpleZeroState :: SimpleZeroState -> Html ()
-renderSimpleZeroState zs =
-  div_ [class_ "flex items-center justify-center gap-2 py-4 text-textWeak"] do
-    faSprite_ zs.icon "regular" "h-4 w-4"
-    span_ [class_ "text-sm"] $ toHtml zs.message
 
 
 treeScript :: Html ()

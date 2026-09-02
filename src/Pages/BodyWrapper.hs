@@ -752,11 +752,11 @@ navbar bcfg menuL =
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
       h1_ [class_ $ "flex min-w-0 items-center text-textStrong" <> bool "" " max-md:hidden" (isJust bcfg.pageActions)] do
-        let targetPage = Components.getTargetPage bcfg.pageTitle
+        let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
             keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
-        if targetPage /= "" && isJust bcfg.pageTitleSuffix
-          then whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
-          else case bcfg.pageTitleModalId of
+        case targetPageM of
+          Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+          Nothing -> case bcfg.pageTitleModalId of
             Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
             Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
         -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
@@ -874,14 +874,16 @@ settingsWrapper pid current pageHtml =
       pageHtml
 
 
+-- | Settings nav entries as @(title, url, icon)@ — the same shape as 'menu', so a
+-- reader never has to check which of the three strings is which.
 navBottomList :: Text -> [(Text, Text, Text)]
 navBottomList pidTxt =
-  [ ("gear", "Project", "/p/" <> pidTxt <> "/settings")
-  , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
-  , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
-  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
-  , ("objects-column", "Prometheus", "/p/" <> pidTxt <> "/settings/prometheus")
-  , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
+  [ ("Project", "/p/" <> pidTxt <> "/settings", "gear")
+  , ("API Keys", "/p/" <> pidTxt <> "/apis", "key")
+  , ("Team", "/p/" <> pidTxt <> "/manage_members", "users")
+  , ("Integrations", "/p/" <> pidTxt <> "/settings/integrations", "arrows-turn-right")
+  , ("Prometheus", "/p/" <> pidTxt <> "/settings/prometheus", "objects-column")
+  , ("Billing", "/p/" <> pidTxt <> "/manage_billing", "dollar")
   ]
 
 
@@ -893,7 +895,7 @@ navFlyoutItems pidTxt = \case
   "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
-  "Settings" -> [(t, l) | (_, t, l) <- navBottomList pidTxt]
+  "Settings" -> [(t, l) | (t, l, _) <- navBottomList pidTxt]
   _ -> []
   where
     p path = "/p/" <> pidTxt <> path
@@ -908,7 +910,7 @@ settingsLoadingId = "settings-loading"
 
 
 renderNavBottomItem :: Text -> (Text, Text, Text) -> Html ()
-renderNavBottomItem curr (iconName, linkText, link) =
+renderNavBottomItem curr (linkText, link, iconName) =
   li_ [] do
     a_
       ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (curr == linkText)

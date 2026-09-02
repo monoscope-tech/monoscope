@@ -266,8 +266,7 @@ hostsTable pid window filters grouping hosts allHosts =
                   { icon = "server"
                   , title = "No hosts reporting"
                   , description = "Enable the OpenTelemetry hostmetrics receiver or Kubernetes node telemetry to populate this inventory."
-                  , actionText = "Host monitoring guide"
-                  , destination = Right "https://monoscope.tech/docs/sdks/infrastructure/"
+                  , action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Host monitoring guide"
                   }
           }
     }
@@ -550,7 +549,7 @@ imagesTable pid window runtimeM registryM images allImages =
                   [ singleSelectFilter "Runtime" "runtime" runtimeM $ sortNub $ map Containers.runtimeLabel $ concatMap (.runtimes) $ V.toList allImages
                   , singleSelectFilter "Registry" "registry" registryM $ facetValues (Just . (.registry)) allImages
                   ]
-          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." "Container setup guide" (Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes")
+          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Container setup guide")
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length images) <> " of " <> show (V.length allImages) <> " images"
           , exportName = Just "container-images"
@@ -759,7 +758,7 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
                   , singleSelectFilter "Namespace" "namespace" namespaceM $ facetValues (.namespace) allRows
                   , singleSelectFilter "Status" "status" statusM $ facetValues (Just . kubeStatusLabel . (.status)) allRows
                   ]
-          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." "Kubernetes setup guide" (Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes")
+          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Kubernetes setup guide")
           }
     }
 

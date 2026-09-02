@@ -1581,7 +1581,7 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
           }
   addRespHeaders
     $ if loadM == Just "true"
-      then ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+      then ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
       else ALPage $ PageCtx bwconf issuesTable
 
 
@@ -1608,11 +1608,11 @@ issueBulkActions pid tab =
 issueZeroState :: Projects.ProjectId -> Text -> ZeroState
 issueZeroState pid = \case
   "Acknowledged" ->
-    ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." "Go to Inbox" (Right $ inboxUrl <> "Inbox")
+    ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." (ESLink (inboxUrl <> "Inbox") "Go to Inbox")
   "Archived" ->
-    ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." "Go to Inbox" (Right $ inboxUrl <> "Inbox")
+    ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink (inboxUrl <> "Inbox") "Go to Inbox")
   _ ->
-    ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." "View SDK setup guides" (Right "https://monoscope.tech/docs/sdks/")
+    ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides")
   where
     inboxUrl = "/p/" <> pid.toText <> "/issues?filter="
 

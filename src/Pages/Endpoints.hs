@@ -18,7 +18,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import PyF qualified
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
@@ -107,8 +107,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                         { icon = "empty-set"
                         , title = "No " <> currentTab <> " Requests Monitored."
                         , description = "Once you integrate an SDK, your " <> T.toLower currentTab <> " requests appear here automatically."
-                        , actionText = "View SDK setup guides"
-                        , destination = Right "https://monoscope.tech/docs/sdks/"
+                        , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
                         }
                 }
           }
@@ -130,7 +129,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                   }
           }
   addRespHeaders case skipM of
-    Just _ -> CatalogListRows TableRows{columns = cols, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
+    Just _ -> CatalogListRows TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
     Nothing -> CatalogListPage $ PageCtx bwconf catalogTable
 
 
@@ -312,15 +311,14 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                         { icon = "empty-set"
                         , title = "Waiting for events"
                         , description = "Once you integrate an SDK, your endpoints appear here automatically."
-                        , actionText = "View SDK setup guides"
-                        , destination = Right "https://monoscope.tech/docs/sdks/"
+                        , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
                         }
                 , header = Just $ div_ [class_ "mb-4"] $ maybe "Endpoints" (\h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)) hostM
                 }
           }
   addRespHeaders
     $ if isJust loadMoreM || isJust searchM
-      then EndpointsListRows TableRows{columns = cols, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
+      then EndpointsListRows TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
       else EndpointsListPage $ PageCtx bwconf endpointsTable
 
 

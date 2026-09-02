@@ -1,4 +1,4 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
+module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default
@@ -298,25 +298,26 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    let vizId (_, _, t, _) = t
-        -- A widget container means we are in the dashboard widget editor rather than the
-        -- log explorer.
-        inWidgetEditor = isJust widgetContainerId
-        -- A dashboard widget starts as a chart. Logs is a full log table — the most
-        -- expensive thing on a dashboard and the wrong thing to drop on one by default.
-        defaultVizType = fromMaybe (bool "logs" "timeseries" (alert || inWidgetEditor)) vizTypeM
-        containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-        -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
-        -- views with no corresponding WidgetType, so a widget set to either could not be
-        -- decoded on save: the tab was offered and simply did not work.
-        hidden = bool [] ["sessions"] alert <> bool [] ["patterns", "sessions"] inWidgetEditor
-        -- Same reason Logs is not the default here: on a dashboard the chart types are
-        -- what the reader wants, so they lead the strip and Logs moves to the end. The log
-        -- explorer keeps Logs first, where it is the view the page is named after.
-        visible =
-          bool id (sortOn ((== "logs") . vizId)) inWidgetEditor
-            $ filter ((`notElem` hidden) . vizId) visTypes
-    forM_ visible \(_icon, label, vizType, emoji) ->
+    let
+      -- A widget container means we are in the dashboard widget editor rather than the
+      -- log explorer.
+      inWidgetEditor = isJust widgetContainerId
+      -- A dashboard widget starts as a chart. Logs is a full log table — the most
+      -- expensive thing on a dashboard and the wrong thing to drop on one by default.
+      defaultVizType = fromMaybe (bool "logs" "timeseries" (alert || inWidgetEditor)) vizTypeM
+      containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
+      -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
+      -- views with no corresponding WidgetType, so a widget set to either could not be
+      -- decoded on save: the tab was offered and simply did not work.
+      hidden = bool [] ["sessions"] alert <> bool [] ["patterns", "sessions"] inWidgetEditor
+      -- Same reason Logs is not the default here: on a dashboard the chart types are
+      -- what the reader wants, so they lead the strip and Logs moves to the end. The log
+      -- explorer keeps Logs first, where it is the view the page is named after.
+      visible =
+        bool id (sortOn ((== "logs") . (.key))) inWidgetEditor
+          $ filter ((`notElem` hidden) . (.key)) visTypes
+    forM_ visible \v -> do
+      let vizType = v.key
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
         input_
           $ [ type_ "radio"
@@ -347,8 +348,8 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
             ]
           <> [checked_ | vizType == defaultVizType]
         -- Emojis only in widget mode, not in the log explorer
-        when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
-        span_ $ toHtml label
+        when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
+        span_ $ toHtml v.label
 
 
 -- | Static stand-in rendered as a child of @\<query-editor\>@. Monaco is loaded on idle
@@ -443,22 +444,23 @@ popularQueries =
   ]
 
 
--- | Visualization types used across the application
--- Each entry is (icon, label, type, emoji)
+-- | A visualization the query box can switch to. @key@ is the wire value shared with
+-- @viz_type@ in the URL, the radio ids, and 'WidgetType'; @emoji@ is shown in the
+-- dashboard widget editor only.
+data VizType = VizType {label :: Text, key :: Text, emoji :: Text}
+
+
+-- | Visualization types used across the application.
 --
--- TODO: Support the other viz types.
-visTypes :: [(Text, Text, Text, Text)]
+-- TODO: Support the other viz types: Pie (pie_chart), Scatter (distribution),
+-- Number (stat), Gauge and Text.
+visTypes :: [VizType]
 visTypes =
-  [ ("list-view", "Logs", "logs", "📋")
-  , ("bar-chart", "Bar", "timeseries", "📊")
-  , ("duo-line-chart", "Line", "timeseries_line", "📈")
-  , ("log-patterns", "Patterns", "patterns", "🔍")
-  , ("users", "Sessions", "sessions", "👥")
-  -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
-  -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
-  -- , ("hashtag", "Number", "stat", "🔢")
-  -- , ("guage", "Guage", "", "🧮")
-  -- , ("text", "Text", "", "📝")
+  [ VizType "Logs" "logs" "📋"
+  , VizType "Bar" "timeseries" "📊"
+  , VizType "Line" "timeseries_line" "📈"
+  , VizType "Patterns" "patterns" "🔍"
+  , VizType "Sessions" "sessions" "👥"
   ]
 
 

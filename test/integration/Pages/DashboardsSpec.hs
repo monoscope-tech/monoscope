@@ -237,6 +237,17 @@ spec = sequential $ aroundAll withTestResources do
           message `shouldBe` "Dashboard title is required"
         _ -> fail "Expected DashboardPostError response"
 
+    -- The empty-state CTA passed a modal id where a URL was expected, and the
+    -- ZeroState type collapsed its Either with `either id id`, so it rendered as
+    -- href="newDashboardMdl" -- a dead relative link. The header opens the same modal
+    -- with a <label for>, and so must this.
+    it "dashboardsZeroState_opensTheNewDashboardModal_notADeadHref" \tr -> do
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters{Dashboards.tag = ["no-such-tag-so-the-list-is-empty"]}
+      let html = TL.toStrict $ renderText $ toHtml pg
+      html `shouldSatisfy` T.isInfixOf "No dashboards yet"
+      html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
+      html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
+
     it "Should update a dashboard" \tr -> do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       case pg of

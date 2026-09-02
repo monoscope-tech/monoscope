@@ -56,7 +56,7 @@ import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
 import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
-import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -383,7 +383,7 @@ teamAlertsGetH pid teamId = do
   teamMap <- buildTeamMap pid
   let alerts' = V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts
 
-  addRespHeaders $ TableRows [] alerts' Nothing False Nothing Nothing Nothing
+  addRespHeaders $ TableRows [] alerts' False Nothing Nothing Nothing
 
 
 alertBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
@@ -446,9 +446,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                         { icon = "bell"
                         , title = "No monitors configured yet"
                         , description = "Get notified when your logs, spans, errors, or metrics match specific conditions"
-                        , actionText = "Create monitor"
-                        , destination =
-                            Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
+                        , action = ESLink ("/p/" <> pid.toText <> "/log_explorer#create-alert-toggle") "Create monitor"
                         }
                 }
           }

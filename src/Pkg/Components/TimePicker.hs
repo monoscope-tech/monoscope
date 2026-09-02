@@ -79,9 +79,10 @@ parseSince now since =
     unitSecs u = fromMaybe 0 $ lookup (T.toUpper u) [("S", 1), ("M", 60), ("H", 3600), ("D", 86400)]
 
 
--- | The one place the default time range is decided. Every layer (server SQL,
--- the picker label, the frontend) either forwards an explicit user pick through
--- here or defers to this — nobody else names a default.
+-- | The default range for query surfaces (Explorer, dashboards): every layer
+-- (server SQL, the picker label, the frontend) either forwards an explicit user
+-- pick through here or defers to this. 'mkTimeWindow' pages use 'defaultWindow'
+-- instead — those are the only two defaults in the app.
 defaultSince :: Text
 defaultSince = "1H"
 
@@ -254,6 +255,8 @@ data TimeWindow = TimeWindow
   }
 
 
+-- | The default range for 'mkTimeWindow' surfaces (infrastructure, RUM), which
+-- refresh live and so open on a tighter window than 'defaultSince'.
 defaultWindow :: Text
 defaultWindow = "5M"
 
