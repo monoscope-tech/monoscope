@@ -4,6 +4,7 @@ import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
 import { echartsUrls } from './assets';
+import { copyParams } from './time-range-utils';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
@@ -681,9 +682,8 @@ type Exemplar = { trace_id: string; timestamp: string; value: number; metric_nam
  * filters to the requested window; anything left is real.
  */
 const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => {
-  const page = new URLSearchParams(location.search);
   const qs = new URLSearchParams();
-  for (const k of ['from', 'to', 'since']) if (page.get(k)) qs.set(k, page.get(k)!);
+  copyParams(new URLSearchParams(location.search), qs);
   const res = await fetch(qs.size ? `${url}?${qs}` : url, { headers: { Accept: 'application/json' }, signal });
   if (!res.ok) return;
   const exemplars: Exemplar[] = await res.json();

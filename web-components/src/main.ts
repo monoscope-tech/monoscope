@@ -4,6 +4,8 @@
 // lives at `detail.ctx.request`, NOT `detail.request`; reading the wrong one silently no-ops.
 // Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
 // itself on the hx-ext marker attribute the call sites already carry.
+import { copyParams } from './time-range-utils';
+
 const htmx4 = (window as any).htmx;
 // Lucid renders every htmx attribute in the `data-` form and call sites comma-separate
 // multiple extensions, so neither a bare `hx-ext` nor a `~=` token match would do.
@@ -295,11 +297,7 @@ function preserveTimeRange(target: EventTarget | null) {
   const link = (target as Element | null)?.closest?.('a[data-preserve-time-range]') as HTMLAnchorElement | null;
   if (!link) return;
   const next = new URL(link.href);
-  const current = new URLSearchParams(window.location.search);
-  for (const key of ['from', 'to', 'since']) {
-    const value = current.get(key);
-    if (value) next.searchParams.set(key, value);
-  }
+  copyParams(new URLSearchParams(window.location.search), next.searchParams);
   link.href = next.toString();
 }
 

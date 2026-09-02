@@ -91,6 +91,10 @@ ansi_up.escapeForHtml = false;
 const ESCAPED_QUOTE_REGEX = /\\"/g;
 const ESCAPED_BACKSLASH_REGEX = /\\\\/g;
 
+// Just the backslash unescaping, without the ANSI/JSON-colorize passes.
+export const unescapeBasic = (s: string): string =>
+  s.includes('\\') ? s.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\') : s;
+
 // Unescape JSON strings - optimized with early exits
 export const unescapeJsonString = (str: string): string => {
   // Early exit if string doesn't need processing
@@ -99,10 +103,7 @@ export const unescapeJsonString = (str: string): string => {
   }
 
   // Only unescape if needed
-  let result = str;
-  if (str.includes('\\"') || str.includes('\\\\')) {
-    result = result.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\');
-  }
+  let result = unescapeBasic(str);
 
   // Only process ANSI if likely present
   if (result.includes('\x1b')) {
@@ -118,16 +119,37 @@ export const unescapeJsonString = (str: string): string => {
 };
 
 // Pure utility functions
-export const formatTimestamp = (input: string): string => {
-  const date = new Date(input);
-  return isValid(date) ? format(date, 'MMM dd HH:mm:ss') + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
-};
+const formatWithMillis =
+  (pattern: string) =>
+  (input: string): string => {
+    const date = new Date(input);
+    return isValid(date) ? format(date, pattern) + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
+  };
+
+export const formatTimestamp = formatWithMillis('MMM dd HH:mm:ss');
 
 // Phones drop the date and keep the clock: the date is redundant inside a time-range
 // window, and "Aug 14 " is ~50px of a 390px screen that the log line needs more.
-export const formatTimestampCompact = (input: string): string => {
-  const date = new Date(input);
-  return isValid(date) ? format(date, 'HH:mm:ss') + `.${date.getUTCMilliseconds().toString().padStart(3, '0')}` : '';
+export const formatTimestampCompact = formatWithMillis('HH:mm:ss');
+
+export type LevelSeverity = 'error' | 'warn' | 'debug' | 'info';
+
+/**
+ * The one vocabulary for what a log level *means*. Every surface that colours by level
+ * routes through this, so `critical` can't be an error in the row tint and neutral in the
+ * badge next to it. Substring match on the lowercased text, checked most-severe first:
+ * levels arrive as free text from the SDK (`SEVERE_ERROR`, `Warning`, `TRACE`).
+ *
+ * `null` means "not a level this vocabulary recognises" — each surface keeps its own
+ * default styling for that rather than pretending it is info.
+ */
+export const classifyLevel = (raw: string | null | undefined): LevelSeverity | null => {
+  const level = (raw ?? '').toLowerCase();
+  if (/error|fatal|critical|exception/.test(level)) return 'error';
+  if (level.includes('warn')) return 'warn';
+  if (level.includes('debug') || level.includes('trace')) return 'debug';
+  if (level.includes('info')) return 'info';
+  return null;
 };
 
 export const lookupVecValue = <T = any>(vec: any[], colIdxMap: ColIdxMap, key: string): T => {
@@ -223,15 +245,23 @@ export const createCachedIconRenderer = () => {
     // Render icon
     const result = renderIconWithTooltip(config.className, config.tooltip, faSprite(config.iconName, config.iconType, config.iconClass));
 
-    // Bounded cache - prevent memory leaks
-    if (cache.size >= 512) {
-      const firstKey = cache.keys().next().value;
-      if (firstKey !== undefined) cache.delete(firstKey);
-    }
-
+    evictOldest(cache, 512);
     cache.set(cacheKey, result);
     return result;
   };
+};
+
+// Bound a Map used as a cache: call before inserting. Map preserves insertion order,
+// so the head of the key iterator is the oldest entry. `batch` amortises the eviction
+// for caches whose entries are expensive to re-key.
+export const evictOldest = <K, V>(cache: Map<K, V>, max: number, batch = 1): void => {
+  if (cache.size < max) return;
+  const keys = cache.keys();
+  for (let i = 0; i < batch; i++) {
+    const next = keys.next();
+    if (next.done) return;
+    cache.delete(next.value);
+  }
 };
 
 export const generateId = (): string => Math.random().toString(36).substring(2, 15);
@@ -265,6 +295,12 @@ export const dedupeById = <T extends { id: string | null | undefined }>(items: T
 // zoom or an anchor restore leaves values like 0.5, and a bare `> 0` reads that as "the user
 // has scrolled away" forever after. That is what stranded live tail — the pill counted up
 // while the list, visibly at the top, never took another row.
+// Is the viewport parked at the bottom of `el`? `slack` is the tolerance in px:
+// 1 for the log list (rounding only), larger where the caller wants a "close enough
+// to keep following" band rather than an exact edge.
+export const atBottom = (el: { scrollTop: number; clientHeight: number; scrollHeight: number }, slack = 1): boolean =>
+  el.scrollTop + el.clientHeight >= el.scrollHeight - slack;
+
 export const atInsertionEdge = (scrollTop: number, scrolledToBottom: boolean, flipDirection: boolean): boolean =>
   flipDirection ? scrolledToBottom : scrollTop <= 2;
 
@@ -419,8 +455,6 @@ export const formatLargeCount = (n: number): string => {
 };
 
 const PLACEHOLDER_RE = /(\{[a-z0-9_]+\}|<\*>)/g;
-const unescapeBasic = (s: string): string =>
-  s.includes('\\') ? s.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\') : s;
 
 export const highlightPlaceholders = (text: string): TemplateResult => {
   const unescaped = unescapeBasic(text);

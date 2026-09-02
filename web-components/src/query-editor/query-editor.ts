@@ -18,6 +18,7 @@ import {
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml.js';
 import { groupBy, pick } from 'lodash';
+import { evictOldest } from '../log-list-utils';
 
 // Configure Monaco workers (we only use the base editor, no language services).
 // Without this, Monaco logs a warning and falls back to running worker code on the main thread.
@@ -248,10 +249,7 @@ class SchemaManager {
     return new Set(Object.keys(fields || {}).map((f) => f.split('.')[0]));
   };
   private setCacheWithLimit<K, V>(cache: Map<K, V>, key: K, value: V): void {
-    if (cache.size >= MAX_CACHE_SIZE) {
-      const firstKey = cache.keys().next().value;
-      if (firstKey !== undefined) cache.delete(firstKey);
-    }
+    evictOldest(cache, MAX_CACHE_SIZE);
     cache.set(key, value);
   }
 

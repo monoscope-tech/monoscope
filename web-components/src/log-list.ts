@@ -16,6 +16,8 @@ import {
   formatTimestamp,
   formatTimestampCompact,
   lookupVecValue,
+  classifyLevel,
+  type LevelSeverity,
   getErrorClassification,
   faSprite,
   renderBadge,
@@ -34,9 +36,11 @@ import {
   formatLargeCount,
   highlightPlaceholders,
   generateId,
+  evictOldest,
   dedupeById,
   shouldBufferRecent,
   atInsertionEdge,
+  atBottom,
   oldestRowTimestamp,
   newestRowTimestamp,
   renderSparkline,
@@ -45,7 +49,7 @@ import {
   deviceIconName,
   middleTruncatePath,
 } from './log-list-utils';
-import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
+import { expandSince, expandFromToRange, parseChartZoom, copyParams, TIME_PARAMS } from './time-range-utils';
 import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
@@ -767,7 +771,7 @@ export class LogList extends LitElement {
     // rows on the floor — and unlike a fetch, there is no cursor to re-request them with.
     const container = this.logsContainer;
     const scrollTop = container?.scrollTop ?? 0;
-    const scrolledToBottom = container ? scrollTop + container.clientHeight >= container.scrollHeight - 1 : true;
+    const scrolledToBottom = container ? atBottom(container) : true;
     // This flag only drives oldest-first's "jump to newest" affordance. Setting it while
     // newest-first pagination is parked at the bottom creates an irrelevant reactive update
     // when a row click clears it, and that full rerender can empty a deep virtualizer runway.
@@ -1473,10 +1477,7 @@ export class LogList extends LitElement {
     url.searchParams.set('kind', this.mode === 'sessions' ? 'session' : 'pattern');
     url.searchParams.set('key', key);
     url.searchParams.set('skip', String(skip));
-    for (const p of ['query', 'since', 'from', 'to']) {
-      const v = pageParams.get(p);
-      if (v) url.searchParams.set(p, v);
-    }
+    copyParams(pageParams, url.searchParams, ['query', ...TIME_PARAMS]);
     return url.toString();
   }
 
@@ -1827,9 +1828,7 @@ export class LogList extends LitElement {
         const container = this.logsContainer;
         if (container) {
           const scrollTop = container.scrollTop;
-          const clientHeight = container.clientHeight;
-          const scrollHeight = container.scrollHeight;
-          const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
+          const scrolledToBottom = atBottom(container);
           if (this.flipDirection && scrolledToBottom) this.shouldScrollToBottom = true;
           const bufferWhenAway = !revealRecent && (this.isLiveStreaming || recentDelivery === 'auto-refresh');
           if (shouldBufferRecent(bufferWhenAway, scrollTop, scrolledToBottom, this.flipDirection)) {
@@ -2417,7 +2416,7 @@ export class LogList extends LitElement {
   private syncBottomPin() {
     const container = this.logsContainer;
     if (!container || !this.flipDirection || this.isRepositioning) return;
-    this.shouldScrollToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+    this.shouldScrollToBottom = atBottom(container);
   }
 
   // Flush buffered background rows if the viewport returns to their insertion edge.
@@ -2435,8 +2434,7 @@ export class LogList extends LitElement {
     if (this.recentDataToBeAdded.length === 0 || (!this.isLiveStreaming && !this.resumeBufferedRecentAtEdge)) return;
     const container = this.logsContainer;
     if (!container || this.isRepositioning) return;
-    const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
-    if (atInsertionEdge(container.scrollTop, scrolledToBottom, this.flipDirection)) this.handleRecentConcatenation();
+    if (atInsertionEdge(container.scrollTop, atBottom(container), this.flipDirection)) this.handleRecentConcatenation();
   }
 
   handleRecentConcatenation() {
@@ -2916,11 +2914,7 @@ export class LogList extends LitElement {
       let unescaped = unescapeCache.get(str);
       if (unescaped === undefined) {
         unescaped = unescapeJsonString(str);
-        // Bounded cache - evict oldest when limit reached
-        if (unescapeCache.size >= 1024) {
-          const firstKey = unescapeCache.keys().next().value!;
-          unescapeCache.delete(firstKey);
-        }
+        evictOldest(unescapeCache, 1024);
         unescapeCache.set(str, unescaped);
       }
       return unescaped;
@@ -3005,12 +2999,7 @@ export class LogList extends LitElement {
       }
 
       // Bounded main cache with bulk eviction
-      if (cache.size >= 512) {
-        // Remove oldest 256 entries
-        const entries = Array.from(cache.keys()).slice(0, 256);
-        entries.forEach((k) => cache.delete(k));
-      }
-
+      evictOldest(cache, 512, 256);
       cache.set(cacheKey, result);
       return result;
     };
@@ -3055,14 +3044,14 @@ export class LogList extends LitElement {
       case 'level':
         const lv = lookupVecValue<string>(dataArr, colIdxMap, key);
         if (!lv) return html`<span class="text-textWeak text-xs text-center w-full inline-block">-</span>`;
-        const lvColors: Record<string, string> = {
+        const lvColors: Record<LevelSeverity, string> = {
           error: 'badge-error',
           warn: 'badge-warning',
-          warning: 'badge-warning',
           info: 'badge-info',
           debug: 'badge-neutral',
         };
-        return renderBadge(`cbadge-sm ${lvColors[lv.toLowerCase()] || 'badge-neutral'}`, lv);
+        const lvSeverity = classifyLevel(lv);
+        return renderBadge(`cbadge-sm ${lvSeverity ? lvColors[lvSeverity] : 'badge-neutral'}`, lv);
       case 'id':
         if (!this._renderOverrides && this.isAggregate) {
           return html`<div class="flex items-center justify-between w-3">
@@ -3630,13 +3619,12 @@ export class LogList extends LitElement {
       );
 
       const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
-      const level = String(
+      const severity = classifyLevel(
         lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'level') ||
-          lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'severity_text') ||
-          ''
-      ).toLowerCase();
-      const isErrorRow = !!rowData.hasErrors || /error|fatal|critical|exception/.test(level);
-      const isWarningRow = !isErrorRow && /warn/.test(level);
+          lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'severity_text')
+      );
+      const isErrorRow = !!rowData.hasErrors || severity === 'error';
+      const isWarningRow = !isErrorRow && severity === 'warn';
       // The existing level badge or error rail is the non-colour cue. The weak
       // row tint makes the same severity scannable without turning it into a CTA.
       const cellBg = isErrorRow ? 'bg-fillError-weak' : isWarningRow ? 'bg-fillWarning-weak' : 'bg-bgRaised';

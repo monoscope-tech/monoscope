@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { expandSince, expandFromToRange, parseChartZoom } from '../src/time-range-utils';
+import { expandSince, expandFromToRange, parseChartZoom, copyParams, TIME_PARAMS } from '../src/time-range-utils';
 
 describe('time-range-utils', () => {
   describe('expandSince', () => {
@@ -65,5 +65,33 @@ describe('time-range-utils', () => {
       expect(parseChartZoom(undefined)).toBeNull();
       expect(parseChartZoom([])).toBeNull();
     });
+  });
+});
+
+// The page's time window is carried onto request/nav URLs from four call sites; they all
+// route through copyParams so none of them can quietly forget `since` (which the server
+// prefers over from/to, so dropping it silently widens the window back to the default).
+describe('copyParams', () => {
+  test('copies the time window and leaves everything else on the target alone', () => {
+    const target = new URLSearchParams({ json: 'true' });
+    copyParams(new URLSearchParams({ since: '1H', from: '', query: 'x' }), target);
+    expect(target.get('since')).toBe('1H');
+    expect(target.get('json')).toBe('true');
+    expect(target.has('query')).toBe(false);
+  });
+
+  test('an empty or absent source value never overwrites what the target already carries', () => {
+    const target = new URLSearchParams({ since: '24H', to: '2024-01-01T00:00:00Z' });
+    copyParams(new URLSearchParams({ since: '', from: 'x' }), target);
+    expect(target.get('since')).toBe('24H');
+    expect(target.get('to')).toBe('2024-01-01T00:00:00Z');
+    expect(target.get('from')).toBe('x');
+  });
+
+  test('extra keys ride along when asked for', () => {
+    const target = new URLSearchParams();
+    copyParams(new URLSearchParams({ query: 'level==error', since: '1H' }), target, ['query', ...TIME_PARAMS]);
+    expect(target.get('query')).toBe('level==error');
+    expect(target.get('since')).toBe('1H');
   });
 });

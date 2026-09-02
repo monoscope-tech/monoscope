@@ -1,19 +1,9 @@
-// Testable worker functions
-type ColIdxMap = Record<string, number>;
-type APTEvent = {
-  id: string;
-  startNs: number;
-  hasErrors: boolean;
-  duration: number;
-  children: APTEvent[];
-  parent: string | null;
-  data: any[];
-  type: 'log' | 'span';
-};
-type EventLine = any;
+// Testable worker functions.
+// Type-only import: erased at compile time, so the worker bundle stays free of the
+// DOM-dependent modules types.ts references.
+import type { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry } from './types/types';
+
 type Trace = { traceId: string; spans: APTEvent[]; startTime: number; duration: number; trace_start_time: Date | null };
-type ChildrenForLatency = { startNs: number; duration: number; data: any[]; depth: number };
-type ServerTraceEntry = { trace_id: string; start_time: number; duration: number; trace_start_time: string | null; root: string; children: Record<string, string[]> };
 
 // Inline generateId to avoid importing log-list-utils (which has DOM dependencies)
 export function generateId() {
