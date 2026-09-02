@@ -214,22 +214,26 @@ data Direction = Incoming | Outgoing
 -- Right Window7d
 -- >>> parseUrlPiece "3d" :: Either Text Period
 -- Left "Invalid Window value: 3d"
--- | Ordering for a catalog listing. The wire spellings are exactly what
--- "Pages.Endpoints" sends and what shared URLs carry: @events@, @name@,
--- @first_seen@, @last_seen@. This was 'Text', and the page sent @"name"@ while the
--- model only matched @"first_seen"@/@"last_seen"@ before falling through to traffic
--- order — so "Alphabetical" silently did nothing. An exhaustive case makes that
--- class of mismatch a compile error.
-data EndpointSort = SortEvents | SortName | SortFirstSeen | SortLastSeen
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (Hashable)
-  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" EndpointSort
-
-
 data Period = Window24h | Window7d
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
   deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Window" Period
+
+
+-- | Ordering for a catalog listing. The wire spellings are exactly what
+-- "Pages.Endpoints" sends and what shared URLs carry. This was 'Text', and the page
+-- sent @"name"@ while the model only matched @"first_seen"@/@"last_seen"@ before
+-- falling through to traffic order — so "Alphabetical" silently did nothing. An
+-- exhaustive case makes that class of mismatch a compile error.
+--
+-- >>> map (\s -> parseUrlPiece s :: Either Text EndpointSort) ["events", "name", "first_seen", "last_seen"]
+-- [Right SortEvents,Right SortName,Right SortFirstSeen,Right SortLastSeen]
+-- >>> parseUrlPiece "alphabetical" :: Either Text EndpointSort
+-- Left "Invalid Sort value: alphabetical"
+data EndpointSort = SortEvents | SortName | SortFirstSeen | SortLastSeen
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Hashable)
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" EndpointSort
 
 
 -- | How far back the catalog's per-host aggregate scans. Independent of
