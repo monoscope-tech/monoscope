@@ -494,7 +494,12 @@ integrationsBody IntegrationsConfig{..} = do
             ( [ class_ "btn btn-sm btn-ghost"
               , hxPost_ [text|/p/$pid/notifications-channels|]
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
-              , [__| on change from closest <div/> put 'btn btn-sm btn-primary' into my.className |]
+              , -- Same intent as Components.dirtyFormSaveAttr_, but that one listens on
+                -- `closest <form/>` and this control lives in a plain div (#notifsForm is
+                -- a div, not a form — the button hx-posts with hx-vals rather than
+                -- submitting). Swapping the classes rather than assigning className keeps
+                -- any other class on the button intact.
+                [__| on change from closest <div/> remove .btn-ghost from me then add .btn-primary to me |]
               ]
                 <> integrationsSwapAttrs_
             )

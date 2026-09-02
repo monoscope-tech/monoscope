@@ -379,7 +379,7 @@ apiKeyColumns pid =
       div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
         input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
         span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-        span_ [class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
+        span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
         div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
           let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
           label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
@@ -390,11 +390,10 @@ apiKeyColumns pid =
             [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
             , type_ "button"
             , Aria.label_ $ "Copy " <> apiKey.title
-            , term "data-key" apiKey.keyPrefix
-            , [__| on click if 'clipboard' in window.navigator then
-                            call navigator.clipboard.writeText(my @data-key)
-                            send successToast(value:['API key copied to clipboard']) to <body/>
-                          end |]
+            , -- Shared Copy behavior (BodyWrapper): copies the element's innerText and
+              -- adds the .copy-success flash. The hand-rolled version here had no flash,
+              -- so copy feedback differed from the log detail panel.
+              term "_" ("install Copy(content: #key-value-" <> apiKey.id.toText <> ")")
             , data_ "tip" "Copy key"
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
@@ -434,13 +433,7 @@ copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
               button_
                 [ type_ "button"
                 , class_ "btn btn-sm btn-success"
-                , [__|
-                      on click
-                        if 'clipboard' in window.navigator then
-                          call navigator.clipboard.writeText(#newKey's innerText)
-                          send successToast(value:['API Key has been added to the Clipboard']) to <body/>
-                        end
-                        |]
+                , [__|install Copy(content: #newKey)|]
                 ]
                 "Copy Key"
               if hasNext

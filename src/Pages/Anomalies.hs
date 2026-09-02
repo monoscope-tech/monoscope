@@ -1450,7 +1450,11 @@ anomalyAIChatBody_ pid issueId = do
       button_
         [ type_ "button"
         , class_ "text-xs px-2 py-1.5 rounded-full bg-fillWeaker text-textWeak hover:text-textStrong hover:bg-fillWeak transition-colors cursor-pointer tap-target"
-        , term "_" $ "on click set #ai-chat-input.value to '" <> txt <> "' then call #ai-chat-input.form.requestSubmit()"
+        , -- The label travels as a data attribute, not interpolated into the script:
+          -- Lucid escapes attribute values, so an apostrophe in a suggestion can't
+          -- terminate the hyperscript string literal and break the handler.
+          data_ "q" txt
+        , [__|on click set #ai-chat-input.value to my @data-q then call #ai-chat-input.form.requestSubmit()|]
         ]
         $ toHtml @Text txt
 
