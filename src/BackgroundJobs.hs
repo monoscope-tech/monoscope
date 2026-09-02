@@ -2664,7 +2664,7 @@ rehydrateTree
   -> Maybe ExtractionWorker.ServiceDrainTree
   -> ATBackgroundCtx ()
 rehydrateTree shard key@(pid, svcName) now existing = do
-  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  (texts, maxSeen) <- LogPatterns.getLogPatternTexts pid "summary" (Just svcName)
   -- Change detection: skip rebuild if maxPatternSeenAt hasn't advanced.
   let unchanged = case (existing, maxSeen) of
         (Just sdt, Just ms) | sdt.maxPatternSeenAt == Just ms -> True
@@ -2685,7 +2685,7 @@ seedDrainTreeFromDB
   -> UTCTime
   -> Eff es Drain.DrainTree
 seedDrainTreeFromDB shard key@(pid, svcName) now = do
-  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  (texts, maxSeen) <- LogPatterns.getLogPatternTexts pid "summary" (Just svcName)
   seedFromPatterns shard key now texts maxSeen
 
 
@@ -3579,7 +3579,6 @@ embedAndMergeErrors pid ctx = do
       , fetchTexts = PatternMergeDB.fetchErrorTexts
       , canMerge = PatternMerge.errorCanMerge
       , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
-      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Nothing
       }
 
@@ -3594,7 +3593,7 @@ embedAndMergeLogPatterns pid ctx = do
       { label = "log"
       , items = unembedded
       , itemText = snd
-      , normalizeEmb = PatternMerge.normalizeForEmbedding
+      , normalizeEmb = Drain.normalizePlaceholders
       , toId = fst
       , updateEmbs = PatternMergeDB.updateLogEmbeddings
       , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
@@ -3602,13 +3601,12 @@ embedAndMergeLogPatterns pid ctx = do
       , fetchTexts = PatternMergeDB.fetchLogTexts
       , canMerge = PatternMerge.logCanMerge
       , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
-      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Just PatternMergeDB.fetchLogSamples
       }
 
 
 -- | Build a judge from a prompt builder. Calls LLM and parses the response.
-mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
+mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
 mkJudge buildPrompt pairs = do
   ctx <- ask @Config.AuthContext
   ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap PatternMerge.parseJudgeResponse
@@ -3625,8 +3623,7 @@ data MergeConfig k a = MergeConfig
   , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
   , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
   , canMerge :: Text -> Text -> Bool
-  , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
-  , onCanonicalPath :: k -> Text -> ATBackgroundCtx ()
+  , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
   , verifyMerge :: Maybe ([k] -> ATBackgroundCtx (Map k Text))
   }
 
@@ -3664,12 +3661,9 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
           judgeResult <- cfg.judgeFn pairs
           case judgeResult of
             Left err -> Log.logAttention ("LLM judge failed for " <> cfg.label <> " patterns") (pid, err)
-            Right decisions -> do
+            Right mergeIdxs -> do
               let ambiguousV = V.fromList validAmbiguous
-                  merges = mapMaybe (\(idx, shouldMerge, _) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
-              verified merges >>= void . cfg.assignCanonical
-              forM_ decisions \(idx, shouldMerge, mPath) ->
-                when shouldMerge $ for_ ((,) . snd <$> (ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
+              verified (mapMaybe (ambiguousV V.!?) mergeIdxs) >>= void . cfg.assignCanonical
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
@@ -3709,14 +3703,14 @@ endpointTemplateDiscovery pid = do
   learned <- map fst <$> Endpoints.learnedIdRulesFor pid
   unless (null endpoints) do
     let known = S.fromList $ V.toList existing
-        grouped = HM.toList $ HM.fromListWith (<>) [((m, host, classifyUrlPathWith learned path), [h]) | (h, m, host, path) <- endpoints]
+        grouped = HM.toList $ HM.fromListWith (<>) [(Endpoints.TemplateKey e.method e.host (classifyUrlPathWith learned e.urlPath), [e.hash]) | e <- endpoints]
         -- An existing template vouches for its group; a new one has to be
         -- witnessed twice and must actually be a template.
-        isEligible ((m, host, tp), hs) = S.member (m, host, tp) known || (length hs >= 2 && T.isInfixOf "{param}" tp)
+        isEligible (k, hs) = S.member k known || (length hs >= 2 && T.isInfixOf "{param}" k.canonicalPath)
         (eligible, leftovers) = partition isEligible grouped
         (!allUpdates, !allInserts) =
           foldMap
-            (\((method, host, tp), hs) -> let ch = toXXHash $ pid.toText <> host <> method <> tp in (map (,ch,tp) hs, [(pid, tp, method, host, ch)]))
+            (\(k, hs) -> let ch = toXXHash $ pid.toText <> k.host <> k.method <> k.canonicalPath in (map (,ch,k.canonicalPath) hs, [(pid, k.canonicalPath, k.method, k.host, ch)]))
             eligible
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
@@ -3729,7 +3723,7 @@ endpointTemplateDiscovery pid = do
     -- evidence floor on any one of them.
     let proposals =
           [ (method, T.intercalate "/" segs)
-          | (method, paths) <- HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" tp]) | ((m, _, tp), _) <- leftovers]
+          | (method, paths) <- HM.toList $ HM.fromListWith (<>) [(k.method, [T.splitOn "/" k.canonicalPath]) | (k, _) <- leftovers]
           , segs <- proposePathTemplates paths
           , "{param}" `elem` segs
           ]
@@ -3801,7 +3795,7 @@ reviewResidualEndpointGroups pid = do
   when (ctx.config.enableEndpointGroupReview && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointGroupReview" do
     endpoints <- Endpoints.getUnmergedEndpoints pid
     learned <- map fst <$> Endpoints.learnedIdRulesFor pid
-    let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPathWith learned path)]) | (_, m, _, path) <- endpoints]
+    let byMethod = HM.toList $ HM.fromListWith (<>) [(e.method, [T.splitOn "/" (classifyUrlPathWith learned e.urlPath)]) | e <- endpoints]
         groups =
           [ (method <> " " <> prefix <> " @" <> show pos, prefix, pos, sort kids)
           | (method, paths) <- byMethod
@@ -3826,7 +3820,7 @@ reviewResidualEndpointGroups pid = do
         Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
         Right txt -> do
           let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
-              rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
+              rows = [(gkey, mhash, n, display v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
           Endpoints.recordGroupReviews pid rows
           Log.logInfo
             "Endpoint group review complete"
@@ -3891,9 +3885,9 @@ applyConfirmedGroups pid confirmed = do
             -- shown.
             wildcardAt segs = take pos segs <> ["{param}"] <> drop (pos + 1) segs
             touched =
-              [ (h, m, host, T.intercalate "/" (wildcardAt segs))
-              | (h, m, host, path) <- endpoints
-              , let segs = T.splitOn "/" (classifyUrlPath path)
+              [ (e.hash, e.method, e.host, T.intercalate "/" (wildcardAt segs))
+              | e <- endpoints
+              , let segs = T.splitOn "/" (classifyUrlPath e.urlPath)
               , take pos segs == prefixSegs
               , maybe False (`S.member` kidSet) (segs !!? pos)
               ]
@@ -4020,7 +4014,7 @@ reportUnwrittenIdRules = do
   unless (null shapes)
     $ Log.logInfo
       "Id shapes with no deterministic rule"
-      ("shapes", [AE.object ["shape" AE..= sh, "groups" AE..= g, "endpoints" AE..= n] | (sh, g, n) <- shapes])
+      ("shapes", [AE.object ["shape" AE..= s.shape, "groups" AE..= s.groups, "endpoints" AE..= s.endpoints] | s <- shapes])
 
 
 -- | Challenge each merge still in quarantine, and undo the ones the model now
@@ -4040,12 +4034,12 @@ recheckQuarantinedMerges pid = do
   when (ctx.config.enableEndpointGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointMergeRecheck" do
     pending <- Endpoints.getQuarantinedMerges pid
     unless (null pending) do
-      let asked = [(gkey, tmpl, ordNub (V.toList paths)) | (gkey, tmpl, paths) <- pending]
+      let asked = [(m.groupKey, m.canonicalPath, ordNub (V.toList m.urlPaths)) | m <- pending]
       reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
         Right txt -> do
-          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= "param"]
+          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= PatternMerge.Param]
           forM_ refuted \gkey -> do
             hashes <- Endpoints.appliedCanonicalHashes pid gkey
             restored <- Endpoints.revertGroupApply pid gkey hashes

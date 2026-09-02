@@ -5,6 +5,7 @@ module Pkg.PatternMerge (
   ambiguousThreshold,
   buildLogClusterJudgePrompt,
   buildGroupReviewPrompt,
+  GroupVerdict (..),
   parseGroupReview,
   buildMergeChallengePrompt,
   buildErrorJudgePrompt,
@@ -15,7 +16,6 @@ module Pkg.PatternMerge (
   logCanMerge,
   errorCanMerge,
   verifyMergeDecision,
-  normalizeForEmbedding,
   normalizeErrorForEmbedding,
 )
 where
@@ -23,20 +23,26 @@ where
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
+import Data.Aeson.Types (parseMaybe)
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
-import Pkg.DeriveUtils (escapeRegex)
+import Pkg.DeriveUtils (WrappedEnumSC (..), escapeRegex)
 import Pkg.Drain qualified as Drain
 import Pkg.ErrorFingerprint qualified as EF
 import Relude
 import Text.Regex.TDFA ((=~))
+
+
+-- $setup
+-- >>> import Data.Text.Display (display)
 
 
 -- | Construct embedding text for an error pattern.
@@ -101,9 +107,16 @@ assignToCentroids centroids = foldl' classify ([], [])
       matches -> Just $ maximumBy (comparing snd) matches
 
 
--- | Parse the LLM judge response. Returns (index, shouldMerge, maybeCanonicalPath).
--- The canonical field is only present in endpoint-specific responses.
-parseJudgeResponse :: Text -> [(Int, Bool, Maybe Text)]
+-- | Indices of the input pairs the judge answered @MERGE@ for. Pairs it declined,
+-- omitted, or answered unparseably are simply absent — a dropped verdict leaves
+-- two patterns separate, which is the recoverable direction.
+--
+-- >>> parseJudgeResponse "[{\"index\":0,\"decision\":\"MERGE\"},{\"index\":1,\"decision\":\"KEEP_SEPARATE\"}]"
+-- [0]
+--
+-- >>> parseJudgeResponse "not json"
+-- []
+parseJudgeResponse :: Text -> [Int]
 parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 $ AI.stripCodeBlock txt) :: Maybe AE.Value of
   Just arr -> mapMaybe parseDecision (arr ^.. _Array . traverse)
   Nothing -> []
@@ -111,8 +124,8 @@ parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 $ AI.stripCodeBlock tx
     parseDecision v = do
       idx <- v ^? key "index" >>= \case AE.Number n -> Just (round n); _ -> Nothing
       decision <- v ^? key "decision" . _String
-      let canonical = v ^? key "canonical" . _String
-      pure (idx, decision == "MERGE", bool Nothing canonical (decision == "MERGE"))
+      guard $ decision == "MERGE"
+      pure idx
 
 
 -- | Wrap a list of items in an XML-style tag so the LLM treats them as data.
@@ -218,25 +231,35 @@ buildMergeChallengePrompt groups = systemPart <> "\n\n" <> wrapTag "merges" (map
       "  MERGE key=" <> gkey <> "\n  prefix: " <> prefix <> "\n  collapsed values (" <> show (length values) <> "): " <> T.intercalate ", " (take 25 values)
 
 
+-- | A group-review verdict. Renders to the exact strings stored in
+-- @apis.endpoint_group_reviews.verdict@, so 'display' is the persistence encoding.
+data GroupVerdict = Param | Routes | Mixed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" GroupVerdict
+
+
 -- | Parse the JSONL group-review reply into (key, verdict, shape).
 --
 -- Unparseable lines are dropped rather than guessed at: a malformed verdict that
--- defaulted to "param" would merge routes on a model's bad day.
+-- defaulted to 'Param' would merge routes on a model's bad day.
 --
 -- >>> parseGroupReview "{\"key\":\"a\",\"verdict\":\"param\",\"shape\":\"uuid\"}\nnot json\n{\"key\":\"b\",\"verdict\":\"routes\"}"
--- [("a","param","uuid"),("b","routes","")]
+-- [("a",Param,"uuid"),("b",Routes,"")]
 --
 -- >>> parseGroupReview "{\"key\":\"a\",\"verdict\":\"nonsense\"}"
 -- []
-parseGroupReview :: Text -> [(Text, Text, Text)]
+--
+-- >>> map (\(_, v, _) -> display v) $ parseGroupReview "{\"key\":\"a\",\"verdict\":\"mixed\"}"
+-- ["mixed"]
+parseGroupReview :: Text -> [(Text, GroupVerdict, Text)]
 parseGroupReview =
   mapMaybe (decodeLine . T.dropAround (\c -> c == '`' || c == ' ')) . lines . AI.stripCodeBlock
   where
     decodeLine ln = do
       v <- AE.decodeStrict (encodeUtf8 ln) :: Maybe AE.Value
       gkey <- v ^? key "key" . _String
-      verdict <- v ^? key "verdict" . _String
-      guard $ verdict `elem` ["param", "routes", "mixed"]
+      verdict <- parseMaybe AE.parseJSON =<< v ^? key "verdict"
       pure (gkey, verdict, fromMaybe "" $ v ^? key "shape" . _String)
 
 
@@ -253,32 +276,6 @@ parseGroupReview =
 -- False
 isPlaceholderToken :: Text -> Bool
 isPlaceholderToken t = t == "<*>" || (T.isPrefixOf "{" t && T.isSuffixOf "}" t)
-
-
--- | Normalize a log pattern for embedding by replacing known Drain placeholders
--- with a uniform `<*>` token. This ensures patterns that differ only in
--- placeholder type (e.g. `{uuid}` vs `<*>`) produce identical embedding text.
--- JSON blobs and URL path segments in braces are preserved.
---
--- >>> normalizeForEmbedding "user {uuid} logged in from {ipv4}"
--- "user <*> logged in from <*>"
---
--- >>> normalizeForEmbedding "user <*> logged in from <*>"
--- "user <*> logged in from <*>"
---
--- >>> normalizeForEmbedding "balance {integer} from {hex} to {hex}"
--- "balance <*> from <*> to <*>"
---
--- >>> normalizeForEmbedding "no placeholders here"
--- "no placeholders here"
---
--- >>> normalizeForEmbedding "{\"context\":\"NestApplication\"}"
--- "{\"context\":\"NestApplication\"}"
---
--- >>> normalizeForEmbedding "error {/payments} not found"
--- "error {/payments} not found"
-normalizeForEmbedding :: Text -> Text
-normalizeForEmbedding = unwords . map Drain.normalizePlaceholder . words
 
 
 -- | Extract non-placeholder content tokens as a Set (for reuse in hot loops).
@@ -460,7 +457,7 @@ verifyMergeDecision :: Text -> Text -> Bool
 verifyMergeDecision template sampleLog = (toString sampleLog :: String) =~ (toString regexPattern :: String)
   where
     regexPattern = "^" <> T.intercalate ".+" (map escapeRegex $ T.splitOn "<*>" expanded) <> "$"
-    expanded = normalizeForEmbedding template
+    expanded = Drain.normalizePlaceholders template
 
 
 -- | Normalize an error pattern for embedding. Splits on ": " to separate the

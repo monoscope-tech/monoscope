@@ -284,7 +284,7 @@ spec = sequential $ aroundAll withTestResources do
       Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
       void $ runTestBg frozenTime tr $ PatternMerge.assignLogsToCanonical [(member.id, canon.id)]
       -- getLogPatternTexts should return the canonical but not the member
-      texts <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts pid srcField
+      (texts, _) <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts pid srcField Nothing
       texts `shouldSatisfy` elem "Canonical drain <*>"
       texts `shouldSatisfy` (not . elem "Member drain <*>")
 
@@ -486,7 +486,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "9. Full embedding + LLM merge pipeline merges similar log patterns" \tr -> do
       -- Group A: identical patterns differing only in placeholder type (should merge)
-      -- After normalizeForEmbedding, both become "user <*> logged in from <*>" → identical embeddings
+      -- After Drain.normalizePlaceholders, both become "user <*> logged in from <*>" → identical embeddings
       let patA1 = mkPatternWithSample "emb-merge-a1"
             "user <*> logged in from <*>"
             "summary" (Just "INFO") 20
