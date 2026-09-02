@@ -33,7 +33,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, stackTrace_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), dateTime, detailTab_, emptyState_, httpTab_, stackTrace_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.StackTrace qualified as StackTrace
 import Relude
@@ -292,9 +292,7 @@ expandedItemView pid item aptSp selectedTabM = do
     -- value would check no radio and leave every panel hidden.
     firstMarker = case tabs of [] -> "tab-raw"; t : _ -> t.marker
     activeMarker = maybe firstMarker (.marker) $ selectedTabM >>= \s -> find ((== s) . (.marker)) tabs
-    detailTabRadio_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
-      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker] <> [checked_ | t.marker == activeMarker]
-      t.label
+    detailTabRadio_ t = detailTab_ dgrp t.marker t.cls (t.marker == activeMarker) t.label
     tabs = detailTabs pid item aptSp
 
     -- Best-effort curl reconstruction from the span's HTTP attributes and any
@@ -444,7 +442,7 @@ detailTabs pid item aptSp =
     badge label cls count = toHtml @Text label >> div_ [class_ cls] (show count)
     attContent = case unAesonTextMaybe item.attributes of
       Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
-      _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
+      _ -> emptyState_ def{size = ESCompact} "No custom attributes on this entry" ""
 
 
 renderHttpDetails :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Html ()

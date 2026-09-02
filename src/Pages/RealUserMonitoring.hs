@@ -1008,11 +1008,9 @@ replayWorkspace_ links = \case
 
 
 replayPrompt_ :: Text -> Text -> Maybe (Text, Text) -> Html ()
-replayPrompt_ title description action = div_ [class_ "flex min-h-[34rem] flex-col items-center justify-center p-8 text-center"] do
-  faSprite_ "video" "regular" "mb-3 h-8 w-8 text-iconNeutral"
-  h2_ [class_ "text-base font-semibold text-textStrong"] $ toHtml title
-  p_ [class_ "mt-1 max-w-md text-sm text-textWeak"] $ toHtml description
-  forM_ action $ \(label, url) -> a_ [href_ url, class_ "btn btn-sm mt-4"] $ toHtml label
+replayPrompt_ title description action =
+  div_ [class_ "flex min-h-[34rem] flex-col items-center justify-center p-8"]
+    $ Components.emptyState_ def{icon = Just "video", action = maybe ESNone (\(label, url) -> ESLink url label) action} title description
 
 
 performance_ :: RumData -> Html ()

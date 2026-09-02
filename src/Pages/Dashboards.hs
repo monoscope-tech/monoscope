@@ -94,7 +94,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, primaryButton_, tagInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -709,9 +709,12 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       -- Nothing to choose from is a different answer than "search found nothing", and a
       -- search box over an empty list reads as a broken page. Say why instead.
       if optCount == 0
-        then div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"] do
-          div_ [class_ "text-sm text-textStrong"] $ toHtml $ "No " <> T.toLower varTitle <> " to choose from yet"
-          div_ [class_ "mt-1 text-xs text-textWeak"] "This dashboard reports on one at a time, so it has nothing to show until data arrives."
+        then
+          div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"]
+            $ emptyState_
+              def{size = ESCompact}
+              ("No " <> T.toLower varTitle <> " to choose from yet")
+              "This dashboard reports on one at a time, so it has nothing to show until data arrives."
         else div_ [class_ "var-picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
           div_ [class_ "px-3 border-b border-base-300"] do
             input_
@@ -776,7 +779,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
                   when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-            div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
+            div_ [class_ "var-picker-empty px-3 py-8 text-center", style_ "display:none"] $ emptyState_ def{size = ESCompact} "No matching results" ""
       -- Keyboard hints
       div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
         $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
@@ -2207,7 +2210,7 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   addRespHeaders case queryM of
-    Nothing -> div_ [class_ "p-3 text-textWeak text-xs"] "No query provided"
+    Nothing -> emptyState_ def{size = ESCompact} "No query provided" ""
     Just query -> case parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query of
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"

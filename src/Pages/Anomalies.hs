@@ -34,7 +34,7 @@ import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
+import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
@@ -77,7 +77,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, detailTab_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
@@ -526,13 +526,26 @@ detailRow_ =
       span_ [class_ "text-xs font-medium"] $ toHtml value
 
 
--- | Right-hand "<title> details" card shown next to the volume chart.
-detailCard_ :: Text -> Html () -> Html ()
-detailCard_ title body = div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2xl overflow-hidden"] do
-  div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-    faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
+data CardCfg = CardCfg
+  { wrapCls :: Maybe Text -- extra classes on the card wrapper
+  , headCls :: Maybe Text -- full override of the header bar's classes
+  , bodyCls :: Maybe Text -- Nothing renders the body bare, with no padding wrapper
+  , attrs :: [Attribute]
+  , trailing :: Maybe (Html ()) -- header content after the label
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+-- | The page's card shape: a @surface-raised@ panel whose header bar carries an optional
+-- icon, an uppercase section label, and optional trailing controls.
+detailCard_ :: Maybe Text -> CardCfg -> Text -> Html () -> Html ()
+detailCard_ iconM cfg title body = div_ ([class_ $ "surface-raised rounded-2xl overflow-hidden " <> fromMaybe "" cfg.wrapCls] <> cfg.attrs) do
+  div_ [class_ $ fromMaybe "px-4 py-3 border-b border-strokeWeak flex items-center gap-2" cfg.headCls] do
+    whenJust iconM \ic -> faSprite_ ic "regular" "w-3.5 h-3.5 text-textWeak"
     span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml title
-  div_ [class_ "p-4 flex flex-col gap-3"] body
+    sequence_ cfg.trailing
+  maybe body (\c -> div_ [class_ c] body) cfg.bodyCls
 
 
 -- | Banner stating, in words, what the issue's current state means for
@@ -576,15 +589,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           -- vector — render each element as a single chip so values with
           -- internal whitespace (user-agents, page titles) stay intact.
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
-            div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
-                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
-              renderLogContent_ logPattern
+            detailCard_ Nothing def{trailing = Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField} "Log Pattern"
+              $ renderLogContent_ logPattern
             let renderSample :: Html () -> Html ()
-                renderSample body = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                  div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
-                  body
+                renderSample = detailCard_ Nothing def "Sample Message"
             maybe
               (whenJust (mfilter ((/= T.strip logPattern) . T.strip) sampleMessage) (renderSample . renderLogContent_))
               (renderSample . div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] . V.mapM_ (summaryToken_ True))
@@ -613,26 +621,24 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       let volumeChart_ chartTitle = whenJust (Issues.hashPrefix issue.issueType) \prefix -> do
             let hashQuery = "hashes[*]==\"" <> prefix <> issue.targetHash <> "\" | summarize count(*) by bin_auto(timestamp)"
                 refreshId = "anomaly-chart-refresh"
-            div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
-            div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-              div_ [class_ "px-4 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-strokeWeak"] do
-                span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml chartTitle
-                div_ [class_ "flex items-center gap-2"] do
+                picker = div_ [class_ "flex items-center gap-2"] do
                   TimePicker.timepicker_ (Just refreshId) currentRange Nothing
                   TimePicker.refreshButton_
-              div_ [class_ "h-24"]
-                $ Widget.widget_
-                  (def :: Widget.Widget)
-                    { Widget.standalone = Just True
-                    , Widget.naked = Just True
-                    , Widget.id = Just $ issueId <> "-pattern-volume"
-                    , Widget.wType = Widget.WTTimeseries
-                    , Widget.showTooltip = Just True
-                    , Widget.query = Just hashQuery
-                    , Widget._projectId = Just issue.projectId
-                    , Widget.hideLegend = Just True
-                    , Widget.hideSubtitle = Just True
-                    }
+            div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
+            detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-strokeWeak", trailing = Just picker} chartTitle
+              $ div_ [class_ "h-24"]
+              $ Widget.widget_
+                (def :: Widget.Widget)
+                  { Widget.standalone = Just True
+                  , Widget.naked = Just True
+                  , Widget.id = Just $ issueId <> "-pattern-volume"
+                  , Widget.wType = Widget.WTTimeseries
+                  , Widget.showTooltip = Just True
+                  , Widget.query = Just hashQuery
+                  , Widget._projectId = Just issue.projectId
+                  , Widget.hideLegend = Just True
+                  , Widget.hideSubtitle = Just True
+                  }
       let patternLayout sf lp sm =
             div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
               div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
@@ -653,7 +659,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Error Frequency"
             whenJust errM \errL -> do
               let err = errL.base
-              detailCard_ "Error Details" do
+              detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-3"} "Error Details" do
                 whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
                   div_ [class_ "mb-1"] do
                     span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
@@ -688,9 +694,11 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                         $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap px-4 py-3"]
                         $ code_ []
                         $ toHtml trimmedStack
-                    else div_ [class_ "px-4 py-4 flex items-start gap-2 text-textWeak"] do
-                      faSprite_ "circle-info" "regular" "w-4 h-4 shrink-0 mt-0.5"
-                      span_ [class_ "text-xs"] "No stack trace captured — common for browser console errors. Check the User Journey for the events that led up to it."
+                    else
+                      emptyState_
+                        def{icon = Just "circle-info", size = ESCompact}
+                        "No stack trace captured — common for browser console errors. Check the User Journey for the events that led up to it."
+                        ""
             activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
@@ -720,7 +728,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           -- Chart + endpoint details panel side-by-side
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Request Trend"
-            detailCard_ "Endpoint Details" do
+            detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-3"} "Endpoint Details" do
               detailRow_
                 [ ("calendar", "text-fillBrand-strong", "First seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
                 , ("calendar", "text-fillBrand-strong", "Last seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
@@ -733,20 +741,16 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
               $ if hasFieldChanges
-                then div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                  div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                    faSprite_ "list-check" "regular" "w-3.5 h-3.5 text-textWeak"
-                    span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Field Changes"
-                  div_ [class_ "p-4 flex flex-col gap-4"] do
-                    fieldList "New" "text-fillSuccess-strong" "plus" d.newFields
-                    fieldList "Deleted" "text-fillError-strong" "minus" d.deletedFields
-                    fieldList "Modified" "text-fillWarning-strong" "code" d.modifiedFields
-                else div_ [class_ "surface-raised rounded-2xl px-4 py-6 flex flex-col items-center gap-2 text-center"] do
-                  faSprite_ "rocket" "regular" "w-5 h-5 text-fillBrand-strong"
-                  span_ [class_ "text-sm text-textStrong"] "New endpoint discovered"
-                  span_
-                    [class_ "text-xs text-textWeak max-w-sm"]
-                    "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
+                then detailCard_ (Just "list-check") def{bodyCls = Just "p-4 flex flex-col gap-4"} "Field Changes" do
+                  fieldList "New" "text-fillSuccess-strong" "plus" d.newFields
+                  fieldList "Deleted" "text-fillError-strong" "minus" d.deletedFields
+                  fieldList "Modified" "text-fillWarning-strong" "code" d.modifiedFields
+                else
+                  div_ [class_ "surface-raised rounded-2xl"]
+                    $ emptyState_
+                      def{icon = Just "rocket"}
+                      "New endpoint discovered"
+                      "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
             activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
       let isLogPatternIssue = issue.issueType `elem` ([Issues.LogPattern, Issues.LogPatternRateChange] :: [Issues.IssueType])
       -- Escape closes the open span panel before it exits fullscreen — the panel's close
@@ -785,9 +789,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                   -- Radio inside the label, panel shown by a CSS variant off
                   -- #error-details-container's group: no JS, and the choice
                   -- survives the htmx morphs this card does on every filter.
-                  tabBtn (tabId, lbl, isActive) = label_ [class_ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-                    input_ $ [type_ "radio", name_ "err-tabs", id_ tabId, class_ "sr-only"] <> [checked_ | isActive]
-                    toHtml (lbl :: Text)
+                  tabBtn (marker, lbl, isActive) = detailTab_ "err-tabs" marker "max-md:px-2 err-tab font-medium" isActive $ toHtml (lbl :: Text)
               forM_ ([(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured", "First"), (aUrl, not isFirst, "Show recent trace the error occured", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
               span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
               forM_ ([("err-tab-trace", "Trace", not isLogPatternIssue), ("err-tab-logs", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
@@ -801,7 +803,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
             -- The trace ships its own details panel (#trace_details_container), so this tab renders
             -- no second one — clicking a span replaces the open panel instead of stacking another.
-            div_ [class_ "hidden group-has-[#err-tab-trace:checked]/inv:block w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
+            div_ [class_ "hidden group-has-[.err-tab-trace:checked]/inv:block w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
               -- The waterfall arrives on its own: a cold read of a multi-thousand-span
               -- trace took >56s and used to 504 this entire page. `load`, not
               -- `intersect` — the pane is full-height and its trigger never scrolls
@@ -817,7 +819,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     ]
                     $ loadingIndicator_ LdMD LdSpinner
 
-          div_ [id_ "log-content", class_ "hidden group-has-[#err-tab-logs:checked]/inv:flex err-tab-content flex-col lg:flex-row w-full lg:h-[70vh]"] do
+          div_ [id_ "log-content", class_ "hidden group-has-[.err-tab-logs:checked]/inv:flex err-tab-content flex-col lg:flex-row w-full lg:h-[70vh]"] do
             let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
                 isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
                 lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
@@ -856,11 +858,8 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
               $ htmxOverlayIndicator_ "details_indicator"
 
       whenJust replaySession \sessionId ->
-        div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
-          div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
-            faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
-            h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Session Replay"
-          termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+        detailCard_ (Just "video") def{headCls = Just "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2", attrs = [id_ "replay-section"]} "Session Replay"
+          $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
 
       -- Every other issue type already renders an Activity panel beside its own content.
       when (issue.issueType == Issues.QueryAlert) $ activityPanel_ pid issueId "" traceRef
@@ -1967,7 +1966,7 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
 
 issueActivityTimeline_ :: Map.Map Projects.UserId Projects.User -> UTCTime -> [Issues.IssueActivity] -> Html ()
 issueActivityTimeline_ userMap now activities
-  | null activities = div_ [class_ "p-4 text-sm text-textWeak text-center"] "No activity yet."
+  | null activities = emptyState_ def{size = ESCompact} "No activity yet." ""
   | otherwise = div_ [class_ "p-4 flex flex-col gap-0"] $ forM_ activities \a -> do
       let (icon, color, label) = eventDisplay a.event
           actorText = foldMap (\uid -> foldMap (\u -> " by " <> CI.original u.email) $ Map.lookup uid userMap) a.createdBy
