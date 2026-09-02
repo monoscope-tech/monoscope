@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -135,8 +135,9 @@ metaChip_ label value = span_ [class_ "inline-flex items-center gap-1 rounded-md
   toHtml value
 
 
-getTargetPage :: Text -> Text
-getTargetPage p = fromMaybe "" $ lookup p [("Requests", "/log_explorer"), ("Issues", "/issues"), ("Endpoints", "/endpoints")]
+-- | The section path a breadcrumb page title links back to, when it has one.
+getTargetPage :: Text -> Maybe Text
+getTargetPage = (`lookup` [("Requests", "/log_explorer"), ("Issues", "/issues"), ("Endpoints", "/endpoints")])
 
 
 -- | Element with a non-standard tag name (custom elements, SVG), which Lucid has no builder for.
@@ -469,10 +470,6 @@ primaryButton_ attrs = button_ (class_ " btn btn-primary btn-sm " : attrs)
 
 headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 headerRow_ attrs = div_ (class_ " flex items-center justify-between " : attrs)
-
-
-headerRowPad_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-headerRowPad_ attrs = div_ (class_ " flex items-center justify-between px-4 py-3 " : attrs)
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()

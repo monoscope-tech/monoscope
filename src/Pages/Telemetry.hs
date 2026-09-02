@@ -888,7 +888,7 @@ dataPointsPage pid metrics refCounts = do
             def
               { Table.search = Just Table.ClientSide
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", actionText = "View SDK setup guides", destination = Right "https://monoscope.tech/docs/sdks/"}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", action = Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
               }
         }
 

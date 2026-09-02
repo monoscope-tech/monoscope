@@ -1740,7 +1740,7 @@ dashboardsGet_ dg = do
                   , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
                   , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
-                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
+                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
                   }
             }
 

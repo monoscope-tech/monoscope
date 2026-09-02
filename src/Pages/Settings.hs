@@ -363,7 +363,7 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = apiKeys
-    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}}
+    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", action = Table.ESNone}}
     }
 
 
