@@ -35,6 +35,26 @@ async function suggestions(page: Page, query: string) {
 
 const labels = (items: { label: string }[]) => items.map(({ label }) => label);
 
+// Outside the describe below on purpose: its beforeEach waits for Monaco, and the whole
+// point here is the window before Monaco exists. The server-rendered skeleton
+// (queryEditorSkeleton_) stands in for the editor then, and it used to be 32px tall
+// inside a box with room for 30 — so the row sat 2px out of line on every page load
+// until the editor upgraded. Blocking the chunk is what makes that state hold still.
+test("keeps the row aligned while the editor is still loading", async ({ page }) => {
+  await page.route("**/query-editor*.js", (route) => route.abort());
+  await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
+  await page.locator("#filterElement").waitFor({ state: "attached" });
+
+  const geometry = await page.locator("#filterElement").evaluate((el) => ({
+    editorHeight: el.parentElement!.getBoundingClientRect().height,
+    controlHeight: document.getElementById("spans-toggle")!.getBoundingClientRect().height,
+    hasMonaco: !!(el as any).editor,
+  }));
+
+  expect(geometry.hasMonaco).toBe(false);
+  expect(geometry.editorHeight).toBe(geometry.controlHeight);
+});
+
 test.describe("Query editor", () => {
   test.beforeEach(async ({ page }) => waitForEditor(page));
 
