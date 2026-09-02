@@ -85,6 +85,15 @@ ghOpts token = Wreq.defaults
   & Wreq.header "User-Agent" .~ ["Monoscope-Test"]
   & Wreq.header "X-GitHub-Api-Version" .~ ["2022-11-28"]
 
+-- | Cheap preflight: can this PAT read the target repo at all? Distinguishes
+-- "credential broken" from "sync code broken", which a 401 inside a sync
+-- assertion cannot.
+ghCredentialUsable :: GitHubTestConfig -> IO Bool
+ghCredentialUsable cfg = do
+  let url = toString $ "https://api.github.com/repos/" <> cfg.owner <> "/" <> cfg.repo
+  either (\(_ :: SomeException) -> False) (const True) <$> try (Wreq.getWith (ghOpts cfg.pat) url)
+
+
 ghUrl :: GitHubTestConfig -> Text -> String
 ghUrl cfg path = toString $ "https://api.github.com/repos/" <> cfg.owner <> "/" <> cfg.repo <> "/contents/" <> path <> "?ref=" <> cfg.branch
 
@@ -464,13 +473,20 @@ spec = sequential do
         n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
         n `shouldBe` 0
 
-  -- Layer 2: E2E tests with real GitHub API
-  configM <- runIO loadTestConfig
+  -- Layer 2: E2E tests with real GitHub API.
+  -- The credential is probed first: an expired or revoked PAT is an environment
+  -- problem, and reporting it as ten failing examples trains readers to ignore a
+  -- permanently-red suite. Absent config and unusable config both skip, with the
+  -- message saying which.
+  configM <- runIO (loadTestConfig >>= traverse (\c -> (c,) <$> ghCredentialUsable c))
   case configM of
     Nothing -> describe "GitHub Sync E2E" $
       it "SKIPPED - Set GH_TEST_PAT, GH_TEST_OWNER, GH_TEST_REPO to enable" pending
 
-    Just cfg -> aroundAll withTestResources $ beforeAll_ (ghCleanupDashboards cfg) $ afterAll_ (ghCleanupDashboards cfg) $ do
+    Just (_, False) -> describe "GitHub Sync E2E" $
+      it "SKIPPED - GH_TEST_PAT is set but GitHub rejected it (expired, revoked, or lacking repo scope)" pending
+
+    Just (cfg, True) -> aroundAll withTestResources $ beforeAll_ (ghCleanupDashboards cfg) $ afterAll_ (ghCleanupDashboards cfg) $ do
 
       describe "GitHub Sync E2E (Real API)" $ do
 
