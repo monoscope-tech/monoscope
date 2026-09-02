@@ -81,7 +81,6 @@ import Text.Megaparsec (parseMaybe)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
@@ -931,7 +930,9 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
   lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now sinceM addCols removeCols tableData
-  let lastFM = lr.cursor >>= (iso8601ParseM . toString) <&> toText . iso8601Show . addUTCTime (-0.001)
+  -- One microsecond, not one millisecond: the page bound is inclusive, so a larger
+  -- step skips every row in the gap. See LogQueries.cursorEpsilon.
+  let lastFM = LogQueries.nudgeCursorBy (negate LogQueries.cursorEpsilon) =<< lr.cursor
   addRespHeaders
     (lr :: LogResult)
       { error = errM

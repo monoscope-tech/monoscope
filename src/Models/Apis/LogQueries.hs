@@ -1,4 +1,6 @@
 module Models.Apis.LogQueries (
+  cursorEpsilon,
+  nudgeCursorBy,
   SDKTypes (..),
   ATError (..),
   PatternRow (..),
@@ -38,10 +40,9 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.Time.Format
-import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -152,9 +153,26 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
-incrementByOneMicrosecond :: Text -> Text
-incrementByOneMicrosecond dateStr =
-  maybe "" (toText . iso8601Show . addUTCTime 0.000001) (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString dateStr) :: Maybe UTCTime)
+-- | The page predicate is inclusive (@timestamp <= cursor@, see "Pkg.Parser"), so a
+-- cursor must be nudged off the boundary or the last row of a page repeats as the
+-- first row of the next. One microsecond is the smallest step that achieves that;
+-- anything larger silently *skips* every row in the gap. The load-more path used
+-- @-0.001@ (a millisecond) and so could drop up to 999us of rows between pages —
+-- easy to hit, since a busy project writes thousands of rows per millisecond.
+cursorEpsilon :: NominalDiffTime
+cursorEpsilon = 0.000001
+
+
+-- | Shift an ISO-8601 cursor by @delta@; 'Nothing' if it doesn't parse.
+--
+-- >>> nudgeCursorBy cursorEpsilon "2026-05-08T10:00:00.000000Z"
+-- Just "2026-05-08T10:00:00.000001Z"
+-- >>> nudgeCursorBy (negate cursorEpsilon) "2026-05-08T10:00:00.000001Z"
+-- Just "2026-05-08T10:00:00Z"
+-- >>> nudgeCursorBy cursorEpsilon "not a timestamp"
+-- Nothing
+nudgeCursorBy :: NominalDiffTime -> Text -> Maybe Text
+nudgeCursorBy delta = fmap (toText . iso8601Show . addUTCTime delta) . iso8601ParseM @Maybe @UTCTime . toString
 
 
 -- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
@@ -178,7 +196,7 @@ logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source rece
           , param "cursor" (unlessRecent cursor)
           , param "since" (unlessRecent since)
           , param "from" fromV
-          , param "to" (if recent then incrementByOneMicrosecond <$> cursor else toV)
+          , param "to" (if recent then nudgeCursorBy cursorEpsilon =<< cursor else toV)
           , param "layout" layout
           , param "source" source
           ]
