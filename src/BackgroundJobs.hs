@@ -2269,8 +2269,8 @@ processEagerBatch batch shard
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = mkPathClassifier projectCache
-            !results = V.zipWith (\sp eid -> let (mkEp, hs, np) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np)) spans entityIds
-            !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
+            !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
+            !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.catMaybes endpoints
 
@@ -2344,7 +2344,11 @@ processEagerBatch batch shard
         Ki.scoped \scope -> do
           let forkNonEmpty :: V.Vector a -> (V.Vector a -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
               forkNonEmpty v action = unless (V.null v) $ void $ forkWithCtx scope $ action v
-          forkNonEmpty endpointsFinal Endpoints.bulkInsertEndpoints
+          -- Sequenced, not forked alongside: the rows have to exist before they
+          -- can be marked as their own canonical template.
+          forkNonEmpty endpointsFinal \eps -> do
+            Endpoints.bulkInsertEndpoints eps
+            Endpoints.frameworkCanonicalHashes $ V.fromList $ ordNub $ V.toList $ V.catMaybes frameworkHashes
           -- Legacy apis.shapes/fields/formats writes removed; the
           -- in-memory schema-learning catalog (observeSpans above) +
           -- runSchemaFlusherFiber replaces them.
@@ -3226,8 +3230,9 @@ processAPIChangeAnomalies pid targetHashes = do
 -- rendering collapses.
 --
 -- >>> import "monoscope" BackgroundJobs qualified as BJ
--- >>> import Pkg.EmailTemplates qualified as ET
--- >>> let row l = ET.EndpointAlertRow l (Just "api") Nothing Nothing
+-- >>> import "monoscope" Pkg.EmailTemplates qualified as ETP
+-- >>> let row l = ETP.EndpointAlertRow l (Just "api") Nothing Nothing
+--
 -- The reported incident, in miniature — and note that every member's id comes
 -- back on the collapsed row, so a single line still claims all of them and none
 -- is left to be announced again next pass:
