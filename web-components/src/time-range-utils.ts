@@ -1,5 +1,20 @@
 /** Pure time-range calculation helpers (no DOM deps, fully testable) */
 
+/** The params that carry the page's time window. The server prefers `since` over from/to. */
+export const TIME_PARAMS = ['since', 'from', 'to'] as const;
+
+/**
+ * Carry `keys` from the page's params onto a request/nav URL. Skips empty values: a key
+ * that is absent and a key set to '' both mean "this URL says nothing about it", and
+ * writing '' over a value the target already carries would silently widen its window.
+ */
+export function copyParams(source: URLSearchParams, target: URLSearchParams, keys: readonly string[] = TIME_PARAMS): void {
+  for (const key of keys) {
+    const value = source.get(key);
+    if (value) target.set(key, value);
+  }
+}
+
 const SINCE_EXPANSION_MAP: Record<string, string> = {
   '5M': '15M', '15M': '30M', '30M': '1H', '1H': '3H', '3H': '6H',
   '6H': '12H', '12H': '24H', '24H': '3D', '3D': '7D', '7D': '14D',
