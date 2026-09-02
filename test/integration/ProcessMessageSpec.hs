@@ -200,7 +200,7 @@ spec = around withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       _ <- runAllBackgroundJobs frozenTime tr.trATCtx
-      endpoints <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False pid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Nothing, page = 0, perPage = 200, period = Endpoints.Window24h}
+      endpoints <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False pid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortEvents, page = 0, perPage = 200, period = Endpoints.Window24h}
       V.length endpoints `shouldBe` 2
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]

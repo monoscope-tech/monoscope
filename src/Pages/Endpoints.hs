@@ -45,7 +45,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
       period = parseOr Endpoints.Window24h periodM
       showArchived = currentTab == "Archived"
       outgoingM = directionOf currentTab
-      sortV = bool "events" "name" (currentSort `elem` ["-name", "+name"])
+      sortV = bool Endpoints.SortEvents Endpoints.SortName (currentSort `elem` ["-name", "+name"])
 
   appCtx <- ask @AuthContext
   -- The host list is a cheap Postgres read; the per-host counts and sparkline scan a
@@ -248,7 +248,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       currentSort = fromMaybe "-events" sortM
       period = parseOr Endpoints.Window24h periodM
       periodT = display period
-      sortV = Just $ bool "events" "name" (currentSort `elem` ["-name", "+name"])
+      sortV = bool Endpoints.SortEvents Endpoints.SortName (currentSort `elem` ["-name", "+name"])
   appCtx <- ask @AuthContext
   let useTf = appCtx.env.enableTimefusionReads
       endpointQuery = Endpoints.EndpointQuery{direction, archived, host = hostParam, search = searchM, sort = sortV, page, perPage, period}

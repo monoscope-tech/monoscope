@@ -362,7 +362,7 @@ instance Var LogLevel where
 -- | Everything that changes the api_catalog stats result: project, tab, sort, window,
 -- period, page offset. A tuple rather than a joined string so a new dimension is a type
 -- error at every construction site instead of a silently colliding cache key.
-type HostStatsKey = (Projects.ProjectId, Text, Text, Endpoints.Since, Endpoints.Period, Int)
+type HostStatsKey = (Projects.ProjectId, Text, Endpoints.EndpointSort, Endpoints.Since, Endpoints.Period, Int)
 
 
 -- | Everything that changes the endpoints-list stats result: (project, direction tab,
