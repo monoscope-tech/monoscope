@@ -273,6 +273,33 @@ head` is used throughout, and two past `fromJust` crashes are recorded in commen
 The PG/TimeFusion `Bool` threaded through 63 sites should be **deleted at parity**, not
 abstracted — per CLAUDE.md, do not build a `Store` abstraction over it.
 
+## /hs-deep-clean — batch 1 (Anomalies, Issues, Telemetry, RUM, Dashboards, Widget)
+
+19 agents, 42 fixes across six files, plus the cross-file items the per-file agents are
+forbidden from making and hand back as "deferred". Landed in `4a2b1f6e`.
+
+Consolidations worth naming:
+- one `encodeText` in `Utils`, replacing `Widget.encodeText`, `Telemetry.jsonText`,
+  `MCP.renderJson` and six inline `decodeUtf8 $ AE.encode` sites
+- one `fmtDate`, deleting two verbatim copies (this had been on my own list)
+- `IssueVM`'s `Bool` field was always `False` — dropped, and the `unless isWidget` it
+  guarded became unconditional
+- `anomalyListGetH` lost four `_`-prefixed parameters plus `QPT "layout"`,
+  `QEID "endpoint"`, `HXRequest`, `HXBoosted` from the route and the orphaned `QEID`
+  synonym. I checked the old body before accepting: all four were genuinely unused.
+
+**The workflow's own caveat was correct and load-bearing.** It flagged that its spec edits
+were compile-unverified because `ghcid-wait.sh` only covers the library — and it had indeed
+updated `AnomaliesSpec` while missing the `anomalyListGetH` call in
+`ErrorPatternsSpec.hs:473`. `make test-unit` caught it. **Never accept a deep-clean run on
+the strength of its library build alone**; the spec tree needs its own compile.
+
+What it declined to do, and I agree with each: the `migrationComplexity` stringly-enum
+(persisted `issue_data` rows would not round-trip a snake_case `WrappedEnumSC` — needs a
+migration, not a cleanup pass), three real bugs it found but would not fix without a
+failing test first (per CLAUDE.md), and unifying the two `WidgetType -> vizType` ladders,
+which genuinely differ on `WTLogs` and would silently change the alert form's hidden field.
+
 ## /hs-evasion-review applied to this branch (823431ef..HEAD)
 
 Run against my own work, since the point of the skill is to catch the shortcuts the
