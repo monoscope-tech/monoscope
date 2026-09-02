@@ -198,11 +198,11 @@ anomalyBulkActionsPostH pid action durationM items = do
 
 
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueByIdScoped pid issueId
+anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById pid issueId
 
 
 anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueByHash pid issueId
+anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
 anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -910,7 +910,7 @@ errorAssigneeSection pid errIdM assigneeIdM members = do
             $ do
               option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
               forM_ members \member -> do
-                let memberIdText = UUID.toText $ Projects.getUserId member.userId
+                let memberIdText = member.userId.toText
                     fullName = T.strip $ member.first_name <> " " <> member.last_name
                     emailText = CI.original member.email
                     label =
@@ -1000,7 +1000,7 @@ assignErrorPostH pid errUuid form = do
           whenJust assigneeIdM \assigneeId ->
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
-          issueM <- Issues.selectIssueByHash pid err.hash
+          issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
           let event = maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeIdM
               meta = assigneeIdM <&> \uid -> AE.object ["assignee_id" AE..= uid]
           whenJust issueM \issue -> Issues.logIssueActivity issue.id event (Just sess.user.id) meta
@@ -1025,7 +1025,7 @@ resolveErrorPostH pid errUuid = do
           when (err.state /= ErrorPatterns.ESResolved) do
             now <- Time.currentTime
             void $ ErrorPatterns.updateErrorPatternState err.id ErrorPatterns.ESResolved now
-            issueM <- Issues.selectIssueByHash pid err.hash
+            issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
             whenJust issueM \issue -> Issues.logIssueActivity issue.id Issues.IEResolved (Just sess.user.id) Nothing
           addSuccessToast "Error resolved" Nothing
           addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
@@ -1105,7 +1105,7 @@ aiChatPostH pid issueId form
       now <- Time.currentTime
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
       void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
-      issueM <- Issues.selectIssueByIdScoped pid issueId
+      issueM <- Issues.selectIssueById pid issueId
       maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
   where
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
@@ -1138,7 +1138,7 @@ aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHead
 aiChatHistoryGetH pid issueId = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  Issues.selectIssueByIdScoped pid issueId >>= \case
+  Issues.selectIssueById pid issueId >>= \case
     Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
     Just issue -> do
       systemPrompt <- buildSystemPromptForIssue pid issue now
@@ -1473,11 +1473,11 @@ anomalyListGetH
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (_, project, bw) <- mkPageCtx pid
-  let (ackd, archived, currentFilterTab) = case filterTM of
-        Just "Inbox" -> (Just False, Just False, "Inbox")
-        Just "Acknowledged" -> (Just True, Nothing, "Acknowledged")
-        Just "Archived" -> (Nothing, Just True, "Archived")
-        _ -> (Just False, Just False, "Inbox")
+  -- The Inbox tab additionally hides severity='low' so demoted silent drops don't clutter it.
+  let (tabFilters, currentFilterTab) = case filterTM of
+        Just "Acknowledged" -> (Issues.defIssueFilters{Issues.ack = Issues.IsNotNull}, "Acknowledged")
+        Just "Archived" -> (Issues.defIssueFilters{Issues.archive = Issues.IsNotNull}, "Archived")
+        _ -> (Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}, "Inbox")
       filterV = fromMaybe "14d" timeFilter
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
@@ -1487,7 +1487,18 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
   currTime <- Time.currentTime
   ((issues, totalCount), (availableServices, availableTypes)) <-
     concurrently
-      (Issues.selectIssues pid ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
+      ( Issues.selectIssues
+          pid
+          Issues.PIssueL
+          tabFilters
+            { Issues.limit = perPage
+            , Issues.offset = pageInt * perPage
+            , Issues.order = Just currentSort
+            , Issues.period = period
+            , Issues.services = serviceFilters
+            , Issues.types = typeFilters
+            }
+      )
       ( concurrently
           (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL |])
           (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])

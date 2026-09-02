@@ -257,7 +257,7 @@ buildLiveReportEmailHtml pid project userName = do
               )
           )
           ( concurrently
-              (Issues.selectIssues pid (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+              (Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.timeRange = Just (startTime, currentTime), Issues.limit = 100})
               (concurrently (LogPatterns.getLogPatterns pid 10 0) (LogQueries.getLastSevenDaysTotalRequest pid))
           )
       )

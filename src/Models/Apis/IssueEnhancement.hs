@@ -238,7 +238,7 @@ buildDescriptionPrompt issue =
             Current rate: {Issues.showRate d.currentRatePerHour}
             Baseline mean: {Issues.showRate d.baselineMean}
             Baseline MAD: {Issues.showRate d.baselineMad}
-            Z-score: {show (round d.zScore :: Int)} standard deviations
+            Z-score: {Issues.showRounded "" d.zScore} standard deviations
             Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}
             Log level: {fromMaybe "unknown" d.logLevel}|]
