@@ -11,7 +11,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (asks)
 import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
 import "cryptonite" Crypto.Error qualified as Crypto
@@ -29,13 +28,11 @@ import Data.Effectful.Wreq (
 import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Models.Apis.Issues qualified as Issues
-import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.Dashboards (Dashboard (..))
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForDiscord, processAIQuery, processReportQuery)
-import Pkg.AI qualified as AI
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
-import Pkg.DeriveUtils (idFromText)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
@@ -46,8 +43,7 @@ import System.Types (ATBaseCtx)
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
 linkDiscordGetH pidM' codeM guildIdM = do
   envCfg <- asks env
-  let parts = T.splitOn "__" <$> pidM'
-      pidM = parts >>= viaNonEmpty head >>= Projects.projectIdFromText
+  let (pidM, isOnboarding) = parseInstallState pidM'
       bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Discord app installed", config = envCfg}
       discordErr = addHeader "" $ DiscordError $ PageCtx def ()
   case (pidM, codeM, guildIdM) of
@@ -58,10 +54,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
         else do
           _ <- insertDiscordData pid guildId
           registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
-          pure
-            $ if maybe False ((> 1) . length) parts
-              then addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-              else addHeader "" $ BotLinked $ PageCtx bwconf ("Discord", Just pid)
+          pure $ installedResponse "Discord" pid isOnboarding bwconf
     _ -> pure discordErr
 
 
@@ -188,13 +181,13 @@ discordInteractionsH rawBody signatureM timestampM = do
         case custom_id of
           "dashboard-select" -> do
             deferAck envCfg interaction
-            withDashboard discordData.projectId selected \dashboard -> do
+            withDashboardTemplate discordData.projectId selected \dashboard -> do
               let widgets = (\w -> let t = fromMaybe "Untitled-" w.title in (t, t <> "___" <> selected)) <$> dashboard.widgets
               followup envCfg interaction $ discordSelectContent widgets "widget-select" "Select a widget"
           "widget-select" -> do
             deferAck envCfg interaction
             case T.splitOn "___" selected of
-              [widget, dashboardId] -> withDashboard discordData.projectId dashboardId \dashboard ->
+              [widget, dashboardId] -> withDashboardTemplate discordData.projectId dashboardId \dashboard ->
                 whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) \w -> do
                   chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
                   followup envCfg interaction $ sharedWidgetContent widget chartUrl (envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId)
@@ -202,46 +195,21 @@ discordInteractionsH rawBody signatureM timestampM = do
           _ -> pass
         pure $ AE.object []
 
-    -- Resolve a dashboard id to its on-disk template, running the continuation if both exist.
-    --
-    -- Scoped to the interaction's own project: @dashboardId@ arrives inside the
-    -- component @custom_id@, which is whatever the sender's client sent, so an
-    -- unscoped lookup here renders another tenant's widget into this channel.
-    withDashboard :: Projects.ProjectId -> Text -> (Dashboards.Dashboard -> ATBaseCtx ()) -> ATBaseCtx ()
-    withDashboard pid dashboardId act = whenJust (idFromText dashboardId) \did ->
-      whenJustM (Dashboards.getDashboardByProjectId pid did) \dashboardVM -> do
-        dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
-        whenJust dashboardM act
-
     handleAskCommand :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> DiscordData -> ATBaseCtx ()
     handleAskCommand options interaction envCfg discordData = do
       deferAck envCfg interaction
-      let userQuery = optionText options ""
-          send = followup envCfg interaction
-          runQuery ctx = processAIQuery envCfg.enableTimefusionReads discordData.projectId userQuery ctx envCfg.openaiModel envCfg.openaiApiKey
-          respond = either (const $ send $ formatBotError Discord ServiceError) \resp ->
-            dispatchAIResponse Discord envCfg discordData.projectId (optionText options "[?]") resp send getBotContentWithUrl
-      case detectReportIntent userQuery of
-        ReportIntent reportType ->
-          processReportQuery discordData.projectId reportType envCfg
-            >>= send
-            . either (\err -> AE.object ["content" AE..= err]) (\(report, eventsUrl, errorsUrl) -> formatReportForDiscord report discordData.projectId envCfg eventsUrl errorsUrl)
-        GeneralQueryIntent -> case interaction.channel of
-          Just DiscordThreadChannel{type_ = 11, id = threadId} -> do
-            let convId = Issues.textToConversationId threadId
-            _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
-            existingHistory <- Issues.selectChatHistory convId
-            -- Advisory lock: only one interaction seeds the thread's history.
-            when (null existingHistory) $ whenM (Issues.tryAcquireChatMigrationLock convId) do
-              msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-              for_ (fold msgs) \m ->
-                Issues.insertChatMessage discordData.projectId convId (if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser) m.content Nothing Nothing
-            threadContext <- formatHistoryAsContext "Discord" . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory convId
-            result <- runQuery (Just threadContext)
-            Issues.insertChatMessage discordData.projectId convId Issues.ChatUser userQuery Nothing Nothing
-            whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId Issues.ChatAssistant q Nothing Nothing
-            respond result
-          _ -> runQuery Nothing >>= respond
+      let resolveThread = case interaction.channel of
+            Just DiscordThreadChannel{type_ = 11, id = threadId} ->
+              Just
+                <$> withBotThread
+                  Discord
+                  discordData.projectId
+                  (Issues.textToConversationId threadId)
+                  Issues.CTDiscordThread
+                  (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
+                  (fmap (map \m -> (if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser, m.content)) <$> getThreadStarterMessage interaction envCfg.discordBotToken)
+            _ -> pure Nothing
+      runBotQuery Discord (followup envCfg interaction) envCfg discordData.projectId (optionText options "") resolveThread
 
 
 -- | First slash-command option's string value, or a fallback.
@@ -255,56 +223,27 @@ contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["content" AE..= msg]]
 
 
--- Discord "components v2" building blocks (flag 32768 opts the message into the new layout).
-containerContent :: Int -> [AE.Value] -> AE.Value
-containerContent accent components =
-  AE.object ["flags" AE..= (32768 :: Int), "components" AE..= ([AE.object ["type" AE..= (17 :: Int), "accent_color" AE..= accent, "components" AE..= components]] :: [AE.Value])]
-
-
-textComponent :: Text -> AE.Value
-textComponent content = AE.object ["type" AE..= (10 :: Int), "content" AE..= content]
-
-
-galleryComponent :: Text -> Text -> AE.Value
-galleryComponent url description = AE.object ["type" AE..= (12 :: Int), "items" AE..= ([AE.object ["media" AE..= AE.object ["url" AE..= url], "description" AE..= description]] :: [AE.Value])]
-
-
-linkButton :: Text -> Text -> AE.Value
-linkButton label url = AE.object ["type" AE..= (1 :: Int), "components" AE..= ([AE.object ["type" AE..= (2 :: Int), "label" AE..= label, "url" AE..= url, "style" AE..= (5 :: Int)]] :: [AE.Value])]
-
-
 hereSuccessResponse :: AE.Value
 hereSuccessResponse =
   AE.object
     [ "type" AE..= (4 :: Int)
     , "data"
-        AE..= containerContent
+        AE..= dcContainer
           5763719 -- Green accent
-          [ textComponent $ botEmoji "success" <> " **Notification channel set**"
-          , textComponent "This channel will now receive:"
-          , textComponent $ "• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections"
+          [ dcText $ botEmoji "success" <> " **Notification channel set**"
+          , dcText "This channel will now receive:"
+          , dcText $ "• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections"
           ]
-    ]
-
-
-getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
-getBotContentWithUrl question query query_url imageUrl =
-  containerContent
-    26879
-    [ textComponent $ botEmoji "chart" <> " **" <> question <> "**"
-    , galleryComponent imageUrl ("Chart visualization: " <> question)
-    , textComponent $ "**Query:** `" <> query <> "`"
-    , linkButton (botEmoji "search" <> " View in Log Explorer") query_url
     ]
 
 
 sharedWidgetContent :: Text -> Text -> Text -> AE.Value
 sharedWidgetContent widgetTitle chartUrl dashboardUrl =
-  containerContent
+  dcContainer
     26879
-    [ textComponent $ botEmoji "chart" <> " **" <> widgetTitle <> "**"
-    , galleryComponent chartUrl ("Dashboard widget: " <> widgetTitle)
-    , linkButton "Open dashboard" dashboardUrl
+    [ dcText $ botEmoji "chart" <> " **" <> widgetTitle <> "**"
+    , dcGallery [(chartUrl, "Dashboard widget: " <> widgetTitle)]
+    , dcLinkButton "Open dashboard" dashboardUrl
     ]
 
 
