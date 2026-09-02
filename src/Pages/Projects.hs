@@ -100,7 +100,7 @@ import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -481,8 +481,8 @@ integrationsBody IntegrationsConfig{..} = do
     -- or it will silently be treated as "enabled" for every project.
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
-        let ems = decodeUtf8 $ AE.encode $ V.toList emails
-            tgs = decodeUtf8 $ AE.encode $ V.toList phones
+        let ems = encodeText $ V.toList emails
+            tgs = encodeText $ V.toList phones
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
@@ -608,8 +608,8 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
       -- for channels the bot can't see at all, fall back to the raw id as the name.
       let knownIds = S.fromList $ map BotUtils.channelId (channels <> extraChannels)
           unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, not (S.member c knownIds)]
-          slackWhitelist = decodeUtf8 $ AE.encode $ map channelJSON (channels <> extraChannels) <> unresolved
-          existingJSON = decodeUtf8 $ AE.encode $ V.toList existingChannels
+          slackWhitelist = encodeText $ map channelJSON (channels <> extraChannels) <> unresolved
+          existingJSON = encodeText $ V.toList existingChannels
           -- Enforcing a whitelist we couldn't fetch leaves the user unable to type
           -- anything at all; fall back to accepting a pasted channel id.
           enforce = [data_ "tagify-enforce-whitelist" "" | isNothing channelsError]
@@ -846,14 +846,14 @@ channelJSON x = AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.
 
 
 encodeChannels :: [BotUtils.Channel] -> Text
-encodeChannels = decodeUtf8 . AE.encode . map channelJSON
+encodeChannels = encodeText . map channelJSON
 
 
 -- | Tagify whitelists for the team modal: (members by user id, members by email).
 memberWhitelists :: V.Vector ProjectMembers.ProjectMemberVM -> (Text, Text)
 memberWhitelists projMembers =
-  ( decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-  , decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+  ( encodeText $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  , encodeText $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
   )
 
 
@@ -1567,7 +1567,7 @@ alertConfiguration cp =
 -- Main Modal Component
 teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Text -> Bool -> Html () -> Html ()
 teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList isInTeamView trigger = do
-  let encodeField f = decodeUtf8 $ AE.encode $ maybe [] f team
+  let encodeField f = encodeText $ maybe [] f team
       name = maybe "" (.name) team
       handle = maybe "" (.handle) team
       description = maybe "" (.description) team

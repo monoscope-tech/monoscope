@@ -149,7 +149,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
 
 -- $setup
@@ -1846,7 +1846,7 @@ numArrayColumn :: Text -> Text -> (r -> Maybe AE.Value) -> BulkCol r
 numArrayColumn nm elemTy proj = (column nm (joined . proj)){selectExpr = \_ a -> "string_to_array(" <> a <> ", chr(31))::" <> elemTy <> "[]"}
   where
     joined = \case
-      Just (AE.Array xs) | not (V.null xs) -> Just (T.intercalate "\x1f" (jsonText <$> V.toList xs))
+      Just (AE.Array xs) | not (V.null xs) -> Just (T.intercalate "\x1f" (encodeText <$> V.toList xs))
       _ -> Nothing
 
 
@@ -1866,7 +1866,7 @@ quantileColumn nm wantQuantiles proj = numArrayColumn nm "double precision" (fma
 -- assignment cast); on TimeFusion the bare text coerces to Variant (the
 -- VariantInsertRewriter fires on the SELECT projection).
 jsonColumn :: Text -> (r -> Maybe AE.Value) -> BulkCol r
-jsonColumn nm proj = (column nm (fmap (jsonText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
+jsonColumn nm proj = (column nm (fmap (encodeText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -2493,7 +2493,7 @@ identitySummary attrsM =
 
 
 encTrunc :: AE.ToJSON a => Int -> a -> T.Text
-encTrunc n x = let t = decodeUtf8 (AE.encode x) in if T.length t > n then T.take (n - 3) t <> "..." else t
+encTrunc n x = let t = encodeText x in if T.length t > n then T.take (n - 3) t <> "..." else t
 
 
 generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
@@ -2529,7 +2529,7 @@ generateLogSummary otel =
     bodyElt =
       bodyV >>= \case
         AE.String t -> Just t
-        AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
+        AE.Object obj -> Just $ fromMaybe (encodeText obj) (extractMessageFromLog (AE.Object obj))
         AE.Null -> Nothing
         v -> Just $ T.take 200 (show v)
 
@@ -2771,9 +2771,9 @@ metricSeriesId MetricRecord{projectId, metricName, metricType, metricUnit, resou
       , metricName
       , toText $ show metricType
       , metricUnit
-      , jsonText resource
-      , jsonText attributes
-      , jsonText instrumentationScope
+      , encodeText resource
+      , encodeText attributes
+      , encodeText instrumentationScope
       ]
 
 
@@ -2784,12 +2784,8 @@ metricId r@MetricRecord{metricTime, startTimestamp, metricValue} =
     , metricSeriesId r
     , toText $ iso8601Show metricTime
     , maybe "" (toText . iso8601Show) startTimestamp
-    , jsonText $ AE.toJSON metricValue
+    , encodeText $ AE.toJSON metricValue
     ]
-
-
-jsonText :: AE.Value -> Text
-jsonText = decodeUtf8 . AE.encode
 
 
 mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord

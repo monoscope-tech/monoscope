@@ -435,7 +435,7 @@ dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartC
       query = fromMaybe "" resp.query
       handleWidget = case resp.visualization of
         Just vizType -> do
-          let wType = Widget.mapChatTypeToWidgetType vizType
+          let wType = Widget.mapChartTypeToWidgetType vizType
               queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> Widget.mapWidgetTypeToChartType wType <> "&query=" <> toUriStr query
           imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (toText . iso8601Show <$> fromTimeM) (toText . iso8601Show <$> toTimeM)
           sendResponse $ buildChartContent userQuestion query queryUrl imageUrl

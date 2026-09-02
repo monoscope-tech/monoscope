@@ -105,7 +105,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -301,7 +301,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             -- when present); a second data_ attr would be (<>)-merged by Lucid.
             <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
-      constantsJson = decodeUtf8 $ AE.encode $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
+      constantsJson = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
   let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount)] do
@@ -632,7 +632,7 @@ queryRowsToText = map (map valueToText . V.toList) . V.toList
       AE.Number n -> show n
       AE.Bool b -> bool "false" "true" b
       AE.Null -> ""
-      v -> decodeUtf8 $ AE.encode v
+      v -> encodeText v
 
 
 -- Process a single dashboard variable recursively.
@@ -941,7 +941,7 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
     let grouped = HM.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]
         spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
         serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-        colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+        colorsJson = encodeText $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
         spansGrouped = HM.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
 
     pure
@@ -953,17 +953,15 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
 
 -- | Populate widgets with their alert statuses
 populateWidgetAlertStatuses :: DB es => [Widget.Widget] -> Eff es [Widget.Widget]
-populateWidgetAlertStatuses widgets = do
-  let widgetIds = V.fromList $ mapMaybe (.id) widgets
-  if V.null widgetIds
-    then pure widgets
-    else do
-      statuses <- Monitors.getWidgetAlertStatuses widgetIds
-      let statusMap = foldMap (\s -> one (s.widgetId, s)) statuses
+populateWidgetAlertStatuses widgets
+  | V.null widgetIds = pure widgets
+  | otherwise = do
+      statusMap <- foldMap (\s -> one (s.widgetId, s)) <$> Monitors.getWidgetAlertStatuses widgetIds
       pure $ map (applyAlertStatus statusMap) widgets
   where
+    widgetIds = V.fromList $ mapMaybe (.id) widgets
     applyAlertStatus statusMap w = fromMaybe w do
-      status <- (.id) w >>= (`Map.lookup` statusMap)
+      status <- w.id >>= (`Map.lookup` statusMap)
       pure
         w
           { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
@@ -974,9 +972,9 @@ populateWidgetAlertStatuses widgets = do
 
 
 populateWidgetPngUrls :: Log :> es => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
-populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w -> do
-  url <- Widget.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr
-  pure $ if T.null url then w else w{Widget.pngUrl = Just url}
+populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w ->
+  Widget.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr <&> \url ->
+    if T.null url then w else w{Widget.pngUrl = Just url}
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -1074,7 +1072,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM pid dashId Nothing
 
   let oldWidgets = case (tabSlugM, dash.tabs) of
-        (Just slug, Just tabs) -> foldMap (.widgets) $ find (\t -> slugify t.name == slug) tabs
+        (Just slug, Just tabs) -> foldMap ((.widgets) . snd) $ findTabBySlug tabs slug
         _ -> dash.widgets
       oldWidgetIds = mapMaybe (.id) oldWidgets
       newWidgetIds = Map.keys widgetOrder
@@ -1220,7 +1218,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
       stickySentinelId = widPrefix <> "-sticky-sentinel"
       stickyContainerId = widPrefix <> "-sticky-container"
-      widgetJSON = Widget.encodeText widgetToUse
+      widgetJSON = encodeText widgetToUse
       formAction = flip foldMap dashboardIdM \dashId ->
         let params = catMaybes [("widget_id=" <>) . maybeToMonoid . (.id) <$> existingWidgetM, ("tab=" <>) <$> tabSlugM]
          in "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> memptyIfFalse (not (null params)) ("?" <> T.intercalate "&" params)
@@ -1333,7 +1331,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
             , targetSpan = Nothing
             , query = widgetToUse.rawQuery <|> widgetToUse.query
             , vizType = Just $ case widgetToUse.wType of
-                Widget.WTTimeseries -> "timeseries"
                 Widget.WTTimeseriesLine -> "timeseries_line"
                 Widget.WTLogs -> "logs"
                 _ -> "timeseries"
@@ -1401,7 +1398,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
-      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
+      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
       Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
       -- Monitor Schedule section (shared component)
@@ -1635,7 +1632,7 @@ dashboardsGet_ dg = do
         div_ [class_ "flex items-end gap-2"] do
           div_ [class_ "flex w-full gap-2"] do
             formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
-            let teamList = Widget.encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+            let teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
             formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
             formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
           div_ [class_ "shrink"] $ primaryButton_ [type_ "submit"] "Create"
@@ -2142,7 +2139,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
           -- at — this used to always land on the first tab, so duplicating a widget on any
           -- other tab made the copy appear somewhere the user was not. Falling back to the
           -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
-          destinationTabM = (tabSlugM >>= \slug -> find (\t -> slugify t.name == slug) targetTabs) <|> viaNonEmpty head targetTabs
+          destinationTabM = (tabSlugM >>= fmap snd . findTabBySlug targetTabs) <|> viaNonEmpty head targetTabs
 
       Log.logTrace "Widget duplication"
         $ AE.object
@@ -2157,7 +2154,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
       syncDashboardAndQueuePush pid targetDashId
 
-      addWidgetJSON $ Widget.encodeText widgetCopy
+      addWidgetJSON $ encodeText widgetCopy
       addSuccessToast (maybe "Widget duplicated successfully" ("Widget copied to " <>) targetDashNameM) Nothing
       addRespHeaders widgetCopy
 

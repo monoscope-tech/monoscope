@@ -85,7 +85,7 @@ whatsappIncomingPostH val = do
 
       handleWidgetResponse now project query visualization fromTimeM toTimeM = case visualization of
         Just vizType -> do
-          let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+          let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChartTypeToWidgetType vizType
               iso = maybe "" (toText . iso8601Show)
               opts =
                 "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (iso fromTimeM) <> "&to=" <> toUriStr (iso toTimeM)

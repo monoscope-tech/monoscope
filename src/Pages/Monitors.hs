@@ -69,7 +69,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), checkFreeTierStatus, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -362,9 +362,9 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
   let defaultSeverity = fromMaybe "Error" severityM
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
-      teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
+      teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
       teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
-      existingTeams = decodeUtf8 $ AE.encode $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
+      existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
@@ -794,7 +794,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
         div_ [class_ "border border-strokeWeak rounded-lg max-md:p-2 p-3 h-48 md:h-80 overflow-hidden"] do
           Widget.widget_
             $ (def :: Widget)
-              { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
+              { Widget.wType = Widget.mapChartTypeToWidgetType alert.visualizationType
               , Widget.query = Just (rewriteBinAutoMins alert.timeWindowMins alert.logQuery)
               , Widget.title = Just "Query Results"
               , Widget.standalone = Just True

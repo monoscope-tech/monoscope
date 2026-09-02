@@ -67,7 +67,6 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -113,7 +112,7 @@ import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
 import UnliftIO.Exception (throwIO, try, tryAny)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatBytes, formatUTC, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -1282,10 +1281,6 @@ usd n = "$" <> toText (printf "%.2f" n :: String)
 -- | Requests past the 20M included in the paid plan (billed at $1 per 1M).
 overageReqs :: Int64 -> Int64
 overageReqs n = max 0 (n - 20_000_000)
-
-
-fmtDate :: FormatTime t => String -> t -> Text
-fmtDate f = toText . formatTime defaultTimeLocale f
 
 
 -- | Sticky table header cell: opaque background so scrolled rows can't show through.

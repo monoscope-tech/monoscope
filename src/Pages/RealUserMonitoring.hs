@@ -22,7 +22,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Fixed (mod')
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime)
+import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
@@ -43,20 +43,19 @@ import Pages.Containers (showFFloat')
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (DB)
 import Relude
-import Relude.Extra.Foldable1 (maximum1)
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (faSprite_)
+import Utils (faSprite_, fmtDate)
 
 
 data RumTab = Overview | Sessions | Performance
-  deriving stock (Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 data SessionFilter = AllSessionRows | ErrorSessionRows | ReplaySessionRows
-  deriving stock (Eq)
+  deriving stock (Bounded, Enum, Eq)
 
 
 renderBucket :: RumBucket -> Text
@@ -67,10 +66,7 @@ renderBucket = \case
 
 
 parseTab :: Maybe Text -> RumTab
-parseTab = \case
-  Just "sessions" -> Sessions
-  Just "performance" -> Performance
-  _ -> Overview
+parseTab tabM = fromMaybe Overview $ find ((== tabM) . Just . tabParam) [minBound .. maxBound]
 
 
 tabParam :: RumTab -> Text
@@ -85,10 +81,7 @@ tabLabel = T.toTitle . tabParam
 
 
 parseSessionFilter :: Maybe Text -> SessionFilter
-parseSessionFilter = \case
-  Just "errors" -> ErrorSessionRows
-  Just "replays" -> ReplaySessionRows
-  _ -> AllSessionRows
+parseSessionFilter paramM = fromMaybe AllSessionRows $ find ((== paramM) . sessionFilterParam) [minBound .. maxBound]
 
 
 sessionFilterParam :: SessionFilter -> Maybe Text
@@ -252,6 +245,12 @@ pageViewPredicate :: HI.Sql
 pageViewPredicate = [HI.sql|(name LIKE 'Pageview %' OR name = 'documentLoad')|]
 
 
+-- | What counts as a browser error. Shared for the same reason as 'pageViewPredicate': the
+-- summary, the trend, the error list and the per-session counts must agree.
+errorPredicate :: HI.Sql
+errorPredicate = [HI.sql|(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)|]
+
+
 -- | Services that actually emit browser telemetry in this window, busiest first. Deliberately
 -- not the project's whole service list: offering a backend service in a RUM picker scopes the
 -- page to something that can never have a page view, and the user cannot tell why it is empty.
@@ -282,7 +281,9 @@ rumSummary scope =
               <> pageViewPredicate
               <> [HI.sql|)::bigint,
               COUNT(DISTINCT NULLIF(COALESCE(attributes___user___id, attributes___user___email), ''))::bigint,
-              COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint
+              COUNT(*) FILTER (WHERE |]
+              <> errorPredicate
+              <> [HI.sql|)::bigint
             FROM otel_logs_and_spans
             WHERE |]
               <> browserScope scope
@@ -300,7 +301,9 @@ rumTrend scope bucket =
           COUNT(*) FILTER (WHERE |]
           <> pageViewPredicate
           <> [HI.sql|)::bigint,
-          COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint
+          COUNT(*) FILTER (WHERE |]
+          <> errorPredicate
+          <> [HI.sql|)::bigint
         FROM otel_logs_and_spans
         WHERE |]
           <> browserScope scope
@@ -346,8 +349,9 @@ rumErrors scope =
         FROM otel_logs_and_spans
         WHERE |]
           <> browserScope scope
-          <> [HI.sql| AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
-        ORDER BY timestamp DESC LIMIT 20|]
+          <> [HI.sql| AND |]
+          <> errorPredicate
+          <> [HI.sql| ORDER BY timestamp DESC LIMIT 20|]
       )
 
 
@@ -358,7 +362,9 @@ otelSessions scope =
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
-          COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::bigint,
+          COUNT(*) FILTER (WHERE |]
+          <> errorPredicate
+          <> [HI.sql|)::bigint,
           COUNT(*) FILTER (WHERE |]
           <> pageViewPredicate
           <> [HI.sql|)::bigint,
@@ -465,7 +471,7 @@ data RumLinks = RumLinks
 -- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
 data RumPanel = PanelServices | PanelPulse | PanelTrend | PanelPages | PanelVitals | PanelErrors | PanelSessions
-  deriving stock (Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 panelParam :: RumPanel -> Text
@@ -486,7 +492,7 @@ panelId panel = "rum-panel-" <> panelParam panel
 
 
 parsePanel :: Text -> Maybe RumPanel
-parsePanel value = find ((== value) . panelParam) [PanelServices, PanelPulse, PanelTrend, PanelPages, PanelVitals, PanelErrors, PanelSessions]
+parsePanel value = find ((== value) . panelParam) [minBound .. maxBound]
 
 
 data RumData = RumData
@@ -560,17 +566,18 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
   let tab = parseTab tabM
       panel = panelM >>= parsePanel
       sessionFilter = parseSessionFilter sessionFilterM
-      window = TimePicker.mkTimeWindow now fromM toM (sinceM <|> Just "24H")
+      since = sinceM <|> Just "24H"
+      window = TimePicker.mkTimeWindow now fromM toM since
       environment = session.environment
       -- An empty select option clears the filter, and "" is not a service name.
-      serviceFilter = serviceM >>= \value -> value <$ guard (not $ T.null value)
+      serviceFilter = find (not . T.null) serviceM
       scope = RumScope{useTf = appCtx.env.enableTimefusionReads, pid, fromTime = window.fromTime, toTime = window.toTime, environment, service = serviceFilter}
       links = RumLinks{pid, window, service = serviceFilter}
       bucket
         | diffUTCTime window.toTime window.fromTime <= 6 * 3600 = FiveMinutes
         | diffUTCTime window.toTime window.fromTime <= 3 * 86400 = OneHour
         | otherwise = SixHours
-      cacheKey query = RumCacheKey pid query environment serviceFilter fromM toM (sinceM <|> Just "24H")
+      cacheKey query = RumCacheKey pid query environment serviceFilter fromM toM since
       summaryQ = ("summary" :: Text, cacheKey SummaryQuery, SummaryResult <$> rumSummary scope)
       trendQ = ("activity" :: Text, cacheKey $ TrendQuery bucket, TrendResult <$> rumTrend scope bucket)
       pagesQ = ("pages" :: Text, cacheKey PagesQuery, PagesResult <$> rumPages scope)
@@ -581,7 +588,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       -- The picker is on every tab, so its options are read on every tab.
       -- Keyed unscoped, matching the query: the option list is the same whichever service is
       -- selected, so scoping the key would cache one identical list per service.
-      servicesQ = ("services" :: Text, RumCacheKey pid ServicesQuery environment Nothing fromM toM (sinceM <|> Just "24H"), ServicesResult <$> rumServices scope)
+      servicesQ = ("services" :: Text, RumCacheKey pid ServicesQuery environment Nothing fromM toM since, ServicesResult <$> rumServices scope)
       -- Only the requested panel's queries run. The skeleton request runs none at all, so the
       -- page chrome is free and each panel pays only for itself.
       --
@@ -612,15 +619,14 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
           window
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
     outcomes <- pooledForConcurrently panelQueries runQuery
-    let results = rights outcomes
-        degradedPanels = lefts outcomes
+    let (degradedPanels, results) = partitionEithers outcomes
         summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | SummaryResult value <- results]
         trend = fold [value | TrendResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
         sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
-    let services = fold [value | ServicesResult value <- results]
+        services = fold [value | ServicesResult value <- results]
     pure RumData{links, tab, panel, summary, trend, pages, errors, sessions, vitals, services, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
   let conf =
         bw
@@ -635,7 +641,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
 rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline items-center max-md:overflow-x-auto max-md:flex-nowrap", Aria.label_ "Real User Monitoring views", term "hx-preload" "mouseover"] do
-  forM_ [Overview, Sessions, Performance] \tab -> do
+  forM_ [minBound .. maxBound] \tab -> do
     let url = rumUrl links [("tab", tabParam tab)]
     a_
       ( [ href_ url
@@ -826,7 +832,7 @@ trendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak bg-bg
           legendDot "bg-fillError-strong" "Errors"
         span_ $ toHtml $ maybe "" (fmtDate "%d %b %H:%M" . (.bucket)) (viaNonEmpty last points)
   where
-    maxViews = max 1 $ fromMaybe 1 $ viaNonEmpty maximum1 $ map (.pageViews) points
+    maxViews = foldl' max 1 $ map (.pageViews) points
     legendDot colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-2 w-2 rounded-sm " <> colour, Aria.hidden_ "true"] "" >> toHtml label
 
 
@@ -860,9 +866,7 @@ vitalRow_ vital = div_ [class_ "px-3 py-3"] do
       strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> (ratingStyle vital.rating).textClass] $ toHtml $ formatVital vital
       span_ [class_ "text-xs text-textWeak"] $ toHtml $ show vital.samples <> " samples"
   div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> (ratingStyle vital.rating).label] do
-    ratingBand Good vital.rating
-    ratingBand NeedsImprovement vital.rating
-    ratingBand Poor vital.rating
+    forM_ [Good, NeedsImprovement, Poor] (`ratingBand` vital.rating)
 
 
 ratingBand :: VitalRating -> VitalRating -> Html ()
@@ -970,7 +974,7 @@ sessionTable_ workspace links sessions query sessionFilter =
         td_ [class_ "text-right"] do
           if session.hasReplay
             then a_ (sessionLinkAttrs session.id <> [class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"]) $ faSprite_ "circle-play" "regular" "h-4 w-4"
-            else a_ [href_ $ logsUrl links ("attributes.session.id == " <> kqlValue session.id), class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
+            else a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
   where
     sessionLinkAttrs sid =
       let url = sessionsUrl links query sessionFilter $ Just sid
@@ -995,11 +999,11 @@ replayWorkspace_ links = \case
       div_ [class_ "min-w-0"] do
         h2_ [class_ "truncate text-sm font-semibold text-textStrong"] $ toHtml $ sessionIdentity session
         p_ [class_ "mt-0.5 truncate font-mono text-xs text-textWeak"] $ toHtml session.id
-      a_ [href_ $ logsUrl links ("attributes.session.id == " <> kqlValue session.id), class_ "btn btn-sm gap-1.5"] do
+      a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-sm gap-1.5"] do
         faSprite_ "magnifying-glass-chart" "regular" "h-3.5 w-3.5"
         "Inspect telemetry"
     termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.pid.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
-  Just session -> replayPrompt_ "No recording for this session" "Open its correlated OpenTelemetry events to inspect navigation, network, and error spans." $ Just ("Inspect telemetry", logsUrl links ("attributes.session.id == " <> kqlValue session.id))
+  Just session -> replayPrompt_ "No recording for this session" "Open its correlated OpenTelemetry events to inspect navigation, network, and error spans." $ Just ("Inspect telemetry", sessionLogsUrl links session.id)
   Nothing -> replayPrompt_ "Select a session" "Choose a row with Replay to watch the user's experience beside its errors and OpenTelemetry context." Nothing
 
 
@@ -1062,10 +1066,6 @@ formatSessionDuration session
   | otherwise = show (floor (seconds / 3600) :: Int) <> "h " <> show (floor ((seconds `mod'` 3600) / 60) :: Int) <> "m"
   where
     seconds = realToFrac (diffUTCTime session.endedAt session.startedAt) :: Double
-
-
-fmtDate :: Text -> UTCTime -> Text
-fmtDate format = toText . formatTime defaultTimeLocale (toString format)
 
 
 formatMilliseconds :: Double -> Text
@@ -1131,6 +1131,11 @@ logsUrl links query =
     ("/p/" <> links.pid.toText <> "/log_explorer")
     [("query", query <> foldMap (\value -> " and resource.service.name == " <> kqlValue value) links.service)]
     links.window
+
+
+-- | Log Explorer link for one session's correlated events.
+sessionLogsUrl :: RumLinks -> Text -> Text
+sessionLogsUrl links sid = logsUrl links $ "attributes.session.id == " <> kqlValue sid
 
 
 sessionsUrl :: RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> Text

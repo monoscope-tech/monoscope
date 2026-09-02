@@ -64,7 +64,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
@@ -330,7 +330,7 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   monitors <- Monitors.queryMonitorsAll pid
   addRespHeaders
     $ maybe
-      (div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found")
+      (div_ [class_ "flex flex-col gap-2 text-2xl"] "Metric not found")
       (\metric -> metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
       metricM
 
@@ -400,11 +400,11 @@ exemplarList_ pid metricName = \case
             span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
             div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
               Components.dateTime x.point.timestamp Nothing
-              whenNotNull (words x.serviceName) \_ -> do
+              unless (T.null $ T.strip x.serviceName) do
                 span_ [class_ "text-textDisabled"] "•"
                 span_ $ toHtml x.serviceName
           div_ [class_ "flex shrink-0 items-center gap-3"] do
-            span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (show @Text x.point.value) <> toHtml (if x.metricUnit == "" then "" else " " <> x.metricUnit)
+            span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ exemplarValueText x
             faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
 
 
@@ -422,6 +422,11 @@ metricExemplarsGetH pid metricName fromM toM sinceM = do
 -- LIKE over raw metric rows, and TimeFusion is OOM-killed by unbounded reads.
 exemplarPageSize :: Int
 exemplarPageSize = 100
+
+
+-- | "123 ms"-style value, with the unit suffix omitted when the metric reports none.
+exemplarValueText :: Telemetry.MetricExemplar -> Text
+exemplarValueText x = show @Text x.point.value <> (if x.metricUnit == "" then "" else " " <> x.metricUnit)
 
 
 -- | The span/log detail panel's Metrics tab. Two tiers, in the order an on-call
@@ -469,7 +474,7 @@ relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = d
         ]
         do
           span_ [class_ "truncate text-textStrong"] $ toHtml x.metricName
-          span_ [class_ "shrink-0 text-textWeak"] $ toHtml (show @Text x.point.value) <> toHtml (if x.metricUnit == "" then "" else " " <> x.metricUnit)
+          span_ [class_ "shrink-0 text-textWeak"] $ toHtml $ exemplarValueText x
   section (if T.null service then "Service metrics" else "Metrics from " <> service) $ case serviceMetrics of
     [] -> hint $ if T.null service then "This record names no service, so there is nothing to scope metrics to." else "No metrics reported by " <> service <> "."
     ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
@@ -848,7 +853,6 @@ dataPointsPage pid metrics refCounts = do
                         a_
                           ( [ class_ "cursor-pointer font-medium text-textStrong hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
                             , href_ $ "/p/" <> pid.toText <> "/metrics?tab=datapoints&expand=" <> r.fullPath
-                            , [__|on keydown[key=='Enter'] halt the event then trigger click end|]
                             ]
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
@@ -1217,7 +1221,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                   , [__| on input show .span-filterble in #trace_span_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
                   ]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
-                div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ decodeUtf8 $ AE.encode $ (.spanId) <$> spanRecords] do
+                div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords] do
                   button_
                     [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer"
                     , Aria.label_ "Previous matching span"
@@ -1335,8 +1339,8 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           , "hasErrors" AE..= sp.hasErrors
           , "totalSpans" AE..= (1 :: Int)
           ]
-      spanJson = decodeUtf8 $ AE.encode $ spanMinToFlame <$> flattenTrees rootSpans
-      colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+      spanJson = encodeText $ spanMinToFlame <$> flattenTrees rootSpans
+      colorsJson = encodeText $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
       trId = traceItem.traceId
   script_
     [text|

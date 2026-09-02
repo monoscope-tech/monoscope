@@ -62,7 +62,6 @@ import Lucid.Base (TermRaw (termRaw), makeAttribute)
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -432,13 +431,14 @@ extractBreadcrumbs spans =
 
 -- | Icon id + tailwind colour class for a breadcrumb @type@.
 breadcrumbVisual :: Text -> (Text, Text)
-breadcrumbVisual t
-  | t == "click" = ("arrow-pointer", "text-fillBrand-strong")
-  | t `elem` ["navigation", "nav"] = ("globe", "text-fillSuccess-strong")
-  | t `elem` ["xhr", "fetch"] = ("wifi", "text-fillInformation-strong")
-  | t == "console.error" = ("terminal", "text-fillError-strong")
-  | t == "console.warn" = ("terminal", "text-fillWarning-strong")
-  | otherwise = ("terminal", "text-textWeak")
+breadcrumbVisual = \case
+  "click" -> ("arrow-pointer", "text-fillBrand-strong")
+  "console.error" -> ("terminal", "text-fillError-strong")
+  "console.warn" -> ("terminal", "text-fillWarning-strong")
+  t
+    | t `elem` ["navigation", "nav"] -> ("globe", "text-fillSuccess-strong")
+    | t `elem` ["xhr", "fetch"] -> ("wifi", "text-fillInformation-strong")
+    | otherwise -> ("terminal", "text-textWeak")
 
 
 -- | Compact selector / url summary from a breadcrumb's @data@ blob.
@@ -1181,14 +1181,15 @@ buildSystemPromptForIssue pid issue now = do
         pure (Just trData, V.fromList spans)
     buildAIContext iss errM trDataM spans alertContextM =
       unlines
-        $ catMaybes
-          [ Just "## Issue Details"
-          , Just $ "- **Title**: " <> iss.title
-          , Just $ "- **Type**: " <> show iss.issueType
-          , Just $ "- **Severity**: " <> display iss.severity
-          , Just $ "- **Service**: " <> Issues.serviceLabel iss.service
-          , Just $ "- **Recommended Action**: " <> iss.recommendedAction
-          , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
+        $ [ "## Issue Details"
+          , "- **Title**: " <> iss.title
+          , "- **Type**: " <> show iss.issueType
+          , "- **Severity**: " <> display iss.severity
+          , "- **Service**: " <> Issues.serviceLabel iss.service
+          , "- **Recommended Action**: " <> iss.recommendedAction
+          ]
+        <> catMaybes
+          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM <&> \err ->
               unlines
                 [ ""
@@ -1203,25 +1204,21 @@ buildSystemPromptForIssue pid issue now = do
                 , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
                 , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
                 ]
-          , trDataM >>= \tr ->
-              Just
-                $ unlines
-                  [ ""
-                  , "## Trace Context"
-                  , "- **Trace ID**: " <> tr.traceId
-                  , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-                  , "- **Span Count**: " <> show (V.length spans)
-                  ]
-          , if V.null spans
-              then Nothing
-              else
-                Just
-                  $ unlines
-                    [ ""
-                    , "## Span Breakdown"
-                    , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                        "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                    ]
+          , trDataM <&> \tr ->
+              unlines
+                [ ""
+                , "## Trace Context"
+                , "- **Trace ID**: " <> tr.traceId
+                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
+                , "- **Span Count**: " <> show (V.length spans)
+                ]
+          , guard (not $ V.null spans)
+              $> unlines
+                [ ""
+                , "## Span Breakdown"
+                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
+                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
+                ]
           ]
     formatCompleteAlertContext alertData monitorM metricsData =
       unlines
@@ -1260,7 +1257,7 @@ buildSystemPromptForIssue pid issue now = do
           , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
           ]
     formatQueryResults md =
-      let timestampIdx = V.findIndex (== "timestamp") md.headers
+      let timestampIdx = V.elemIndex "timestamp" md.headers
           formatRow = V.imap \idx -> \case
             Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
             Just val -> show val
@@ -1297,7 +1294,7 @@ buildSystemPromptForIssue pid issue now = do
               <> ": "
               <> T.intercalate ", " (map (\fv -> fv.value <> " (" <> show fv.count <> ")") $ take 10 values)
               <> bool "" ", ..." (length values > 10)
-          topFields = take 30 $ sortOn (\(_, vs) -> negate $ sum $ map (.count) vs) $ HM.toList facetMap
+          topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
        in unlines
             $ "Available telemetry fields (top values by frequency):"
             : map formatField topFields
@@ -1468,14 +1465,10 @@ anomalyListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> Maybe Endpoints.EndpointId
-  -> Maybe Text
   -> [Text]
   -> [Text]
-  -> Maybe Text
-  -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _endpointM periodM serviceFilters typeFilters _hxRequestM _hxBoostedM = do
+anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (_, project, bw) <- mkPageCtx pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
@@ -1509,7 +1502,7 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
           }
       serviceMenu = multiSelectFilter "Service" "service" serviceFilters availableServices
       typeMenu = multiSelectFilter "Type" "type" typeFilters availableTypes
-      issuesVM = V.fromList $ map (IssueVM False currTime filterV) issues
+      issuesVM = V.fromList $ map (IssueVM currTime filterV) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -1622,7 +1615,7 @@ instance ToHtml AnomalyListGet where
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
-issueRowAttrs (IssueVM _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
+issueRowAttrs (IssueVM _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
   where
     (bg, sty) = case display issue.base.severity of
       "critical" -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
@@ -1631,7 +1624,7 @@ issueRowAttrs (IssueVM _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker "
 
 
 issueRowId :: IssueVM -> Text
-issueRowId (IssueVM _ _ _ issue) = issue.base.id.toText
+issueRowId (IssueVM _ _ issue) = issue.base.id.toText
 
 
 -- | (icon, colorClass, tooltip) — uses shape+color so status isn't color-only
@@ -1643,7 +1636,7 @@ anomalyStatusIndicator False False "warning" = ("triangle-alert", "text-fillWarn
 anomalyStatusIndicator False False _ = ("circle-alert", "text-textWeak", "Active")
 
 
-data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
+data IssueVM = IssueVM UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
@@ -1657,9 +1650,8 @@ issueColumns pid period toggleM =
 
 
 renderIssueEventsCol :: IssueVM -> Html ()
-renderIssueEventsCol (IssueVM isWidget _ _ issue) =
-  unless isWidget
-    $ span_ [class_ $ "tabular-nums font-medium text-sm " <> countStyle issue.eventCount]
+renderIssueEventsCol (IssueVM _ _ issue) =
+  span_ [class_ $ "tabular-nums font-medium text-sm " <> countStyle issue.eventCount]
     $ toHtml
     $ formatWithCommas (fromIntegral issue.eventCount)
   where
@@ -1670,12 +1662,12 @@ renderIssueEventsCol (IssueVM isWidget _ _ issue) =
 
 
 renderIssueDateCol :: IssueVM -> Html ()
-renderIssueDateCol (IssueVM _ currTime _ issue) =
+renderIssueDateCol (IssueVM currTime _ issue) =
   span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.base.createdAt
 
 
 renderIssueChartCol :: IssueVM -> Html ()
-renderIssueChartCol (IssueVM _ _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
+renderIssueChartCol (IssueVM _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()
@@ -1729,7 +1721,7 @@ renderWithPlaceholders_ = mconcat . intersperse (span_ [class_ "text-textWeak op
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
-renderIssueMainCol pid (IssueVM _ currTime period issue) = do
+renderIssueMainCol pid (IssueVM currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt

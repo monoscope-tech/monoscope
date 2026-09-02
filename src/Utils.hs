@@ -17,6 +17,8 @@ module Utils (
   lookupValueText,
   formatUTC,
   formatUTCMicros,
+  fmtDate,
+  encodeText,
   insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
@@ -102,7 +104,7 @@ import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (formatTime)
+import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
@@ -482,7 +484,7 @@ jsonValueToHtmlTree val pathM = do
             faSprite_ "download-f" "regular" "w-2 h-2"
       jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
-    json = decodeUtf8 $ AE.encode $ AE.toJSON val
+    json = encodeText val
     hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toAscList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, AEK.toText kk, vv)))
@@ -598,6 +600,16 @@ formatUTC = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ"
 -- | ISO-8601 with fixed 6-digit (microsecond) fractional seconds.
 formatUTCMicros :: UTCTime -> Text
 formatUTCMicros = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ"
+
+
+-- | Format any time value with a strftime-style pattern.
+fmtDate :: FormatTime t => String -> t -> Text
+fmtDate f = toText . formatTime defaultTimeLocale f
+
+
+-- | Encode a value as JSON Text (data attributes, widget JSON, etc.)
+encodeText :: AE.ToJSON a => a -> Text
+encodeText = decodeUtf8 . AE.encode
 
 
 data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
@@ -818,7 +830,7 @@ instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
 
 instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
   toUrlPiece (JSONHttpApiData a) =
-    let t = decodeUtf8 (AE.encode a)
+    let t = encodeText a
      in fromMaybe t $ T.stripSuffix "\"" =<< T.stripPrefix "\"" t
 
 

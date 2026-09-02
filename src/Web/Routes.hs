@@ -145,7 +145,6 @@ type QPT a = QueryParam a Text
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
 type QPD a = QueryParam a PageDirection
-type QEID a = QueryParam a Endpoints.EndpointId
 type QPUUId a = QueryParam a UUID.UUID
 
 
@@ -595,7 +594,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
+  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))

@@ -606,19 +606,19 @@ setAckState pid iids ackM
   -- UPDATE therefore 500'd. Keep the newest selected recurrence actionable and
   -- archive competing selected or already-open rows before reopening it.
   | Nothing <- ackM = do
-      void
-        $ Hasql.interpExecute
-          [HI.sql|
-          WITH selected AS (
-            SELECT id, project_id, target_hash, issue_type, updated_at
-            FROM apis.issues
-            WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
-          ), keepers AS (
+      let keepers =
+            [HI.sql|
+          WITH keepers AS (
             SELECT DISTINCT ON (project_id, target_hash, issue_type)
                    id, project_id, target_hash, issue_type
-            FROM selected
+            FROM apis.issues
+            WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
             ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
-          )
+          )|]
+      void
+        $ Hasql.interpExecute
+          ( keepers
+              <> [HI.sql|
           UPDATE apis.issues i
           SET archived_at = app_now(), updated_at = app_now()
           FROM keepers k
@@ -628,22 +628,16 @@ setAckState pid iids ackM
             AND i.id <> k.id
             AND (i.id = ANY(#{iids}::uuid[])
                  OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
-      Hasql.interpExecute
-        [HI.sql|
-          WITH selected AS (
-            SELECT id, project_id, target_hash, issue_type, updated_at
-            FROM apis.issues
-            WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
-          ), keepers AS (
-            SELECT DISTINCT ON (project_id, target_hash, issue_type) id
-            FROM selected
-            ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
           )
+      Hasql.interpExecute
+        ( keepers
+            <> [HI.sql|
           UPDATE apis.issues i
           SET acknowledged_at = NULL, acknowledged_by = NULL,
               acknowledged_until = NULL, archived_at = NULL, updated_at = app_now()
           FROM keepers k
           WHERE i.id = k.id |]
+        )
   | otherwise =
       Hasql.interpExecute
         [HI.sql|
@@ -662,9 +656,8 @@ expireAcks :: DB es => UTCTime -> Eff es [IssueId]
 expireAcks now = do
   -- Expired recurrences can share a signal key. Archive all but the newest before
   -- reopening it, or the open-issue partial index rejects the whole expiry sweep.
-  void
-    $ Hasql.interpExecute
-      [HI.sql|
+  let expiredKeepers =
+        [HI.sql|
       WITH expired AS (
         SELECT id, project_id, target_hash, issue_type, updated_at
         FROM apis.issues
@@ -675,7 +668,11 @@ expireAcks now = do
                id, project_id, target_hash, issue_type
         FROM expired
         ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
-      )
+      )|]
+  void
+    $ Hasql.interpExecute
+      ( expiredKeepers
+          <> [HI.sql|
       UPDATE apis.issues i
       SET archived_at = #{Just now}, updated_at = #{now}
       FROM keepers k
@@ -685,20 +682,20 @@ expireAcks now = do
         AND i.id <> k.id
         AND (i.id IN (SELECT id FROM expired)
              OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
+      )
+  -- The losers are archived above, so re-deriving keepers here yields exactly the
+  -- rows that must be reopened.
   HI.getOneColumn
     <<$>> Hasql.interp
-      [HI.sql|
-        UPDATE apis.issues
+      ( expiredKeepers
+          <> [HI.sql|
+        UPDATE apis.issues i
         SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL,
             archived_at = NULL, updated_at = #{now}
-        WHERE id IN (
-          SELECT DISTINCT ON (project_id, target_hash, issue_type) id
-          FROM apis.issues
-          WHERE acknowledged_at IS NOT NULL AND archived_at IS NULL
-            AND acknowledged_until <= #{now}
-          ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
-        )
-        RETURNING id |]
+        FROM keepers k
+        WHERE i.id = k.id
+        RETURNING i.id |]
+      )
 
 
 -- | True if a live acknowledgement for this (project, target, type) is still
