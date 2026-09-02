@@ -461,7 +461,12 @@ runServer appLogger env tp = do
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
         , guard (not consumerOnly && env.config.enableOtlpGrpcService) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , -- TWO identical ingest consumers per node, on purpose (commit 4ee5350a, "Extra
+          -- kafka processor fiber per node"): they join the same consumer group, so the
+          -- broker splits the partitions between them and the node gets a second
+          -- independent poll/decode/insert pipeline. Not a copy-paste — deleting either
+          -- line halves this node's ingest throughput.
+          guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , -- Small batch: DLQ replay is a retry carousel, not steady-state ingest;
           -- a poison-heavy batch should not stall a large offset window.

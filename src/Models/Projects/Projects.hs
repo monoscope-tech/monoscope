@@ -18,6 +18,7 @@ module Models.Projects.Projects (
   ProjectS3Bucket (..),
   insertProject,
   projectIdFromText,
+  demoProjectId,
   usersByProjectId,
   usersByIds,
   selectProjectsForUser,
@@ -257,6 +258,14 @@ type ProjectId = UUIDId "project"
 
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
+
+
+-- | The public demo project. World-readable by design, and the id the auth layers
+-- special-case: the nil UUID. Spelled once so the web bypass ('Web.Auth.sessionByID'),
+-- the API bypass ('Web.Auth.apiKeyAuthHandler'), the write guard
+-- ('Utils.isDemoAndNotSudo') and 'sessionAndProject' below cannot drift apart.
+demoProjectId :: ProjectId
+demoProjectId = UUIDId UUID.nil
 
 
 data Project = Project
@@ -1492,7 +1501,7 @@ sessionAndProject pid = do
     Just p | not (isOnboarding p.paymentPlan) -> pure (sess, p)
     Just _ -> fetch
     Nothing
-      | pid == UUIDId UUID.nil || sess.user.isSudo -> fetch
+      | pid == demoProjectId || sess.user.isSudo -> fetch
       | otherwise -> redirect
 
 

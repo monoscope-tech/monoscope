@@ -32,6 +32,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (ToJSON)
+import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
@@ -49,12 +50,10 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (
   Eff,
-  Effect,
   IOE,
   runEff,
   type (:>),
  )
-import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (ask, asks)
@@ -80,7 +79,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import Utils (escapedQueryPartial)
+import Utils (escapedQueryPartial, hostPath)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
@@ -90,19 +89,32 @@ import "base64" Data.ByteString.Base64 qualified as B64
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
 
 
-validateBasicAuth :: EnvConfig -> ByteString -> Maybe (Text, Text)
+-- | The one 401 that asks a client for basic-auth credentials. Written once so the
+-- four places that reject an unauthenticated request under @BASIC_AUTH_ENABLED@
+-- cannot drift into serving a redirect (or a different realm) from one of them.
+basicAuthChallenge :: ServerError
+basicAuthChallenge = err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+
+
+-- | Drop the @Bearer @ scheme from an @Authorization@ value, if present.
+--
+-- >>> stripBearer "Bearer abc" == "abc" && stripBearer "abc" == "abc"
+-- True
+stripBearer :: Text -> Text
+stripBearer t = fromMaybe t (T.stripPrefix "Bearer " t)
+
+
+-- | The configured basic-auth user, if the header carries its credentials.
+-- Compared with 'BA.constEq' so a wrong password cannot be narrowed down by
+-- timing the response.
+validateBasicAuth :: EnvConfig -> ByteString -> Maybe Text
 validateBasicAuth config authHeader = do
-  let prefix = "Basic "
-  let authHeaderText = decodeUtf8 authHeader
-  stripped <- T.stripPrefix prefix authHeaderText
-  let decoded = B64.decodeBase64Lenient (encodeUtf8 stripped)
-  let decodedText = decodeUtf8 decoded
-  case T.splitOn ":" decodedText of
-    [username, password] ->
-      if username == config.basicAuthUsername && password == config.basicAuthPassword
-        then Just (username, password)
-        else Nothing
+  stripped <- T.stripPrefix "Basic " (decodeUtf8 authHeader)
+  case T.splitOn ":" (decodeUtf8 $ B64.decodeBase64Lenient (encodeUtf8 stripped)) of
+    [username, password] -> username <$ guard (eq username config.basicAuthUsername && eq password config.basicAuthPassword)
     _ -> Nothing
+  where
+    eq a b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
 
 authHandler :: Logger -> AuthContext -> APItoolkitAuthContext
@@ -123,33 +135,28 @@ authHandler logger env =
         then do
           let authHeader = L.lookup hAuthorization $ requestHeaders req
           case authHeader >>= validateBasicAuth env.config of
-            Just (username, _password) -> do
+            Just username -> do
               -- Basic auth successful, create a session for the basic auth user
-              let isSidebarClosed = sidebarClosedFromCookie $ getCookies req
-              let theme = themeFromCookie $ getCookies req
-              let lang = I18n.languageFromCookies $ getCookies req
+              let cookies = getCookies req
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme lang (envFromCookie $ getCookies req) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
-              let cookies = getCookies req
-              mbPersistentSessionId <- handlerToEff $ getSessionId cookies
-              mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
+              mbPersistentSession <- join <$> mapM Projects.getPersistentSession (getSessionId (getCookies req))
               case mbPersistentSession of
-                Just _ -> do
-                  -- We have a valid cookie session, proceed normally
-                  proceedWithCookieAuth req env.config.basicAuthEnabled
-                Nothing -> do
-                  -- No valid session and basic auth is enabled - return 401
-                  throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+                -- We have a valid cookie session, proceed normally
+                Just _ -> proceedWithCookieAuth req
+                -- No valid session and basic auth is enabled - return 401
+                Nothing -> throwError basicAuthChallenge
         else
           -- Basic auth not enabled, use normal cookie auth
-          proceedWithCookieAuth req env.config.basicAuthEnabled
+          proceedWithCookieAuth req
 
-    proceedWithCookieAuth req basicAuthEnabledFlag = do
+    proceedWithCookieAuth :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+    proceedWithCookieAuth req = do
       -- Check for Bearer session token (used by CLI device auth flow)
       let mbBearerSessionId = do
             authH <- L.lookup hAuthorization $ requestHeaders req
@@ -157,13 +164,8 @@ authHandler logger env =
             uuid <- UUID.fromText token
             pure $ Projects.PersistentSessionId uuid
       let cookies = getCookies req
-      mbCookieSessionId <- handlerToEff $ getSessionId cookies
-      let mbPersistentSessionId = mbBearerSessionId <|> mbCookieSessionId
-      let isSidebarClosed = sidebarClosedFromCookie cookies
-      let theme = themeFromCookie cookies
-      let lang = I18n.languageFromCookies cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (envFromCookie cookies) (Just $ getRequestUrl req) (challengeFor basicAuthEnabledFlag (requestHeaders req))
+      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
 
 
 -- | How to tell an unauthenticated request to authenticate.
@@ -224,7 +226,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
     _ -> do
       case url of
         Just u -> do
-          if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
+          if any (\prefix -> T.isInfixOf (prefix <> Projects.demoProjectId.toText) (decodeUtf8 u)) ["/p/", "pid="]
             then do
               mbPess <- demoGuestSession
               let mU = mbPess <&> (.user.getUser)
@@ -242,7 +244,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environme
     -- a URL missing everything after the first parameter.
     loginUrl path = path <> "?redirect_to=" <> decodeUtf8 (urlEncode True (fromMaybe "" url))
     unauthenticated path = case challenge of
-      ChallengeBasic -> err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+      ChallengeBasic -> basicAuthChallenge
       ChallengeRedirect -> err302{errHeaders = [("Location", encodeUtf8 (loginUrl path))]}
       ChallengeHtmx -> err401{errHeaders = [("HX-Redirect", encodeUtf8 (loginUrl path))]}
       ChallengeJson ->
@@ -316,32 +318,14 @@ envFromCookie cookies = do
 
 
 themeFromCookie :: Cookies -> Text
-themeFromCookie cookies = case L.lookup "theme" cookies of
-  Just "dark" -> "dark"
-  Just "light" -> "light"
-  Just _ -> "dark"
-  Nothing -> "dark"
+themeFromCookie cookies = if L.lookup "theme" cookies == Just "light" then "light" else "dark"
 
 
-getSessionId :: Cookies -> Handler (Maybe Projects.PersistentSessionId)
-getSessionId cookies = pure $ Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
+getSessionId :: Cookies -> Maybe Projects.PersistentSessionId
+getSessionId cookies = Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
 
 
-handlerToEff
-  :: forall (es :: [Effect]) (a :: Type)
-   . Error ServerError :> es
-  => Handler a
-  -> Eff es a
-handlerToEff handler = do
-  v <- unsafeEff_ $ Servant.runHandler handler
-  either throwError pure v
-
-
-effToHandler
-  :: forall (a :: Type)
-   . ()
-  => Eff '[Error ServerError, IOE] a
-  -> Handler a
+effToHandler :: Eff '[Error ServerError, IOE] a -> Handler a
 effToHandler computation = do
   v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
   either T.throwError pure v
@@ -352,7 +336,7 @@ type ApiKeyAuthContext = AuthHandler Request Projects.ProjectId
 
 resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 resolveApiKeyProject bearerToken =
-  ProjectApiKeys.getProjectIdByApiKey (T.replace "Bearer " "" bearerToken)
+  ProjectApiKeys.getProjectIdByApiKey (stripBearer bearerToken)
 
 
 apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
@@ -369,7 +353,7 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & runEff
   -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
   case mbHeaderPid of
-    Just pid | pid.toText == "00000000-0000-0000-0000-000000000000" -> pure pid
+    Just pid | pid == Projects.demoProjectId -> pure pid
     _ -> case mbAuth of
       Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
       Just token -> do
@@ -378,7 +362,7 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           Just pid -> pure pid
           Nothing -> do
             -- Fallback for CLI clients that authenticate with session token + X-Project-Id
-            let rawToken = T.replace "Bearer " "" token
+            let rawToken = stripBearer token
                 mbSessionId = Projects.PersistentSessionId <$> UUID.fromText rawToken
             case (mbSessionId, mbHeaderPid) of
               (Just sessId, Just pid) -> do
@@ -413,7 +397,7 @@ loginRedirectH redirectToM = do
   envCfg <- asks env
   -- If basic auth is enabled, return 401 instead of redirecting to /login
   if envCfg.basicAuthEnabled
-    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+    then throwError basicAuthChallenge
     else do
       let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
       pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
@@ -433,7 +417,7 @@ loginH redirectToM screenHintM loginHintM = do
   envCfg <- asks env
   -- If basic auth is enabled, return 401 instead of redirecting to OAuth
   if envCfg.basicAuthEnabled
-    then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
+    then throwError basicAuthChallenge
     else do
       stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
       let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
@@ -564,7 +548,7 @@ clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
 clientMetadataH Nothing = throwError err401
 clientMetadataH (Just authTextB64) = do
   appCtx <- ask @AuthContext
-  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
+  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ stripBearer authTextB64)
   case authTextE of
     Left err -> Logging.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
     Right authText -> do
@@ -618,7 +602,7 @@ deviceCodeH = do
   rowId <- liftIO UUIDV4.nextRandom
   now <- currentTime
   let expiresAt = addUTCTime 300 now
-      verificationUri = T.dropWhileEnd (== '/') envCfg.hostUrl <> "/device?code=" <> userCode
+      verificationUri = hostPath envCfg.hostUrl ("device?code=" <> userCode)
   void
     $ EHasql.interpExecute
       [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (#{rowId}, #{deviceCode}, #{userCode}, #{expiresAt}) |]
