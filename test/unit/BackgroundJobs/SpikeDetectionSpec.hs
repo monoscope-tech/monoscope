@@ -1,6 +1,6 @@
 module BackgroundJobs.SpikeDetectionSpec (spec) where
 
-import BackgroundJobs (aboveVolumeFloor, detectSpikeOrDrop, dropMinBaselineRate, isAlertableLogLevel, spikeMinAbsoluteDelta, spikeMinBaselineRate, spikeZScoreThreshold)
+import BackgroundJobs (aboveVolumeFloor, detectSpikeOrDrop, dropMinBaselineRate, isAlertableLogLevel, isIssueWorthy, spikeMinAbsoluteDelta, spikeMinBaselineRate, spikeZScoreThreshold)
 import Models.Apis.Issues (RateChangeDirection (..), SpikeResult (..))
 import Relude
 import Test.Hspec
@@ -83,3 +83,20 @@ spec = describe "detectSpikeOrDrop" do
 
     it "rejects empty string" do
       isAlertableLogLevel (Just "") `shouldBe` False
+
+
+  -- The new-pattern path (isIssueWorthy) and the rate-change path (isAlertableLogLevel)
+  -- must agree on which levels are alertable: they had drifted, so a pattern with
+  -- logLevel "fatal" fired rate-change alerts but never opened a new-pattern issue.
+  describe "isIssueWorthy" do
+    it "isIssueWorthy_levelGate_mirrorsIsAlertableLogLevel" do
+      let levels = [Just "ERROR", Just "error", Just "Warn", Just "warning", Just "FATAL", Just "critical", Just "INFO", Just "debug", Just "", Nothing]
+      map (\l -> isIssueWorthy l "plain message") levels `shouldBe` map isAlertableLogLevel levels
+
+    it "opens an issue for an error status badge even when the level is absent" do
+      isIssueWorthy Nothing "status_code;badge-5xx" `shouldBe` True
+      isIssueWorthy Nothing "status_code;badge-4xx" `shouldBe` True
+      isIssueWorthy Nothing "status;badge-error⇒ERROR" `shouldBe` True
+
+    it "ignores an unremarkable pattern with no level" do
+      isIssueWorthy Nothing "user logged in" `shouldBe` False
