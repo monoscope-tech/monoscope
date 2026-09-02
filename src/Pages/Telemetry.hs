@@ -64,7 +64,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
@@ -824,6 +824,9 @@ dataPointsPage pid metrics refCounts = do
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
       rows = flattenMetricTree dataMap tree 0 []
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] do
+    -- Four icons, once each, instead of once per row: this table renders ~540 rows and the
+    -- per-row copies were 886 KB of the 5.1 MB document.
+    faSymbolDefs_ [("chevron-right", "regular"), ("grid", "regular"), ("chart-line", "regular"), ("bell", "regular")]
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" False Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
@@ -847,7 +850,7 @@ dataPointsPage pid metrics refCounts = do
                     div_ [class_ "w-10 shrink-0"]
                       $ when r.isGroup
                       $ div_ [class_ "w-full border border-strokeWeak flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
-                        faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
+                        faUse_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
                         span_ [class_ "text-xs"] $ toHtml $ show r.childCount
                     whenJust r.parentPath \p -> span_ [class_ "text-textDisabled"] $ toHtml $ p <> "."
                     case r.metric of
@@ -868,9 +871,9 @@ dataPointsPage pid metrics refCounts = do
                 ( \r -> whenJust r.metric \_ -> do
                     let (d, w, a) = fromMaybe (0, 0, 0) $ Map.lookup r.fullPath refCounts
                     div_ [class_ "flex gap-2 items-center text-xs"] do
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faSprite_ "grid" "regular" "w-3 h-3"; toHtml $ show d
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faSprite_ "chart-line" "regular" "w-3 h-3"; toHtml $ show w
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Monitors"] do faSprite_ "bell" "regular" "w-3 h-3"; toHtml $ show a
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faUse_ "grid" "regular" "w-3 h-3"; toHtml $ show d
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faUse_ "chart-line" "regular" "w-3 h-3"; toHtml $ show w
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Monitors"] do faUse_ "bell" "regular" "w-3 h-3"; toHtml $ show a
                 )
                 & Table.withAttrs [class_ "w-40"]
             ]

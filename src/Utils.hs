@@ -6,6 +6,8 @@ module Utils (
   parseTime,
   DBField (..),
   faSprite_,
+  faSymbolDefs_,
+  faUse_,
   LoadingSize (..),
   LoadingType (..),
   loadingIndicator_,
@@ -357,6 +359,40 @@ faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
       , term "width" "1em"
       , term "height" "1em"
       ]
+
+
+-- | Emit each icon once as a @\<symbol\>@, for pages that repeat the same few icons per row.
+--
+-- 'faSprite_' inlines an icon's paths at every call site, which is right for a page that shows
+-- an icon once or twice and wrong for a table: the metrics datapoints tab renders three badge
+-- icons per row over ~540 rows and spends 886 KB — 17% of a 5.1 MB document — on 1,912 copies
+-- of seventeen kilobytes of unique path data. Pair this with 'faUse_': define once near the
+-- top of the page, reference per row.
+--
+-- Same-document @\<use\>@, not the sprite file: a reference into another document renders in a
+-- shadow tree the page's CSS cannot reach, which is what @.icon { fill: currentColor }@ needs.
+-- The @\<g\>@ carrying the symbol's own presentation attributes is kept inside the symbol for
+-- the same reason it is kept inside the @\<svg\>@ in 'faSprite_'.
+faSymbolDefs_ :: Monad m => [(Text, Text)] -> HtmlT m ()
+faSymbolDefs_ icons =
+  svg_ [term "aria-hidden" "true", style_ "display:none"]
+    $ forM_ icons \(name, faType) ->
+      whenJust (Icons.lookupIcon faType name) \icon ->
+        term "symbol" [id_ (faSymbolId name faType), term "viewBox" icon.viewBox]
+          $ Svg.g_ (map (uncurry term) icon.attributes)
+          $ toHtmlRaw icon.body
+
+
+-- | Reference an icon defined by 'faSymbolDefs_'. Same attributes 'faSprite_' emits, so the
+-- two are interchangeable at a call site as long as the icon was defined on the page.
+faUse_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
+faUse_ name faType classes =
+  svg_ [class_ $ "icon " <> classes, term "width" "1em", term "height" "1em"]
+    $ term "use" [term "href" ("#" <> faSymbolId name faType)] pass
+
+
+faSymbolId :: Text -> Text -> Text
+faSymbolId name faType = "fa-" <> faType <> "-" <> name
 
 
 -- | Type-safe loading indicator size
