@@ -141,7 +141,7 @@ timepicker_ submitForm currentRange targetIdM = do
     , style_ $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
     , onclick_ "event.stopPropagation()"
-    , class_ "flex min-h-9 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
+    , class_ "flex min-h-8 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
     , data_ "live-range" $ bool "false" "true" isLive
     ]
     do
@@ -152,7 +152,7 @@ timepicker_ submitForm currentRange targetIdM = do
       span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-  div_ [class_ "relative w-max"] do
+  div_ [class_ "contents"] do
     div_
       [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgRaised shadow-lg"
       , term "popover" "manual"
@@ -320,7 +320,7 @@ refreshOptions =
 refreshButton_ :: Html ()
 refreshButton_ =
   div_
-    [ class_ "join min-h-9"
+    [ class_ "join min-h-8"
     , data_ "time-transport" ""
     , -- Guarded: the web-components bundle is deferred, so this hook can fire
       -- before `window.initTimeTransport` is assigned. main.ts adopts any
@@ -353,7 +353,7 @@ refreshButton_ =
     transportBtn label extraClass attrs =
       button_
         $ [ type_ "button"
-          , class_ $ "btn btn-sm join-item min-h-9 border-strokeWeak bg-bgBase px-2 shadow-xs" <> extraClass
+          , class_ $ "btn btn-sm join-item min-h-8 border-strokeWeak bg-bgBase px-2 shadow-xs" <> extraClass
           , Aria.label_ label
           , data_ "tippy-content" label
           ]

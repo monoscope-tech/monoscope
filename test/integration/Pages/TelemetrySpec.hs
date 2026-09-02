@@ -1,5 +1,6 @@
 module Pages.TelemetrySpec (spec) where
 
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (UTCTime, addUTCTime)
@@ -13,11 +14,13 @@ import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Lucid qualified
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Telemetry (metricDetailUrl, metricExpandUrl)
 import Pages.Telemetry qualified as Trace
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Relude
+import System.Config (AuthContext (metricCatalogBuffer))
 import Test.Hspec
 
 
@@ -35,6 +38,104 @@ spec = do
     it "shares an expanded chart through the metrics overview" do
       metricExpandUrl testPid "container.cpu.time" "accounting" (Just "attributes.service.name")
         `shouldBe` "/p/" <> testPid.toText <> "/metrics?tab=charts&metric_source=accounting&expand=container.cpu.time&label=attributes.service.name"
+
+  around withTestResources $ describe "metric datapoints" do
+    it "datapointToolbar_usesOnlySharedDrawer" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "datapoint-window-key"
+      ingestMetric tr apiKey [] [] "datapoint.current" 1 frozenTime
+      ingestMetric tr apiKey [] [] "datapoint.stale" 1 (addUTCTime (-7200) frozenTime)
+      runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
+
+      (_, overview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      case overview of
+        Trace.MetricsOVDataPointMain (PageCtx _ (_, datapoints, _, countUrl, page, pageUrl)) -> do
+          countUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics/datapoints/counts?since=1H"
+          page `shouldBe` 0
+          pageUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics?tab=datapoints&since=1H"
+          let counts = Map.fromList [(m.metricName, m.dataPointsCount) | m <- V.toList datapoints]
+          Map.lookup "datapoint.current" counts `shouldBe` Just Nothing
+          Map.lookup "datapoint.stale" counts `shouldBe` Just Nothing
+        _ -> expectationFailure "expected the datapoints overview"
+
+      (_, expanded) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing
+      let overviewHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml overview
+          drawerMarkup = T.take 200 $ snd $ T.breakOn "id=\"global-data-drawer\"" $ LT.toStrict $ Lucid.renderText $ Lucid.toHtml expanded
+      T.count "placeholder=\"Search metrics\"" overviewHtml `shouldBe` 1
+      overviewHtml `shouldSatisfy` not . T.isInfixOf "placeholder=\"Search\""
+      overviewHtml `shouldSatisfy` T.isInfixOf "border-b border-strokeWeak"
+      T.count "id=\"global-data-drawer\"" overviewHtml `shouldBe` 1
+      overviewHtml `shouldSatisfy` T.isInfixOf "fixed right-0 top-0"
+      overviewHtml `shouldSatisfy` T.isInfixOf "event.preventDefault"
+      drawerMarkup `shouldSatisfy` T.isInfixOf "checked"
+
+      (_, countCells) <- testServant tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing
+      let countsHtml = LT.toStrict $ Lucid.renderText countCells
+      for_ ["metric-datapoint-count-datapoint.current", "metric-datapoint-count-datapoint.stale", "hx-swap-oob", ">1<", ">0<"] \text -> countsHtml `shouldSatisfy` T.isInfixOf text
+
+    it "datapointSourceOverflow_defersAdditionalSourcesToDetails" \tr -> do
+      let seedSvc svc =
+            withPool tr.trPool
+              $ void
+              $ DBT.execute
+                [sql| INSERT INTO otel_metrics_meta
+                        (project_id, metric_name, metric_type, metric_unit, metric_description,
+                         service_name, scope_name, metric_labels, first_seen_at, last_seen_at,
+                         first_timestamp, last_timestamp)
+                      VALUES (?, 'source.overflow', 'GAUGE', '1', 'seeded', ?, 'test', '{}', now(), now(), now(), now())
+                      ON CONFLICT DO NOTHING |]
+                (testPid, svc :: Text)
+      for_ ["source-1", "source-2", "source-3", "source-4"] seedSvc
+
+      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      for_ ["source-1", "source-2", "source-3", "View 1 more source in details", metricDetailUrl testPid "source.overflow" "all" Nothing] \text -> pageHtml `shouldSatisfy` T.isInfixOf text
+      pageHtml `shouldSatisfy` not . T.isInfixOf "source-4"
+
+    it "datapointPagination_rendersOnlyTheRequestedPage" \tr -> do
+      let seed n =
+            withPool tr.trPool
+              $ void
+              $ DBT.execute
+                [sql| INSERT INTO otel_metrics_meta
+                        (project_id, metric_name, metric_type, metric_unit, metric_description,
+                         service_name, scope_name, metric_labels, first_seen_at, last_seen_at,
+                         first_timestamp, last_timestamp)
+                      VALUES (?, ?, 'GAUGE', '1', 'seeded', 'gateway', 'test', '{}', now(), now(), now(), now())
+                      ON CONFLICT DO NOTHING |]
+                (testPid, "page.metric." <> show n :: Text)
+      for_ ([1 .. 30] :: [Int]) seed
+
+      (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
+      firstHtml `shouldSatisfy` not . T.isInfixOf "page.metric.30"
+      firstHtml `shouldSatisfy` T.isInfixOf "&cursor=1"
+
+      (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml secondPage) `shouldSatisfy` T.isInfixOf "page.metric.30"
+
+  around withTestResources $ describe "metric details" do
+    it "metricDetails_defersRelatedMetricsUntilTheirTabIsOpened" \tr -> do
+      let seed name labels =
+            withPool tr.trPool
+              $ void
+              $ DBT.execute
+                [sql| INSERT INTO otel_metrics_meta
+                        (project_id, metric_name, metric_type, metric_unit, metric_description,
+                         service_name, scope_name, metric_labels, first_seen_at, last_seen_at,
+                         first_timestamp, last_timestamp)
+                      VALUES (?, ?, 'GAUGE', '1', 'seeded', 'gateway', 'test', ?, now(), now(), now(), now())
+                      ON CONFLICT DO NOTHING |]
+                (testPid, name :: Text, PGArray (labels :: [Text]))
+      seed "process.cpu.usage" ["state"]
+      seed "process.cpu.time" ["state"]
+
+      (_, detail) <- testServant tr $ Trace.metricDetailsGetH testPid "process.cpu.usage" Nothing Nothing Nothing Nothing Nothing
+      let detailHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml detail
+      detailHtml `shouldSatisfy` T.isInfixOf "metric-related-content"
+      detailHtml `shouldSatisfy` not . T.isInfixOf "process.cpu.time"
+
+      (_, related) <- testServant tr $ Trace.metricRelatedGetH testPid "process.cpu.usage" Nothing
+      LT.toStrict (Lucid.renderText $ Lucid.toHtml related) `shouldSatisfy` T.isInfixOf "process.cpu.time"
 
   -- Regression guard: the trace-overlay projection selected neither `kind` nor
   -- `status_code`, and 'traceSpanRecord' hard-coded both to Nothing. That silently pinned

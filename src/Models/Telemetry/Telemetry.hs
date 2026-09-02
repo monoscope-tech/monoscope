@@ -34,6 +34,7 @@ module Models.Telemetry.Telemetry (
   Severity (..),
   Context (..),
   getDataPointsData,
+  DataPointLoad (..),
   SpanMatch (..),
   sdkSpanNames,
   sdkSpanStoredName,
@@ -583,7 +584,7 @@ data MetricDataPoint = MetricDataPoint
   , metricType :: Text
   , metricUnit :: Text
   , metricDescription :: Text
-  , dataPointsCount :: Int
+  , dataPointsCount :: Maybe Int
   , serviceNames :: V.Vector Text
   , metricLabels :: V.Vector Text
   }
@@ -916,33 +917,42 @@ spanRecordInTrace pid trId (lo, hi) match =
     <> [HI.sql| ORDER BY start_time ASC LIMIT 1 |]
 
 
--- | Metric catalogue with a datapoint count per metric, over a window.
+-- | Metric catalogue, optionally with a datapoint count per metric.
 --
--- The window is required, not @(Maybe, Maybe)@. It used to be optional and the filter was
--- only emitted when the upper bound was present, so a caller with no time parameters — which
--- is exactly what @/metrics?tab=datapoints@ was, since 'Utils.parseTime' returns
--- @(Nothing, Nothing)@ when given none — silently ran
+-- 'CatalogOnly' is what a page load wants: the catalogue comes from @otel_metrics_meta@ and
+-- touches no datapoint rows at all, so the table renders immediately and 'dataPointsCount'
+-- stays 'Nothing' until the counts endpoint fills it in.
+--
+-- 'CatalogWithCounts' carries a **required** window, not @(Maybe, Maybe)@. It used to be
+-- optional and the filter was only emitted when the upper bound was present, so a caller
+-- with no time parameters — which is exactly what @/metrics?tab=datapoints@ was, since
+-- 'Utils.parseTime' returns @(Nothing, Nothing)@ when given none — silently ran
 -- @SELECT metric_name, COUNT(*) FROM otel_metrics WHERE project_id = ?@ across the project's
 -- entire history. On the demo project (~2.4M metric rows per hour) that never returned: the
 -- page hung until TimeFusion cancelled it with @57014 statement timeout@. Unbounded
--- aggregates are also what has OOM-killed TimeFusion before, so the type now refuses one.
-getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> (UTCTime, UTCTime) -> Eff es [MetricDataPoint]
-getDataPointsData useTimefusion pid (from, to) = do
-  let dateFilter = [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
+-- aggregates are also what has OOM-killed TimeFusion before, so the type still refuses one.
+data DataPointLoad = CatalogOnly | CatalogWithCounts Bool (UTCTime, UTCTime)
+
+
+getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es) => DataPointLoad -> Projects.ProjectId -> Eff es [MetricDataPoint]
+getDataPointsData load pid = do
   catalog <-
     Hasql.interp
       [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
-      0::bigint, ARRAY_AGG(DISTINCT service_name), '{}'::text[]
+      NULL::bigint, ARRAY_AGG(DISTINCT service_name), '{}'::text[]
     FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}
     GROUP BY metric_name |]
-  counts :: V.Vector (Text, Int) <-
-    Hasql.withHasqlTimefusion useTimefusion
-      $ Hasql.interp
-      $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
-      <> dateFilter
-      <> [HI.sql| GROUP BY metric_name |]
-  let countByName = Map.fromList $ V.toList counts
-  pure $ fmap (\m -> m{dataPointsCount = fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
+  case load of
+    CatalogOnly -> pure catalog
+    CatalogWithCounts useTimefusion (from, to) -> do
+      counts :: V.Vector (Text, Int) <-
+        Hasql.withHasqlTimefusion useTimefusion
+          $ Hasql.interp
+          $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
+          <> [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
+          <> [HI.sql| GROUP BY metric_name |]
+      let countByName = Map.fromList $ V.toList counts
+      pure $ fmap (\m -> m{dataPointsCount = Just $ fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
@@ -956,7 +966,7 @@ getMetricData pid metricName = do
     LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
     WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
-  pure $ (\(name, typ, unit, desc, services, labels) -> MetricDataPoint name typ unit desc 0 services labels) <$> meta
+  pure $ (\(name, typ, unit, desc, services, labels) -> MetricDataPoint name typ unit desc Nothing services labels) <$> meta
 
 
 -- | One OTLP exemplar as ingestion stores it: the trace/span it was recorded in,

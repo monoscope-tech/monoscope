@@ -71,7 +71,7 @@ emptyState_ cfg title subTxt =
 facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
 facetRail_ elemId extraClass searchLabel actions content =
   div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
-    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-full items-center gap-2 border-strokeWeak bg-bgBase"] do
+    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-[calc(100%-1rem)] mx-2 items-center gap-2 border-strokeWeak bg-bgBase"] do
       faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
       input_
         [ type_ "search"
@@ -181,7 +181,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
     div_
       [ id_ $ drawerId <> "-panel"
       , style_ "width: min(90vw, 1200px)"
-      , class_ "bg-bgRaised h-full overflow-y-auto overscroll-contain overflow-x-hidden w-full max-sm:w-screen! relative"
+      , class_ "bg-bgRaised fixed right-0 top-0 h-full overflow-y-auto overscroll-contain overflow-x-hidden w-full max-sm:w-screen! relative"
       , role_ "dialog"
       , term "aria-modal" "true"
       , Aria.label_ "Details"
@@ -576,8 +576,10 @@ jsonTab_ :: Text -> Text -> AE.Value -> Maybe Text -> Html ()
 jsonTab_ visCls elemId val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree val filt
 
 
+-- >>> T.isInfixOf "pt-12" (toStrict $ renderText drawerLoadingSkeleton_)
+-- True
 drawerLoadingSkeleton_ :: Html ()
-drawerLoadingSkeleton_ = div_ [class_ "flex w-full flex-col gap-5 pt-8", role_ "status", Aria.label_ "Loading metric detail"] do
+drawerLoadingSkeleton_ = div_ [class_ "flex w-full flex-col gap-5 pt-12", role_ "status", Aria.label_ "Loading metric detail"] do
   div_ [class_ "flex items-center justify-between gap-4 border-b border-strokeWeak pb-3"] do
     div_ [class_ "flex flex-col gap-2"] do
       div_ [class_ "h-4 w-52 rounded skeleton-shimmer"] ""

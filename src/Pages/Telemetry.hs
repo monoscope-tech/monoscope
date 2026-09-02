@@ -2,7 +2,9 @@ module Pages.Telemetry (
   -- Metrics
   metricsOverViewGetH,
   metricDetailsGetH,
+  metricRelatedGetH,
   metricServicesGetH,
+  dataPointCountsGetH,
   MetricsOverViewGet (..),
   metricBreakdownGetH,
   metricCardGetH,
@@ -68,13 +70,13 @@ import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, encodeText, 
 
 
 data MetricsOverViewGet
-  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int)))
+  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int), Text, Int, Text))
   | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, Text, Text, Int, Maybe Text))
   | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
-  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts
+  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts, countsUrl, page, pageUrl))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts countsUrl page pageUrl
   toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, source, prefix, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive source prefix activeCount nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, labels, source, nextUrl)) = toHtml $ chartList pid labels source mList nextUrl
   toHtmlRaw = toHtml
@@ -190,8 +192,13 @@ buildMetricTree :: [Text] -> [MetricTree]
 buildMetricTree metrics = buildTree_ (foldr insertNode Map.empty (concatMap pathToNodes metrics)) Nothing
   where
     insertNode sp = Map.insertWith (\new old -> if sp `elem` old then old else new ++ old) sp.parent [sp]
+    -- Sorted, because the map holds children in insertion order and the fold
+    -- prepends: the tree came out in whatever order the query happened to
+    -- return, so a page boundary fell in a different place run to run. A
+    -- catalogue the reader pages through has to be ordered by something they
+    -- can predict, and the only such thing here is the name.
     buildTree_ nodeMap parentId =
-      [MetricTree mt (buildTree_ nodeMap (Just $ nodePath mt)) | mt <- Map.findWithDefault [] parentId nodeMap]
+      [MetricTree mt (buildTree_ nodeMap (Just $ nodePath mt)) | mt <- sortOn (.current) $ Map.findWithDefault [] parentId nodeMap]
 
 
 data MetricRow = MetricRow
@@ -268,7 +275,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       -- written. Fall back to the time picker's own default so the control and the data
       -- agree, rather than defaulting further down where the picker would still read empty.
       sinceOrDefault = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
-      (from, to, currentRange) = parseTime fromM toM sinceOrDefault now
+      (_, _, currentRange) = parseTime fromM toM sinceOrDefault now
       bwconf =
         bw
           { prePageTitle = Just "Explorer"
@@ -282,18 +289,26 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           }
   if dataPointsTab
     then do
-      -- 'sinceOrDefault' already guarantees a window when no time parameter was given; this
-      -- closes the remaining hole, an absolute range with one end missing or unparseable.
-      -- Collapsing to now..now returns no counts, which is the safe way to be wrong here.
-      dataPoints <- Telemetry.getDataPointsData ctx.env.enableTimefusionReads pid (fromMaybe now from, fromMaybe now to)
+      -- Catalogue only: a page load must not wait on a COUNT over otel_metrics. The counts
+      -- arrive from 'dataPointCountsGetH' once the table is on screen.
+      dataPoints <- Telemetry.getDataPointsData Telemetry.CatalogOnly pid
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
       monitors <- Monitors.queryMonitorsAll pid
+      drawerM <- forM expandM \metricName -> do
+        metricM <- Telemetry.getMetricData pid metricName
+        pure $ metricM <&> \metric ->
+          metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
       let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
-      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, V.fromList dataPoints, refCounts)
+          page = max 0 $ fromMaybe 0 cursorM
+          countParams = T.intercalate "&" [k <> "=" <> v | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)] :: [(Text, Maybe Text)]]
+          pageUrl = "/p/" <> pid.toText <> "/metrics?tab=datapoints&" <> countParams
+          countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> countParams
+          bwconf' = bwconf{globalDrawerContent = join drawerM}
+      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, page, pageUrl)
     else do
       let cursor = fromMaybe 0 cursorM
           cutoff = addUTCTime (-(7 * 24 * 3600)) now
-          pageSize = 20
+          pageSize = 12
       -- Only the requested page comes back, not the whole catalogue. The inactive tail rides
       -- along in the same result set because it falls out of the same aggregate.
       page <- Telemetry.getMetricCatalogPage pid sourceM prefixM cutoff pageSize cursor (cursor == 0)
@@ -311,14 +326,27 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           -- drawer, so they are read inside the `forM` rather than on every page load.
           drawerM <- forM expandM \metricName -> do
             metricM <- Telemetry.getMetricData pid metricName
-            serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid Nothing serviceOptionsLimit
-            candidates <- V.fromList <$> Telemetry.getMetricChartListData pid sourceM prefixM
             pure $ metricM <&> \metric ->
-              metricsDetailsPage pid serviceNames metric candidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
+              metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, page.inactive, fromMaybe "all" sourceM, fromMaybe "all" prefixM, page.activeTotal, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, labels, fromMaybe "all" sourceM, nextFetchUrl)
+
+
+dataPointCountsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+dataPointCountsGetH pid fromM toM sinceM = do
+  ctx <- Reader.ask @AuthContext
+  void $ Projects.sessionAndProject pid
+  now <- Time.currentTime
+  -- With no time parameters at all 'parseTime' yields no window, and an absolute range can
+  -- still arrive with one end missing. 'CatalogWithCounts' takes a required window precisely
+  -- so neither can reach the COUNT as an unbounded scan; collapsing to now..now returns no
+  -- counts, which is the safe way to be wrong here.
+  let rangeSince = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
+      (from, to, _) = parseTime fromM toM rangeSince now
+  dataPoints <- Telemetry.getDataPointsData (Telemetry.CatalogWithCounts ctx.env.enableTimefusionReads (fromMaybe now from, fromMaybe now to)) pid
+  addRespHeaders $ dataPointCountCells_ dataPoints
 
 
 -- | Options for the metric-source picker, searched and capped server-side.
@@ -335,14 +363,26 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
   metricM <- Telemetry.getMetricData pid metricName
-  relatedCandidates <- V.fromList <$> Telemetry.getMetricChartListData pid (mfilter (/= "all") source) Nothing
   dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
   monitors <- Monitors.queryMonitorsAll pid
   addRespHeaders
     $ maybe
       (Components.emptyState_ def{icon = Just "circle-xmark"} "Metric not found" "")
-      (\metric -> metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
+      -- No related candidates passed in: ranking them needs the whole catalogue, so the
+      -- Related tab hx-gets 'metricRelatedGetH' when it is first opened instead of every
+      -- details render paying for it.
+      (\metric -> metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
       metricM
+
+
+-- | The full catalogue is only needed to rank this opt-in tab; never make a drawer
+-- click wait for it.
+metricRelatedGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricRelatedGetH pid metricName sourceM = do
+  void $ Projects.sessionAndProject pid
+  metricM <- Telemetry.getMetricData pid metricName
+  candidates <- V.fromList <$> Telemetry.getMetricChartListData pid (mfilter (/= "all") sourceM) Nothing
+  addRespHeaders $ maybe "Metric not found" (\metric -> relatedMetrics pid (fromMaybe "all" sourceM) metric candidates) metricM
 
 
 -- | Deep link that opens a trace in the log explorer's trace overlay. @Log.hs@'s
@@ -590,13 +630,39 @@ overViewTabs pid tab =
       viewTab "Table" "datapoints"
 
 
+metricSearch_ :: Text -> Text -> Html ()
+metricSearch_ matchingClass containerId =
+  label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-8 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
+    faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
+    input_
+      [ class_ "grow"
+      , type_ "text"
+      , placeholder_ "Search metrics"
+      , Aria.label_ "Search metrics"
+      , id_ "search-input"
+      , term "_" $ "on input show ." <> matchingClass <> " in #" <> containerId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"
+      ]
+
+
+metricsToolbar_ :: Projects.ProjectId -> Text -> Maybe (Html ()) -> Html () -> Text -> Text -> Html ()
+metricsToolbar_ pid tab filters status matchingClass containerId =
+  div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-8 py-1 border-b border-strokeWeak"] do
+    overViewTabs pid tab
+    div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
+    whenJust filters \scopeFilters -> do
+      scopeFilters
+      div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
+    metricSearch_ matchingClass containerId
+    status
+
+
 -- | Service picker for the metric catalogue. A project can have thousands of services, so
 -- the list is searched server-side and capped rather than rendered up front — the options
 -- only exist once the popover is opened, and only the matching ones.
 servicePicker_ :: Projects.ProjectId -> Text -> Html ()
-servicePicker_ pid current = div_ [class_ "join-item"] do
+servicePicker_ pid current = do
   button_
-    ( [ class_ "select select-sm bg-bgBase border border-strokeWeak h-10 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus flex items-center"
+    ( [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-8 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus flex items-center"
       , type_ "button"
       , Aria.label_ "Filter by service"
       ]
@@ -652,41 +718,34 @@ chartsPage pid metricList labels inactive source mFilter activeCount nextUrl =
     [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload:inherited" "false"]
     do
       div_ [class_ "w-full"] do
-        div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
-          overViewTabs pid "charts"
-          div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-          let metricNames =
-                ordNub
-                  $ ( \x ->
-                        let sep = if "." `T.isInfixOf` x.metricName then "." else "_"
-                         in fst (T.breakOn sep x.metricName) <> sep
-                    )
-                  <$> V.toList metricList
-              stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
-          div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
-            span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
-            div_ [class_ "join max-md:w-full"] do
-              servicePicker_ pid source
-              select_
-                [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
-                , Aria.label_ "Filter by metric group"
-                , onchange_ "window.setQueryParamAndReload('metric_prefix', this.value)"
-                ]
-                do
-                  option_ ([selected_ "all" | mFilter == "all"] ++ [value_ "all"]) "All metric groups"
-                  forM_ metricNames \o -> option_ ([selected_ o | o == mFilter] ++ [value_ o]) $ toHtml $ stripTrailing o
-          div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-          label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
-            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
-            input_
-              [ class_ "grow"
-              , type_ "text"
-              , placeholder_ "Search metrics"
-              , Aria.label_ "Search metrics"
-              , id_ "search-input"
-              , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-              ]
-          span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d"
+        let metricNames =
+              ordNub
+                $ ( \x ->
+                      let sep = if "." `T.isInfixOf` x.metricName then "." else "_"
+                       in fst (T.breakOn sep x.metricName) <> sep
+                  )
+                <$> V.toList metricList
+            stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
+            filters =
+              div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
+                span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
+                div_ [class_ "join max-md:w-full"] do
+                  servicePicker_ pid source
+                  select_
+                    [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-8 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+                    , Aria.label_ "Filter by metric group"
+                    , onchange_ "window.setQueryParamAndReload('metric_prefix', this.value)"
+                    ]
+                    do
+                      option_ ([selected_ "all" | mFilter == "all"] ++ [value_ "all"]) "All metric groups"
+                      forM_ metricNames \o -> option_ ([selected_ o | o == mFilter] ++ [value_ o]) $ toHtml $ stripTrailing o
+        metricsToolbar_
+          pid
+          "charts"
+          (Just filters)
+          (span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d")
+          "metric_filterble"
+          "metric_list_container"
       if V.null metricList && V.null inactive
         then
           div_ [class_ "w-full flex items-center justify-center h-96"]
@@ -825,20 +884,30 @@ inactiveMetricsList pid source metrics = do
               span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
 
 
-dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Html ()
-dataPointsPage pid metrics refCounts = do
+dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> Html ()
+dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
   let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
-      rows = flattenMetricTree dataMap tree 0 []
+      allRows = flattenMetricTree dataMap tree 0 []
+      -- take/drop, not V.slice: slice is partial and errors unless the whole
+      -- window is in range, so a last page shorter than dataPointPageSize — or
+      -- any project with fewer metrics than one page — crashed the tab with
+      -- "invalid slice (0,25,3)".
+      rows = V.take dataPointPageSize $ V.drop (page * dataPointPageSize) allRows
+      metricPageUrl path = pageUrl <> "&cursor=" <> show page <> "&expand=" <> path
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] do
     -- Four icons, once each, instead of once per row: this table renders ~540 rows and the
     -- per-row copies were 886 KB of the 5.1 MB document.
     faSymbolDefs_ [("chevron-right", "regular"), ("grid", "regular"), ("chart-line", "regular"), ("bell", "regular")]
     div_ [class_ "w-full"] do
-      Components.drawer_ "global-data-drawer" False Nothing Nothing ""
-      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-      div_ [class_ "w-full flex gap-3 items-center min-h-10"] do
-        overViewTabs pid "datapoints"
+      metricsToolbar_
+        pid
+        "datapoints"
+        Nothing
+        (span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full"] "Calculating datapoint counts…")
+        "itemsListItem"
+        "dataPointsTable_page"
+      div_ [hxGet_ countsUrl, hxTrigger_ "load", hxSwap_ "none"] pass
     toHtml
       Table
         { config = def{Table.elemID = "dataPointsTable", Table.showHeader = True, Table.renderAsTable = True, Table.noDividers = True}
@@ -865,13 +934,36 @@ dataPointsPage pid metrics refCounts = do
                       Just _ ->
                         a_
                           ( [ class_ "cursor-pointer font-medium text-textStrong hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
-                            , href_ $ "/p/" <> pid.toText <> "/metrics?tab=datapoints&expand=" <> r.fullPath
+                            , -- Carries the cursor, so a middle-click or reload from a deep
+                              -- page lands back on that page rather than at the top.
+                              href_ $ metricPageUrl r.fullPath
                             ]
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
                           $ toHtml r.segment
-            , Table.col "Sources" (\r -> div_ [class_ "flex gap-1 flex-wrap"] $ whenJust r.metric \m -> forM_ m.serviceNames $ span_ [class_ "badge badge-ghost text-xs"] . toHtml) & Table.withAttrs [class_ "w-48"]
-            , Table.col "Datapoints" (\r -> whenJust r.metric \m -> span_ [class_ "tabular-nums"] $ toHtml $ prettyPrintCount m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
+            , Table.col
+                "Sources"
+                ( \r -> whenJust r.metric \m -> do
+                    let shownSources = V.take 3 m.serviceNames
+                        moreSources = V.drop 3 m.serviceNames
+                    div_ [class_ "flex flex-wrap gap-1"] do
+                      forM_ shownSources $ span_ [class_ "badge badge-ghost text-xs"] . toHtml
+                      unless (V.null moreSources)
+                        $ button_
+                          ( [ class_ "inline-flex cursor-pointer items-center text-xs text-textWeak hover:text-textStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11"
+                            , type_ "button"
+                            , onclick_ "event.stopPropagation()"
+                            ]
+                              <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
+                          )
+                        $ "View "
+                        <> toHtml (prettyPrintCount $ V.length moreSources)
+                        <> " more source"
+                        <> bool "s" "" (V.length moreSources == 1)
+                        <> " in details"
+                )
+                & Table.withAttrs [class_ "w-48"]
+            , Table.col "Datapoints" (\r -> whenJust r.metric \m -> metricDataPointCount_ False m.metricName m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
             , Table.col
                 "Referenced in"
                 ( \r -> whenJust r.metric \_ -> do
@@ -886,15 +978,51 @@ dataPointsPage pid metrics refCounts = do
         , rows
         , features =
             def
-              { Table.search = Just Table.ClientSide
+              { Table.search = Nothing
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
               , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", action = Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
               }
         }
+    dataPointPager_ page pageUrl $ V.length allRows
 
 
-metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor]) -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-metricsDetailsPage pid sources metric candidates (dashboards, monitors) source selected currentRange = do
+dataPointPageSize :: Int
+dataPointPageSize = 25
+
+
+dataPointPager_ :: Int -> Text -> Int -> Html ()
+dataPointPager_ page pageUrl total =
+  unless (total <= dataPointPageSize)
+    $ div_ [class_ "flex items-center justify-between px-4 py-3 text-sm text-textWeak"] do
+      span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
+      div_ [class_ "join"] do
+        let pageLink icon target enabled =
+              (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ pageUrl <> "&cursor=" <> show target] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
+                $ faSprite_ icon "regular" "w-4 h-4"
+        pageLink "chevron-left" (page - 1) (page > 0)
+        pageLink "chevron-right" (page + 1) ((page + 1) * dataPointPageSize < total)
+
+
+metricDataPointCount_ :: Bool -> Text -> Maybe Int -> Html ()
+metricDataPointCount_ oob metricName countM =
+  span_
+    ( [ id_ $ "metric-datapoint-count-" <> toUriStr metricName
+      , class_ "tabular-nums text-textWeak"
+      ]
+        <> [term "hx-swap-oob" "true" | oob]
+    )
+    $ toHtml
+    $ maybe "…" prettyPrintCount countM
+
+
+dataPointCountCells_ :: [Telemetry.MetricDataPoint] -> Html ()
+dataPointCountCells_ dataPoints = do
+  forM_ dataPoints \metric -> metricDataPointCount_ True metric.metricName metric.dataPointsCount
+  span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "text-xs text-textWeak", term "hx-swap-oob" "true"] "Datapoint counts loaded."
+
+
+metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor]) -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
+metricsDetailsPage pid sources metric (dashboards, monitors) source selected currentRange = do
   let refreshId = "metric-details-chart-refresh"
       chartId = "details_" <> T.replace "." "_" metric.metricName
       labelPriority label
@@ -987,8 +1115,18 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
                       a_ [class_ "flex cursor-pointer items-center justify-between gap-3 px-1 py-2 text-sm hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus", href_ $ "/p/" <> pid.toText <> "/" <> path] do
                         span_ [class_ "truncate text-textStrong"] $ toHtml label
                         faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
-          input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Related metrics"]
-          div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ "rl-content"] $ relatedMetrics pid source metric candidates
+          input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Related metrics", id_ "metric-tab-related"]
+          div_
+            [ class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal"
+            , id_ "metric-related-content"
+            , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/related"
+            , hxTrigger_ "change from:#metric-tab-related once"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , term "hx-ext" "forward-page-params"
+            ]
+            $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading related metrics"]
+            $ loadingIndicator_ LdSM LdDots
           -- The fetch hangs off this radio's own `change`, via htmx's `from:`.
           -- It cannot hang off the panel: a `.tab-content` that is not selected
           -- is display:none, and a display:none element never fires `intersect`.

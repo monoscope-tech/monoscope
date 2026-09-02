@@ -194,9 +194,11 @@ spec = sequential $ aroundAll withTestResources do
       -- the count query then ran across the project's whole metrics history — unbounded, which
       -- on a real project never returns (TimeFusion cancels it at the statement timeout) and is
       -- the shape that has OOM-killed it before. The picker showing its default is the visible
-      -- half of the fix; 'getDataPointsData' now also refuses to be called without a window.
+      -- half of the fix; a page load now asks for 'CatalogOnly' and runs no COUNT at all, and
+      -- 'CatalogWithCounts' takes a required window so the counts endpoint cannot regress into
+      -- the unbounded scan either.
       dataPointsHtml `shouldContain` "Last hour"
-      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True mpid (addUTCTime (-1) frozenTime, addUTCTime 1 frozenTime)
+      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData (Telemetry.CatalogWithCounts True (addUTCTime (-1) frozenTime, addUTCTime 1 frozenTime)) mpid
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       totals <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True mpid (addUTCTime (-1) frozenTime) (addUTCTime 1 frozenTime)
       totals.events `shouldSatisfy` (>= 0)

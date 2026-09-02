@@ -617,7 +617,9 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
   , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
+  , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricRelatedGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "related" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , -- HTML for the metric page's Exemplars tab, JSON for the chart's diamond overlay:
     -- one query, so the list and the markers can't disagree.
@@ -1039,7 +1041,9 @@ telemetryServer pid =
     { tracesGet = Trace.traceH pid
     , rumGetH = RUM.rumGetH pid
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
+    , dataPointCountsGetH = Metrics.dataPointCountsGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
+    , metricRelatedGetH = Metrics.metricRelatedGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
     , metricExemplarsGetH = Metrics.metricExemplarsGetH pid
     , metricCardGetH = Metrics.metricCardGetH pid

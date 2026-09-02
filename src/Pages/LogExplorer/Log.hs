@@ -1595,7 +1595,7 @@ apiLogsPage page = do
     -- #apiLogsPage`, but this element is the only receiver — so the handler lives on it.
     sectionWrapper_ =
       section_
-        [ class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
+        [ class_ "mx-auto pt-1 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
         , id_ "apiLogsPage"
         , [__|on toggleFullscreen(mode, active)
                 default active to (my @data-fullscreen is not mode)

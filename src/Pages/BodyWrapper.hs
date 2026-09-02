@@ -576,17 +576,17 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Projects.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-15 md:shrink-0 md:w-15 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
-  div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
+  div_ [class_ "px-1 group-has-[#sidenav-toggle:checked]/pg:px-2"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     -- Project picker + Toggle (context + sidebar control)
-    div_ [class_ "pt-3.5 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
+    div_ [class_ "pt-2 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
       div_ [class_ "block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
         button_
           ( [ type_ "button"
-            , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+            , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-1 justify-center group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
             , Aria.haspopup_ "dialog"
             , Aria.label_ $ "Switch project, current: " <> project.title
             ]
@@ -741,7 +741,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 
 navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()
 navbar bcfg menuL =
-  nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
+  nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1 px-4 py-1 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
       when (isJust bcfg.currProject) do
         label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
