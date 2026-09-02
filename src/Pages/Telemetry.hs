@@ -50,7 +50,7 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..))
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..))
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -229,28 +229,30 @@ instance ToHtml TraceDetailsGet where
   toHtml (TraceDetailsNotFound pid selfUrl embedded) =
     -- The id is what Retry swaps: `closest div` would only replace the button row.
     div_ [id_ "trace-fallback", class_ $ bool "min-h-screen" "h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
-      $ div_ [class_ "max-w-lg space-y-4 text-center"] do
-        div_ [class_ "flex flex-col items-center gap-3"] do
-          faSprite_ "circle-exclamation" "solid" "w-6 h-6 text-textWeak"
-          div_ [class_ "space-y-1.5"] do
-            h1_ [class_ "text-lg font-semibold text-textStrong"] "Couldn't load this trace"
-            p_ [class_ "max-w-md text-sm leading-6 text-textWeak"] "A slow or unavailable read timed out. Retrying often works — the second read is warm."
-        div_ [class_ "flex flex-wrap justify-center gap-2"] do
-          -- Re-issue the very request that produced this fallback, replacing it in
-          -- place. Works identically in the overlay and in an embedded panel.
-          button_ [class_ "btn btn-sm btn-primary", hxGet_ selfUrl, hxTarget_ "#trace-fallback", hxSwap_ "outerHTML"] "Retry loading trace"
-          unless embedded
-            $ button_
-              [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
-              , -- Only the log explorer renders #trace_expanded_view (Log.hs). Reached
-                -- standalone (/p/<pid>/traces/<tid>) this panel still renders, and the
-                -- unguarded send threw "'#trace_expanded_view' is null"; there the browser's
-                -- own history is the way back.
-                [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
-              ]
-              "Back to search results"
-        unless embedded
-          $ a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
+      $ toHtml
+      $ Components.emptyState_
+        def
+          { icon = Just "circle-exclamation"
+          , action = ESCustom do
+              div_ [class_ "flex flex-wrap justify-center gap-2"] do
+                -- Re-issue the very request that produced this fallback, replacing it in
+                -- place. Works identically in the overlay and in an embedded panel.
+                button_ [class_ "btn btn-sm btn-primary", hxGet_ selfUrl, hxTarget_ "#trace-fallback", hxSwap_ "outerHTML"] "Retry loading trace"
+                unless embedded
+                  $ button_
+                    [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
+                    , -- Only the log explorer renders #trace_expanded_view (Log.hs). Reached
+                      -- standalone (/p/<pid>/traces/<tid>) this panel still renders, and the
+                      -- unguarded send threw "'#trace_expanded_view' is null"; there the browser's
+                      -- own history is the way back.
+                      [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
+                    ]
+                    "Back to search results"
+              unless embedded
+                $ a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
+          }
+        "Couldn't load this trace"
+        "A slow or unavailable read timed out. Retrying often works — the second read is warm."
   toHtmlRaw = toHtml
 
 
@@ -338,7 +340,7 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   monitors <- Monitors.queryMonitorsAll pid
   addRespHeaders
     $ maybe
-      (div_ [class_ "flex flex-col gap-2 text-2xl"] "Metric not found")
+      (Components.emptyState_ def{icon = Just "circle-xmark"} "Metric not found" "")
       (\metric -> metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
       metricM
 
@@ -451,7 +453,7 @@ relatedMetricsGetH pid rdId timestamp = withSpan_ "log-explorer.related-metrics"
   void $ Projects.sessionAndProject pid
   env <- (.env) <$> Reader.ask @AuthContext
   Telemetry.otelRecordByProjectAndId env.enableTimefusionReads pid timestamp rdId >>= \case
-    Nothing -> addRespHeaders $ div_ [class_ "px-5 py-8 text-sm text-textWeak"] "Record not found"
+    Nothing -> addRespHeaders $ Components.emptyState_ def{size = ESCompact} "Record not found" ""
     Just record -> do
       let service = fromMaybe "" $ Telemetry.spanServiceName record
           -- A span brackets its own window; a log is an instant, so it borrows
@@ -1023,7 +1025,7 @@ metricDimension pid metricName source selected label =
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
   case take 6 $ map snd $ sortWith (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedMetricScore metric c, score > 0] of
-    [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] $ if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources."
+    [] -> Components.emptyState_ def{size = ESCompact} (if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources.") ""
     related -> do
       div_ [class_ "px-5 pb-3 pt-5"] do
         span_ [class_ "block text-sm font-semibold text-textStrong"] "Related metrics"

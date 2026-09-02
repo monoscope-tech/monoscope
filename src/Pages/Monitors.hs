@@ -54,7 +54,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -707,7 +707,7 @@ unifiedMonitorOverviewH pid monitorId = do
       let nameOf cs x = maybe x (.channelName) $ find ((== x) . (.channelId)) cs
           teams' = (\t -> t{slack_channels = nameOf channels <$> t.slack_channels, discord_channels = nameOf discordChannels <$> t.discord_channels}) <$> teams
       addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
-    Nothing -> addRespHeaders $ PageCtx baseBwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
+    Nothing -> addRespHeaders $ PageCtx baseBwconf $ emptyState_ def "Monitor not found" ""
 
 
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
@@ -750,14 +750,10 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     -- Which tab is open is DOM state (radio), so no script is needed and it survives a morph.
     div_ [role_ "tablist", class_ "w-full group/mt", id_ "monitor-tabs"] do
       div_ [class_ "w-full flex border-b border-strokeWeak"] do
-        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-exec-history", class_ "sr-only", checked_]
-          "Execution History"
-        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-notif-channels", class_ "sr-only"]
-          "Notification Channels"
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
+        detailTab_ "monitor-tabs" "tab-exec-history" "shrink-0 font-medium text-textWeak" True "Execution History"
+        detailTab_ "monitor-tabs" "tab-notif-channels" "shrink-0 font-medium text-textWeak" False "Notification Channels"
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
     displayName = bool (statusInfo alert.currentStatus).statusLabel "Inactive" (isJust alert.deactivatedAt)
 

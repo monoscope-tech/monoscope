@@ -100,7 +100,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -969,9 +969,7 @@ notificationsTestHistoryGetH pid = do
 
 
 historyHtml_ :: [TestHistory] -> Html ()
-historyHtml_ [] = div_ [class_ "text-center py-12"] do
-  div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
-  p_ [class_ "text-sm text-textWeak"] "Test your integrations to see results here"
+historyHtml_ [] = emptyState_ def{size = ESCompact} "No test notifications sent yet" "Test your integrations to see results here"
 historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
     renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
@@ -1303,7 +1301,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
   if null rows
-    then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
+    then emptyState_ def{size = ESCompact} "No usage recorded yet this cycle." ""
     else do
       let activeDays = length rows
           maxDay = foldr (max . (.requests)) 1 rows

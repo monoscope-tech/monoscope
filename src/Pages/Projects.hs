@@ -857,9 +857,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
     div_ [class_ "max-w-2xl"] $ teamTabsHeader_ pid "teams" (V.length projMembers) (V.length teams)
 
     if V.null teams
-      then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] do
-        div_ [class_ "text-sm text-textStrong font-medium"] "No teams yet"
-        div_ [class_ "text-xs text-textWeak mt-1"] "Create a team to route alerts to the right people."
+      then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] $ emptyState_ def{size = ESCompact} "No teams yet" "Create a team to route alerts to the right people."
       else
         div_ [class_ "w-full"]
           $ toHtml
@@ -1012,10 +1010,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
 teamPageNF pid handle = do
-  section_ [id_ "main-content", class_ "w-full py-16"] do
-    div_ [class_ "p-6 w-[606px] mx-auto"] do
-      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] $ "Team not found: " <> toHtml handle
-      p_ [class_ "text-textWeak text-sm leading-tight"] "We couldn't find the team you're looking for."
+  section_ [id_ "main-content", class_ "w-full py-16"]
+    $ emptyState_ def{icon = Just "circle-xmark"} ("Team not found: " <> handle) "We couldn't find the team you're looking for."
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
@@ -1095,7 +1091,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
-              then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
+              then emptyState_ def{size = ESCompact} "No members yet" "Invite someone to get started."
               else V.imapM_ (memberRowWithStatus pid) projMembers
   where
     roleTooltip :: Text
