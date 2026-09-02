@@ -1361,7 +1361,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
       const container = document.querySelector('#currentSpanIndex')
       const spans = JSON.parse(container.dataset.spanIds)
       const currentSpan = Number(container.dataset.span)
-      if (direction == 'next' && currentSpan >= spans.length) return;
+      if (direction == 'next' && currentSpan >= spans.length - 1) return;
       if (direction == 'prev' && currentSpan <= 0) return;
       const spandInd = direction == 'next' ? currentSpan + 1 : currentSpan - 1
       container.dataset.span = spandInd
@@ -1644,7 +1644,7 @@ buildSpanTree_ pid sp level scol = do
           <> ( if isSynthetic
                  then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
                  else
-                   [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
+                   [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
                      : spanDetailAttrs_ ShowSkeleton pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
              )
       )

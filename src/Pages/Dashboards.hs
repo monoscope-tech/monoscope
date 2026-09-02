@@ -1,7 +1,6 @@
 module Pages.Dashboards (
   dashboardGetH,
   dashboardTabGetH,
-  dashboardTabContentGetH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
   DashboardGet (..),
@@ -242,18 +241,21 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload:inherited" "mouseover"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabPath = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name
-              tabUrl = tabPath <> queryStr
-              tabContentUrl = tabPath <> "/content" <> queryStr
+          let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
+          -- Project tab/nav swap pattern (CLAUDE.md): fetch the *full page* and select the
+          -- content container out of it, morphing the tab strip out-of-band. Morphing carries
+          -- `tab-active` across for free, so no hyperscript manages the active class.
           a_
             [ role_ "tab"
             , href_ tabUrl
             , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-            , hxGet_ tabContentUrl
+            , hxGet_ tabUrl
             , hxTarget_ "#dashboard-tabs-content"
-            , hxSwap_ "innerHTML settle:0ms"
-            , hxPushUrl_ tabUrl
-            , [__|on click remove .tab-active from <.tab-active/> in #dashboard-tabs-container then add .tab-active to me then set my.preloadState to 'DONE'|]
+            , hxSelect_ "#dashboard-tabs-content"
+            , term "hx-select-oob" "#dashboard-tabs-container:morph"
+            , hxSwap_ "morph"
+            , hxPushUrl_ "true"
+            , [__|on click set my.preloadState to 'DONE'|]
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
@@ -1405,7 +1407,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
 
       Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
       -- Monitor Schedule section (shared component)
-      Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded") (Just chartTargetId)
+      Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded")
       -- Thresholds section (shared component)
       Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
       -- Widget-specific: Show threshold lines option
@@ -2420,52 +2422,6 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   -- Including constants allows HTMX tab switches to skip re-executing constant queries
   let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
-
-
--- | Handler for tab content partial (htmx): /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}/content
--- This returns only the tab content panel for htmx swapping
-dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
-dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
-  _ <- Projects.sessionAndProject pid
-  now <- Time.currentTime
-  (_, dash) <- getDashAndVM pid dashId fileM
-  let timeParams = (sinceStr, fromDStr, toDStr)
-      paramsWithVarDefaults = addVariableDefaults allParams dash.variables
-      -- Check if constants are already in params (passed from initial page load)
-      hasConstants = any (T.isPrefixOf "const-" . fst) allParams
-
-  tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
-  (idx, tab) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
-
-  -- Skip constant processing if already provided via params (avoids redundant SQL queries)
-  allParamsWithConstants <-
-    if hasConstants
-      then pure paramsWithVarDefaults
-      else snd <$> processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
-
-  -- Process variables to check if tab requires one that's not set
-  dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dash
-
-  -- Render the tab's content, which is the picker itself while a required variable is
-  -- unanswered. Widget processing is skipped entirely in that case: every query would
-  -- interpolate the variable to '' and come back empty, at the cost of a real round
-  -- trip each, only to be covered by a prompt.
-  let orderForm = widgetOrderTriggerForm_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug) True
-  case findVarToPrompt (Just tab) (fold dash'.variables) of
-    Just v -> addRespHeaders do
-      breadcrumbSuffixOob_ tab.name
-      div_
-        [ class_ "tab-panel"
-        , data_ "tab-index" (show idx)
-        , id_ $ "tab-panel-" <> dashId.toText <> "-" <> show idx
-        ]
-        $ variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v False
-      orderForm
-    Nothing -> do
-      widgetsWithPngUrls <- processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
-      addRespHeaders do
-        tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True
-        orderForm
 
 
 -- | Render a single tab content panel.

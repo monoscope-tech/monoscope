@@ -253,8 +253,8 @@ alertTeamDeleteH pid monitorId teamId = do
   addRespHeaders $ AlertNoContent ""
 
 
-monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Maybe Text -> Html ()
-monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType chartTargetIdM = do
+monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Html ()
+monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
       isByos = paymentPlan == "Bring your own storage"
@@ -270,9 +270,11 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
          in option_ attrs ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
       isThresholdType = maybe True (== "threshold_exceeded") conditionType
-      chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on change set chart to document.getElementById('${chartId}') if chart exists then call chart.updateRollup(my.value) end|]
-        Nothing -> [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
+      -- Both flows retune the bin through the query builder. The widget flow used to call
+      -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
+      -- tests the element rather than the method, it threw on every change instead of
+      -- degrading. Charts only carry the `applyThresholds` expando (web-components/src/widgets.ts).
+      chartUpdateAttr = [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex gap-2 py-2"] do
@@ -289,8 +291,8 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
 thresholdsSection_ :: Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
   let chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-        Nothing -> [__|on input set chart to #visualization-widget if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+        Nothing -> [__|on input set chart to #visualization-widget if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
       showVal = maybe "" show
   panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
     div_ [class_ "flex flex-row gap-2 py-2"] do
