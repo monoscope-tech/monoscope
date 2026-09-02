@@ -1084,7 +1084,7 @@ webhookPostH sigHeaderM rawBody = do
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
       upgrade = do
-        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id plan
+        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id (Projects.PlanName plan)
         when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
         when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
         Projects.projectBySubId (show subItem.subscriptionId) >>= \case
@@ -1111,7 +1111,7 @@ webhookPostH sigHeaderM rawBody = do
       _ <- Projects.addSubscription sub
       -- Safety net: update project billing if frontend checkout callback failed
       whenJust (Projects.projectIdFromText projectId) \pid -> do
-        void $ Projects.updateProjectBilling pid plan (show subItem.subscriptionId) (show subItem.id) (show orderId)
+        void $ Projects.updateProjectBilling pid (Projects.PlanName plan) (Projects.SubId $ show subItem.subscriptionId) (Projects.SubItemId $ show subItem.id) (Projects.OrderId $ show orderId)
         whenJustM (Projects.projectById pid) \project ->
           notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
       pure "subscription created"
@@ -1581,7 +1581,7 @@ handleStripeCheckout envConfig obj = do
           subDetails <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
           when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
           let subItemId = maybe "" (.subItemId) subDetails
-          void $ Projects.updateStripeProjectBilling pid plan subId subItemId customerId
+          void $ Projects.updateStripeProjectBilling pid (Projects.PlanName plan) (Projects.SubId subId) (Projects.SubItemId subItemId) (Projects.CustomerId customerId)
           void $ ProjectMembers.activateAllMembers pid
           case subDetails of
             Just BJ.StripeSubDetails{trialEnd = Just epoch} -> BJ.scheduleTrialReminders pid epoch
@@ -1649,7 +1649,7 @@ handleStripeSubResumed envConfig obj =
           let plan
                 | priceId == envConfig.stripePriceIdByos = "SystemsPricing"
                 | otherwise = "GraduatedPricing"
-          rows <- Projects.setPlanBySubId plan itemId subId
+          rows <- Projects.setPlanBySubId (Projects.PlanName plan) (Projects.SubItemId itemId) (Projects.SubId subId)
           when (rows == 0) $ Log.logAttention "Stripe subscription.resumed: no project for sub_id" (subId, plan)
           when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
           when (rows > 0)

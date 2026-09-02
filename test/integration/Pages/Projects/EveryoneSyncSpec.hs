@@ -9,7 +9,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.ProjectMembers qualified as PM
-import Models.Projects.Projects (UserId (..))
+import Models.Projects.Projects (pattern UserId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude

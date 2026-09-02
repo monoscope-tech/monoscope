@@ -175,7 +175,7 @@ selectActiveProjectMembers pid =
            ORDER BY pm.created_at ASC |]
 
 
-getActiveProjectMemberByUserId :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe ProjectMemberVM)
+getActiveProjectMemberByUserId :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe ProjectMemberVM)
 getActiveProjectMemberByUserId pid uid =
   Hasql.interpOne
     [HI.sql|
