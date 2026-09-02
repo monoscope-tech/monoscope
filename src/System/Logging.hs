@@ -10,6 +10,7 @@ module System.Logging (
   logTrace,
   logAttention,
   logAttention_,
+  withError,
   timeAction,
   tolerantLogger,
   LoggingDestination (..),
@@ -23,6 +24,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
 import Effectful (
@@ -160,6 +162,12 @@ logTrace = logWithTrace Log.LogTrace
 
 logAttention :: (AE.ToJSON a, IOE :> es, Log :> es) => Text -> a -> Eff es ()
 logAttention = logWithTrace Log.LogAttention
+
+
+-- | Attach a rendered exception to a log context under the conventional
+-- "error" key, so call sites stop repeating the displayException dance.
+withError :: Exception e => e -> HashMap Text Text -> HashMap Text Text
+withError e = HM.insert "error" (toText $ displayException e)
 
 
 logInfo_ :: (IOE :> es, Log :> es) => Text -> Eff es ()

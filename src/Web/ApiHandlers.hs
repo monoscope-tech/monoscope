@@ -108,7 +108,6 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
-import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (throwError)
@@ -262,9 +261,7 @@ saveMonitor pid mid existingM inp = do
 
 
 apiMonitorCreate :: Projects.ProjectId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorCreate pid inp = do
-  mid <- Monitors.QueryMonitorId <$> UUID.genUUID
-  saveMonitor pid mid Nothing inp
+apiMonitorCreate pid inp = Monitors.QueryMonitorId <$> UUID.genUUID >>= \mid -> saveMonitor pid mid Nothing inp
 
 
 apiMonitorUpdate :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
@@ -485,30 +482,25 @@ renderWidgetTree pid timeParams params w = do
   let blank = maybe True (T.null . T.strip)
   md <- if blank w.query && blank w.sql then pure def else DashPage.widgetMetrics pid timeParams params w
   kids <- pooledForConcurrently (fold w.children) (renderWidgetTree pid timeParams params)
-  pure $ toRenderedWidget w md kids
-
-
--- | Flatten a widget plus its query result into the wire shape.
-toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> [RenderedWidget] -> RenderedWidget
-toRenderedWidget w md kids =
-  RenderedWidget
-    { id = w.id
-    , title = w.title
-    , subtitle = w.subtitle
-    , wType = w.wType
-    , unit = w.unit
-    , query = w.query
-    , layout = w.layout
-    , summarizeBy = w.summarizeBy
-    , value = md.dataFloat
-    , headers = V.toList md.headers
-    , rows = V.toList (V.toList <$> md.dataset)
-    , textRows = V.toList (V.toList <$> md.dataText)
-    , stats = md.stats
-    , error = md.error
-    , columns = maybe [] (map (.title)) w.columns
-    , children = kids
-    }
+  pure
+    RenderedWidget
+      { id = w.id
+      , title = w.title
+      , subtitle = w.subtitle
+      , wType = w.wType
+      , unit = w.unit
+      , query = w.query
+      , layout = w.layout
+      , summarizeBy = w.summarizeBy
+      , value = md.dataFloat
+      , headers = V.toList md.headers
+      , rows = V.toList (V.toList <$> md.dataset)
+      , textRows = V.toList (V.toList <$> md.dataText)
+      , stats = md.stats
+      , error = md.error
+      , columns = maybe [] (map (.title)) w.columns
+      , children = kids
+      }
 
 
 -- | Insert a new dashboard row from an input.
@@ -531,8 +523,7 @@ insertDashboard pid uid now did title tags teams filePath schema = do
           , filePath = filePath
           , fileSha = Nothing
           }
-  _ <- Dashboards.insert d
-  pure $ toFull d
+  toFull d <$ Dashboards.insert d
 
 
 apiDashboardCreate :: Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull
@@ -632,12 +623,14 @@ apiDashboardWidgetDelete :: Projects.ProjectId -> Dashboards.DashboardId -> Text
 apiDashboardWidgetDelete pid did wId = NoContent <$ withWidgets pid did (filter ((/= Just wId) . (.id)))
 
 
-apiDashboardWidgetsReorder :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Map Text WidgetPosition -> ATBaseCtx NoContent
-apiDashboardWidgetsReorder pid did _tabM positions = NoContent <$ withWidgets pid did (fmap applyPos)
+apiDashboardWidgetsReorder :: Projects.ProjectId -> Dashboards.DashboardId -> Map Text WidgetPosition -> ATBaseCtx NoContent
+apiDashboardWidgetsReorder pid did positions = NoContent <$ withWidgets pid did (fmap applyPos)
   where
-    applyPos w = flip (maybe w) (w.id >>= (`Map.lookup` positions)) $ \p ->
-      let l = fromMaybe def w.layout
-       in w{Widget.layout = Just l{Widget.x = Just p.x, Widget.y = Just p.y, Widget.w = Just p.w, Widget.h = Just p.h}}
+    applyPos w = maybe w update (w.id >>= (`Map.lookup` positions))
+      where
+        update p =
+          let l = fromMaybe def w.layout
+           in w{Widget.layout = Just l{Widget.x = Just p.x, Widget.y = Just p.y, Widget.w = Just p.w, Widget.h = Just p.h}}
 
 
 toApiKeySummary :: ProjectApiKeys.ProjectApiKey -> ApiKeySummary
@@ -714,7 +707,7 @@ data ShareLinkCreated = ShareLinkCreated
   , url :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ShareLinkCreated
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ShareLinkCreated
   deriving (ToSchema) via SnakeSchema ShareLinkCreated
 
 
@@ -973,16 +966,16 @@ issueMutate pid iid op = fetchIssue pid iid *> op [iid] *> apiIssueGet pid iid
 -- | Acknowledge, silencing notifications for @duration_minutes@ — or
 -- indefinitely (until the issue regresses or is un-acked) when omitted.
 apiIssueAck :: Projects.ProjectId -> Issues.IssueId -> Maybe Int -> ATBaseCtx IssueApiFull
-apiIssueAck pid iid durationM = do
-  ack <- mkAckSet Nothing durationM
-  issueMutate pid iid $ \ids -> Issues.setAckState pid ids (Just ack)
+apiIssueAck pid iid durationM =
+  mkAckSet durationM >>= \ack -> issueMutate pid iid \ids -> Issues.setAckState pid ids (Just ack)
 
 
 -- | Build an 'Issues.AckSet' for @now@ from an optional duration in minutes.
-mkAckSet :: Maybe Projects.UserId -> Maybe Int -> ATBaseCtx Issues.AckSet
-mkAckSet by durationM = do
+-- API-key auth carries no user, so @by@ is always unattributed.
+mkAckSet :: Maybe Int -> ATBaseCtx Issues.AckSet
+mkAckSet durationM = do
   now <- Time.currentTime
-  pure Issues.AckSet{at = now, by, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
+  pure Issues.AckSet{at = now, by = Nothing, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
 
 
 apiIssueUnack :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -1002,7 +995,7 @@ apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState
 apiIssuesBulk :: Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
 apiIssuesBulk pid ba = do
   now <- Time.currentTime
-  ackSet <- mkAckSet Nothing ba.durationMinutes
+  ackSet <- mkAckSet ba.durationMinutes
   let ack = count $ Issues.setAckState pid ba.ids (Just ackSet)
       unack = count $ Issues.setAckState pid ba.ids Nothing
       archive = count $ Issues.setArchiveState pid ba.ids (Just now)
@@ -1150,8 +1143,7 @@ apiTeamDelete :: Projects.ProjectId -> TeamId -> ATBaseCtx NoContent
 apiTeamDelete pid tid = do
   t <- fetchTeam pid tid
   when t.is_everyone $ throwError err400{errBody = "The everyone team cannot be deleted"}
-  PM.deleteTeams pid (V.singleton tid.unwrap)
-  pure NoContent
+  NoContent <$ PM.deleteTeams pid (V.singleton tid.unwrap)
 
 
 apiTeamsBulk :: Projects.ProjectId -> BulkAction TeamId -> ATBaseCtx (BulkResult TeamId)
@@ -1220,8 +1212,7 @@ apiMemberPatch pid uid p = do
 apiMemberRemove :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx NoContent
 apiMemberRemove pid uid = do
   m <- fetchMemberByUserId pid uid
-  PM.softDeleteProjectMembers (m.id :| [])
-  pure NoContent
+  NoContent <$ PM.softDeleteProjectMembers (m.id :| [])
 
 
 -- | GET /api/v1/facets — return the precomputed facet summary for a project.

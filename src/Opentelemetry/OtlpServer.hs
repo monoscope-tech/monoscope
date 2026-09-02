@@ -71,7 +71,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
+import Pkg.DeriveUtils (AesonText (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
@@ -143,7 +143,7 @@ noteProfilingStrindex x = unsafePerformIO $ do
 -- the daemon is reaped on shutdown; falls back to an untracked fork only when no scope
 -- exists (non-server contexts).
 initPeriodicErrorLogging :: Maybe Ki.Scope -> Logger -> IO ()
-initPeriodicErrorLogging scopeM logger = onScope $ forever $ do
+initPeriodicErrorLogging scopeM logger = maybe (void . forkIO) (\s -> void . RawKi.fork s) scopeM $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
   (errors, dropped) <- atomicModifyIORef' wireTypeErrorsRef ((HM.empty, 0),)
   unless (HM.null errors) $ do
@@ -165,10 +165,6 @@ initPeriodicErrorLogging scopeM logger = onScope $ forever $ do
             ++ ["dropped_categories" AE..= dropped | dropped > 0]
     runLogT "monoscope" logger LogAttention
       $ LogBase.logAttention "Wire type errors summary" errorDetails
-  where
-    onScope a = case scopeM of
-      Just scope -> void $ RawKi.fork scope a
-      Nothing -> void $ forkIO a
 
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)
@@ -896,17 +892,10 @@ deriveClientAddress kvMap
     -- Priority order: vendor-specific (single, trustworthy) before XFF (chainable, spoofable).
     clientIpHeaders :: [(Text, Text -> Text)]
     clientIpHeaders =
-      [ ("http.request.header.cf-connecting-ip", T.strip)
-      , ("http.request.header.true-client-ip", T.strip)
-      , ("http.request.header.fastly-client-ip", T.strip)
-      , ("http.request.header.x-real-ip", T.strip)
-      , ("http.request.header.x-client-ip", T.strip)
-      , ("http.request.header.x-cluster-client-ip", T.strip)
-      , ("http.request.header.x-forwarded-for", T.strip . fst . T.breakOn ",")
-      , ("http.request.header.forwarded", parseForwardedFor)
-      ]
+      map (,T.strip) ["cf-connecting-ip", "true-client-ip", "fastly-client-ip", "x-real-ip", "x-client-ip", "x-cluster-client-ip"]
+        <> [("x-forwarded-for", T.strip . fst . T.breakOn ","), ("forwarded", parseForwardedFor)]
     tryHeader (key, parse) = do
-      raw <- headerString =<< HM.lookup key kvMap
+      raw <- headerString =<< HM.lookup ("http.request.header." <> key) kvMap
       let ip = parse raw
       -- Reject RFC 7239 §6.3 obfuscated identifiers ("_hidden") and the legacy
       -- nginx "unknown" sentinel — both are explicitly not IPs.
@@ -1000,16 +989,15 @@ attrPairsToJSON pairs =
 
 
 keyValuePairs :: [PC.KeyValue] -> [(Text, AE.Value)]
-keyValuePairs kvs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- kvs]
+keyValuePairs kvs = [(kv ^. PCF.key, anyValueToJSON (kv ^. PCF.value)) | kv <- kvs]
 
 
 keyValueToJSON :: [PC.KeyValue] -> AE.Value
 keyValueToJSON !kvs = attrPairsToJSON $ migrateHttpSemanticConventions $ keyValuePairs kvs
 
 
-anyValueToJSON :: Maybe PC.AnyValue -> AE.Value
-anyValueToJSON Nothing = AE.Null
-anyValueToJSON (Just av) =
+anyValueToJSON :: PC.AnyValue -> AE.Value
+anyValueToJSON av =
   case av ^. PCF.maybe'value of
     Nothing -> AE.Null
     Just (PC.AnyValue'StringValue txt) ->
@@ -1023,17 +1011,10 @@ anyValueToJSON (Just av) =
     Just (PC.AnyValue'IntValue i) -> AE.Number (fromInteger (toInteger i))
     Just (PC.AnyValue'DoubleValue d) -> AE.Number (fromFloatDigits d)
     Just (PC.AnyValue'ArrayValue arr) ->
-      AE.Array . V.fromList $ map (anyValueToJSON . Just) (arr ^. PCF.values)
+      AE.Array . V.fromList $ map anyValueToJSON (arr ^. PCF.values)
     Just (PC.AnyValue'KvlistValue kvl) ->
-      let pairs =
-            [ (AEK.fromText (pv ^. PCF.key), anyValueToJSON (Just (pv ^. PCF.value)))
-            | pv <- kvl ^. PCF.values
-            ]
-       in AE.Object (KEM.fromList pairs)
-    Just (PC.AnyValue'BytesValue bs) ->
-      -- if the bytes is a json string, decode it
-      -- otherwise just return AE.string like it it nowl
-      AE.String $ B64.extractBase64 $ B64.encodeBase64 bs
+      AE.Object $ KEM.fromList [(AEK.fromText (pv ^. PCF.key), anyValueToJSON (pv ^. PCF.value)) | pv <- kvl ^. PCF.values]
+    Just (PC.AnyValue'BytesValue bs) -> AE.String $ B64.extractBase64 $ B64.encodeBase64 bs
     -- Profiling-signal-only field; per OTLP v1.10 spec, treat as absent for
     -- non-profiling receivers. Counter feeds the periodic warning summary.
     Just (PC.AnyValue'StringValueStrindex _) -> noteProfilingStrindex AE.Null
@@ -1051,18 +1032,12 @@ removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
 
-canonicalLevels :: [(Text, Telemetry.SeverityLevel)]
-canonicalLevels = [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]
-
-
+-- | Uppercased severity text → (canonical text, level); aliases resolve to their canonical entry.
 severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
-severityMap = Map.fromList $ [(t, (t, sl)) | (t, sl) <- canonicalLevels] <> [(alias, (canonical, sl)) | (alias, canonical) <- [("WARNING", "WARN"), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")], Just sl <- [L.lookup canonical canonicalLevels]]
-
-
--- | Normalized severity text + level in one map lookup (used together at the one call site).
-{-# INLINE lookupSeverity #-}
-lookupSeverity :: Text -> Maybe (Text, Telemetry.SeverityLevel)
-lookupSeverity txt = Map.lookup (T.toUpper txt) severityMap
+severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
+  where
+    base = Map.fromList [(t, (t, sl)) | (t, sl) <- [("TRACE", Telemetry.SLTrace), ("DEBUG", Telemetry.SLDebug), ("INFO", Telemetry.SLInfo), ("WARN", Telemetry.SLWarn), ("ERROR", Telemetry.SLError), ("FATAL", Telemetry.SLFatal)]]
+    aliases = Map.fromList [("WARNING", "WARN" :: Text), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")]
 
 
 -- | Gate a project's converted records on its cache: unknown project or a
@@ -1084,7 +1059,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
   let projectKey = fromMaybe "" $ (V.!? 0) $ getLogApiKey (V.singleton resourceLogs)
       projectId =
         (snd <$> find ((== projectKey) . fst) pids)
-          <|> (UUIDId <$> (UUID.fromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs))))
+          <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
    in case projectId of
         Just pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
         Nothing -> []
@@ -1118,7 +1093,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
       !validTimestamp = validTsOr validObservedTimestamp timeNano
 
       !parentId = hexIdMaybe (logRecord ^. PLF.spanId)
-      !severity' = lookupSeverity severityText
+      !severity' = Map.lookup (T.toUpper severityText) severityMap
 
       otelLog =
         OtelLogsAndSpans
@@ -1142,7 +1117,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
                   { severity_text = snd <$> severity'
                   , severity_number = severityNumber
                   }
-          , body = fmap AesonText $ Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
+          , body = Just $ AesonText $ anyValueToJSON $ logRecord ^. PLF.body
           , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ logRecord ^. PLF.attributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = Just V.empty
@@ -1172,7 +1147,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
       let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
           projectId =
             (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
-              <|> (UUIDId <$> (UUID.fromText =<< (V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs))))
+              <|> (Projects.projectIdFromText =<< (V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs)))
               -- Fall back to the batch's project only when it is unambiguous (a
               -- single project). Picking V.head of a multi-project batch silently
               -- mis-attributes spans to the wrong project (cross-tenant leak).
@@ -1638,18 +1613,20 @@ httpLogsExport appLogger appCtx tp keyM body = case decodeMessage body of
     pure $ Right (encodeMessage (defMessage :: LS.ExportLogsServiceResponse))
 
 
--- | Metadata-less Export handlers, kept for direct calls from tests; the
--- RpcHandler variants below carry the gRPC metadata api-key.
+-- | Shared body of the metadata-less Export handlers below: dispatch the signal's
+-- processing in the background and answer with an empty success response. Those
+-- handlers exist for direct calls from tests; the RpcHandler variants further down
+-- carry the gRPC metadata api-key.
+otlpExport :: Message res => (Maybe Text -> req -> ATBackgroundCtx ()) -> Logger -> AuthContext -> TracerProvider -> Proto req -> IO (Proto res)
+otlpExport process appLogger appCtx tp (Proto req) = Proto defMessage <$ runBackground appLogger appCtx tp (process Nothing req)
+
+
 traceServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
-traceServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processTraceRequest Nothing req
-  pure defMessage
+traceServiceExport = otlpExport processTraceRequest
 
 
 logsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
-logsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processLogsRequest Nothing req
-  pure defMessage
+logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
@@ -1694,20 +1671,16 @@ processMetricsRequest metadataApiKey req = do
 
 
 metricsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
-metricsServiceExport appLogger appCtx tp (Proto req) = do
-  _ <- runBackground appLogger appCtx tp $ processMetricsRequest Nothing req
-  pure defMessage
+metricsServiceExport = otlpExport processMetricsRequest
 
 
 isAesonTextEmpty :: AE.ToJSON a => Maybe (AesonText a) -> Bool
-isAesonTextEmpty Nothing = True
-isAesonTextEmpty (Just (AesonText v)) =
-  case AE.toJSON v of
-    AE.Object o -> KEM.null o
-    AE.Array arr -> V.null arr
-    AE.String t -> T.null t
-    AE.Null -> True
-    _ -> False
+isAesonTextEmpty = maybe True \(AesonText v) -> case AE.toJSON v of
+  AE.Object o -> KEM.null o
+  AE.Array arr -> V.null arr
+  AE.String t -> T.null t
+  AE.Null -> True
+  _ -> False
 
 
 -- | Check if a project's free tier is exceeded using cached data (non-blocking).

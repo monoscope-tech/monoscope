@@ -1,7 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
 module Models.Telemetry.Telemetry (
-  LogRecord (..),
   otelRecordByProjectAndId,
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
@@ -99,7 +98,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
@@ -250,27 +248,12 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
 -- the columns stay 'Text' on the row types and are parsed totally here.
 parseSpanKind :: Maybe Text -> Maybe SpanKind
 parseSpanKind =
-  ( >>=
-      \case
-        "internal" -> Just SKInternal
-        "server" -> Just SKServer
-        "client" -> Just SKClient
-        "producer" -> Just SKProducer
-        "consumer" -> Just SKConsumer
-        "unspecified" -> Just SKUnspecified
-        _ -> Nothing
-  )
+  (=<<) (`lookup` [("internal", SKInternal), ("server", SKServer), ("client", SKClient), ("producer", SKProducer), ("consumer", SKConsumer), ("unspecified", SKUnspecified)])
 
 
 parseSpanStatus :: Maybe Text -> Maybe SpanStatus
 parseSpanStatus =
-  ( >>=
-      \t -> case T.toUpper t of
-        "OK" -> Just SSOk
-        "ERROR" -> Just SSError
-        "UNSET" -> Just SSUnset
-        _ -> Nothing
-  )
+  (=<<) ((`lookup` [("OK", SSOk), ("ERROR", SSError), ("UNSET", SSUnset)]) . T.toUpper)
 
 
 data Trace = Trace
@@ -284,36 +267,6 @@ data Trace = Trace
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Trace
-
-
-data LogRecord = LogRecord
-  { projectId :: UUID.UUID
-  , id :: UUID.UUID
-  , timestamp :: UTCTime
-  , observedTimestamp :: UTCTime
-  , traceId :: Text
-  , spanId :: Maybe Text
-  , severityText :: Maybe SeverityLevel
-  , severityNumber :: Int
-  , body :: AE.Value
-  , attributes :: AE.Value
-  , resource :: AE.Value
-  , instrumentationScope :: AE.Value
-  }
-  deriving (Generic, Show)
-  deriving anyclass (FromRow, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
-
-
-instance AE.FromJSON ByteString where
-  parseJSON = AE.withText "ByteString" $ \t ->
-    case B16.decode (Relude.encodeUtf8 t) of
-      Right bs -> return bs
-      Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
-
-
-instance AE.ToJSON ByteString where
-  toJSON = AE.String . decodeUtf8 . B16.encode
 
 
 -- JSONB/text decode for Map Text Value reuses the generic AesonText decoder in DeriveUtils.
@@ -437,7 +390,7 @@ metricCatalogKey r =
     "\x1f"
     [ UUID.toText r.projectId
     , r.metricName
-    , toText $ show r.metricType
+    , show r.metricType
     , r.metricUnit
     , metricServiceNameFromResource r.metricName r.resource
     , fromMaybe "" $ scopeField "name" r.instrumentationScope
@@ -912,12 +865,6 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
   pure resolved
 
 
--- | Full-record trace fetch. Missing parents are resolved iteratively: a parent
--- ingested outside ±5min (clock skew, late ingestion, async batch) is looked up
--- via context___span_id within ±24h. Recovered spans may themselves have a
--- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
--- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
--- logged so SREs can correlate with ingestion incidents.
 -- | Full-record spans for a trace, paged like 'getTraceDetailsForView'. Callers
 -- here look up one span (detail panel, waterfall keyboard nav) rather than
 -- drawing the whole trace, so they should pass a limit generous enough to
@@ -2769,7 +2716,7 @@ metricSeriesId MetricRecord{projectId, metricName, metricType, metricUnit, resou
       [ "series"
       , UUID.toText projectId
       , metricName
-      , toText $ show metricType
+      , show metricType
       , metricUnit
       , encodeText resource
       , encodeText attributes

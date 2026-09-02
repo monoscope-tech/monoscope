@@ -1,6 +1,5 @@
 module Pages.MonitorsSpec (spec) where
 
-import Data.Vector qualified as V
 import Models.Apis.Monitors
 import Test.Hspec
 
@@ -58,12 +57,8 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Check Alerts" do
     it "should return an empty list" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertListGetH testPid
-      case pg of
-        Alerts.AlertListGet monitors -> do
-          length monitors `shouldBe` 0
-        _ -> fail "unexpected response"
+      monitors <- runQueryEffect tr $ queryMonitorsAll testPid
+      length monitors `shouldBe` 0
 
     it "should insert an alert" \tr -> do
       (_, pg) <-
@@ -73,16 +68,13 @@ spec = sequential $ aroundAll withTestResources do
           d `shouldBe` ""
         _ -> fail "unexpected response"
     it "should return a list with the inserted alert" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertListGetH testPid
-      case pg of
-        Alerts.AlertListGet monitors -> do
-          length monitors `shouldBe` 1
-          let alert = V.head monitors
+      monitors <- runQueryEffect tr $ queryMonitorsAll testPid
+      case monitors of
+        [alert] -> do
           alert.warningThreshold `shouldBe` Nothing
           alert.alertThreshold `shouldBe` 1
           alert.id `shouldBe` QueryMonitorId alertId
-        _ -> fail "unexpected response"
+        _ -> expectationFailure "expected exactly one monitor"
     it "should get single alert" \tr -> do
       (_, pg) <-
         testServant tr $ Alerts.alertSingleGetH testPid (QueryMonitorId alertId)

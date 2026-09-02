@@ -320,7 +320,7 @@ data ApiV1Routes mode = ApiV1Routes
   , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] ApiT.DashboardYAMLDoc
   , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
   , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
-  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> QPT "tab" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
+  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
   , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
   , -- API keys
     apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]

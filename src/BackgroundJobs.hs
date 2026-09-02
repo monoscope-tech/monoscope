@@ -22,7 +22,6 @@ import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List (partition)
-import Data.List qualified as L
 import Data.List.Extra (chunksOf, groupBy, headDef)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -79,7 +78,6 @@ import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -130,8 +128,7 @@ data BgJobs
   = InviteUserToProject Projects.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Projects.UserId Projects.ProjectId Text Text
   | SendDiscordData Projects.UserId Projects.ProjectId Text [Text] Text
-  | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly
+  | NewAnomaly
       { projectId :: Projects.ProjectId
       , createdAt :: ZonedTime
       , anomalyType :: Text
@@ -237,7 +234,6 @@ jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
 jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
-    -- Create a span for the entire job execution
     let jobType = jobTypeName bgJob
     withSpan
       ("background_job." <> jobType)
@@ -246,13 +242,9 @@ jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
       , ("job.attempts", OA.toAttribute job.jobAttempts)
       ]
       $ \sp -> do
-        -- Add start event
         addEvent sp "job.started" []
-
-        -- Execute the job
         result <- try $ processBackgroundJob authCtx bgJob
-
-        -- Set span status based on result, then re-throw so odd-jobs sees the failure
+        -- Re-throw after recording, so odd-jobs still sees the failure.
         case result of
           Left (e :: SomeException) -> do
             Log.logAttention "Background job failed" (show e)
@@ -311,7 +303,7 @@ processBackgroundJob authCtx bgJob =
         renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
       users <- Projects.usersByProjectId projectId
-      let stackString = intercalate ", " $ map toString stack
+      let stackString = T.intercalate ", " stack
       forM_ users \user -> do
         let userEmail = CI.original user.email
         let project_url = projectUrl authCtx projectId
@@ -373,8 +365,8 @@ processBackgroundJob authCtx bgJob =
 
         runDailyJobScheduling = do
           Log.logInfo "Running daily job" ()
-          currentDay <- utctDay <$> Time.currentTime
           currentTime <- Time.currentTime
+          let currentDay = utctDay currentTime
           -- Book tomorrow before doing any work. odd-jobs deletes this job's own row on
           -- success, so without a future-dated DailyJob the 30-minute backstop in
           -- 'jobsWorkerInit' would re-insert one every half hour. Booking it at the start
@@ -2152,10 +2144,7 @@ safetyNetReprocess pid = do
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- forkWithCtx scope $ retryOnDeadlock "UPDATE-1" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
-    Tx.sql "SET LOCAL lock_timeout = '30s'"
-    Tx.sql "SET LOCAL statement_timeout = '5min'"
-    HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
+  mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" sql'
   _ <- forkWithCtx scope $ when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
@@ -2176,7 +2165,11 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
 -- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
 -- the PG arm of `dualExecPgTf`, but no TF fork.
 pgOnlyExec :: (DB es, Log :> es) => HI.Sql -> Eff es Int64
-pgOnlyExec sql' = retryOnDeadlock "pgOnlyExec" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+pgOnlyExec = pgExecLabeled "pgOnlyExec"
+
+
+pgExecLabeled :: (DB es, Log :> es) => Text -> HI.Sql -> Eff es Int64
+pgExecLabeled label sql' = retryOnDeadlock label $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
   Tx.sql "SET LOCAL lock_timeout = '30s'"
   Tx.sql "SET LOCAL statement_timeout = '5min'"
   HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
@@ -3190,9 +3183,7 @@ processAPIChangeAnomalies pid targetHashes = do
                 $ Log.logAttention
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
                   (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "issue_id" AE..= issue.id])
-              let label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-                  row = ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
-              pure $ Just (endpointHash, issue.id, row, unresolved)
+              pure $ Just (endpointHash, unresolved)
 
   -- Notification gate: only send for issues whose endpoint is genuinely new
   -- (not in apis.endpoints >5min ago — that's the canonical "we already
@@ -3202,7 +3193,7 @@ processAPIChangeAnomalies pid targetHashes = do
   -- same as "this endpoint is new to the project".
   preexisting <-
     SchemaCatalog.existingEndpointHashes
-      (V.fromList [(pid, h) | (h, _, _, _) <- newEndpointInfos])
+      (V.fromList [(pid, h) | (h, _) <- newEndpointInfos])
   -- A concrete path may still be an un-recognised id — template discovery
   -- decides, and it has not run yet. Announcing it now is how a single
   -- unknown id format turns into one "new endpoint" mail per id, for
@@ -3216,14 +3207,9 @@ processAPIChangeAnomalies pid targetHashes = do
   -- skipped the wait on the strength of a @{uuid}@ five segments away from the
   -- one still in question. Everything this deferral exists to prevent went out
   -- through that hole.
-  let deferred =
-        [ (iid, row)
-        | (h, iid, row, unr) <- newEndpointInfos
-        , not unr
-        , not (HashSet.member (pid, h) preexisting)
-        ]
-  unless (null deferred)
-    $ Log.logInfo "Deferred new-endpoint notifications until template discovery confirms them" ("project_id", pid.toText, "deferred", length deferred)
+  let deferred = length [() | (h, unr) <- newEndpointInfos, not unr, not (HashSet.member (pid, h) preexisting)]
+  when (deferred > 0)
+    $ Log.logInfo "Deferred new-endpoint notifications until template discovery confirms them" ("project_id", pid.toText, "deferred", deferred)
 
 
 -- | Collapse siblings that differ at one path position into a single line.
@@ -3449,14 +3435,10 @@ processIssuesEnhancement scheduledTime = do
 enhanceIssuesWithLLM :: Projects.ProjectId -> V.Vector Issues.IssueId -> ATBackgroundCtx ()
 enhanceIssuesWithLLM pid issueIds = do
   ctx <- ask @Config.AuthContext
-
-  -- Check if OpenAI API key is configured
   if T.null ctx.config.openaiApiKey
     then Log.logAttention "OpenAI API key not configured, skipping issue enhancement" pid
     else do
       Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
-
-      -- Process each issue
       forM_ issueIds \issueId -> do
         issueM <- Issues.selectIssueById issueId
         case issueM of
@@ -3464,7 +3446,6 @@ enhanceIssuesWithLLM pid issueIds = do
           Just issue
             | Issues.isNewEndpointOnly issue -> Log.logTrace "Skipping LLM enhancement for new endpoint issue" issueId
             | otherwise -> do
-                -- Call LLM to enhance the issue based on type
                 enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
                 case enhancementResult of
                   Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
@@ -3656,7 +3637,7 @@ endpointTemplateDiscovery pid = do
         -- An existing template vouches for its group; a new one has to be
         -- witnessed twice and must actually be a template.
         isEligible ((m, host, tp), hs) = S.member (m, host, tp) known || (length hs >= 2 && T.isInfixOf "{param}" tp)
-        (eligible, leftovers) = L.partition isEligible grouped
+        (eligible, leftovers) = partition isEligible grouped
         (!allUpdates, !allInserts) =
           foldMap
             (\((method, host, tp), hs) -> let ch = toXXHash $ pid.toText <> host <> method <> tp in (map (,ch,tp) hs, [(pid, tp, method, host, ch)]))
@@ -3707,7 +3688,8 @@ endpointTemplateDiscovery pid = do
 residualGroups :: Int -> [[Text]] -> [(Text, Int, [Text])]
 residualGroups minMembers paths =
   [ (prefix, pos, kids)
-  | (prefix, pos, kids) <- HM.toList byNode <&> \((pre, pos), ks) -> (pre, pos, S.toList ks)
+  | ((prefix, pos), ks) <- HM.toList byNode
+  , let kids = S.toList ks
   , length kids >= minMembers
   , any (/= "{param}") kids
   ]
@@ -3907,7 +3889,7 @@ sharedIdPrefix vals = do
   guard $ T.length common >= 2 && remainder >= 4 && length vals >= 2
   pure common
   where
-    sharedPrefix a b = toText $ map fst $ takeWhile (uncurry (==)) $ T.zip a b
+    sharedPrefix a b = maybe "" (\(c, _, _) -> c) $ T.commonPrefixes a b
 
 
 -- | Promote confirmed families to deterministic rules, but only where the rule
@@ -3933,7 +3915,7 @@ promoteConfirmedIdRules pid confirmed = do
       -- The safety test. A prefix that matches even one segment this project
       -- routes on is rejected outright rather than qualified further.
       collides p = any (T.isPrefixOf p) staticSegments
-      (rejected, safe) = L.partition (\(_, p, _) -> collides p) candidates
+      (rejected, safe) = partition (\(_, p, _) -> collides p) candidates
   unless (null rejected)
     $ Log.logInfo
       "Declined to promote id rules that collide with known routes"

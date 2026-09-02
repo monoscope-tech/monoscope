@@ -56,6 +56,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
+import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
@@ -268,7 +269,8 @@ stampHashesAtIngest :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.
 stampHashesAtIngest caches = V.map \r -> fromMaybe r do
   pid <- Projects.projectIdFromText r.project_id
   pjc <- HM.lookup pid caches
-  let (_, spanHashes, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
+  classifier <- HM.lookup pid templatesByPid
+  let (_, spanHashes, _) = processSpanToEntities classifier pjc pid r
       errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
   pure r{hashes = Just $ spanHashes <> errHashes}
   where
@@ -422,7 +424,7 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
         , name = Just "monoscope.http"
         , start_time = zonedTimeToUTC rm.timestamp
         , end_time = Just $ addUTCTime (realToFrac (fromIntegral rm.duration / 1000000000)) (zonedTimeToUTC rm.timestamp)
-        , kind = Just $ if T.isSuffixOf "Outgoing" (show rm.sdkType) then "client" else "server"
+        , kind = Just $ bool "server" "client" $ T.isSuffixOf "Outgoing" $ show rm.sdkType
         , level = Nothing
         , body = Just $ AesonText $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
         , severity = Nothing
@@ -438,7 +440,7 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
               $ jsonToMap
               $ nestedJsonFromDotNotation
                 [ ("service.name", AE.String $ fromMaybe "unknown" rm.host)
-                , ("service.version", maybe (AE.String "") AE.String rm.serviceVersion)
+                , ("service.version", AE.String $ fromMaybe "" rm.serviceVersion)
                 , ("telemetry.sdk.language", AE.String "apitoolkit")
                 , ("telemetry.sdk.name", AE.String $ show rm.sdkType)
                 ]
@@ -571,9 +573,8 @@ requestEventIds request =
   , UUID.toText $ DeterministicId.eventUuid DeterministicId.LegacyRequestTraceId identityValue
   )
   where
-    identityValue = case request.msgId of
-      Just msgId -> AE.object ["project_id" AE..= request.projectId, "msg_id" AE..= msgId]
-      Nothing -> AE.toJSON request
+    identityValue =
+      maybe (AE.toJSON request) (\msgId -> AE.object ["project_id" AE..= request.projectId, "msg_id" AE..= msgId]) request.msgId
 
 
 -- Untagged codec for the SDK's referer field: a bare string or an array of strings
@@ -927,7 +928,7 @@ isRoutePlaceholder t = case T.uncons t of
 -- ["auth0|abc","{id}","plain","100%","%zz","a/b"]
 percentDecodeLenient :: Text -> Text
 percentDecodeLenient t
-  | not (T.any (== '%') t) = t
+  | not (T.elem '%' t) = t
   | otherwise = go t
   where
     go s =
@@ -956,34 +957,31 @@ dynSegmentLabelWith :: [Text] -> Text -> Maybe Text
 dynSegmentLabelWith learned x0
   | isRoutePlaceholder x = Just "param"
   | otherwise = case valueToFormatStr x of
-      Nothing -> if isUrlIdLikeWith learned x then Just "param" else Nothing
-      Just "{uuid}" -> Just "uuid"
-      Just v
-        | v
-            `elem` [ "{mm/dd/yyyy}"
-                   , "{mm-dd-yyyy}"
-                   , "{mm.dd.yyyy}"
-                   , "{dd/mm/yyyy}"
-                   , "{dd-mm-yyyy}"
-                   , "{dd.mm.yyyy}"
-                   , "{YYYY-MM-DD}"
-                   , "{YYYY/MM/DD}"
-                   , "{YYYYMMDD}"
-                   , "{YYYY-MM-DDThh:mm:ss.sTZD}"
-                   ] ->
-            Just "date"
-        | v `elem` ["{ip}", "{ipv6}"] -> Just "ip_address"
-        | v `elem` ["{integer}", "{float}", "{hex}"] -> Just "number"
-        | otherwise -> Just "param"
+      Nothing -> "param" <$ guard (isUrlIdLikeWith learned x)
+      Just v -> Just $ fromMaybe "param" $ L.lookup v formatStrLabels
   where
     x = percentDecodeLenient x0
+
+
+-- | Maps a 'valueToFormatStr' hint to the coarser label 'dynSegmentLabelWith' stamps.
+formatStrLabels :: [(Text, Text)]
+formatStrLabels =
+  [ (fmt, label)
+  | (label, fmts) <-
+      [ ("uuid", ["{uuid}"])
+      , ("date", ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"])
+      , ("ip_address", ["{ip}", "{ipv6}"])
+      , ("number", ["{integer}", "{float}", "{hex}"])
+      ]
+  , fmt <- fmts
+  ]
 
 
 -- | Render a @{label}@ segment, suffixing @_n@ when the label already occurs.
 newSegment :: [Text] -> Text -> Text
 newSegment segs seg =
   let pfx = "{" <> seg
-      pos = length [s | s <- segs, pfx `T.isPrefixOf` s]
+      pos = length $ filter (T.isPrefixOf pfx) segs
    in if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}"
 
 

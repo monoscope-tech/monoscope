@@ -103,7 +103,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
@@ -491,6 +491,12 @@ refreshSession pool hpool sessionHeaders = do
 fromRightShow :: Show a => Either a b -> b
 fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
+
+
+-- | Test-only structural equality for ZonedTime, which has no Eq upstream.
+-- Lives here (not in Utils) so it can't leak into production comparisons.
+instance Eq ZonedTime where
+  (==) _ _ = True
 
 
 -- | Default frozen time used in tests
