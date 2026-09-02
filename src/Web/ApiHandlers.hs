@@ -352,7 +352,7 @@ apiMonitorPatch pid mid patch = do
 
 
 apiMonitorDelete :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx NoContent
-apiMonitorDelete pid mid = withRefetchNoContent (apiMonitorGet pid mid) (Monitors.monitorSoftDeleteByIds [mid])
+apiMonitorDelete pid mid = withRefetchNoContent (apiMonitorGet pid mid) (Monitors.monitorSoftDeleteByIds pid [mid])
 
 
 -- | Verify a resource belongs to the project via @fetch@, run a mutation,
@@ -373,27 +373,27 @@ apiMonitorToggleActive pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.m
 
 
 apiMonitorMute :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorMute pid mid durationM = withRefetch (apiMonitorGet pid mid) (Monitors.monitorMuteByIds durationM [mid])
+apiMonitorMute pid mid durationM = withRefetch (apiMonitorGet pid mid) (Monitors.monitorMuteByIds pid durationM [mid])
 
 
 apiMonitorUnmute :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorUnmute pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorUnmuteByIds [mid])
+apiMonitorUnmute pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorUnmuteByIds pid [mid])
 
 
 apiMonitorResolve :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorResolve pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorResolveByIds [mid])
+apiMonitorResolve pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorResolveByIds pid [mid])
 
 
 apiMonitorBulk :: Projects.ProjectId -> BulkAction UUID.UUID -> ATBaseCtx (BulkResult UUID.UUID)
-apiMonitorBulk _pid ba =
+apiMonitorBulk pid ba =
   bulkExec
     ba
-    [ ("delete", count $ Monitors.monitorSoftDeleteByIds qIds)
-    , ("activate", count $ Monitors.monitorReactivateByIds qIds)
-    , ("deactivate", count $ Monitors.monitorDeactivateByIds qIds)
-    , ("mute", count $ Monitors.monitorMuteByIds ba.durationMinutes qIds)
-    , ("unmute", count $ Monitors.monitorUnmuteByIds qIds)
-    , ("resolve", count $ Monitors.monitorResolveByIds qIds)
+    [ ("delete", count $ Monitors.monitorSoftDeleteByIds pid qIds)
+    , ("activate", count $ Monitors.monitorReactivateByIds pid qIds)
+    , ("deactivate", count $ Monitors.monitorDeactivateByIds pid qIds)
+    , ("mute", count $ Monitors.monitorMuteByIds pid ba.durationMinutes qIds)
+    , ("unmute", count $ Monitors.monitorUnmuteByIds pid qIds)
+    , ("resolve", count $ Monitors.monitorResolveByIds pid qIds)
     ]
   where
     qIds = Monitors.QueryMonitorId <$> ba.ids

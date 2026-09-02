@@ -181,39 +181,39 @@ monitorToggleActiveById mid = do
         where id=#{mid}|]
 
 
-monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
-monitorDeactivateByIds ids =
+monitorDeactivateByIds :: (DB es, Time :> es) => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
+monitorDeactivateByIds pid ids =
   Time.currentTime >>= \now ->
-    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
 
 
-monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorReactivateByIds ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
+monitorReactivateByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
+monitorReactivateByIds pid ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
 
 
 -- | Mute monitors until a future time. Pass Nothing for indefinite mute.
-monitorMuteByIds :: (DB es, Time :> es) => Maybe Int -> [QueryMonitorId] -> Eff es Int64
-monitorMuteByIds durationMinsM ids = do
+monitorMuteByIds :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Int -> [QueryMonitorId] -> Eff es Int64
+monitorMuteByIds pid durationMinsM ids = do
   now <- Time.currentTime
   let mutedUntil = maybe (UTCTime (ModifiedJulianDay 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE id = ANY(#{ids}::uuid[]) |]
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) |]
 
 
-monitorUnmuteByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorUnmuteByIds ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
+monitorUnmuteByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
+monitorUnmuteByIds pid ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
 
 
-monitorResolveByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorResolveByIds ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
+monitorResolveByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
+monitorResolveByIds pid ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
 
 
-monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
-monitorSoftDeleteByIds ids =
+monitorSoftDeleteByIds :: (DB es, Time :> es) => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
+monitorSoftDeleteByIds pid ids =
   Time.currentTime >>= \now ->
-    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]

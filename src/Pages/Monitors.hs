@@ -386,12 +386,12 @@ alertBulkActionH pid action form = do
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
     case action of
-      "deactivate" -> void $ Monitors.monitorDeactivateByIds monitorIds
-      "reactivate" -> void $ Monitors.monitorReactivateByIds monitorIds
-      "mute" -> void $ Monitors.monitorMuteByIds Nothing monitorIds
-      "unmute" -> void $ Monitors.monitorUnmuteByIds monitorIds
-      "resolve" -> void $ Monitors.monitorResolveByIds monitorIds
-      "delete" -> void $ Monitors.monitorSoftDeleteByIds monitorIds
+      "deactivate" -> void $ Monitors.monitorDeactivateByIds pid monitorIds
+      "reactivate" -> void $ Monitors.monitorReactivateByIds pid monitorIds
+      "mute" -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
+      "unmute" -> void $ Monitors.monitorUnmuteByIds pid monitorIds
+      "resolve" -> void $ Monitors.monitorResolveByIds pid monitorIds
+      "delete" -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
       _ -> pass
     addTriggerEvent "monitorsListChanged" AE.Null
   unifiedMonitorsGetH pid (Just $ bool "Active" "Inactive" (action == "deactivate")) Nothing
@@ -547,10 +547,10 @@ buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map UUID.UUID Text)
 buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
 
 
-monitorActionH :: ([Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
+monitorActionH :: (Projects.ProjectId -> [Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 monitorActionH action msg pid monitorId = do
   _ <- Projects.sessionAndProject pid
-  void $ action [monitorId]
+  void $ action pid [monitorId]
   addSuccessToast msg Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders ""
@@ -558,7 +558,7 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM =
-  monitorActionH (Monitors.monitorMuteByIds durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+  monitorActionH (\p' -> Monitors.monitorMuteByIds p' durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
@@ -566,7 +566,7 @@ alertUnmuteH = monitorActionH Monitors.monitorUnmuteByIds "Monitor unmuted"
 alertResolveH = monitorActionH Monitors.monitorResolveByIds "Monitor resolved"
 alertDeleteH pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
-  void $ Monitors.monitorSoftDeleteByIds [monitorId]
+  void $ Monitors.monitorSoftDeleteByIds pid [monitorId]
   Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
   addSuccessToast "Monitor deleted" Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
