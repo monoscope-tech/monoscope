@@ -247,6 +247,24 @@
   .drawer-toggle:checked ~ .drawer-side > .drawer-overlay {
     opacity: 1;
   }
+  .drawer-side .drawer-content-animated,
+  .drawer-side > *:not(.drawer-overlay) {
+    transform: translateX(100%);
+    transition: transform 250ms var(--ease-out-expo);
+  }
+  .drawer-toggle:checked ~ .drawer-side .drawer-content-animated,
+  .drawer-toggle:checked ~ .drawer-side > *:not(.drawer-overlay) {
+    transform: translateX(0);
+  }
+  /* Left-side drawers */
+  .drawer-side.drawer-start .drawer-content-animated,
+  .drawer-side.drawer-start > *:not(.drawer-overlay) {
+    transform: translateX(-100%);
+  }
+  .drawer-toggle:checked ~ .drawer-side.drawer-start .drawer-content-animated,
+  .drawer-toggle:checked ~ .drawer-side.drawer-start > *:not(.drawer-overlay) {
+    transform: translateX(0);
+  }
 
   /* Modal fade-scale animation with exit */
   .modal-box {
