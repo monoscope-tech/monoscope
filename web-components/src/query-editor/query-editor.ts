@@ -1143,10 +1143,13 @@ export class QueryEditorComponent extends LitElement {
       wordWrapOverride2: 'on',
       glyphMargin: false,
       folding: false,
-      // 6px padding makes one 20px line exactly the 32px the shell reserves for it
-      // (`min-h-8`). Keep this coupled to the shell and loading placeholder so the
-      // text remains centred before and after Monaco loads.
-      padding: { top: 6, bottom: 6 },
+      // 5px padding makes one 20px line 30px, which is what fits inside the
+      // bordered box the editor sits in: that box is `min-h-8` and border-box, so
+      // its 1px borders leave exactly 30 for us. Monaco writes this height inline
+      // on #editor-container, so it wins over any min-height a parent sets — the
+      // shell below and the loading placeholder have to move with it or the text
+      // stops being centred, and the row stops matching the controls beside it.
+      padding: { top: 5, bottom: 5 },
       renderLineHighlight: 'none',
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
@@ -1817,12 +1820,12 @@ export class QueryEditorComponent extends LitElement {
       <div
         class=${this.hasAttribute('standalone-ai-search')
           ? 'relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong focus-within:border-strokeBrand-strong focus:outline-2'
-          : 'relative w-full min-h-8 flex'}
+          : 'relative w-full min-h-[30px] flex'}
       >
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-5 py-1.5 pl-0 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-5 py-[5px] pl-0 hidden cursor-text"
           >
             <span class="opacity-60">level == "ERROR"</span>
             <span class="mx-1 opacity-30">·</span>
