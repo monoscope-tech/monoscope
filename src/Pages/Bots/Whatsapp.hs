@@ -1,9 +1,9 @@
 module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..), BodyType (..), parseWhatsappBody, getWhatsappList) where
 
-import Control.Lens ((.~), (?~))
+import Control.Lens ((.~), (?~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEYM
-import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Lens qualified as AEL
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -14,7 +14,7 @@ import Models.Apis.Integrations (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq
-import Pages.Bots.Utils (BotType (..), runBotQuery, withDashboardTemplate)
+import Pages.Bots.Utils (BotReply (..), BotType (..), runBotQuery, withDashboardTemplate)
 import Pkg.Components.Widget (Widget (..))
 import Relude
 import System.Config (AuthContext (backgroundScope))
@@ -37,11 +37,11 @@ whatsappIncomingPostH val = do
       fromN = T.dropWhile (/= '+') val.from
 
       -- Twilio has two outbound shapes: a plain-text template (Body) and the
-      -- chart template (ContentVariables). Text-form bot replies are exactly
-      -- the ones carrying a "body" key, so route on it.
-      send v = case v of
-        AE.Object o | Just (AE.String t) <- KEM.lookup "body" o -> sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (Just t)
-        _ -> sendWhatsappResponse v val.from envCfg.whatsappBotChart Nothing
+      -- chart template (ContentVariables). Which one is a property of the reply,
+      -- so it comes from the constructor rather than being sniffed out of the JSON.
+      send = \case
+        ReplyText v -> sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (v ^? AEL.key "body" . AEL._String)
+        ReplyChart v -> sendWhatsappResponse v val.from envCfg.whatsappBotChart Nothing
 
       handleDashboard project dashboardId skip = withDashboardTemplate project.id dashboardId $ \dashboard -> do
         let widgets = V.fromList $ (\w -> let t = fromMaybe "Untitled-" w.title in (t, "widg" <> joiner <> t <> joiner <> dashboardId)) <$> dashboard.widgets

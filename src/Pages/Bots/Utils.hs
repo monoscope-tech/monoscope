@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -468,6 +468,24 @@ formatChart target c = case target of
     iso = maybe "" (toText . iso8601Show)
 
 
+-- | A rendered bot reply. The payload is already platform-shaped by
+-- 'formatTextResponse' / 'formatReport' / 'formatChart'; the constructor records
+-- which outbound /form/ it is, because WhatsApp must select a different Twilio
+-- content template for each. The pipeline knows this at every send site, so it
+-- is carried in the type rather than re-derived downstream by sniffing whichever
+-- JSON key the renderer happened to emit.
+data BotReply = ReplyText AE.Value | ReplyChart AE.Value
+
+
+-- | Slack and Discord post both forms the same way, so they discard the
+-- distinction that WhatsApp needs. Spelled out per constructor rather than
+-- pattern-matched with a wildcard, so a third form can't be added silently.
+botReplyPayload :: BotReply -> AE.Value
+botReplyPayload = \case
+  ReplyText v -> v
+  ReplyChart v -> v
+
+
 -- | A bot conversation thread: where replies are persisted, plus the formatted
 -- history handed to the model.
 data BotThread = BotThread
@@ -484,7 +502,7 @@ data BotThread = BotThread
 runBotQuery
   :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => BotType
-  -> (AE.Value -> Eff es ())
+  -> (BotReply -> Eff es ())
   -> EnvConfig
   -> Projects.ProjectId
   -> Text
@@ -496,6 +514,7 @@ runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIn
   ReportIntent reportType ->
     processReportQuery pid reportType envCfg
       >>= send
+      . ReplyText
       . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
   GeneralQueryIntent -> do
     threadM <- resolveThread
@@ -504,7 +523,7 @@ runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIn
       Issues.insertChatMessage pid t.convId Issues.ChatUser userQuery Nothing Nothing
       whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage pid t.convId Issues.ChatAssistant q Nothing Nothing
     case result of
-      Left _ -> send $ formatBotError target ServiceError
+      Left _ -> send $ ReplyText $ formatBotError target ServiceError
       Right resp -> dispatchAIResponse resp
   where
     -- Renders a chart when the model picked a visualization, a result table when
@@ -513,7 +532,7 @@ runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIn
       now <- Time.currentTime
       let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
       case resp.query of
-        Nothing -> send $ formatTextResponse target $ fromMaybe "No response available" resp.explanation
+        Nothing -> send $ ReplyText $ formatTextResponse target $ fromMaybe "No response available" resp.explanation
         Just query -> do
           case resp.visualization of
             Just vizType -> do
@@ -521,6 +540,7 @@ runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIn
                   chartType = Widget.mapWidgetTypeToChartType wType
               imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (toText . iso8601Show <$> fromTimeM) (toText . iso8601Show <$> toTimeM)
               send
+                $ ReplyChart
                 $ formatChart
                   target
                   ChartCtx
@@ -535,11 +555,11 @@ runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIn
                     , toTime = toTimeM
                     }
             Nothing -> case parseQueryToAST query of
-              Left _ -> send $ formatBotError target (QueryParseError query)
+              Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
               Right query' -> do
                 tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
-                send $ handleTableResponse target tableAsVecE envCfg pid query
-          whenJust resp.explanation (send . formatTextResponse target)
+                send $ ReplyText $ handleTableResponse target tableAsVecE envCfg pid query
+          whenJust resp.explanation (send . ReplyText . formatTextResponse target)
 
 
 -- | Resolve a bot thread's conversation, backfilling it from the platform's own
