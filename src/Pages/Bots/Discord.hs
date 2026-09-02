@@ -31,7 +31,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
@@ -209,7 +209,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                   (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
                   (fmap (map \m -> (if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser, m.content)) <$> getThreadStarterMessage interaction envCfg.discordBotToken)
             _ -> pure Nothing
-      runBotQuery Discord (followup envCfg interaction) envCfg discordData.projectId (optionText options "") resolveThread
+      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg discordData.projectId (optionText options "") resolveThread
 
 
 -- | First slash-command option's string value, or a fallback.

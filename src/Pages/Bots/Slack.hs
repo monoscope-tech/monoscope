@@ -35,7 +35,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, parseInstallState, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, parseInstallState, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
 import PyF
@@ -178,7 +178,7 @@ slackInteractionsH interaction = do
       forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
         $ maybe
           (sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError))
-          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url) authCtx.env sd.projectId interaction.text (pure Nothing))
+          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env sd.projectId interaction.text (pure Nothing))
           slackDataM
       traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
@@ -610,7 +610,7 @@ slackEventsPostH payload = do
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)
-      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread) envCfg slackData.projectId event.text resolveThread
+      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg slackData.projectId event.text resolveThread
 
 
 newtype SlackThreadedMessage = SlackThreadedMessage {text :: Text}
