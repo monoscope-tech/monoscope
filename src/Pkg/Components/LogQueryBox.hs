@@ -166,7 +166,13 @@ logQueryBox_ config = do
               div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
-                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-8" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                  -- 30px, not min-h-8: the bordered box around this is what has
+                  -- to line up with the controls next to it, and that box is
+                  -- min-h-8 with a 1px border on each side. An editor of the
+                  -- same 32px forces its own wrapper to 34 and the row stops
+                  -- matching — which is what `matches the query controls'
+                  -- height and centers its text` measures.
+                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-[30px]" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                       -- The editor validates against the server, which needs the same source the
                       -- query will run under: metrics live in another table, so without this the
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
