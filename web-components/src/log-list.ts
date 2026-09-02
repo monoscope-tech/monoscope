@@ -4,10 +4,9 @@ import { FlowLayout } from '@lit-labs/virtualizer/layouts/flow.js';
 import { LitElement, html, css, TemplateResult, nothing, render as renderLit } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
-import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
+import { ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry } from './types/types';
 import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
-import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { groupSpans } from './log-worker-functions';
@@ -25,6 +24,7 @@ import {
   getStyleClass,
   CHAR_WIDTHS,
   MIN_COLUMN_WIDTH,
+  calculateColumnWidth,
   parseSummaryElement,
   unescapeJsonString,
   calculateAutoBinWidth,
@@ -1970,9 +1970,7 @@ export class LogList extends LitElement {
             let maxWidth = MIN_COLUMN_WIDTH * CHAR_WIDTHS.default;
 
             sampleRows.forEach((vec) => {
-              const content = String(vec[value] || '');
-              const target = content.length * CHAR_WIDTHS.default;
-              maxWidth = Math.max(maxWidth, target);
+              maxWidth = Math.max(maxWidth, calculateColumnWidth(String(vec[value] || ''), key));
             });
 
             this.columnMaxWidthMap[key] = Math.min(maxWidth, 400); // Cap at 400px
@@ -3159,18 +3157,12 @@ export class LogList extends LitElement {
             userId = '',
             userBadgeStyle = '';
           for (let i = 0; i < summaryArr.length; i++) {
-            const element = summaryArr[i];
-            const sepIdx = element.indexOf('⇒');
-            if (sepIdx === -1) continue;
+            const parsed = parseSummaryElement(summaryArr[i]);
+            if (parsed.type !== 'formatted') continue;
 
-            const semiIdx = element.indexOf(';');
-            if (semiIdx === -1 || semiIdx > sepIdx) continue;
-
-            const style = element.substring(semiIdx + 1, sepIdx);
+            const { field, style, value } = parsed;
             if (!RIGHT_PREFIX_REGEX.test(style)) continue;
 
-            const field = element.substring(0, semiIdx);
-            const value = element.substring(sepIdx + 1);
             const badgeStyle = this.getStyleClass(style);
 
             if (field === 'session') {
@@ -3289,8 +3281,8 @@ export class LogList extends LitElement {
           ${this.view === 'tree' || this.mode === 'sessions'
             ? html`
                 <div class="flex items-center shrink-0">
-                  ${map(
-                    Array(Math.max(0, depth - 1)),
+                  ${Array.from(
+                    { length: Math.max(0, depth - 1) },
                     (_, i) =>
                       html`<div class="w-8 h-5 shrink-0 flex items-center justify-center">
                         ${siblingsArr[i] ? faSprite('tree-straight', 'regular', 'w-8 h-5 text-iconNeutral') : nothing}
@@ -4736,7 +4728,7 @@ function loadingSkeleton(columns: string[]) {
           <p class="text-sm text-textWeak text-center py-3">Loading events...</p>
         </td>
       </tr>
-      ${map(Array(10), (_, rowIdx) => skeletonRow(rowIdx, cols))}
+      ${Array.from({ length: 10 }, (_, rowIdx) => skeletonRow(rowIdx, cols))}
     </tbody>
   `;
 }

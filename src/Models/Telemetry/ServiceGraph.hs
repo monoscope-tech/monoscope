@@ -29,7 +29,6 @@ module Models.Telemetry.ServiceGraph (
   rollupServiceEdges,
   upsertServiceDependencyEdges,
   serviceGraphForRange,
-  latencyPercentile,
 ) where
 
 import Data.Aeson qualified as AE
@@ -49,7 +48,7 @@ import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanKind (..), SpanRecord (..), SpanStatus (..), atMapText)
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), idFromText)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), decodeEnumSC, encodeEnumSC, idFromText)
 import Relude
 
 
@@ -572,14 +571,22 @@ data SliceRow = SliceRow
   deriving anyclass (HI.DecodeRow)
 
 
+-- | The stored spelling of a kind is exactly what 'NodeKind's 'WrappedEnumSC' derivation
+-- encodes, so the column, the JSON payload and the rollup's SQL literals cannot drift apart
+-- — but it also means renaming a constructor rewrites the storage format, which the
+-- round-trip doctest below is here to catch. An unrecognised value degrades to 'NKUnknown'
+-- rather than failing the whole query.
+--
+-- >>> map kindText [minBound .. maxBound]
+-- ["entry","service","database","queue","external","unknown"]
+-- >>> all (\k -> parseNodeKind (kindText k) == k) [minBound .. maxBound]
+-- True
 parseNodeKind :: Text -> NodeKind
-parseNodeKind = \case
-  "entry" -> NKEntry
-  "service" -> NKService
-  "database" -> NKDatabase
-  "queue" -> NKQueue
-  "external" -> NKExternal
-  _ -> NKUnknown
+parseNodeKind = fromMaybe NKUnknown . decodeEnumSC @"NK" . toString
+
+
+kindText :: NodeKind -> Text
+kindText = toText . encodeEnumSC @"NK"
 
 
 sliceRowsToEdges :: [SliceRow] -> [RollupEdge]
@@ -743,16 +750,6 @@ histObject (LatencyHist h) = AE.object [AEKey.fromString (show idx) AE..= c | (i
 
 histFromObject :: Map Text Int64 -> LatencyHist
 histFromObject m = LatencyHist $ IntMap.fromListWith (+) [(idx, c) | (k, c) <- Map.toList m, Just idx <- [readMaybe (toString k)]]
-
-
-kindText :: NodeKind -> Text
-kindText = \case
-  NKEntry -> "entry"
-  NKService -> "service"
-  NKDatabase -> "database"
-  NKQueue -> "queue"
-  NKExternal -> "external"
-  NKUnknown -> "unknown"
 
 
 -- | Read the rollup for a range and fold it into a graph. Cheap: a day is a few thousand
