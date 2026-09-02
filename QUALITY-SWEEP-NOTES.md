@@ -336,6 +336,32 @@ the delay is an implementation detail of a retry loop that already requires `IOE
 because `-Wredundant-constraints` is error-level here and made the constraint genuinely
 unused. Flagging it so the trade is a conscious one rather than an implicit one.
 
+## The integration suite cannot be trusted while another checkout is testing
+
+`Pkg.TestUtils` clones each run's database from a **server-wide** template,
+`monoscope_test_template`. Each run does get its own `monoscope_test_<uuid>` database —
+but the template is shared across every checkout pointed at the same Postgres. When
+`monoscope` or `monoscope-perf-sweep` run their suites concurrently, they drop and
+recreate that template, and any overlapping run dies at setup with
+
+    SqlError 3D000: template database "monoscope_test_template" does not exist
+
+That is the whole explanation for the 9–72 "failures" I chased across several runs: they
+are setup failures, not assertion failures, and they evaporate when the specs are re-run in
+isolation. The single run that had the machine to itself gave **784 examples, 1 failure** —
+one real defect, fixed in `674c4ca7`.
+
+Two further traps I hit while chasing it, both worth knowing:
+
+- **`make test-integration` passes `--jobs=$(NCPUS)`.** A hand-rolled `cabal test` without
+  it runs sequentially and produces a different, failing result. Use the make target.
+- **Killing `cabal test` does not kill the test binary.** `pkill -f "cabal test …"` matches
+  the wrapper; the compiled `integration-tests` executable survives, orphaned, holding
+  ~1 GB. Kill the process tree, not the pattern.
+
+The leftover `monoscope_test_<uuid>` databases on the server are debris from killed runs
+and can be dropped when nothing is testing.
+
 ## Verification status
 
 | lane | state |
