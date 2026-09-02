@@ -121,8 +121,8 @@ acknowledgeAnomalyGetH pid enable aid durationM = do
       then do
         void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = now, by = Just sess.user.id, window}
         Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
-        hashes <- Anomalies.acknowledgeAnomalies sess.user.id until' (V.singleton (UUID.toText aid.unUUIDId))
-        void $ Anomalies.acknowlegeCascade sess.user.id until' (V.fromList hashes)
+        hashes <- Anomalies.acknowledgeAnomalies pid sess.user.id until' (V.singleton (UUID.toText aid.unUUIDId))
+        void $ Anomalies.acknowlegeCascade pid sess.user.id until' (V.fromList hashes)
         addSuccessToast (untilLabel "Acknowledged" now until' <> " \x2014 notifications paused") Nothing
         pure $ Just until'
       else do
@@ -179,8 +179,8 @@ anomalyBulkActionsPostH pid action durationM items = do
           until' = Issues.ackUntil now window
       (eventType, msg) <- case action of
         "acknowledge" -> do
-          ths <- Anomalies.acknowledgeAnomalies sess.user.id until' vIds
-          void $ Anomalies.acknowlegeCascade sess.user.id until' (V.fromList ths)
+          ths <- Anomalies.acknowledgeAnomalies pid sess.user.id until' vIds
+          void $ Anomalies.acknowlegeCascade pid sess.user.id until' (V.fromList ths)
           pure (Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
         "unacknowledge" -> do
           void $ Issues.setAckState pid issueIds Nothing

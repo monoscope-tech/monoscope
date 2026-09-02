@@ -191,31 +191,46 @@ where
 -- @until'@ is the end of the acknowledgement window (see @Issues.ackUntil@); it
 -- is what actually silences notifications, so it must be stamped everywhere
 -- @acknowledged_at@ is.
-acknowledgeAnomalies :: (DB es, Time :> es) => Projects.UserId -> UTCTime -> V.Vector Text -> Eff es [Text]
-acknowledgeAnomalies uid until' issueIds
+acknowledgeAnomalies :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UTCTime -> V.Vector Text -> Eff es [Text]
+acknowledgeAnomalies pid uid until' issueIds
   | V.null issueIds = pure []
   | otherwise = do
       now <- Time.currentTime
       Hasql.interp
         [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}, acknowledged_until=#{until'}
                  WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
+        -- Project-scoped for the same two reasons as 'acknowlegeCascade': an anomaly hash is
+        -- content-derived and not unique across projects, and (project_id, target_hash) is the
+        -- index this can actually use.
         <* Hasql.interpExecute_
           [HI.sql| WITH related AS (
                      SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
                      FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
                    )
                    UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
-                   WHERE a.target_hash IN (SELECT h FROM related) |]
+                   WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
 
 
-acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> UTCTime -> V.Vector Text -> Eff es Int64
-acknowlegeCascade uid until' targets
+-- | Sweep every issue and anomaly whose @target_hash@ starts with one of @targets@.
+--
+-- Scoped to the project. It was not, and a @target_hash@ is derived from content — two
+-- projects seeing the same endpoint or error shape can produce the same 8-character hash, and
+-- acknowledging in one would then silence the other. Scoping is also what lets the sweep use
+-- an index: every index on these tables leads with @project_id@, so without it both statements
+-- were sequential scans of tables that are 1.7 GB (issues) and 2.4 GB / 6.3M rows (anomalies).
+-- Measured on prod with EXPLAIN, the issues sweep goes from cost 11,438 to 375.
+--
+-- The anomalies sweep is still a bitmap scan filtered by the LIKE (cost ~170k): the prefix is
+-- variable-width, so it needs @(project_id, target_hash text_pattern_ops)@ to range-scan. See
+-- the note in scripts/local/page-perf/FINDINGS.md — that one wants a migration, not a patch.
+acknowlegeCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UTCTime -> V.Vector Text -> Eff es Int64
+acknowlegeCascade pid uid until' targets
   | V.null targets = pure 0
   | otherwise = do
       now <- Time.currentTime
       let hashes = (<> "%") <$> targets
-      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE target_hash LIKE ANY(#{hashes}) |]
-      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
+      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE project_id = #{pid} AND target_hash LIKE ANY(#{hashes}) |]
+      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE project_id = #{pid} AND target_hash LIKE ANY(#{hashes}) |]
 
 
 -- | Archive issues by id and cascade-archive their underlying anomalies via

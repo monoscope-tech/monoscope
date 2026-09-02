@@ -257,7 +257,29 @@ spec = sequential $ aroundAll withTestResources do
                 VALUES (?, ?) ON CONFLICT DO NOTHING |]
             (testPid, prefix <> ":anom")
 
-      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id Issues.indefiniteUntil (V.singleton prefix)
+      -- A second project holding the SAME hash. The sweep is by content-derived hash, which is
+      -- not unique across projects, so an unscoped sweep silences another tenant's issue —
+      -- and unscoped it also could not use any index on these tables (every one leads with
+      -- project_id), which is what made acknowledging an issue a pair of sequential scans.
+      otherPid <- UUIDId <$> UUID.nextRandom
+      otherIid <- UUIDId <$> UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql| INSERT INTO projects.projects (id, title, description, active) VALUES (?, 'other', '', true) ON CONFLICT DO NOTHING |] (Only otherPid)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+            (otherIid, otherPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
+
+      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade testPid sess.user.id Issues.indefiniteUntil (V.singleton prefix)
+
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NULL |] (Only otherIid)
+        >>= (`shouldBe` 1)
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
         >>= (`shouldBe` 1)
