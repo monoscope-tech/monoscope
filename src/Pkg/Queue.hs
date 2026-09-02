@@ -219,14 +219,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let !validMsgs =
-              mapMaybe
-                ( \msg -> do
-                    ackId <- msg.ackId
-                    b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                    Just (ackId, b64Msg)
-                )
-                messages
+        let !validMsgs = mapMaybe (\msg -> (,) <$> msg.ackId <*> msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64) messages
         let msgAttrs = maybeToMonoid $ messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
         msgIds <-
@@ -245,7 +238,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
             >>= \batchRes ->
               liftIO
                 $ fromRight []
-                <$> runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (routeBatchOutcome appCtx appCtx.config.kafkaDeadLetterTopic "pubsub-service" topic validMsgs msgAttrs batchRes)))
+                <$> runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (routeBatchOutcome appCtx.config.kafkaDeadLetterTopic "pubsub-service" topic validMsgs msgAttrs batchRes)))
 
         unless (null msgIds)
           $ void
@@ -552,7 +545,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
               "kafka.process_batch"
               [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length w.payloads)), ("client_id", OA.toAttribute clientId)]
               (fn w.payloads attrs)
-        acks <- routeBatchOutcome appCtx dlqBase "kafka-service" topic w.payloads attrs result
+        acks <- routeBatchOutcome dlqBase "kafka-service" topic w.payloads attrs result
         atomically do
           -- No-ack (transient write/DLQ failure → routeBatchOutcome []): the chunk's
           -- offsets won't advance the commit base, yet the poll position has already
@@ -716,7 +709,7 @@ notDueHold nowEpoch recs = K.unOffset . (.crOffset) <$> find (not . isDue nowEpo
 
 
 topicToCeType :: Text -> Text
-topicToCeType topic = case topic of
+topicToCeType = \case
   "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
   "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
   "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
@@ -790,8 +783,8 @@ subChunksFor role dlqGroupKey nowEpoch byTP =
 -- get DLQ'd again, duplicating in DLQ. The trade — duplicate DLQ entries
 -- vs. losing poison data — favors duplicates: DLQ is rare and replay tooling
 -- can dedupe by 'original-ack-id'.
-publishToDeadLetterQueue :: (KE.KafkaProducer :> es, Time.Time :> es) => AuthContext -> Text -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> Eff es ()
-publishToDeadLetterQueue _appCtx base messages attributes errorReason = do
+publishToDeadLetterQueue :: (KE.KafkaProducer :> es, Time.Time :> es) => Text -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> Eff es ()
+publishToDeadLetterQueue base messages attributes errorReason = do
   let tiers = retryTiers base
       park = parkingTopicFor base
   currentTime <- Time.currentTime
@@ -851,8 +844,7 @@ publishToDeadLetterQueue _appCtx base messages attributes errorReason = do
 --     Otherwise: DLQ the whole batch as opaque poison; commit only if DLQ accepted.
 routeBatchOutcome
   :: (Error K.KafkaError :> es, KE.KafkaProducer :> es, Log :> es, Time.Time :> es)
-  => AuthContext
-  -> Text
+  => Text
   -- ^ dead-letter base topic (per-service: OTLP DLQ vs rrweb DLQ)
   -> Text
   -- ^ service name for log context ("pubsub-service" / "kafka-service")
@@ -864,7 +856,7 @@ routeBatchOutcome
   -- ^ base attrs (ce-type etc.)
   -> Either SomeException (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
   -> Eff es [Text]
-routeBatchOutcome appCtx dlqBase svc topic validMsgs attrs = \case
+routeBatchOutcome dlqBase svc topic validMsgs attrs = \case
   Right (Right (writeAcks, [])) -> pure writeAcks
   Right (Right (writeAcks, poison)) -> do
     let firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
@@ -887,4 +879,4 @@ routeBatchOutcome appCtx dlqBase svc topic validMsgs attrs = \case
     -- DLQ publish throws KafkaError on enqueue failure; on failure commit nothing
     -- → broker redelivers (writes repeated on retry; need idempotency downstream).
     dlqThen msgs dlqAttrs reason acks =
-      tryError @K.KafkaError (publishToDeadLetterQueue appCtx dlqBase msgs dlqAttrs reason) <&> either (const []) (const acks)
+      tryError @K.KafkaError (publishToDeadLetterQueue dlqBase msgs dlqAttrs reason) <&> either (const []) (const acks)

@@ -120,12 +120,13 @@ module Pkg.LiveTail (
 import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, swapTVar, writeTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addDays, diffTimeToPicoseconds, picosecondsToDiffTime)
+import Data.Time (UTCTime (..), addDays)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -880,31 +881,13 @@ data LogRowFields = LogRowFields
 
 
 -- The wire field is optional only at this boundary: v3 producers deployed before projection
--- omit it. Normalising to an empty map keeps that rollout detail out of the domain type.
+-- omit it. Defaulting it before the derived parser keeps that rollout detail out of the domain
+-- type, and keeps one spelling of the field names — a hand-written parser here would be free to
+-- drift from the derived encoder above.
 instance AE.FromJSON LogRowFields where
-  parseJSON = AE.withObject "LogRowFields" \o ->
-    LogRowFields
-      <$> o
-      AE..: "id"
-      <*> o
-      AE..: "timestamp"
-      <*> o
-      AE..: "level"
-      <*> o
-      AE..: "service"
-      <*> o
-      AE..: "trace_id"
-      <*> o
-      AE..: "span_id"
-      <*> o
-      AE..: "name"
-      <*> o
-      AE..: "body"
-      <*> o
-      AE..:? "fields"
-      AE..!= mempty
-      <*> o
-      AE..: "truncated"
+  parseJSON = AE.withObject "LogRowFields" \o -> do
+    r <- AE.parseJSON (AE.Object (AEKM.insertWith (\dflt present -> bool present dflt (present == AE.Null)) "fields" (AE.object []) o))
+    pure (DAE.unCustomJSON (r :: DAE.Snake LogRowFields))
 
 
 -- | One matched record, shaped for whichever surface asked for it.
@@ -1047,14 +1030,16 @@ dottedSubject path = case T.splitOn "." path of
 -- | Match PostgreSQL/TimeFusion's microsecond timestamp precision before the row becomes a
 -- durable-record lookup key. Incoming OTLP timestamps can carry nanoseconds; sending those
 -- unchanged makes an exact lookup miss the row the database just rounded and stored.
+--
+-- The rounding is 'Telemetry.roundUTCToMicros' — the rule the write path already applies, so
+-- the lookup key cannot drift from the value that was stored. Only the day carry is added
+-- here: a timestamp that rounds up past midnight is the next day, not a 24:00 day time.
 storageTimestamp :: UTCTime -> UTCTime
-storageTimestamp ts = UTCTime (addDays dayCarry ts.utctDay) (picosecondsToDiffTime dayPicoseconds)
+storageTimestamp ts
+  | rounded.utctDayTime >= 86_400 = UTCTime (addDays 1 rounded.utctDay) (rounded.utctDayTime - 86_400)
+  | otherwise = rounded
   where
-    rounded =
-      ((diffTimeToPicoseconds ts.utctDayTime + picosecondsPerMicrosecond `div` 2) `div` picosecondsPerMicrosecond)
-        * picosecondsPerMicrosecond
-    (dayCarry, dayPicoseconds) = rounded `divMod` (86_400 * 1_000_000_000_000)
-    picosecondsPerMicrosecond = 1_000_000
+    rounded = Telemetry.roundUTCToMicros ts
 
 
 toLogRowFields :: [Text] -> Telemetry.OtelLogsAndSpans -> LogRowFields
@@ -1331,13 +1316,13 @@ publishMatches rt pid records = do
     else do
       let affordable = affordableRecords (length subs)
       liftIO
-        $ (<> PublishStats{evaluated = 0, matched = 0, failed = 0, publishFailed = 0, oversized = 0, skipped = Sum (max 0 (V.length records - affordable))})
+        $ (<> (mempty :: PublishStats){skipped = Sum (max 0 (V.length records - affordable))})
         <$> foldlM (step subs) mempty (V.take affordable records)
   where
     step subs acc rec = do
       let (hits, errs) = matchesFor subs rec
       (sent, tooBig) <- foldMapM emitOne hits
-      pure (acc <> PublishStats{evaluated = 1, matched = Sum (length hits), failed = Sum (length errs), publishFailed = Sum (length hits) - sent - tooBig, oversized = tooBig, skipped = 0})
+      pure (acc <> (mempty :: PublishStats){evaluated = 1, matched = Sum (length hits), failed = Sum (length errs), publishFailed = Sum (length hits) - sent - tooBig, oversized = tooBig})
       where
         emitOne cs =
           let env = LiveEnvelope envelopeVersion cs.sub.id (toLiveRow cs.sub.scope cs.sub.columns rec)

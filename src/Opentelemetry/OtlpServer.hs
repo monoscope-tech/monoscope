@@ -578,11 +578,7 @@ parseConnectionString connStr =
               -- Remove any trailing semicolons
               cleanVal = T.takeWhile (/= ';') serverVal
               -- Handle both colon and comma separators
-              (host, portPart) = case T.breakOn ":" cleanVal of
-                (h, p) | not (T.null p) -> (h, T.drop 1 p)
-                _ -> case T.breakOn "," cleanVal of
-                  (h, p) | not (T.null p) -> (h, T.drop 1 p) -- For comma, extract port
-                  _ -> (cleanVal, "")
+              (host, portPart) = second (T.drop 1) $ (if T.any (== ':') cleanVal then T.breakOn ":" else T.breakOn ",") cleanVal
            in if T.null host
                 then []
                 else
@@ -777,9 +773,6 @@ migrateHttpSemanticConventions !keyVals =
       Just (AE.String connStr) -> parseConnectionString connStr
       _ -> []
 
-    -- Handle db.elasticsearch.path_parts.<key> -> db.operation.parameter.<key>
-    migrateElasticsearchPaths = migrateElasticsearchPathParts keyVals
-
     -- Handle db.redis.database_index special case (convert to string for db.namespace)
     migrateRedisIndex = case HM.lookup "db.redis.database_index" kvMap of
       Just (AE.Number n) -> [("db.namespace", AE.String (show (round n :: Int)))]
@@ -789,13 +782,8 @@ migrateHttpSemanticConventions !keyVals =
     migrateHttpTarget = case httpTargetM of
       Just (AE.String target)
         | not hasUrlPath ->
-            let
-              (path, query) = T.breakOn "?" target
-              queryWithoutQ = if T.null query then "" else T.drop 1 query
-              pathPair = [("url.path", AE.String path)]
-              queryPair = [("url.query", AE.String queryWithoutQ) | not (T.null query)]
-             in
-              pathPair ++ queryPair
+            let (path, query) = T.breakOn "?" target
+             in ("url.path", AE.String path) : [("url.query", AE.String (T.drop 1 query)) | not (T.null query)]
       _ -> []
 
     -- Migrate method "_OTHER" case
@@ -834,7 +822,7 @@ migrateHttpSemanticConventions !keyVals =
     -- the proxy's address (or nothing) in attributes___client___address.
     migrateClientAddress = deriveClientAddress kvMap
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError ++ migrateServerAddress ++ migrateClientAddress
+    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPathParts keyVals ++ migrateRedisIndex ++ migrateBrowserError ++ migrateServerAddress ++ migrateClientAddress
 
 
 -- | Derive @client.address@ from common proxy/CDN headers when not explicitly set.
@@ -1060,9 +1048,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
       projectId =
         (snd <$> find ((== projectKey) . fst) pids)
           <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
-   in case projectId of
-        Just pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
-        Nothing -> []
+   in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs) projectId
 
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
@@ -1152,9 +1138,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
               -- single project). Picking V.head of a multi-project batch silently
               -- mis-attributes spans to the wrong project (cross-tenant leak).
               <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
-       in case projectId of
-            Just pid -> withinQuota projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
-            Nothing -> []
+       in maybe [] (\pid -> withinQuota projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs) projectId
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpansF
@@ -1194,45 +1178,35 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
       statusMsgText = Just $ status ^. PTF.message
       parentId = hexIdMaybe (pSpan ^. PTF.parentSpanId)
 
-      -- Convert events only if non-empty
-      eventsJson =
-        let !events = pSpan ^. PTF.events
-         in if null events
-              then Nothing
-              else
-                Just
-                  $! AE.toJSON
-                  $! map
-                    ( \ev ->
-                        AE.object
-                          [ "event_name" AE..= (ev ^. PTF.name)
-                          , "event_time" AE..= validTsOr fallbackTime (ev ^. PTF.timeUnixNano)
-                          , "event_attributes" AE..= keyValueToJSON (ev ^. PTF.attributes)
-                          , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
-                          ]
-                    )
-                    events
-
-      -- Convert links only if non-empty
-      linksJson =
-        let !links = pSpan ^. PTF.links
-         in if null links
-              then Nothing
-              else
-                Just
-                  $! show
-                  $! AE.toJSON
-                  $! map
-                    ( \link ->
-                        AE.object
-                          [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
-                          , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
-                          , "link_attributes" AE..= keyValueToJSON (link ^. PTF.attributes)
-                          , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
-                          , "link_flags" AE..= (link ^. PTF.traceState)
-                          ]
-                    )
-                    links
+      -- Convert events/links only if non-empty
+      eventsJson = case pSpan ^. PTF.events of
+        [] -> Nothing
+        evs ->
+          Just
+            $! AE.toJSON
+            $! [ AE.object
+                   [ "event_name" AE..= (ev ^. PTF.name)
+                   , "event_time" AE..= validTsOr fallbackTime (ev ^. PTF.timeUnixNano)
+                   , "event_attributes" AE..= keyValueToJSON (ev ^. PTF.attributes)
+                   , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
+                   ]
+               | ev <- evs
+               ]
+      linksJson = case pSpan ^. PTF.links of
+        [] -> Nothing
+        lks ->
+          Just
+            $! show
+            $! AE.toJSON
+            $! [ AE.object
+                   [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
+                   , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
+                   , "link_attributes" AE..= keyValueToJSON (link ^. PTF.attributes)
+                   , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
+                   , "link_flags" AE..= (link ^. PTF.traceState)
+                   ]
+               | link <- lks
+               ]
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
       -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
@@ -1284,13 +1258,10 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
         lookupNested "url" "full" attrs >>= \case
           AE.String u ->
             let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
-                h = T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
-             in if T.null h then Nothing else Just h
+             in guarded (not . T.null) $ T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
           _ -> Nothing
       serviceName =
-        resourceAttrs >>= Map.lookup "service" >>= \case
-          AE.Object s -> KEM.lookup "name" s >>= \case AE.String n -> Just n; _ -> Nothing
-          _ -> Nothing
+        (resourceAttrs >>= lookupNested "service" "name") >>= \case AE.String n -> Just n; _ -> Nothing
       mergeObjects (AE.Object new) (AE.Object old) = AE.Object (KEM.union new old)
       mergeObjects new _ = new
       otelSpan =
@@ -1363,22 +1334,16 @@ metricRequestHasOverflow req =
 -- | Convert ResourceMetrics to MetricRecords
 convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
-  withinQuota projectCaches pid $ concatMap (convertResourceMetricToMetricRecords fallbackTime pid) (V.toList resourceMetrics)
-
-
--- | Convert a single ResourceMetrics to MetricRecords
-convertResourceMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
-convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
-  let resourceM = Just $ resourceMetric ^. PMF.resource
-      resourceSchemaUrl = resourceMetric ^. PMF.schemaUrl
-      droppedAttributesCount = fromIntegral $ resourceMetric ^. PMF.resource . PRF.droppedAttributesCount
-   in [ record
-      | sm <- resourceMetric ^. PMF.scopeMetrics
-      , let scope = Just $ sm ^. PMF.scope
-      , let scopeSchemaUrl = sm ^. PMF.schemaUrl
-      , metric <- sm ^. PMF.metrics
-      , record <- convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppedAttributesCount scope scopeSchemaUrl metric
-      ]
+  withinQuota
+    projectCaches
+    pid
+    [ record
+    | rm <- V.toList resourceMetrics
+    , let resourceM = Just $ rm ^. PMF.resource
+    , sm <- rm ^. PMF.scopeMetrics
+    , metric <- sm ^. PMF.metrics
+    , record <- convertMetricToMetricRecords fallbackTime pid resourceM (rm ^. PMF.schemaUrl) (fromIntegral $ rm ^. PMF.resource . PRF.droppedAttributesCount) (Just $ sm ^. PMF.scope) (sm ^. PMF.schemaUrl) metric
+    ]
 
 
 -- | Convert a single Metric to MetricRecords
@@ -1728,7 +1693,6 @@ mkOtlpRpcHandler appLogger appCtx tp label countFn rejectResp process = mkRpcHan
       sendFinalOutput call (defMessage, NoMetadata)
 
 
--- | RpcHandler for trace service with metadata access
 traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
 traceServiceRpcHandler appLogger appCtx tp =
   mkOtlpRpcHandler
@@ -1741,7 +1705,6 @@ traceServiceRpcHandler appLogger appCtx tp =
     processTraceRequest
 
 
--- | RpcHandler for logs service with metadata access
 logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
 logsServiceRpcHandler appLogger appCtx tp =
   mkOtlpRpcHandler
@@ -1754,7 +1717,6 @@ logsServiceRpcHandler appLogger appCtx tp =
     processLogsRequest
 
 
--- | RpcHandler for metrics service with metadata access
 metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
 metricsServiceRpcHandler appLogger appCtx tp =
   mkOtlpRpcHandler
