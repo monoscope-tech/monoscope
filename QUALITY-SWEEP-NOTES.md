@@ -1,129 +1,126 @@
-# Quality sweep — worklist and findings
+# Quality sweep — findings and open decisions
 
-Branch: `quality-sweep-2026-09-02`, from `master@44c38b1c`.
+Branch `quality-sweep-2026-09-02`, from `master@44c38b1c`.
+All three skills (`/hs-distill`, `/hs-lob-review`, `/hs-evasion-review`) applied across
+feature groups: log explorer, service map, replay, bots, monitors, issues, endpoints,
+billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
 ## Verification rules (learned the hard way)
 
 - **Never run `cabal build`/`cabal test`.** A ghcid watcher owns the build; a second
-  cabal process races it and produces phantom errors.
-  Start the watcher type-check-only (NOT `make live-reload`, which kills port 8080 and
-  disrupts the other checkouts on this machine):
-  ```
-  ghcid --command 'cabal repl monoscope --no-semaphore \
-    --ghc-options="-j3 -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds"' --warnings > build.log 2>&1
-  ```
-- Read the verdict with `GHCID_WAIT_TIMEOUT=1800 GHCID_MIN_MODULES=120 ./scripts/local/ghcid-wait.sh`.
-  It handles ghcid's three false-green modes (stale title, in-flight reload, and
-  `All good (N modules)` printed right after `Failed, unloaded all modules` on an import cycle).
-- **Do not run parallel editors against one watcher.** With several agents editing
-  different files, a red build cannot be attributed to any one of them. Batch edits,
-  then verify once.
+  cabal process races it and produces phantom errors. Read the verdict with
+  `GHCID_WAIT_TIMEOUT=1800 GHCID_MIN_MODULES=120 ./scripts/local/ghcid-wait.sh`, which
+  handles ghcid's three false-green modes.
+- **`0 examples, 0 failures` is not a pass.** `TEST_MATCH` silently matches nothing if
+  the pattern is wrong. It is a substring match on the full spec path, and the Makefile's
+  `:main --match $(TEST_MATCH)` form **cannot contain a space**. Bad patterns cost time
+  three separate times tonight.
+- **A filtered run of a `sequential`/`aroundAll` spec can fail for reasons unrelated to
+  the code** — the fixture is seeded by an earlier example the filter excluded.
+- **The library build cannot catch test-only breakage.** The test target compiles
+  separately; a removed field can leave a live reference in a spec that `build.log`
+  never sees.
+- **`weeder` is currently unusable** — `~/.cabal/bin/weeder` is a dangling symlink into a
+  pruned store entry. CLAUDE.md tells you to run it regularly; it has been silently
+  unavailable. `cabal install weeder` will fix it, but not while watchers are running.
 
-## Why the integration suite fails under concurrent checkouts
+## Bugs fixed on this branch
 
-Several checkouts of this repo share one PostgreSQL server. `Pkg.TestUtils` clones a
-server-wide template database, `monoscope_test_template`, and other checkouts' suites
-drop and recreate it. A run that starts while another is recreating it dies with
-`SqlError 3D000: template database "monoscope_test_template" does not exist`, and the
-failure count (9, 72, …) is a function of timing, not of the code under test.
+Each has a regression guard unless noted.
 
-Treat 3D000 as environmental. Get one clean full pass before merging, and prefer
-`TEST_MATCH`-scoped runs while other checkouts are active. Note that `make test-integration`
-passes `--jobs=$(NCPUS)`, which a hand-rolled `cabal test` omits — another reason not to
-hand-roll one.
+1. **Cross-tenant read via `selectIssueById`** — it and `selectIssueByIdScoped` differed
+   only by `AND project_id = #{pid}`. Same shape as the monitors bulk-action hole.
+2. **Cross-tenant writes via the monitors bulk actions** (earlier branch, same class).
+3. **`EnvConfig` derived `Show`** — ~15 secrets, embedded in `BWConfig` which also
+   derives `Show`. One `show bwconf` in a log or exception printed the whole credential
+   set. Now redacting. *No test — asserting on the absence of a leak is awkward; the
+   instance is one line and self-evident.*
+4. **`active` was DB-inert on monitors** — `queryMonitorUpsert` omitted `deactivated_at`
+   from both the INSERT and the `ON CONFLICT SET`, so creating a monitor with
+   `active: false` answered "disabled" while the row stayed live and kept firing.
+5. **Load-more paging skipped rows** — the cursor epsilon was 1ms against an inclusive
+   `timestamp <= cursor` bound, discarding up to 999µs of rows per page.
+6. **Alerting whitelists had drifted** — `isIssueWorthy` was case-sensitive and missing
+   `WARNING`/`FATAL`/`CRITICAL`, so `logLevel = "fatal"` fired rate-change alerts but
+   never opened an issue.
+7. **Double-slash alert URLs** — `HOST_URL` carries a trailing slash; three sites added
+   another. Now one doctested `Utils.hostPath`.
+8. **Dashboard "Create Dashboard" CTA was dead** — `ZeroState` collapsed an
+   `Either Text Text` with `either id id`, so a modal id rendered as
+   `href="newDashboardMdl"`.
+9. **Syntax highlighting never re-ran after a swap** — the listener read
+   `e.detail.elt`, which htmx 4 does not provide (the same file documents this 250
+   lines earlier and uses `event.target`).
+10. **`updateUrlState` defined twice with incompatible signatures**; the surviving one
+    dropped the URL fragment.
+11. **`navigateSpans` off-by-one** — advanced past the last span and fired
+    `htmx.trigger('#trigger-span-undefined')`.
+12. **`.waterfall-active` accumulated** on every row ever clicked.
+13. **Timepicker labels disagreed on all eleven entries** between `sinceWindows` and
+    `timePickerItems`, so the same control read differently per page.
+14. **`chart.updateRollup` is implemented nowhere** and was guarded by `if chart exists`
+    (the element, not the method), so it threw on every change.
+15. **`Eq ZonedTime` was `_ == _ = True`** in TestUtils — every `ZonedTime` field of
+    every record compared equal, so any test asserting on a whole `Issue` was vacuous on
+    three fields. Now compares the instant; the full suite confirmed nothing was hiding.
 
-## Bugs found by survey (fix test-first)
+## Open decisions — deliberately NOT actioned
 
-1. **`isIssueWorthy` / `isAlertableLogLevel` had drifted** — `BackgroundJobs.hs:4966` vs `:4835`.
-   The new-pattern path was case-*sensitive* and accepted only `ERROR`/`WARN`; the
-   rate-change path was case-insensitive and also accepted `WARNING`/`FATAL`/`CRITICAL`.
-   A pattern with `logLevel = "fatal"` fired rate-change alerts but never opened an issue.
-   The comment at `:4869` claimed the two mirrored each other. **Fix in progress**; regression
-   guard `isIssueWorthy_levelGate_mirrorsIsAlertableLogLevel` asserts the two agree across
-   the whole level set.
-2. **Double slash in query-monitor alert URLs** — `BackgroundJobs.hs:2885,2897` use
-   `hostUrl <> "/p/"`, but `hostUrl` already carries a trailing slash; every other site in
-   the repo uses `hostUrl <> "p/"` (`Pages/Reports.hs:195`, `Settings.hs:916,1066,1486`,
-   `Projects.hs:1157,1405`, `Bots/Slack.hs:331`). Fix by routing all 7 sites through one
-   `issueUrl` builder.
-3. **Undocumented digest reason** — `BackgroundJobs.hs:2029` passes `"runtime_exception"`,
-   absent from the enumeration documented at `:1914`. `digestReason` is a `Text` with its
-   values in a comment; it wants a 4-constructor sum type.
+These need a human call or a failing test first.
 
-4. **`active` is DB-inert on monitor create/PUT/PATCH** — `Models/Apis/Monitors.hs:138-164`.
-   `queryMonitorUpsert` omits `deactivated_at` from both the INSERT column list and the
-   `ON CONFLICT DO UPDATE SET`. `monitorFromInput` (`ApiHandlers.hs:236`) computes
-   `deactivatedAt` from `inp.active`, and `saveMonitor` returns that in-memory record
-   rather than a re-read — so the API answers "disabled" while the row stays live and
-   keeps firing alerts. Only `monitorToggleActiveById`/`monitorReactivateByIds` ever
-   write the column. Guards added in `Web/ApiV1Spec.hs` assert against a re-read, not
-   against the handler's return value. **Fix in progress.**
-5. **`apiMonitorPatch` never recomputes `logQueryAsSql`** — `ApiHandlers.hs:333-351`.
-   Patching `query` or `time_window_mins` updates `log_query` but leaves the compiled SQL
-   that actually drives alert evaluation stale. `apiMonitorUpdate`/`apiMonitorApply` do
-   recompute it via `monitorFromInput`. Not yet fixed — it is a behavior change needing
-   its own test, and PATCH-through-`saveMonitor` would also reset `last_evaluated` and
-   `deactivated_at`, so the deltas must be pinned deliberately.
+1. **Basic auth mints a `persistent_sessions` row per request.** Browsers resend
+   `Authorization` on every request, so a `BASIC_AUTH_ENABLED` deployment gets one
+   INSERT per page load. Same failure class as the 2,569,021-row demo-guest incident
+   documented ~100 lines away in `Web/Auth.hs`. The fix reorders auth resolution.
+2. **Two independent project-membership checks.** `Auth.hs:374` (CLI path) vs
+   `Projects.sessionAndProject`. The API path is *stricter* — no sudo bypass, no stale
+   refetch — so not a vulnerability, but they can drift.
+3. **`flushDrainTask` writes orphaned `pat:<hash>` span tags.** Tags come from
+   pre-Jaccard templates; rows are keyed on the merge survivor, so absorbed patterns'
+   tags dead-end with no `log_patterns` row. `errByHash` likewise keys on pre-merge
+   hashes and silently drops an absorbed pattern's `isError`. Every fix moves stored
+   hashes.
+4. **Two definitions of "placeholder"** — `PatternMerge` treats any `{…}` token as one,
+   `Drain` only a closed set of ~19. A JSON blob is a placeholder for Jaccard merging
+   but content for embedding normalisation, so the two stages rank the same pair
+   differently.
+5. **"Alphabetical" sort is a silent no-op** on the API-catalog and endpoints pages —
+   the pages send `sort=name`, the model matches `first_seen`/`last_seen` and falls
+   through to traffic order.
+6. **`SortConfig`/`Features.sort` and `SortableConfig`/`Features.sortableColumns` are
+   dead** — no caller sets either, so Dashboards' `withSort` columns render no sort
+   affordance. Keep-and-wire or delete: a product call.
+7. **`apiMonitorPatch` never recomputes `logQueryAsSql`**, so patching `query` leaves
+   the compiled SQL that drives alert evaluation stale.
+8. **`AuthContext` carries `EnvConfig` twice** (`env` and `config`), set from the same
+   value, used interchangeably, with nothing enforcing they stay equal.
+9. **`ErrorPatterns.getErrorPatternById` is unscoped** — not currently exploitable, as
+   all three handler callers guard `err.projectId /= pid` explicitly, but the guard is
+   repeated rather than structural.
 
-## Hazards (zero lines, real risk)
+## Recommended follow-up PRs
 
-- **`instance Eq ZonedTime where (==) _ _ = True`** — `Pkg/TestUtils.hs:496-499`. An orphan
-  that makes every `ZonedTime` field compare equal. `Issues.Issue` has three of them, so any
-  test comparing whole `Issue` records passes vacuously on those fields. Replace with a
-  `newtype ZT` deriving `Eq` via `zonedTimeToUTC`.
-- **`selectIssueById` is unscoped** — `Models/Apis/Issues.hs:390` vs `selectIssueByIdScoped:752`.
-  Differ only by `AND project_id = #{pid}`. A latent cross-tenant read; keep the scoped one.
-  (Same class of bug as the monitors bulk-mutation authz hole fixed on the previous branch.)
-- **`linksJson` emits Haskell `Show` syntax, not JSON** — `OtlpServer.hs:1195` uses
-  `show $! AE.toJSON …` while the adjacent `eventsJson` does not. Flagged, not fixed —
-  changing it alters ingest output and needs its own test.
-- **Quarantine window duplicated in two SQL literals** — `Endpoints.hs:587-594` and `:598-610`
-  both inline `applied_at > NOW() - INTERVAL '24 hours'`. Change one and the merge-delete
-  path disagrees with the challenge UI.
-
-## Consolidation worklist, ranked
-
-### Pages (~250 lines)
-1. `emptyState_` already exists (`Components.hs:48`) and covers every variant found —
-   ~16 sites hand-roll it. `Infrastructure.hs:925` is a verbatim duplicate of `:263`.
-2. Nav tab bar — 6 sites, no canonical component; propose `navTabs_`.
-3. Card + uppercase section header — 10 sites inside `Anomalies.hs` alone, plus `Projects.hs:950`.
-4. Severity banner — 8 sites; `infoBanner_` exists but is brand-only, needs a severity param.
-5. Underline radio tab label — 5 sites duplicate `detailTab_`'s class string verbatim.
-
-Verified clean, do not touch: modals, pagination, form fields, TimePicker, LogQueryBox,
-page header chrome (all already centralized).
-
-### BackgroundJobs.hs (~240 lines)
-Runtime-error alert pipeline ×3 → `createAndNotifyErrorIssue` (~55); channel fan-out ×3 (~40);
-`WeeklyReportData` build duplicating `Pages/Reports.renderWeeklyEmail` field-for-field (~38);
-`withResource`+`createJob` ×22 → `enqueueJob` (~35); health-check `([Text],[Text])` ×5 →
-`[HealthFinding]` (~20); relative-time helpers ×3 → `Utils` (~10); `sendMessageToDiscord`
-bypasses the `Notify` effect (~8).
-
-Separately: `processBackgroundJob` is 658 lines because five arms carry inline bodies
-(`MonoscopeAdminDaily` 172, `ReportUsage` 133, `DailyJob` 128, `UsageAuditReport` 74).
-Extracting them deletes nothing but drops the dispatch table to ~230 lines.
-
-### Handlers / models (~250 lines)
-DTO shovel converters ×11 (~60-90); generic patch merge ×5 (~50); `selectIssues` vs
-`selectIssuesByFilters` fork (~25); untyped `V.Vector (V.Vector AE.Value)` row matrix and the
-five `lookupVec*` helpers that exist only to index it (~25); parallel badge/colour tables in
-`Utils.hs` vs `Telemetry.hs` (~20); `archiveHosts`/`unarchiveHosts` boolean fork (~10).
-
-Reinventions of library functions: `TestUtils.hs:1510` `lookupParam` is `Prelude.lookup`;
-`:491` `fromRightShow` is `either (error . show) id`; `:1518` `pBool` is `FromHttpApiData Bool`;
-epoch conversion has 4 spellings; hour truncation has 2+.
-
-### Typing
-`IssueStatus` is destroyed into `Maybe Bool -> Maybe Bool` at `ApiHandlers.hs:903`;
-`Plan` exists but 5 functions take bare `Text`; bare `UUID` where `UserId` exists (4 handlers);
-no `LogPatternId` newtype; 14 anonymous wide tuples where the file already shows the fix
-(`GroupReview`, `MetricCatalogPage`, `UserBilling` are records with `HI.DecodeRow`).
+- **`PatternHash` newtype.** `patternHash`, `hash`, `pattern_hash`, `keyHash`,
+  `targetHash`, `templateHash` are all bare `Text` and freely interchangeable across
+  `LogPattern`, `UpsertPattern`, hourly stats, `Endpoints` and `SchemaLearning`.
+- **Stringly-typed `sourceField`** (`"body"/"summary"/"url_path"/"exception"`) used as a
+  DB key in ~12 queries and in web routes.
+- **Stringly-typed `runtime`** in `ErrorFingerprint.parseStackFrame` with an `otherwise`
+  catch-all — a typo at a caller silently produces a different fingerprint.
+- **Unify `Utils.parseTime` with `TimePicker.parseSince`.** The labels are now shared;
+  the parsers are not. `parseTime` returns an unbounded range for absent params and
+  `Telemetry.hs:266` depends on exactly that, so each of four callers needs review.
+- **64 dependabot vulnerabilities** on the default branch (9 critical), unrelated to
+  this work.
 
 ## Scale, honestly
 
-Identified so far is roughly 750-900 deletable lines against 75,133 in `src/` — about 1%.
-The previous branch's breadth-first pass netted -598. A mature codebase does not hold
-30% dead weight; "drastic" here realistically means low thousands of lines plus the
-uniformity and typing wins, which matter more than the line count.
+Roughly −200 net lines across ~75 files. Several agents independently reported that the
+code is already better factored than assumed: `EmailTemplates` already had its
+parameterised skeleton, the handler layer was "unusually well-factored", and modals,
+pagination, form fields, TimePicker and LogQueryBox had zero reinventions.
+
+Where lines *were* added, it was deliberate type strengthening — `IssueFilters` +
+`NullFilter` (+34), five billing newtypes (+33), `EndpointQuery`/`HostQuery` (+126),
+frontend helpers (+25). The largest structural win doesn't show in the line count at
+all: `processBackgroundJob` went from 655 lines to 106 by extraction.
