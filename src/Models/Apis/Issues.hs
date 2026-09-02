@@ -33,10 +33,11 @@ module Models.Apis.Issues (
   -- * Database Operations
   insertIssue,
   selectIssueById,
-  selectIssueByIdScoped,
   selectIssues,
-  selectIssuesByFilters,
-  findOpenIssueForEndpoint,
+  IssueProjection (..),
+  IssueFilters (..),
+  NullFilter (..),
+  defIssueFilters,
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
   updateIssueCriticality,
@@ -50,7 +51,7 @@ module Models.Apis.Issues (
   setArchiveState,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
-  selectLatestIssueByHash,
+  IssueScope (..),
   reopenIssue,
   bumpIssueUpdatedAt,
   issueNotifyDedupHours,
@@ -69,6 +70,7 @@ module Models.Apis.Issues (
   hashPrefix,
   defaultRecommendedAction,
   serviceLabel,
+  showRounded,
   showRate,
   showPct,
   isNewEndpointOnly,
@@ -205,12 +207,18 @@ toIssueSummary IssueL{base, activityBuckets} =
   IssueSummary base.id base.title base.critical base.severity base.issueType (Just $ V.toList activityBuckets)
 
 
-showRate :: Double -> Text
-showRate x = show (round x :: Int) <> "/hr"
+-- | Rounded-to-integer number with a unit suffix — the only numeric formatting
+-- issue titles and prompts use.
+--
+-- >>> (showRounded "" (2.6 :: Double), showRate (2.4 :: Double), showPct (99.5 :: Double))
+-- ("3","2/hr","100%")
+showRounded :: RealFrac a => Text -> a -> Text
+showRounded unit x = show (round x :: Int) <> unit
 
 
-showPct :: RealFrac a => a -> Text
-showPct x = show (round x :: Int) <> "%"
+showRate, showPct :: RealFrac a => a -> Text
+showRate = showRounded "/hr"
+showPct = showRounded "%"
 
 
 serviceLabel :: Maybe Text -> Text
@@ -386,19 +394,31 @@ DO UPDATE SET
     |]
 
 
--- | Select issue by ID
-selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
-selectIssueById iid = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} |])
+-- | Select issue by ID, scoped to its project: an id from another tenant reads as
+-- 'Nothing' rather than leaking the row.
+selectIssueById :: DB es => Projects.ProjectId -> IssueId -> Eff es (Maybe Issue)
+selectIssueById pid iid =
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} AND project_id = #{pid} |])
 
 
-selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid tgtHash = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |])
+-- | Which recurrence of a target hash 'selectIssueByHash' returns: the most recently
+-- active one of any type, the newest-created one of a type (including acked/archived),
+-- or the single open one of a type — 'insertIssue's partial unique index guarantees at
+-- most one open row per (project, target, type), so that case needs no ordering.
+data IssueScope = AnyIssue | OfType IssueType | OpenOfType IssueType
+  deriving stock (Eq, Show)
 
 
--- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)
-selectLatestIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectLatestIssueByHash pid tgtHash =
-  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |])
+selectIssueByHash :: DB es => Projects.ProjectId -> Text -> IssueScope -> Eff es (Maybe Issue)
+selectIssueByHash pid tgtHash scope =
+  Hasql.interpOne
+    $ selectFrom @Issue
+    <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash}|]
+    <> case scope of
+      AnyIssue -> [HI.sql| ORDER BY updated_at DESC, id DESC|]
+      OfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type ORDER BY created_at DESC|]
+      OpenOfType ty -> [HI.sql| AND issue_type = #{ty}::apis.issue_type AND acknowledged_at IS NULL AND archived_at IS NULL|]
+    <> [HI.sql| LIMIT 1 |]
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -423,41 +443,92 @@ bumpIssueUpdatedAt :: (DB es, Time :> es) => IssueId -> Eff es ()
 bumpIssueUpdatedAt = touchIssue mempty
 
 
--- | @AND pfx.col IS [NOT] NULL@ clause, or empty if the filter is unset. Shared
--- between 'selectIssues' (prefixed, joined query) and 'selectIssuesByFilters'
--- (unprefixed, single-table query — pass @mempty@ for @pfx@).
-sqlNullFilter :: HI.Sql -> HI.Sql -> Maybe Bool -> HI.Sql
-sqlNullFilter pfx col = foldMap (bool [HI.sql| AND ^{pfx}^{col} IS NULL|] [HI.sql| AND ^{pfx}^{col} IS NOT NULL|])
+-- | Tri-state predicate on a nullable column (@acknowledged_at@, @archived_at@).
+data NullFilter = AnyValue | IsNull | IsNotNull
+  deriving stock (Eq, Show)
 
 
--- | Select issues with filters, returns issues and total count for pagination
--- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
-selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
-selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
+-- | @AND pfx.col IS [NOT] NULL@ clause, or empty when the filter is 'AnyValue'.
+sqlNullFilter :: HI.Sql -> HI.Sql -> NullFilter -> HI.Sql
+sqlNullFilter pfx col = \case
+  AnyValue -> mempty
+  IsNull -> [HI.sql| AND ^{pfx}^{col} IS NULL|]
+  IsNotNull -> [HI.sql| AND ^{pfx}^{col} IS NOT NULL|]
+
+
+-- | Which row shape 'selectIssues' projects. 'PIssueL' adds per-issue event counts,
+-- last-state event and activity buckets (the HTML list); 'PIssue' is the plain row
+-- (the public API). The filter/count half is shared either way.
+data IssueProjection r where
+  PIssueL :: IssueProjection IssueL
+  PIssue :: IssueProjection Issue
+
+
+-- | Filter/pagination surface of the issue list. Named fields rather than a run of
+-- positional @Maybe Bool@\/@Maybe Text@ arguments, which were silently swappable.
+data IssueFilters = IssueFilters
+  { ack :: NullFilter
+  , archive :: NullFilter
+  , services :: [Text]
+  , types :: [Text]
+  , timeRange :: Maybe (UTCTime, UTCTime)
+  , order :: Maybe Text
+  -- ^ @-col@\/@+col@ over created_at\/updated_at\/title; anything else falls back to critical-first.
+  , period :: Text
+  -- ^ activity-bucket granularity, 'PIssueL' only: @"24h"@ = 24 hourly buckets, else 7 daily.
+  , hideLowSeverity :: Bool
+  -- ^ Inbox behaviour: drop @severity = 'low'@ so demoted silent drops don't clutter the list.
+  , limit :: Int
+  , offset :: Int
+  }
+  deriving stock (Generic, Show)
+
+
+defIssueFilters :: IssueFilters
+defIssueFilters =
+  IssueFilters
+    { ack = AnyValue
+    , archive = AnyValue
+    , services = []
+    , types = []
+    , timeRange = Nothing
+    , order = Nothing
+    , period = "7d"
+    , hideLowSeverity = False
+    , limit = 50
+    , offset = 0
+    }
+
+
+-- | Select issues with filters, returning the rows and the total count for pagination.
+selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> IssueProjection r -> IssueFilters -> Eff es ([r], Int)
+selectIssues pid projection f = do
   now <- Time.currentTime
-  -- period controls bucket granularity: "24h" = hourly, "7d" = daily.
   -- seriesStart/step are bound here (not via SQL NOW()) so charts honour the test clock.
-  let (seriesStart, stepSql) = case period of
+  let (seriesStart, stepSql) = case f.period of
         "24h" -> (addUTCTime (-(23 * 3600)) now, [HI.sql|interval '1 hour'|])
         _ -> (UTCTime (addDays (-6) (utctDay now)) 0, [HI.sql|interval '1 day'|])
-      -- Inbox tab (unacked + unarchived) hides severity='low' so demoted silent drops don't clutter the view.
-      isInbox = isAcknowledged == Just False && isArchived == Just False
-      orderBy = rawSql case T.uncons =<< sortM of
-        Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> "i." <> c <> bool " ASC" " DESC" (s == '-')
-        _ -> "i.critical DESC, i.created_at DESC"
+      orderBy pfx = rawSql case T.uncons =<< f.order of
+        Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> pfx <> c <> bool " ASC" " DESC" (s == '-')
+        _ -> pfx <> "critical DESC, " <> pfx <> "created_at DESC"
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
-        foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) timeRangeM
-          <> sqlNullFilter pfx [HI.sql|acknowledged_at|] isAcknowledged
-          <> sqlNullFilter pfx [HI.sql|archived_at|] isArchived
-          <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] isInbox
-          <> arrF pfx [HI.sql|service|] serviceFilters
-          <> arrF pfx [HI.sql|issue_type::text|] typeFilters
+        foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) f.timeRange
+          <> sqlNullFilter pfx [HI.sql|acknowledged_at|] f.ack
+          <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
+          <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
+          <> arrF pfx [HI.sql|service|] f.services
+          <> arrF pfx [HI.sql|issue_type::text|] f.types
       iFilters = mkFilters [HI.sql|i.|]
       cFilters = mkFilters mempty
-  issues <-
-    Hasql.interp
-      [HI.sql|
+  issues <- case projection of
+    PIssue ->
+      Hasql.interp
+        $ selectFrom @Issue
+        <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy ""} LIMIT #{f.limit} OFFSET #{f.offset} |]
+    PIssueL ->
+      Hasql.interp
+        [HI.sql|
         SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type,
           i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
           -- The leading columns must match Issue's field declaration order so Generic decodeRow lines up.
@@ -508,19 +579,13 @@ selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period 
           ORDER BY a.created_at DESC LIMIT 1
         ) lat ON TRUE
         WHERE i.project_id = #{pid} ^{iFilters}
-        ORDER BY ^{orderBy}
-        LIMIT #{limit} OFFSET #{offset} |]
+        ORDER BY ^{orderBy "i."}
+        LIMIT #{f.limit} OFFSET #{f.offset} |]
   total <-
     fromMaybe 0
       <$> Hasql.interpOne
         [HI.sql| SELECT COUNT(*)::bigint FROM apis.issues WHERE project_id = #{pid} ^{cFilters} |]
   pure (issues, total)
-
-
--- | Find open issue for endpoint
-findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid tgtHash =
-  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |])
 
 
 -- | Update issue with new anomaly data
@@ -748,37 +813,6 @@ autoArchiveStaleDiscoveryIssues pid now days =
         AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
 
 
--- | Scoped lookup: returns Nothing if the issue belongs to a different project.
-selectIssueByIdScoped :: DB es => Projects.ProjectId -> IssueId -> Eff es (Maybe Issue)
-selectIssueByIdScoped pid iid =
-  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} AND project_id = #{pid} |])
-
-
--- | List issues with the filter/pagination surface the public API needs.
--- Returns raw 'Issue' rows (not 'IssueL' view rows) with a total count.
-selectIssuesByFilters
-  :: DB es
-  => Projects.ProjectId
-  -> Maybe Bool -- isAcknowledged: Just True = ack only, Just False = unack only, Nothing = any
-  -> Maybe Bool -- isArchived
-  -> Maybe Text -- issueType text (NULL/empty = any)
-  -> Maybe Text -- service (NULL/empty = any)
-  -> Int -- limit
-  -> Int -- offset
-  -> Eff es ([Issue], Int)
-selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
-  let eqF col = foldMap (\v -> if T.null v then mempty else [HI.sql| AND ^{col} = #{v}|])
-      whereSql =
-        [HI.sql| WHERE project_id = #{pid}|]
-          <> sqlNullFilter mempty [HI.sql|acknowledged_at|] isAck
-          <> sqlNullFilter mempty [HI.sql|archived_at|] isArch
-          <> eqF [HI.sql|issue_type::text|] tyM
-          <> eqF [HI.sql|service|] svcM
-  rows <- Hasql.interp (selectFrom @Issue <> whereSql <> [HI.sql| ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
-  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::bigint FROM apis.issues |] <> whereSql)
-  pure (rows, total)
-
-
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty Anomalies.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
@@ -983,7 +1017,7 @@ createLogPatternRateChangeIssue projectId lp sr = do
       , critical = not silentDrop && sr.direction == Spike && lvl == "error"
       , severity
       , title
-      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> show (round (abs sr.zScore) :: Int) <> " std devs)."
+      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> showRounded "" (abs sr.zScore) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData =
           LogPatternRateChangeData
@@ -1282,7 +1316,7 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
         errRate
         (round currentRate)
         (const $ "Error Spike: " <> errRate.errorType <> " (" <> showPct increasePercent <> " increase)")
-        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> ". Investigate recent deployments or changes.")
+        ("Error rate has spiked " <> showRounded "" zScore <> " standard deviations above baseline. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> ". Investigate recent deployments or changes.")
 
 
 -- | Create a new issue for an error pattern.

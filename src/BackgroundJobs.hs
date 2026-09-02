@@ -326,7 +326,7 @@ processBackgroundJob authCtx bgJob =
         (Just project, Just err, Just user) | err.projectId == pid -> do
           let userEmail = CI.original user.email
               userName = if T.null user.firstName then userEmail else user.firstName
-          issueM <- Issues.selectIssueByHash pid err.hash
+          issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
           let (issueTitle, issuePath) = case issueM of
                 Just issue -> (issue.title, issue.id.toText)
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
@@ -2120,7 +2120,7 @@ processProjectErrors pid errors now = do
         whenJust errM \err ->
           if outcome == ErrorPatterns.UORegressed
             then do
-              existingM <- Issues.selectLatestIssueByHash pid errorHash
+              existingM <- Issues.selectIssueByHash pid errorHash (Issues.OfType Issues.RuntimeException)
               maybe
                 ( do
                     issue <- createIssueForError pid err
@@ -3092,7 +3092,7 @@ sendReportForProject pid rType = do
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                     )
-                    (Issues.selectIssues pid (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+                    (Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.timeRange = Just (startTime, currentTime), Issues.limit = 100})
                 )
             )
         )
@@ -3217,7 +3217,7 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Process each endpoint group, collecting info for newly created issues only
   newEndpointInfos <-
     catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
-      existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
+      existingIssueM <- Issues.selectIssueByHash pid endpointHash (Issues.OpenOfType Issues.ApiChange)
       -- All endpoint_* fields on an anomaly come from the same joined apis.endpoints
       -- row, so they always co-vary. Matching the create path (Issues.createAPIChangeIssue),
       -- we take anomaly[0]'s fields rather than searching for the first non-null per column.
@@ -3516,7 +3516,7 @@ enhanceIssuesWithLLM pid issueIds = do
     else do
       Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
       forM_ issueIds \issueId -> do
-        issueM <- Issues.selectIssueById issueId
+        issueM <- Issues.selectIssueById pid issueId
         case issueM of
           Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
           Just issue
