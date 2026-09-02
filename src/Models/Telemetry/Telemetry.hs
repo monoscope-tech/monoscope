@@ -5,7 +5,6 @@ module Models.Telemetry.Telemetry (
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
-  getTotalEventsToReport,
   getUsageTotals,
   SpanRecord (..),
   getAllATErrors,
@@ -43,7 +42,7 @@ module Models.Telemetry.Telemetry (
   getTraceDetailsForView,
   defaultTraceSpanPage,
   getEndpointTraceId,
-  getTotalMetricsCount,
+  countRowsSince,
   getMetricData,
   MetricExemplar (..),
   ExemplarPoint (..),
@@ -118,10 +117,10 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V5 qualified as UUIDv5
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..))
+import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.ToField (ToField (toField))
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -137,7 +136,7 @@ import Hasql.Session qualified as HSession
 import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, encodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
@@ -241,19 +240,18 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SK" SpanKind
 
 
--- | @kind@ and @status_code@ are stored as plain text, and neither matches the
--- 'WrappedEnumSC' snake encoding: ingest writes lower-case kinds plus @"log"@ for log
--- records (which has no 'SpanKind' constructor), and UPPER-CASE status codes. Decoding
--- those columns as the enums directly would make 'refineText' abort the whole query, so
--- the columns stay 'Text' on the row types and are parsed totally here.
+-- | @kind@ and @status_code@ are stored as plain text and carry values with no
+-- constructor (ingest writes @"log"@ for log records). Decoding those columns as the
+-- enums directly would make 'refineText' abort the whole query, so the columns stay
+-- 'Text' on the row types and are parsed totally here — via the enums' own
+-- 'WrappedEnumSC' encoding's own 'decodeEnumSC', which normalises case and re-adds the
+-- constructor prefix, so both @"internal"@ and @"ERROR"@ land on their constructor.
 parseSpanKind :: Maybe Text -> Maybe SpanKind
-parseSpanKind =
-  (=<<) (`lookup` [("internal", SKInternal), ("server", SKServer), ("client", SKClient), ("producer", SKProducer), ("consumer", SKConsumer), ("unspecified", SKUnspecified)])
+parseSpanKind = (>>= decodeEnumSC @"SK" . toString)
 
 
 parseSpanStatus :: Maybe Text -> Maybe SpanStatus
-parseSpanStatus =
-  (=<<) ((`lookup` [("OK", SSOk), ("ERROR", SSError), ("UNSET", SSUnset)]) . T.toUpper)
+parseSpanStatus = (>>= decodeEnumSC @"SS" . toString)
 
 
 data Trace = Trace
@@ -269,13 +267,11 @@ data Trace = Trace
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Trace
 
 
--- JSONB/text decode for Map Text Value reuses the generic AesonText decoder in DeriveUtils.
-instance FromField (Map Text AE.Value) where
-  fromField f mdata = coerce (fromField f mdata :: Conversion (AesonText (Map Text AE.Value)))
+-- JSONB/text (de)coding for Map Text Value reuses the generic AesonText codec in DeriveUtils.
+deriving via AesonText (Map Text AE.Value) instance FromField (Map Text AE.Value)
 
 
-instance ToField (Map Text AE.Value) where
-  toField = toField . AesonText
+deriving via AesonText (Map Text AE.Value) instance ToField (Map Text AE.Value)
 
 
 data SpanRecord = SpanRecord
@@ -1045,14 +1041,14 @@ metricExemplars useTimefusion pid scope (lo, hi) limit = do
       ]
 
 
-getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
-getTotalEventsToReport pid lastReported =
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
-
-
-getTotalMetricsCount :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es Int
-getTotalMetricsCount useTimefusion pid lastReported =
-  fromMaybe 0 <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
+-- | Rows written to @tbl@ since @lastReported@. One function for both telemetry
+-- tables so the two report counters can't drift in window or routing.
+countRowsSince :: (DB es, Labeled "timefusion" Hasql :> es) => HI.Sql -> Bool -> Projects.ProjectId -> UTCTime -> Eff es Int
+countRowsSince tbl useTimefusion pid lastReported =
+  fromMaybe 0
+    <$> Hasql.withHasqlTimefusion
+      useTimefusion
+      (Hasql.interpOne $ [HI.sql| SELECT count(*)::bigint FROM |] <> tbl <> [HI.sql| WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
 
 
 -- | Split @(start, end]@ into contiguous slices of at most one day.
@@ -1185,6 +1181,22 @@ data MetricCatalogPage = MetricCatalogPage
   }
 
 
+-- | One row of the tagged UNION below: a catalogue entry plus which side of the
+-- active/inactive split it came from and the active total carried on every row.
+data MetricCatalogRow = MetricCatalogRow
+  { metricName :: Text
+  , metricType :: Text
+  , metricUnit :: Text
+  , metricDescription :: Text
+  , lastSeen :: UTCTime
+  , metricLabels :: V.Vector Text
+  , isActive :: Bool
+  , activeTotal :: Int64
+  }
+  deriving (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
 -- @withInactive@ is False for scroll-in pages: the inactive list is only rendered on the
 -- first page, so later pages must not carry it back.
 getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogPage
@@ -1202,16 +1214,13 @@ getMetricCatalogPage pid sourceM prefixM cutoff limit offset withInactive = do
       UNION ALL
       SELECT metric_name, metric_type, metric_unit, metric_description, last_seen, labs, FALSE, (SELECT n FROM tot)
       FROM catalog WHERE #{withInactive} AND last_seen < #{cutoff} |]
-  let rowMetric (n, ty, u, d, ls, labs, _, _) = MetricChartListData n ty u d ls labs
-      isActive (_, _, _, _, _, _, a, _) = a
-      total = case rows of
-        ((_, _, _, _, _, _, _, n) : _) -> fromIntegral @Int64 n
-        [] -> 0
+  let metric :: MetricCatalogRow -> MetricChartListData
+      metric r = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
   pure
     MetricCatalogPage
-      { active = V.fromList $ rowMetric <$> filter isActive rows
-      , inactive = V.fromList $ sortOn (.metricName) $ rowMetric <$> filter (not . isActive) rows
-      , activeTotal = total
+      { active = V.fromList $ metric <$> filter (.isActive) rows
+      , inactive = V.fromList $ sortOn (.metricName) $ metric <$> filter (not . (.isActive)) rows
+      , activeTotal = maybe 0 (fromIntegral . (.activeTotal)) $ viaNonEmpty head rows
       }
 
 
@@ -2176,20 +2185,14 @@ atErrorFrom spanObj typ msg stack =
 
 getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsForReport projectId start end =
-  Hasql.interp
-    [HI.sql| SELECT resource___service___name AS service_name,  (COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::bigint AS total_error_events, COUNT(*)::bigint AS total_events
-         FROM otel_logs_and_spans
-         WHERE project_id = #{projectId.toText} AND timestamp >= #{start} AND timestamp <= #{end} AND resource___service___name is not null
-         GROUP BY resource___service___name
-         ORDER BY total_events DESC
-      |]
+  Hasql.interp $ selectSpansWhere [HI.sql|resource___service___name AS service_name, (COUNT(*) FILTER (WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::bigint AS total_error_events, COUNT(*)::bigint AS total_events|] projectId.toText start end [HI.sql| AND resource___service___name IS NOT NULL GROUP BY resource___service___name ORDER BY total_events DESC|]
 
 
 getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsBySpanType projectId start end =
   Hasql.interp
-    [HI.sql|
-        SELECT
+    $ selectSpansWhere
+      [HI.sql|
           CASE
             WHEN attributes___http___request___method IS NOT NULL THEN 'http'
             WHEN attributes___db___system___name IS NOT NULL THEN 'db'
@@ -2199,17 +2202,15 @@ getProjectStatsBySpanType projectId start end =
             ELSE 'other'
           END AS span_type,
           COUNT(*)::bigint AS total_events,
-          AVG(duration)::bigint AS avg_duration
-        FROM otel_logs_and_spans
-        WHERE project_id = #{projectId.toText}
-          AND timestamp >= #{start}
-          AND timestamp <= #{end}
-          AND kind != 'log'
-        GROUP BY span_type
-        ORDER BY total_events DESC
-      |]
+          AVG(duration)::bigint AS avg_duration|]
+      projectId.toText
+      start
+      end
+      [HI.sql| AND kind != 'log' GROUP BY span_type ORDER BY total_events DESC|]
 
 
+-- | Strict time bounds, unlike its sibling report queries — so it deliberately does
+-- not go through 'selectSpansWhere', whose BETWEEN would include the boundary rows.
 getEndpointStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int64, Int64)]
 getEndpointStats projectId start end =
   Hasql.interp
@@ -2222,7 +2223,7 @@ SELECT
     COUNT(*)::bigint AS request_count
 FROM otel_logs_and_spans
 WHERE
-    project_id = #{projectId}::text
+    project_id = #{projectId.toText}
     AND timestamp > #{start} AND timestamp < #{end}
     AND attributes___http___request___method IS NOT NULL
 GROUP BY
@@ -2236,19 +2237,15 @@ ORDER BY
 getDBQueryStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getDBQueryStats projectId start end =
   Hasql.interp
-    [HI.sql| SELECT
-        attributes___db___query___text AS query,
-        ROUND(AVG(duration))::int8 AS avg_duration,
-        COUNT(*)::int8 AS count
-      FROM otel_logs_and_spans
-      WHERE project_id = #{projectId.toText}
-        AND timestamp >= #{start}
-        AND timestamp <= #{end}
-        AND kind != 'log'
-        AND attributes___db___query___text IS NOT NULL
+    $ selectSpansWhere
+      [HI.sql|attributes___db___query___text AS query, ROUND(AVG(duration))::int8 AS avg_duration, COUNT(*)::int8 AS count|]
+      projectId.toText
+      start
+      end
+      [HI.sql| AND kind != 'log' AND attributes___db___query___text IS NOT NULL
       GROUP BY attributes___db___query___text
       HAVING ROUND(AVG(duration)/1000000) > 500
-      ORDER BY avg_duration DESC LIMIT 10 |]
+      ORDER BY avg_duration DESC LIMIT 10|]
 
 
 getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]

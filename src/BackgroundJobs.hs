@@ -736,8 +736,8 @@ processBackgroundJob authCtx bgJob =
           lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
       allRows <- forM allProjects \(project :: Projects.Project) -> do
-        events <- Telemetry.getTotalEventsToReport project.id since
-        metrics <- Telemetry.getTotalMetricsCount authCtx.env.enableTimefusionReads project.id since
+        events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] False project.id since
+        metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
         pure (project, events, metrics, events + metrics)
       let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
           sorted = sortOn (\(_, _, _, t) -> negate t) activeRows

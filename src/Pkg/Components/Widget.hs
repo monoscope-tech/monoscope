@@ -13,7 +13,6 @@ import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
-import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
@@ -1102,11 +1101,11 @@ widgetToECharts widget =
                     legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= if isStatic then "plain" else "scroll"
-                    , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
-                    , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
-                    , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
-                    , "itemGap" AE..= AE.Number (fromIntegral itemGap)
-                    , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
+                    , "textStyle" AE..= AE.object ["fontSize" AE..= fontSize, "padding" AE..= ([0, 0, 0, -2] :: [Int])]
+                    , "itemWidth" AE..= itemSize
+                    , "itemHeight" AE..= itemSize
+                    , "itemGap" AE..= itemGap
+                    , "padding" AE..= pad
                     , "tooltip" AE..= AE.object ["show" AE..= True]
                     , "data" AE..= maybe seriesNames (map (fromMaybe "Unnamed Series" . (.query))) widget.queries -- Use series names from dataset if no explicit queries
                     ]
@@ -1135,15 +1134,15 @@ widgetToECharts widget =
                   <> if isCategorical
                     then [] -- For categorical, ECharts will derive categories from dataset
                     else
-                      [ "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget.dataset >>= (.from))
-                      , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget.dataset >>= (.to))
+                      [ "min" AE..= (widget.dataset >>= (.from))
+                      , "max" AE..= (widget.dataset >>= (.to))
                       ]
               )
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
               , "min" AE..= (0 :: Int)
-              , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) ((.maxGroupSum) <$> (widget.dataset >>= (.stats)))
+              , "max" AE..= ((.maxGroupSum) <$> (widget.dataset >>= (.stats)))
               , "splitLine"
                   AE..= AE.object
                     [ "show" AE..= axisVisibility
@@ -1172,7 +1171,7 @@ widgetToECharts widget =
               ]
         , "dataset"
             AE..= AE.object
-              ["source" AE..= maybe AE.Null (.source) widget.dataset]
+              ["source" AE..= ((.source) <$> widget.dataset)]
         , "series" AE..= addMarkLinesToFirstSeries widget (zipWith (createSeries widget.wType) [1 ..] seriesNames)
         , "animation" AE..= False
         , if isTrue widget.allowZoom
@@ -1235,7 +1234,7 @@ createSeries widgetType colIdx name =
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
         , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
-        , "itemStyle" AE..= AE.object ["color" AE..= seriesColor, "borderRadius" AE..= AE.Array [AE.Number 2, AE.Number 2, AE.Number 0, AE.Number 0]]
+        , "itemStyle" AE..= AE.object ["color" AE..= seriesColor, "borderRadius" AE..= ([2, 2, 0, 0] :: [Int])]
         , "barCategoryGap" AE..= ("30%" :: Text)
         , "barMaxWidth" AE..= (10 :: Int)
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
