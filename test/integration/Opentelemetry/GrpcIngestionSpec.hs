@@ -184,7 +184,13 @@ spec = sequential $ aroundAll withTestResources do
       dataPointsHtml `shouldContain` "tabindex=\"0\""
       dataPointsHtml `shouldContain` "w-10 shrink-0"
       dataPointsHtml `shouldNotContain` "cursor-pointerhover"
-      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True mpid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
+      -- Regression: with no time parameters this tab used to resolve to no window at all, and
+      -- the count query then ran across the project's whole metrics history — unbounded, which
+      -- on a real project never returns (TimeFusion cancels it at the statement timeout) and is
+      -- the shape that has OOM-killed it before. The picker showing its default is the visible
+      -- half of the fix; 'getDataPointsData' now also refuses to be called without a window.
+      dataPointsHtml `shouldContain` "Last Hour"
+      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True mpid (addUTCTime (-1) frozenTime, addUTCTime 1 frozenTime)
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       totals <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True mpid (addUTCTime (-1) frozenTime) (addUTCTime 1 frozenTime)
       totals.events `shouldSatisfy` (>= 0)

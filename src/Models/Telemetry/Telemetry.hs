@@ -982,12 +982,19 @@ spanRecordInTrace pid trId (lo, hi) match =
     <> [HI.sql| ORDER BY start_time ASC LIMIT 1 |]
 
 
-getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
-getDataPointsData useTimefusion pid dateRange = do
-  now <- Time.currentTime
-  let dateFilter = case dateRange of
-        (a, Just b) -> [HI.sql| AND timestamp BETWEEN #{fromMaybe now a} AND #{b} |]
-        _ -> mempty
+-- | Metric catalogue with a datapoint count per metric, over a window.
+--
+-- The window is required, not @(Maybe, Maybe)@. It used to be optional and the filter was
+-- only emitted when the upper bound was present, so a caller with no time parameters — which
+-- is exactly what @/metrics?tab=datapoints@ was, since 'Utils.parseTime' returns
+-- @(Nothing, Nothing)@ when given none — silently ran
+-- @SELECT metric_name, COUNT(*) FROM otel_metrics WHERE project_id = ?@ across the project's
+-- entire history. On the demo project (~2.4M metric rows per hour) that never returned: the
+-- page hung until TimeFusion cancelled it with @57014 statement timeout@. Unbounded
+-- aggregates are also what has OOM-killed TimeFusion before, so the type now refuses one.
+getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> (UTCTime, UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData useTimefusion pid (from, to) = do
+  let dateFilter = [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
   catalog <-
     Hasql.interp
       [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),

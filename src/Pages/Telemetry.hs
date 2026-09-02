@@ -261,7 +261,12 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let dataPointsTab = any (/= "charts") tabM
-      (from, to, currentRange) = parseTime fromM toM sinceM now
+      -- With no time parameters at all 'parseTime' yields no window, which the datapoints
+      -- tab then turned into an unbounded count over every metric row the project has ever
+      -- written. Fall back to the time picker's own default so the control and the data
+      -- agree, rather than defaulting further down where the picker would still read empty.
+      sinceOrDefault = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
+      (from, to, currentRange) = parseTime fromM toM sinceOrDefault now
       bwconf =
         bw
           { prePageTitle = Just "Explorer"
@@ -275,7 +280,10 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           }
   if dataPointsTab
     then do
-      dataPoints <- Telemetry.getDataPointsData ctx.env.enableTimefusionReads pid (from, to)
+      -- 'sinceOrDefault' already guarantees a window when no time parameter was given; this
+      -- closes the remaining hole, an absolute range with one end missing or unparseable.
+      -- Collapsing to now..now returns no counts, which is the safe way to be wrong here.
+      dataPoints <- Telemetry.getDataPointsData ctx.env.enableTimefusionReads pid (fromMaybe now from, fromMaybe now to)
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
       monitors <- Monitors.queryMonitorsAll pid
       let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
