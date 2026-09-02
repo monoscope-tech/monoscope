@@ -1699,7 +1699,15 @@ highlightJsHead_ = do
     }
     function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
     document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
-    document.addEventListener('htmx:after:swap', e => highlightSnippets(e.detail.elt));
+    // htmx 4's native event detail has no `elt` (see the comment on the chat container's
+    // hx-on::after:swap), so `e.detail.elt` was undefined and highlighting never re-ran
+    // after a swap.
+    document.addEventListener('htmx:after:swap', e => highlightSnippets(e.target));
+    // The theme is a data-theme attribute on body, written by the toggle, the cookie
+    // restore and the OS-preference listener alike. Observing the attribute keeps the
+    // stylesheet in step with all three; setHljsTheme used to run once at load, so
+    // toggling the theme afterwards left the wrong sheet enabled.
+    new MutationObserver(setHljsTheme).observe(document.body, { attributeFilter: ['data-theme'] });
     """
 
 
