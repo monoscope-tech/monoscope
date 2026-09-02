@@ -139,12 +139,12 @@ spec = sequential $ aroundAll withTestResources do
       -- Put the issues created above back in one customer-visible list. The bulk handler
       -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
       acknowledged <- listAnomalies tr (Just "Acknowledged")
-      let acknowledgedIds = [issue.base.id.toText | AnomalyList.IssueVM _ _ _ issue <- V.toList acknowledged]
+      let acknowledgedIds = [issue.base.id.toText | AnomalyList.IssueVM _ _ issue <- V.toList acknowledged]
       unless (null acknowledgedIds) do
         void $ testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "unacknowledge" Nothing AnomalyList.AnomalyBulk{itemId = acknowledgedIds}
 
       let load page perPage services types = do
-            (_, response) <- testServant tr $ AnomalyList.anomalyListGetH testPid Nothing (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing Nothing (Just "24h") services types Nothing Nothing
+            (_, response) <- testServant tr $ AnomalyList.anomalyListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
             case response of
               AnomalyList.ALPage (PageCtx _ table) -> pure (response, table)
               _ -> fail "expected a full anomaly-list page"
@@ -213,7 +213,7 @@ spec = sequential $ aroundAll withTestResources do
     -- issue_data.anomaly_hashes; this test asserts both halves fire.
     it "bulk archive cascades to anomalies referenced by issue_data.anomaly_hashes" \tr -> do
       issueId <- pickApiChangeIssue tr
-      let containsIssue = V.any \(AnomalyList.IssueVM _ _ _ issue) -> issue.base.id == issueId
+      let containsIssue = V.any \(AnomalyList.IssueVM _ _ issue) -> issue.base.id == issueId
 
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
@@ -553,11 +553,11 @@ spec = sequential $ aroundAll withTestResources do
 
 
 isApiChange :: AnomalyList.IssueVM -> Bool
-isApiChange (AnomalyList.IssueVM _ _ _ c) = c.base.issueType == Issues.ApiChange
+isApiChange (AnomalyList.IssueVM _ _ c) = c.base.issueType == Issues.ApiChange
 
 
 issueOf :: AnomalyList.IssueVM -> Issues.IssueL
-issueOf (AnomalyList.IssueVM _ _ _ issue) = issue
+issueOf (AnomalyList.IssueVM _ _ issue) = issue
 
 
 issueIdOf :: AnomalyList.IssueVM -> Issues.IssueId
@@ -580,7 +580,7 @@ encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
 
 listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector AnomalyList.IssueVM)
 listAnomalies tr filterT = do
-  (_, pg) <- testServant tr $ AnomalyList.anomalyListGetH testPid Nothing filterT Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
+  (_, pg) <- testServant tr $ AnomalyList.anomalyListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
   case pg of
     AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"

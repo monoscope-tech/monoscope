@@ -1,14 +1,12 @@
 {-# LANGUAGE StrictData #-}
 
 module Models.Telemetry.Telemetry (
-  LogRecord (..),
   otelRecordByProjectAndId,
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
   getTotalEventsToReport,
   getUsageTotals,
-  dayWindows,
   SpanRecord (..),
   getAllATErrors,
   isErrorRecord,
@@ -22,7 +20,6 @@ module Models.Telemetry.Telemetry (
   MetricRecord (..),
   MetricCatalogBuffer,
   newMetricCatalogBuffer,
-  enqueueMetricCatalog,
   flushMetricCatalog,
   reconcileMetricCatalog,
   ExponentialHistogram (..),
@@ -67,8 +64,6 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
-  retryTransientEff,
-  maxWriteAttempts,
   maxReadAttempts,
   handOffBatches,
   mintOtelLogIds,
@@ -79,7 +74,6 @@ module Models.Telemetry.Telemetry (
   getMetricServiceNames,
   getMetricNames,
   projectsWithRecentMetrics,
-  resourceServiceName,
   metricServiceNameFromResource,
   SpanEvent (..),
   atMapText,
@@ -95,6 +89,7 @@ module Models.Telemetry.Telemetry (
   rowIdentity,
   otelSpanColsSql,
   roundUTCToMicros,
+  dayWindows,
 )
 where
 
@@ -103,9 +98,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
-import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
-import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
@@ -131,7 +125,6 @@ import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
@@ -154,7 +147,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
 
 -- $setup
@@ -166,7 +159,7 @@ getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
 getNestedValue [] _ = Nothing
 getNestedValue [k] m = Map.lookup k m
 getNestedValue ks@(k : rest) m =
-  Map.lookup (T.intercalate "." ks) m <|> (getNestedValue rest =<< objectToMap =<< Map.lookup k m)
+  Map.lookup (T.intercalate "." ks) m <|> (getNestedValue rest =<< jsonToMap =<< Map.lookup k m)
 
 
 -- | Render a JSON leaf as Text (strings scrubbed of NULs, numbers shown).
@@ -203,13 +196,9 @@ asTextRaw = \case
   _ -> Nothing
 
 
-objectToMap :: AE.Value -> Maybe (Map Text AE.Value)
-objectToMap = \case AE.Object o -> Just $ KEM.toMapText o; _ -> Nothing
-
-
 -- | Look up a top-level key of a JSON object and render its leaf as Text.
 scopeField :: Text -> AE.Value -> Maybe Text
-scopeField k v = valText =<< Map.lookup k =<< objectToMap v
+scopeField k v = valText =<< Map.lookup k =<< jsonToMap v
 
 
 -- Lens-like access helpers for Map Text AE.Value fields
@@ -259,27 +248,12 @@ data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKU
 -- the columns stay 'Text' on the row types and are parsed totally here.
 parseSpanKind :: Maybe Text -> Maybe SpanKind
 parseSpanKind =
-  ( >>=
-      \case
-        "internal" -> Just SKInternal
-        "server" -> Just SKServer
-        "client" -> Just SKClient
-        "producer" -> Just SKProducer
-        "consumer" -> Just SKConsumer
-        "unspecified" -> Just SKUnspecified
-        _ -> Nothing
-  )
+  (=<<) (`lookup` [("internal", SKInternal), ("server", SKServer), ("client", SKClient), ("producer", SKProducer), ("consumer", SKConsumer), ("unspecified", SKUnspecified)])
 
 
 parseSpanStatus :: Maybe Text -> Maybe SpanStatus
 parseSpanStatus =
-  ( >>=
-      \t -> case T.toUpper t of
-        "OK" -> Just SSOk
-        "ERROR" -> Just SSError
-        "UNSET" -> Just SSUnset
-        _ -> Nothing
-  )
+  (=<<) ((`lookup` [("OK", SSOk), ("ERROR", SSError), ("UNSET", SSUnset)]) . T.toUpper)
 
 
 data Trace = Trace
@@ -293,36 +267,6 @@ data Trace = Trace
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Trace
-
-
-data LogRecord = LogRecord
-  { projectId :: UUID.UUID
-  , id :: UUID.UUID
-  , timestamp :: UTCTime
-  , observedTimestamp :: UTCTime
-  , traceId :: Text
-  , spanId :: Maybe Text
-  , severityText :: Maybe SeverityLevel
-  , severityNumber :: Int
-  , body :: AE.Value
-  , attributes :: AE.Value
-  , resource :: AE.Value
-  , instrumentationScope :: AE.Value
-  }
-  deriving (Generic, Show)
-  deriving anyclass (FromRow, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRecord
-
-
-instance AE.FromJSON ByteString where
-  parseJSON = AE.withText "ByteString" $ \t ->
-    case B16.decode (Relude.encodeUtf8 t) of
-      Right bs -> return bs
-      Left err -> fail $ "Invalid hex-encoded ByteString: " ++ err
-
-
-instance AE.ToJSON ByteString where
-  toJSON = AE.String . decodeUtf8 . B16.encode
 
 
 -- JSONB/text decode for Map Text Value reuses the generic AesonText decoder in DeriveUtils.
@@ -446,7 +390,7 @@ metricCatalogKey r =
     "\x1f"
     [ UUID.toText r.projectId
     , r.metricName
-    , toText $ show r.metricType
+    , show r.metricType
     , r.metricUnit
     , metricServiceNameFromResource r.metricName r.resource
     , fromMaybe "" $ scopeField "name" r.instrumentationScope
@@ -921,12 +865,6 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
   pure resolved
 
 
--- | Full-record trace fetch. Missing parents are resolved iteratively: a parent
--- ingested outside ±5min (clock skew, late ingestion, async batch) is looked up
--- via context___span_id within ±24h. Recovered spans may themselves have a
--- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
--- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
--- logged so SREs can correlate with ingestion incidents.
 -- | Full-record spans for a trace, paged like 'getTraceDetailsForView'. Callers
 -- here look up one span (detail panel, waterfall keyboard nav) rather than
 -- drawing the whole trace, so they should pass a limit generous enough to
@@ -1301,8 +1239,8 @@ projectsWithRecentMetrics since =
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
-    $ resourceServiceName (objectToMap resource)
-    <|> (valText =<< getNestedValue ["container", "name"] =<< objectToMap resource)
+    $ resourceServiceName (jsonToMap resource)
+    <|> (valText =<< getNestedValue ["container", "name"] =<< jsonToMap resource)
     <|> lookupValueText resource "compose_service"
     <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
 
@@ -1476,12 +1414,6 @@ maxWriteAttempts :: Int
 maxWriteAttempts = 10
 
 
--- | Exponential backoff schedule shared by the write ('retryHasqlWrite') and
--- read ('retryTransientEff') retry loops: 100ms, 200ms, 400ms … capped at 5s.
-transientBackoffMicros :: Int -> Int
-transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
-
-
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential
 -- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
@@ -1491,7 +1423,7 @@ transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
 -- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
 -- exceptions (non-Hasql) propagate as Left without retry.
 retryHasqlWrite
-  :: (Concurrent :> es, IOE :> es, Log :> es, Monoid a)
+  :: (IOE :> es, Log :> es, Monoid a)
   => Int
   -- ^ max attempts (must be >= 1)
   -> Text
@@ -1519,50 +1451,11 @@ retryHasqlWrite maxAttempts store act =
         | otherwise -> throwIO e
 
 
--- | Retry @act@ on transient Hasql errors with exponential backoff
--- ('transientBackoffMicros'), yielding the last exception once the budget is
--- spent or the error is non-transient. @msg@/@key@/@label@ shape the retry log
--- line so the write and read wrappers keep their distinct log identities.
-retryTransientLoop :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
-retryTransientLoop maxAttempts msg key label act = go 1
-  where
-    go attempt =
-      tryAny act >>= \case
-        Right a -> pure (Right a)
-        Left e
-          | attempt < maxAttempts
-          , Hasql.isTransientException e -> do
-              let delayMicros = transientBackoffMicros attempt
-              Log.logAttention msg
-                $ AE.object
-                  [ AEK.fromText key AE..= label
-                  , "attempt" AE..= attempt
-                  , "max_attempts" AE..= maxAttempts
-                  , "backoff_us" AE..= delayMicros
-                  , "error" AE..= show @Text e
-                  ]
-              threadDelay delayMicros
-              go (attempt + 1)
-          | otherwise -> pure (Left e)
-
-
 -- | Read-side transient-retry budget. Smaller than 'maxWriteAttempts' (10):
 -- a read blip blocking the consumer for the full ~25s write budget would stall
 -- the partition, and the DLQ is a fine backstop for a read that won't recover.
 maxReadAttempts :: Int
 maxReadAttempts = 5
-
-
--- | Retry a read action on transient Hasql errors (dropped connection, empty
--- SQLSTATE from a pgdog/pgwire reset — see 'Data.Effectful.Hasql.isTransientUsageError')
--- with the same 100ms→5s backoff as 'retryHasqlWrite'. Rethrows the final
--- exception when the budget is exhausted or the error is non-transient, so the
--- caller's existing catch still routes the batch to the DLQ as the last resort.
--- Guards the per-batch project-id / cache lookups that previously dead-lettered
--- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
-retryTransientEff :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
-retryTransientEff maxAttempts op act =
-  either throwIO pure =<< retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op act
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
@@ -1573,8 +1466,7 @@ retryTransientEff maxAttempts op act =
 -- single-row failure can't occur, and if one ever did it's a systemic bug to
 -- surface loudly, not silently drop one row for.
 bulkInsertOtelLogsAndSpansTF
-  :: ( Concurrent :> es
-     , Hasql :> es
+  :: ( Hasql :> es
      , IOE :> es
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
@@ -1610,7 +1502,7 @@ bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
 -- whether at least one leg fully persisted the batch (for best-effort follow-on
 -- work like the metrics catalog).
 dualWrite
-  :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
   => Int
   -- ^ submitted row count
   -> WriteTarget
@@ -1667,8 +1559,7 @@ dualWrite submitted target writePg writeTf = case target of
 -- stores, `processed_at` stays NULL, and the hourly `SafetyNetReprocess` job
 -- re-submits it on the next tick.
 insertAndHandOff
-  :: ( Concurrent :> es
-     , Hasql :> es
+  :: ( Hasql :> es
      , IOE :> es
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
@@ -1909,7 +1800,7 @@ numArrayColumn :: Text -> Text -> (r -> Maybe AE.Value) -> BulkCol r
 numArrayColumn nm elemTy proj = (column nm (joined . proj)){selectExpr = \_ a -> "string_to_array(" <> a <> ", chr(31))::" <> elemTy <> "[]"}
   where
     joined = \case
-      Just (AE.Array xs) | not (V.null xs) -> Just (T.intercalate "\x1f" (jsonText <$> V.toList xs))
+      Just (AE.Array xs) | not (V.null xs) -> Just (T.intercalate "\x1f" (encodeText <$> V.toList xs))
       _ -> Nothing
 
 
@@ -1929,7 +1820,7 @@ quantileColumn nm wantQuantiles proj = numArrayColumn nm "double precision" (fma
 -- assignment cast); on TimeFusion the bare text coerces to Variant (the
 -- VariantInsertRewriter fires on the SELECT projection).
 jsonColumn :: Text -> (r -> Maybe AE.Value) -> BulkCol r
-jsonColumn nm proj = (column nm (fmap (jsonText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
+jsonColumn nm proj = (column nm (fmap (encodeText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -2024,6 +1915,14 @@ otelColumns =
       , attrText "attributes___user_agent___original" "user_agent.original"
       , attrText "attributes___http___request___method" "http.request.method"
       , attrText "attributes___http___request___method_original" "http.request.method_original"
+      , -- The route the framework's router matched. Promoted for the same reason
+        -- url.path is: it is what endpoints are grouped on, so every query
+        -- touching it was paying a JSON extraction out of `attributes`.
+        -- otel_metrics has carried this column all along; the spans table was the
+        -- outlier. Storage was widened first (timefusion `migrate-columns`,
+        -- 2026-09-02) — writing a column TF's schema lacks fails the INSERT, and
+        -- migration 0141 is the Postgres half, since one statement serves both legs.
+        attrText "attributes___http___route" "http.route"
       , attrInt "attributes___http___response___status_code" "http.response.status_code"
       , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
       , attrBigInt "attributes___http___request___body___size" "http.request.body.size"
@@ -2123,7 +2022,7 @@ data Context = Context
 -- are queried by KQL, never read back through 'otelSpanColsSql'.)
 --
 -- >>> length otelColumns
--- 90
+-- 91
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID
@@ -2167,7 +2066,7 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
       maybe False (\n -> "exception" `T.isInfixOf` n || "error" `T.isInfixOf` n)
         $ asTextRaw
         =<< Map.lookup "event_name"
-        =<< objectToMap v
+        =<< jsonToMap v
 getErrorEvents _ = []
 
 
@@ -2221,7 +2120,7 @@ extractATError _ _ = Nothing
 extractATErrorFromRecord :: OtelLogsAndSpans -> Maybe ErrorPatterns.ATError
 extractATErrorFromRecord spanObj =
   let attrs = unAesonTextMaybe spanObj.attributes
-      excAttr k = asTextRaw =<< Map.lookup k =<< objectToMap =<< Map.lookup "exception" =<< attrs
+      excAttr k = asTextRaw =<< Map.lookup k =<< jsonToMap =<< Map.lookup "exception" =<< attrs
       bodyTxt = asTextRaw =<< unAesonTextMaybe spanObj.body
       typ = fromMaybe "Error" (excAttr "type")
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
@@ -2238,11 +2137,11 @@ atErrorFrom spanObj typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
       getSpanAttr k = attrs >>= Map.lookup k >>= valText
-      getUserAttrM k v = valText =<< Map.lookup k =<< objectToMap =<< Map.lookup v =<< resc
+      getUserAttrM k v = valText =<< Map.lookup k =<< jsonToMap =<< Map.lookup v =<< resc
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
       -- TODO: parse telemetry.sdk.name to SDKTypes
-      tech = asTextRaw =<< Map.lookup "language" =<< objectToMap =<< Map.lookup "sdk" =<< objectToMap =<< Map.lookup "telemetry" =<< resc
+      tech = asTextRaw =<< Map.lookup "language" =<< jsonToMap =<< Map.lookup "sdk" =<< jsonToMap =<< Map.lookup "telemetry" =<< resc
       serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
@@ -2450,7 +2349,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => Bool
   -- ^ enablePostgresTelemetryWrites
   -> Bool
@@ -2556,7 +2455,7 @@ identitySummary attrsM =
 
 
 encTrunc :: AE.ToJSON a => Int -> a -> T.Text
-encTrunc n x = let t = decodeUtf8 (AE.encode x) in if T.length t > n then T.take (n - 3) t <> "..." else t
+encTrunc n x = let t = encodeText x in if T.length t > n then T.take (n - 3) t <> "..." else t
 
 
 generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
@@ -2592,7 +2491,7 @@ generateLogSummary otel =
     bodyElt =
       bodyV >>= \case
         AE.String t -> Just t
-        AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
+        AE.Object obj -> Just $ fromMaybe (encodeText obj) (extractMessageFromLog (AE.Object obj))
         AE.Null -> Nothing
         v -> Just $ T.take 200 (show v)
 
@@ -2686,14 +2585,6 @@ clickTargetLabel :: Maybe (Map Text AE.Value) -> Maybe T.Text
 clickTargetLabel attrs =
   asum
     $ map (`atMapText` attrs) ["target.aria_label", "aria.label", "target.text_content", "text_content", "target.element", "target_element", "target.tag_name", "target.xpath", "event_type"]
-
-
--- | Format a byte count compactly (e.g. 340000 → "340KB").
-humanBytes :: Int -> T.Text
-humanBytes n
-  | n < 1024 = show n <> "B"
-  | n < 1024 * 1024 = show (n `div` 1024) <> "KB"
-  | otherwise = show (n `div` (1024 * 1024)) <> "MB"
 
 
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
@@ -2793,7 +2684,7 @@ generateSpanSummary otel =
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
-        , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
+        , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (formatBytes n)
         , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
         , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
@@ -2840,11 +2731,11 @@ metricSeriesId MetricRecord{projectId, metricName, metricType, metricUnit, resou
       [ "series"
       , UUID.toText projectId
       , metricName
-      , toText $ show metricType
+      , show metricType
       , metricUnit
-      , jsonText resource
-      , jsonText attributes
-      , jsonText instrumentationScope
+      , encodeText resource
+      , encodeText attributes
+      , encodeText instrumentationScope
       ]
 
 
@@ -2855,12 +2746,8 @@ metricId r@MetricRecord{metricTime, startTimestamp, metricValue} =
     , metricSeriesId r
     , toText $ iso8601Show metricTime
     , maybe "" (toText . iso8601Show) startTimestamp
-    , jsonText $ AE.toJSON metricValue
+    , encodeText $ AE.toJSON metricValue
     ]
-
-
-jsonText :: AE.Value -> Text
-jsonText = decodeUtf8 . AE.encode
 
 
 mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord
@@ -2871,7 +2758,7 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- as logs and spans. The caller mints ids before calling this function; it is
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => MetricCatalogBuffer
   -> Bool
   -> WriteTarget
@@ -2911,8 +2798,8 @@ mkMetricRow :: MetricRecord -> MetricRow
 mkMetricRow r =
   MetricRow
     { rec = r
-    , attrs = objectToMap r.attributes
-    , resourceMap = objectToMap r.resource
+    , attrs = jsonToMap r.attributes
+    , resourceMap = jsonToMap r.resource
     , native = metricValueToNative r.metricValue
     }
 

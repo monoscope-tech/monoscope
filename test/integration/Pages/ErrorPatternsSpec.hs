@@ -470,7 +470,7 @@ spec = sequential $ aroundAll withTestResources do
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash)
-          (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid Nothing (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing (Just "24h") [] [] Nothing Nothing
+          (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
           let listHtml = TL.toStrict $ renderText $ toHtml issueList
           listHtml `shouldSatisfy` T.isInfixOf issue.title
           listHtml `shouldSatisfy` T.isInfixOf "RESOLVED"

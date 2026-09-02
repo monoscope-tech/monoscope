@@ -18,7 +18,6 @@ module Pkg.TestUtils (
   testServant,
   testServantWithNotifications,
   runAllBackgroundJobs,
-  runAllBackgroundJobsNoReset,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
   runBackgroundJobsWhere,
@@ -48,11 +47,8 @@ module Pkg.TestUtils (
   createTestProject,
   createTestAPIKey,
   ingestLog,
-  ingestLogAt,
   ingestErrorLog,
-  ingestErrorAt,
   ingestTrace,
-  ingestTraceAt,
   ingestSpanLinked,
   ingestSpanReq,
   withSpanKind,
@@ -107,7 +103,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
@@ -495,6 +491,12 @@ refreshSession pool hpool sessionHeaders = do
 fromRightShow :: Show a => Either a b -> b
 fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
+
+
+-- | Test-only structural equality for ZonedTime, which has no Eq upstream.
+-- Lives here (not in Utils) so it can't leak into production comparisons.
+instance Eq ZonedTime where
+  (==) _ _ = True
 
 
 -- | Default frozen time used in tests
@@ -1132,23 +1134,6 @@ runAllBackgroundJobs t authCtx = do
   pure jobs
 
 
--- | Like 'runAllBackgroundJobs' but uses the live 'trTestClock' (no reset)
--- so jobs see the advanced time. Multi-tick specs should call this instead
--- of @runAllBackgroundJobs t tr.trATCtx@ which snaps the clock to @t@.
-runAllBackgroundJobsNoReset :: TestResources -> IO (V.Vector Job)
-runAllBackgroundJobsNoReset TestResources{..} = do
-  jobs <- withResource trATCtx.pool getBackgroundJobs
-  withSharedLogger \logger ->
-    runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
-      threads <- V.forM jobs \job -> Ki.fork scope $ liftIO $ do
-        Relude.when trATCtx.config.enableBackgroundJobs $ do
-          bgJob <- BackgroundJobs.throwParsePayload job
-          (notifs, _) <- runTestBackgroundWithClock trTestClock logger trATCtx (BackgroundJobs.processBackgroundJob trATCtx bgJob)
-          logNotifications trATCtx logger notifs
-      V.forM_ threads $ Ki.atomically . Ki.await
-  pure jobs
-
-
 -- | Run background jobs matching a predicate
 -- Useful for running only specific job types in tests
 runBackgroundJobsWhere :: UTCTime -> AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
@@ -1372,21 +1357,6 @@ ingestLog tr apiKey bodyText timestamp =
   void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey [bodyText] timestamp)
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" [bodyText] timestamp)
-
-
--- | Like 'ingestLog' but timestamps the record with the current test-clock value.
-ingestLogAt :: TestResources -> Text -> Text -> IO ()
-ingestLogAt tr apiKey bodyText = getTestTime tr.trTestClock >>= ingestLog tr apiKey bodyText
-
-
--- | Like 'ingestErrorLog' but timestamps the record with the current test-clock value.
-ingestErrorAt :: TestResources -> Text -> Text -> [(Text, Text)] -> IO ()
-ingestErrorAt tr apiKey bodyText extras = getTestTime tr.trTestClock >>= ingestErrorLog tr apiKey bodyText extras
-
-
--- | Like 'ingestTrace' but timestamps the span with the current test-clock value.
-ingestTraceAt :: TestResources -> Text -> Text -> IO ()
-ingestTraceAt tr apiKey spanName = getTestTime tr.trTestClock >>= ingestTrace tr apiKey spanName
 
 
 -- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.

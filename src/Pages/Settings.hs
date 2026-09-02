@@ -67,7 +67,6 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -101,7 +100,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -113,7 +112,7 @@ import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
 import UnliftIO.Exception (throwIO, try, tryAny)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -220,7 +219,7 @@ bringS3Page pid s3BucketM = settingsSection_ do
       formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
       formField_ FieldSm def{value = maybe "us-east-1" (.region) s3BucketM, placeholder = "us-east-1", extraAttrs = [term "list" "aws-regions"]} "Region" "region" True Nothing
       formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
-    datalist_ [id_ "aws-regions"] $ forM_ awsRegions \(code, label) -> option_ [value_ code] $ toHtml label
+    datalist_ [id_ "aws-regions"] $ options_ Nothing awsRegions
     formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
     p_ [class_ "text-xs text-textWeak"] "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."
 
@@ -399,13 +398,13 @@ apiKeyColumns pid =
             , data_ "tip" "Copy key"
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          let (hoverCls, hxMethod, tip, icon, iconCls) =
+          let (hxMethod, tip, icon, iconCls) =
                 if apiKey.active
-                  then ("hover:bg-fillError-weak", hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
-                  else ("hover:bg-fillSuccess-weak", hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
+                  then (hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
+                  else (hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
               confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
           button_
-            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> hoverCls
+            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
             , type_ "button"
             , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
             , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
@@ -798,10 +797,9 @@ prometheusFields_ pid modalId submitLabel mcfg = do
 
 -- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
 prometheusTestResult :: Maybe (Either Text (Int, Int)) -> Html ()
-prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ case res of
-  Nothing -> mempty
-  Just (Right (n, ms)) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
-  Just (Left err) -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
+prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust res \case
+  Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
+  Left err -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
 
 
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
@@ -1157,7 +1155,7 @@ data BillingData = BillingData
   , enableFreetier :: Bool
   , basicAuthEnabled :: Bool
   , provider :: Projects.BillingProvider
-  , dailyUsage :: [(Day, Int64, Int64, Int64, Int64)]
+  , dailyUsage :: [Projects.DailyUsage]
   -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
   , cycleStart :: Day
   , pastCycles :: [(Day, Day, Int64, Int64)]
@@ -1173,8 +1171,8 @@ instance ToHtml BillingGet where
   toHtmlRaw = toHtml
 
 
-manageBillingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders BillingGet)
-manageBillingGetH pid from = do
+manageBillingGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders BillingGet)
+manageBillingGetH pid = do
   (_, project, bw) <- mkPageCtx pid
   let dat = fromMaybe project.createdAt project.billingDay
       envCfg = bw.config
@@ -1192,15 +1190,15 @@ manageBillingGetH pid from = do
   (totalRequests, totalBytes) <- Projects.getTotalUsage pid cycleStart
   allDaily <- Projects.getDailyUsageBreakdown pid fetchStart
   let breakdownDay = utctDay breakdownStart
-      dailyUsage = filter (\(day, _, _, _, _) -> day >= breakdownDay) allDaily
+      dailyUsage = filter ((>= breakdownDay) . (.day)) allDaily
       -- Bucket prior cycles. pastBoundaries is newest-first; pair each cycle's
       -- start with the next-newer boundary as its exclusive end.
       pastCycles =
-        [ (utctDay cStart, utctDay cEnd, sum [n | (_, n, _, _, _) <- inCycle], sum [eb + mb | (_, _, _, eb, mb) <- inCycle])
+        [ (utctDay cStart, utctDay cEnd, sum (map (.requests) inCycle), sum [u.eventBytes + u.metricBytes | u <- inCycle])
         | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
         , let s = utctDay cStart
               e = utctDay cEnd
-              inCycle = filter (\(d, _, _, _, _) -> d >= s && d < e) allDaily
+              inCycle = filter (\u -> u.day >= s && u.day < e) allDaily
         , not (null inCycle)
         ]
   let lastReported = fmtDate "%b %-d" project.usageLastReported
@@ -1246,7 +1244,7 @@ billingPage d = div_ [] do
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
         div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
-        let bytesSuffix = bool "" (" · " <> humanBytes d.totalBytes) (d.totalBytes > 0)
+        let bytesSuffix = bool "" (" · " <> formatBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
               if isFree || overageNum <= 0
                 then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
@@ -1284,22 +1282,6 @@ overageReqs :: Int64 -> Int64
 overageReqs n = max 0 (n - 20_000_000)
 
 
-fmtDate :: FormatTime t => String -> t -> Text
-fmtDate f = toText . formatTime defaultTimeLocale f
-
-
--- | Format a byte count with the largest unit it fits into. KB-step decimal
--- (matches what most cloud billing pages render), one decimal past KB.
-humanBytes :: Int64 -> Text
-humanBytes b
-  | b < 1024 = show b <> " B"
-  | b < 1_048_576 = fmtNum (fromIntegral b / 1024 :: Double) <> " KB"
-  | b < 1_073_741_824 = fmtNum (fromIntegral b / 1_048_576 :: Double) <> " MB"
-  | otherwise = fmtNum (fromIntegral b / 1_073_741_824 :: Double) <> " GB"
-  where
-    fmtNum n = toText (printf "%.1f" n :: String)
-
-
 -- | Sticky table header cell: opaque background so scrolled rows can't show through.
 stickyTh_ :: Text -> Html () -> Html ()
 stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
@@ -1308,15 +1290,15 @@ stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWea
 -- | Per-day usage table for the last 30 days. Cost shown is the marginal
 -- contribution past the 20M-included tier ($1 per 1M), assuming chronological
 -- accumulation across the cycle. Days entirely below the threshold show "—".
-dailyUsageBreakdown_ :: Bool -> Day -> [(Day, Int64, Int64, Int64, Int64)] -> Html ()
+dailyUsageBreakdown_ :: Bool -> Day -> [Projects.DailyUsage] -> Html ()
 dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
   -- Header total is scoped to current cycle so it matches the headline
   -- "Estimated this cycle" figure. Pre-cycle rows are still rendered (dimmed)
   -- below for context, but excluded from the totals.
-  let cycleRows = filter (\(d, _, _, _, _) -> d >= cycleStartDay) rows
-      totalReqs = sum [n | (_, n, _, _, _) <- cycleRows]
-      totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- cycleRows]
-      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> humanBytes totalBytes) (totalBytes > 0)
+  let cycleRows = filter ((>= cycleStartDay) . (.day)) rows
+      totalReqs = sum (map (.requests) cycleRows)
+      totalBytes = sum [u.eventBytes + u.metricBytes | u <- cycleRows]
+      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0)
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
@@ -1324,18 +1306,18 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
     then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
     else do
       let activeDays = length rows
-          maxDay = foldr (\(_, n, _, _, _) acc -> max n acc) 1 rows
-          hasMetrics = any (\(_, _, m, _, _) -> m > 0) rows
-          ascending = sortWith (\(d, _, _, _, _) -> d) rows
+          maxDay = foldr (max . (.requests)) 1 rows
+          hasMetrics = any ((> 0) . (.metrics)) rows
+          ascending = sortWith (.day) rows
           -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
           -- for context) don't inflate the included-tier counter and produce
           -- incorrect "Est. cost" for current-cycle days.
           withRunning =
             fst
               $ foldl'
-                ( \(xs, acc) (day, n, m, eb, mb) ->
-                    let acc' = bool acc 0 (day < cycleStartDay) + n
-                     in ((day, n, m, eb, mb, acc' - n, acc') : xs, acc')
+                ( \(xs, acc) u ->
+                    let acc' = bool acc 0 (u.day < cycleStartDay) + u.requests
+                     in ((u.day, u.requests, u.metrics, u.eventBytes, u.metricBytes, acc' - u.requests, acc') : xs, acc')
                 )
                 ([], 0 :: Int64)
                 ascending
@@ -1366,16 +1348,14 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                   $ bool (fmt (commaizeF n0)) "—" (n0 <= 0)
                 when (bytes > 0)
                   $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
-                  $ toHtml @Text (humanBytes bytes)
+                  $ toHtml @Text (formatBytes bytes)
           tbody_ do
             forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
                   events = max 0 (n - metrics)
                   preCycle = day < cycleStartDay
-                  rowCls = "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle
-                  dayCls = "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle
-              tr_ [class_ rowCls, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
-                td_ [class_ dayCls] $ toHtml $ fmtDate "%a %b %e" day
+              tr_ [class_ $ "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
+                td_ [class_ $ "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle] $ toHtml $ fmtDate "%a %b %e" day
                 countCell eb events True
                 countCell mb metrics False
                 td_ [class_ "px-3 py-2"] do
@@ -1432,7 +1412,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
           tr_ [class_ "border-t border-strokeWeak"] do
             td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
             td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (humanBytes bytes) (bytes > 0))
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (formatBytes bytes) (bytes > 0))
             td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml costText
   unless isFree
     $ div_ [class_ "text-xs text-textWeak"] "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."

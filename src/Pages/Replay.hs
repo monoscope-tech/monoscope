@@ -56,7 +56,7 @@ data ReplayPost = ReplayPost
   , userEmail :: Maybe Text
   , userName :: Maybe Text
   }
-  deriving (Generic, Show)
+  deriving stock (Generic, Show)
   deriving anyclass (ToSchema)
 
 
@@ -124,8 +124,8 @@ replayBatchByteBudget = 64 * 1024 * 1024
 -- | Strip the JSON-encoded null escape sequence (`\u0000`) directly on a
 -- ByteString. Avoids the three-pass decodeUtf8/replace/encodeUtf8 round-trip
 -- that allocated 3× the message size per event. Single linear scan via
--- `BS.breakSubstring` followed by a strict left fold over the resulting
--- chunks; for the common case (no nulls) it returns the input unchanged.
+-- `BS.breakSubstring`; for the common case (no nulls) the scan yields one
+-- chunk and the input is returned unchanged, with sharing intact.
 --
 -- >>> stripJsonNullEscapes "ab"
 -- "ab"
@@ -136,9 +136,9 @@ replayBatchByteBudget = 64 * 1024 * 1024
 -- >>> stripJsonNullEscapes "no\\u0000tabs\\u0000here"
 -- "notabshere"
 stripJsonNullEscapes :: BS.ByteString -> BS.ByteString
-stripJsonNullEscapes bs0 = case BS.breakSubstring needle bs0 of
-  (_, rest) | BS.null rest -> bs0
-  (pre, rest) -> BS.concat (pre : go (BS.drop 6 rest))
+stripJsonNullEscapes bs0 = case go bs0 of
+  [only] -> only
+  chunks -> BS.concat chunks
   where
     needle = "\\u0000"
     go bs = case BS.breakSubstring needle bs of
@@ -266,7 +266,7 @@ skipJsonValue = do
     '{' -> skipBracketed '{' '}'
     '[' -> skipBracketed '[' ']'
     '"' -> AC.anyChar *> skipStringBody
-    _ -> void $ AC.takeWhile1 (\ch -> ch `notElem` [',' :: Char, '}', ']', ' ', '\t', '\n', '\r'])
+    _ -> void $ AC.takeWhile1 (AC.notInClass ",}] \t\n\r")
 
 
 skipBracketed :: Char -> Char -> AC.Parser ()
@@ -334,9 +334,7 @@ processReplayEvents msgs _attrs = do
           Metrics.bumpErrorCounter "replay:decode_error"
           pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
         Right payload ->
-          saveReplayMinio envCfg jobsPool ackId payload <&> \case
-            Just acked -> ([acked], [])
-            Nothing -> ([], [])
+          saveReplayMinio envCfg jobsPool ackId payload <&> (,[]) . maybeToList
 
 
 -- | True if the Minio error represents a missing object (safe to treat as empty).
@@ -352,12 +350,6 @@ isNoSuchKey _ = False
 
 sessionLogCtx :: Projects.ProjectId -> UUID.UUID -> HashMap Text Text
 sessionLogCtx pid sid = HM.fromList [("session_id", UUID.toText sid), ("project_id", pid.toText)]
-
-
--- | Attach a rendered exception to a log context under the conventional
--- "error" key. Used so call sites stop repeating the displayException dance.
-withError :: Exception e => e -> HashMap Text Text -> HashMap Text Text
-withError e = HM.insert "error" (toText $ displayException e)
 
 
 -- | Enqueue a BgJobs job. The payload is hand-rolled to mirror the derived
@@ -665,7 +657,7 @@ sessionMetadata pid sessionId logCtx = do
     rows :: [SessionMeta] <-
       Hasql.interp [HI.sql| SELECT user_id, user_email, user_name, last_event_at FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
     pure $ listToMaybe rows
-  either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err logCtx)) pure r
+  either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (Log.withError err logCtx)) pure r
 
 
 -- | One event's `timestamp` field (0 if absent / not an object). Sorts files by
@@ -789,7 +781,7 @@ saveReplayMinio envCfg jobsPool ackId payload =
                 $ enqueueBgJob jobsPool "MergeReplaySession" [AE.toJSON payload.projectId, AE.toJSON payload.sessionId]
               pure $ Just ackId
             Left err -> do
-              Log.logAttention "Failed to save replay events to MinIO" (withError err $ HM.fromList [("session", session), ("projectId", payload.projectId.toText)])
+              Log.logAttention "Failed to save replay events to MinIO" (Log.withError err $ HM.fromList [("session", session), ("projectId", payload.projectId.toText)])
               pure Nothing
 
 
@@ -825,7 +817,7 @@ fetchReplaySession p sessionId = do
       Log.logInfo "Replay session served (user-facing error)" (summaryCtx <> HM.fromList [("outcome", "user_error"), ("user_msg", userMsg)])
       pure $ emptyResp userMsg
     Left err -> do
-      Log.logAttention "Unexpected exception fetching replay session" (withError err summaryCtx)
+      Log.logAttention "Unexpected exception fetching replay session" (Log.withError err summaryCtx)
       pure $ emptyResp "We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support."
 
 
@@ -899,7 +891,7 @@ fetchReplayShard p sessionId mkey = do
         -- the player shows a retryable error, instead of masking it as "[]" which
         -- the client mislabels as "too few events / recording never started".
         Left err | isNoSuchKey err -> RawJson "[]" <$ Log.logInfo "Replay shard already sealed/removed; serving empty" (HM.fromList [("key", k)])
-        Left err -> Log.logAttention "Replay shard fetch failed" (withError err (HM.fromList [("key", k)])) >> liftIO (throwIO err)
+        Left err -> Log.logAttention "Replay shard fetch failed" (Log.withError err (HM.fromList [("key", k)])) >> liftIO (throwIO err)
     _ -> pure $ RawJson "[]"
 
 
@@ -931,7 +923,7 @@ compressAndMergeReplaySessions = do
   forM_ sessions $ \(sessionId, projectId) -> do
     r <- tryAny $ mergeOneSessionByKeys projectId sessionId Nothing $ \_ -> markMerged projectId sessionId now
     whenLeft_ r $ \err ->
-      Log.logAttention "Replay session merge threw; continuing batch" (withError err (sessionLogCtx projectId sessionId))
+      Log.logAttention "Replay session merge threw; continuing batch" (Log.withError err (sessionLogCtx projectId sessionId))
 
 
 -- | Look up a project + its S3 settings + tracked file keys and seal them into
@@ -991,7 +983,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
           let shardPrefix = replayObjectPrefix pid nowForKey sessionId
           liftIO (try @MergeError $ mergeOneSession s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
             Left merr -> do
-              let ctxWithErr = withError merr logCtx
+              let ctxWithErr = Log.withError merr logCtx
               case merr of
                 -- Fatal: corrupt data will never succeed. Mark merged so we stop
                 -- retrying forever and paging on-call.

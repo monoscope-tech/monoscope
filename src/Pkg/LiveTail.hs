@@ -134,7 +134,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), unAesonText)
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
 import Pkg.Parser.Stats (parseQueryToAST, validateFields)
@@ -446,8 +446,13 @@ effectiveFilter cs row
       AllSignals -> True
     resolver :: Resolver
     resolver = resolveIn row
-    matches subj expected = expected `elem` map asText (resolver subj)
-    asText = \case AE.String s -> s; v -> decodeUtf8 (AE.encode v)
+    matches subj expected = any ((== expected) . valueText) (resolver subj)
+
+
+-- | A resolved value as text: strings pass through, anything else is its JSON encoding.
+-- Shared by filter matching and row projection so the same value reads the same way in both.
+valueText :: AE.Value -> Text
+valueText = \case AE.String s -> s; v -> decodeUtf8 (AE.encode v)
 
 
 -- | @resource.service.name@ and @resource.deployment.environment.name@ as subjects, built
@@ -494,7 +499,6 @@ matchesFor subs rec = partitionEithers (mapMaybe decide subs)
 -- Storage
 -- ---------------------------------------------------------------------------------------
 
--- | Insert a lease. The caller has already authenticated the user and enforced the limits.
 -- | Insert a lease, but only if both limits still hold.
 --
 -- One statement rather than count-check-insert across three round trips, which is what the
@@ -509,7 +513,7 @@ matchesFor subs rec = partitionEithers (mapMaybe decide subs)
 -- see each other's uncommitted row, so the cap is "about N", not exactly N. That is deliberate
 -- rather than overlooked: these limits are a courtesy bound on one user's tabs, and paying for
 -- exactness (advisory locks, or @SERIALIZABLE@ with retries) on a registration path is not
--- worth it. The bound that actually protects the fleet is 'liveTailMaxCached', which is a
+-- worth it. The bound that actually protects the fleet is 'maxCached', which is a
 -- @LIMIT@ on the ingest side and cannot be raced at all.
 insertSubscription
   :: DB es
@@ -562,8 +566,9 @@ type SubRow = (SubscriptionId, Projects.ProjectId, Projects.UserId, Text, Maybe 
 
 -- | Rebuild a 'Subscription', dropping any row whose scope cannot be reconstructed.
 --
--- Dropping rather than defaulting: the only way this fails is a @logs_only@ row with no
--- service, and the safe reading of a missing gate is "do not match", never "match everything".
+-- Dropping rather than defaulting: the only way this fails is a scope discriminator this build
+-- does not know, and the safe reading of an unreadable gate is "do not match", never "match
+-- everything".
 fromRow :: SubRow -> Maybe Subscription
 fromRow (sid, pid, uid, scopeText, svc, kind, environment, query, columns, expiresAt) = do
   scope <- scopeFromRow scopeText svc kind
@@ -659,9 +664,7 @@ relayDrain lastSeen = do
   -- Every row goes through the same version check the Kafka path uses, so a rolling-deploy
   -- skew is reported as a skew on both transports rather than looking like corruption on one
   -- of them. The watermark advances past undecodable rows so they are not retried forever.
-  let decoded = map (\(_, AesonText v) -> envelopeFromValue v) rows
-      watermark = maybe lastSeen fst (viaNonEmpty Relude.last rows)
-  pure (decoded, watermark)
+  pure (map (envelopeFromValue . unAesonText . snd) rows, maybe lastSeen fst (viaNonEmpty Relude.last rows))
 
 
 -- | Where a pod starts reading: the current end of the table.
@@ -1024,12 +1027,10 @@ toLiveRow scope cols r = case scope of
 -- Columns SQL would have computed (aggregates, expressions) resolve to nothing and are simply
 -- omitted; the row carries what it can prove and the durable read supplies the rest.
 toTableCols :: [Text] -> Telemetry.OtelLogsAndSpans -> Map Text AE.Value
-toTableCols cols r = fromList [(c, v) | c <- cols, Just v <- [resolveCol c]]
+toTableCols cols r = fromList (mapMaybe resolveCol cols)
   where
     json = AE.toJSON r
-    resolveCol c = case resolveIn json (dottedSubject (T.replace "___" "." c)) of
-      [] -> Nothing
-      v : _ -> Just (truncateValue v)
+    resolveCol c = (c,) . truncateValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
     truncateValue = \case
       AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
       v -> v
@@ -1062,21 +1063,16 @@ toLogRowFields cols r =
     { id = r.id
     , timestamp = storageTimestamp r.timestamp
     , level = r.level
-    , service = lookupText serviceSubject
-    , traceId = r.context >>= (.trace_id) >>= nonEmptyText
-    , spanId = r.context >>= (.span_id) >>= nonEmptyText
+    , service = valueText <$> find (/= AE.Null) (resolveIn (AE.toJSON r) serviceSubject)
+    , traceId = r.context >>= (.trace_id) >>= guarded (not . T.null)
+    , spanId = r.context >>= (.span_id) >>= guarded (not . T.null)
     , name = r.name
-    , body = bodyText
+    , body = T.take maxRowFieldChars rawBody
     , fields = toTableCols cols r
     , truncated = T.length rawBody > maxRowFieldChars
     }
   where
-    json = AE.toJSON r
-    lookupText subj = viaNonEmpty Relude.head (mapMaybe asText (resolveIn json subj))
-    asText = \case AE.String s -> Just s; AE.Null -> Nothing; v -> Just (decodeUtf8 (AE.encode v))
-    nonEmptyText t = t <$ guard (not (T.null t))
-    rawBody = maybe "" (\(AesonText b) -> case b of AE.String s -> s; v -> decodeUtf8 (AE.encode v)) r.body
-    bodyText = T.take maxRowFieldChars rawBody
+    rawBody = foldMap (valueText . unAesonText) r.body
 
 
 -- ---------------------------------------------------------------------------------------
@@ -1132,9 +1128,7 @@ attachConn hub sid conn = atomically do
 
 detachConn :: MonadIO m => Hub -> SubscriptionId -> Unique -> m ()
 detachConn hub sid key =
-  atomically $ modifyTVar' hub $ HM.update (nonEmptyList . filter ((/= key) . fst)) sid
-  where
-    nonEmptyList xs = xs <$ guard (not (null xs))
+  atomically $ modifyTVar' hub $ HM.update (guarded (not . null) . filter ((/= key) . fst)) sid
 
 
 -- | Monotonic source for 'Unique'. A global is right here: the value means nothing outside the
@@ -1144,9 +1138,6 @@ counter = unsafePerformIO (newTVarIO 0)
 {-# NOINLINE counter #-}
 
 
--- | Queue a matched row for the relay writer. Never blocks: on a full buffer the oldest row
--- is discarded, because a slow database must cost a tail its rows and never cost ingestion its
--- latency.
 -- | Matched rows waiting to be written to the relay table, and what overflow has cost.
 --
 -- The counter is not decoration. Every other drop in this feature is counted — the per-browser
@@ -1167,12 +1158,18 @@ newRelayBuffer = RelayBuffer <$> liftIO (newTBQueueIO relayBufferDepth) <*> newT
 -- discarded and counted, because a slow database must cost a tail its rows and never cost
 -- ingestion its latency.
 bufferForRelay :: RelayBuffer -> LiveEnvelope -> IO ()
-bufferForRelay rb e = atomically do
-  full <- isFullTBQueue rb.queue
-  when full do
-    void (readTBQueue rb.queue)
-    modifyTVar' rb.dropped (+ 1)
-  writeTBQueue rb.queue e
+bufferForRelay rb = atomically . pushDropping rb.queue rb.dropped
+
+
+-- | Enqueue without ever blocking: a full queue loses its oldest entry and counts it. The one
+-- place that bargain is written down, so the relay buffer and the per-browser queue cannot
+-- drift apart on what "full" costs.
+pushDropping :: TBQueue a -> TVar Int -> a -> STM ()
+pushDropping q dropped x = do
+  whenM (isFullTBQueue q) do
+    void (readTBQueue q)
+    modifyTVar' dropped (+ 1)
+  writeTBQueue q x
 
 
 -- | Everything buffered since the last call, with the number of rows overflow discarded in
@@ -1199,12 +1196,7 @@ hubIsEmpty = fmap HM.null . readTVarIO
 deliver :: MonadIO m => Hub -> LiveEnvelope -> m ()
 deliver hub env = atomically do
   conns <- HM.lookupDefault [] env.subscriptionId <$> readTVar hub
-  forM_ conns \(_, c) -> do
-    full <- isFullTBQueue c.queue
-    when full do
-      void (readTBQueue c.queue)
-      modifyTVar' c.dropped (+ 1)
-    writeTBQueue c.queue env.row
+  forM_ conns \(_, c) -> pushDropping c.queue c.dropped env.row
 
 
 -- | Block for the next row, then take whatever else has arrived, with the running drop count.
@@ -1212,7 +1204,7 @@ deliver hub env = atomically do
 -- Batching matters: a burst that arrives as 200 rows should become a handful of SSE writes
 -- rather than 200 syscalls, and the browser renders one frame either way.
 takeBatch :: MonadIO m => Conn -> m ([LiveRow], Int)
-takeBatch conn = atomically (batchSTM conn)
+takeBatch = atomically . batchSTM
 
 
 -- | 'takeBatch', but giving up after @micros@ with 'Nothing'.
@@ -1339,13 +1331,13 @@ publishMatches rt pid records = do
     else do
       let affordable = affordableRecords (length subs)
       liftIO
-        $ (<> PublishStats 0 0 0 0 0 (Sum (max 0 (V.length records - affordable))))
+        $ (<> PublishStats{evaluated = 0, matched = 0, failed = 0, publishFailed = 0, oversized = 0, skipped = Sum (max 0 (V.length records - affordable))})
         <$> foldlM (step subs) mempty (V.take affordable records)
   where
     step subs acc rec = do
       let (hits, errs) = matchesFor subs rec
       (sent, tooBig) <- foldMapM emitOne hits
-      pure (acc <> PublishStats 1 (Sum (length hits)) (Sum (length errs)) (Sum (length hits) - sent - tooBig) tooBig 0)
+      pure (acc <> PublishStats{evaluated = 1, matched = Sum (length hits), failed = Sum (length errs), publishFailed = Sum (length hits) - sent - tooBig, oversized = tooBig, skipped = 0})
       where
         emitOne cs =
           let env = LiveEnvelope envelopeVersion cs.sub.id (toLiveRow cs.sub.scope cs.sub.columns rec)

@@ -17,12 +17,10 @@ module Models.Telemetry.ServiceGraph (
   EdgeSample (..),
   LatencyHist (..),
   singletonLatency,
-  latencyPercentile,
   buildServiceGraph,
   Collapse (..),
   serviceMapFanout,
   traceEdgeSamples,
-  emptyServiceGraph,
   drawnNodes,
   drawnEdges,
   serviceMapNodeCap,
@@ -31,6 +29,7 @@ module Models.Telemetry.ServiceGraph (
   rollupServiceEdges,
   upsertServiceDependencyEdges,
   serviceGraphForRange,
+  latencyPercentile,
 ) where
 
 import Data.Aeson qualified as AE
@@ -219,10 +218,6 @@ drawnEdges :: ServiceGraph -> V.Vector ServiceEdge
 drawnEdges g = V.filter (\e -> e.source `S.member` ks && e.target `S.member` ks) g.edges
   where
     ks = S.fromList [n.key | n <- V.toList (drawnNodes g)]
-
-
-emptyServiceGraph :: Double -> ServiceGraph
-emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing V.empty
 
 
 -- | Beyond this a layered graph stops being readable and starts being a hairball, so the

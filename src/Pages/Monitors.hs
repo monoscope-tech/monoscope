@@ -2,7 +2,6 @@ module Pages.Monitors (
   alertSingleGetH,
   convertToQueryMonitor,
   alertSingleToggleActiveH,
-  alertListGetH,
   alertUpsertPostH,
   alertTeamDeleteH,
   AlertUpsertForm (..),
@@ -15,7 +14,6 @@ module Pages.Monitors (
   UnifiedMonitorItem (..),
   unifiedMonitorsGetH,
   unifiedMonitorOverviewH,
-  statusBadge_,
   teamAlertsGetH,
   alertBulkActionH,
   alertMuteH,
@@ -56,7 +54,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, panel_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -69,7 +67,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), checkFreeTierStatus, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -210,13 +208,6 @@ alertUpsertPostH pid form = do
   addRespHeaders $ AlertNoContent ""
 
 
-alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
-alertListGetH pid = do
-  _ <- Projects.sessionAndProject pid
-  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
-  addRespHeaders $ AlertListGet monitors
-
-
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
   _ <- Projects.sessionAndProject pid
@@ -233,13 +224,11 @@ alertSingleGetH pid monitorId = do
 
 
 data Alert
-  = AlertListGet (V.Vector Monitors.QueryMonitor)
-  | AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
+  = AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
   | AlertNoContent Text
 
 
 instance ToHtml Alert where
-  toHtml (AlertListGet monitors) = toHtml $ queryMonitors_ monitors
   toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
   toHtml (AlertNoContent msg) = toHtml msg
   toHtmlRaw = toHtml
@@ -250,48 +239,6 @@ alertSingleComp pid monitor = do
   div_ [] do
     a_ [class_ "border-y p-3 block cursor-pointer", hxGet_ $ "/p/" <> pid.toText <> "/monitors/alerts", hxTarget_ "#alertsListContainer"] "‹ Back to alerts list"
     div_ [class_ "p-3"] $ span_ "Alert details view not implemented"
-
-
-queryMonitors_ :: V.Vector Monitors.QueryMonitor -> Html ()
-queryMonitors_ monitors = do
-  table_ [class_ "table text-lg min-w-[65ch]"] do
-    thead_ $ tr_ do
-      th_ "Title"
-      th_ "Source"
-      th_ ""
-    tbody_ do
-      V.forM_ monitors \monitor -> tr_ do
-        let editURI = "/p/" <> monitor.projectId.toText <> "/monitors/alerts/" <> monitor.id.toText
-            isWidget = isJust monitor.widgetId
-            isDeactivated = isJust monitor.deactivatedAt
-            sourceLabel = do
-              faSprite_ (bool "file-lines" "chart-simple" isWidget) "regular" "w-3.5 h-3.5 text-iconNeutral"
-              bool "Log Explorer" "Widget" isWidget
-        td_
-          [ class_ $ bool "" "line-through" isDeactivated
-          , hxTarget_ "#alertsListContainer"
-          , hxGet_ editURI
-          ]
-          $ toHtml monitor.alertConfig.title
-        td_ [class_ "text-sm text-textWeak"]
-          $ case (,) <$> monitor.widgetId <*> monitor.dashboardId of
-            Just (wid, dashId) -> a_ [class_ "flex items-center gap-1 hover:text-textStrong", href_ $ "/p/" <> monitor.projectId.toText <> "/dashboards/" <> UUID.toText dashId <> "#" <> wid] sourceLabel
-            Nothing -> span_ [class_ "flex items-center gap-1"] sourceLabel
-        td_ [class_ "flex items-center gap-1"] do
-          a_
-            [ class_ "btn btn-ghost btn-xs btn-square text-iconNeutral"
-            , hxTarget_ "#alertsListContainer"
-            , hxGet_ editURI
-            , Aria.label_ "Edit"
-            ]
-            $ faSprite_ "pen-to-square" "regular" "w-3.5 h-3.5"
-          a_
-            [ class_ "btn btn-ghost btn-xs btn-square text-iconNeutral"
-            , hxTarget_ "#alertsListContainer"
-            , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/monitors/alerts/" <> monitor.id.toText <> "/toggle_active"
-            , Aria.label_ $ bool "Delete" "Reactivate" isDeactivated
-            ]
-            $ faSprite_ (bool "trash" "arrow-rotate-left" isDeactivated) "regular" "w-3.5 h-3.5"
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
@@ -345,9 +292,8 @@ thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessT
     div_ [class_ "flex flex-row gap-2 py-2"] do
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
-      formSelectField_ FieldSm "Trigger condition" "direction" False do
-        option_ (value_ "above" : [selected_ "" | not triggerLessThan]) "Above threshold"
-        option_ (value_ "below" : [selected_ "" | triggerLessThan]) "Below threshold"
+      formSelectField_ FieldSm "Trigger condition" "direction" False
+        $ options_ (Just $ bool "above" "below" triggerLessThan) [("above", "Above threshold"), ("below", "Below threshold")]
     div_ [class_ "mt-3 pt-3 border-t border-strokeWeak space-y-2"] do
       div_ [class_ "space-y-1 text-xs text-textWeak"] do
         div_ (span_ [class_ "font-medium text-textStrong"] "Recovery thresholds " >> span_ "(optional)")
@@ -362,9 +308,9 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
   let defaultSeverity = fromMaybe "Error" severityM
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
-      teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
+      teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
       teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
-      existingTeams = decodeUtf8 $ AE.encode $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
+      existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
@@ -381,7 +327,7 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       div_ [class_ "space-y-3"] do
         div_ [class_ "flex items-center"] do
           formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" $ value_ "true" : [checked_ | renotifyEnabled]
-          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == renotifyVal]) $ toHtml t
+          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ options_ (Just renotifyVal) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")]
         div_ [class_ "group/stopafter flex items-center"] do
           formCheckbox_ FieldSm "Stop after" "stopAfterCheck" $ value_ "true" : id_ "stopAfterCheck" : [checked_ | stopEnabled]
           div_ [class_ "items-center gap-1.5 ml-2 hidden group-has-[#stopAfterCheck:checked]/stopafter:flex", id_ "stopAfterInput"] do
@@ -394,7 +340,7 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
     div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
       formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ value_ "true" : [checked_ | emailAll]
-      span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      span_ [class_ "tooltip", data_ "tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
 
 ---------------------------------
@@ -420,7 +366,6 @@ data UnifiedMonitorDetails = AlertDetails
   , alertThreshold :: Double
   , warningThreshold :: Maybe Double
   , triggerDirection :: Text -- "above" or "below"
-  , visualizationType :: Text
   }
 
 
@@ -441,12 +386,12 @@ alertBulkActionH pid action form = do
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
     case action of
-      "deactivate" -> void $ Monitors.monitorDeactivateByIds monitorIds
-      "reactivate" -> void $ Monitors.monitorReactivateByIds monitorIds
-      "mute" -> void $ Monitors.monitorMuteByIds Nothing monitorIds
-      "unmute" -> void $ Monitors.monitorUnmuteByIds monitorIds
-      "resolve" -> void $ Monitors.monitorResolveByIds monitorIds
-      "delete" -> void $ Monitors.monitorSoftDeleteByIds monitorIds
+      "deactivate" -> void $ Monitors.monitorDeactivateByIds pid monitorIds
+      "reactivate" -> void $ Monitors.monitorReactivateByIds pid monitorIds
+      "mute" -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
+      "unmute" -> void $ Monitors.monitorUnmuteByIds pid monitorIds
+      "resolve" -> void $ Monitors.monitorResolveByIds pid monitorIds
+      "delete" -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
       _ -> pass
     addTriggerEvent "monitorsListChanged" AE.Null
   unifiedMonitorsGetH pid (Just $ bool "Active" "Inactive" (action == "deactivate")) Nothing
@@ -599,15 +544,13 @@ bulkActionsFor filterType pid =
 
 
 buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map UUID.UUID Text)
-buildTeamMap pid = do
-  allTeams <- ManageMembers.getTeams pid
-  pure $ Map.fromList $ map (\t -> (t.id, t.handle)) allTeams
+buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
 
 
-monitorActionH :: ([Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
+monitorActionH :: (Projects.ProjectId -> [Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 monitorActionH action msg pid monitorId = do
   _ <- Projects.sessionAndProject pid
-  void $ action [monitorId]
+  void $ action pid [monitorId]
   addSuccessToast msg Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders ""
@@ -615,7 +558,7 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM =
-  monitorActionH (Monitors.monitorMuteByIds durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+  monitorActionH (\p' -> Monitors.monitorMuteByIds p' durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
@@ -623,7 +566,7 @@ alertUnmuteH = monitorActionH Monitors.monitorUnmuteByIds "Monitor unmuted"
 alertResolveH = monitorActionH Monitors.monitorResolveByIds "Monitor resolved"
 alertDeleteH pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
-  void $ Monitors.monitorSoftDeleteByIds [monitorId]
+  void $ Monitors.monitorSoftDeleteByIds pid [monitorId]
   Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
   addSuccessToast "Monitor deleted" Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
@@ -656,7 +599,6 @@ toUnifiedMonitorItem teamMap pid currTime alert =
           , alertThreshold = alert.alertThreshold
           , warningThreshold = alert.warningThreshold
           , triggerDirection = bool "above" "below" alert.triggerLessThan
-          , visualizationType = alert.visualizationType
           }
     , teamBadges = mapMaybe (\tid -> (UUID.toText tid,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
     }
@@ -670,12 +612,11 @@ statusBadge_ isLarge status = do
         "Failing" -> ("badge-error", "xmark")
         "Active" -> ("badge-success", "circle-check")
         "Inactive" -> ("badge-ghost", "circle-pause")
-        _ | isAlerting -> ("badge-error", "bell-exclamation")
         "Warning" -> ("badge-warning", "triangle-exclamation")
         "Healthy" -> ("badge-success", "heart-pulse")
         "Pending" -> ("badge-ghost", "clock")
         "NoData" -> ("badge-ghost", "circle-question")
-        _ -> ("badge-ghost", "circle")
+        _ -> bool ("badge-ghost", "circle") ("badge-error", "bell-exclamation") isAlerting
       sizeClass = bool "badge-sm" "" isLarge
       iconSize = bool "h-3 w-3" "h-4 w-4" isLarge
   span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" isAlerting] do
@@ -731,18 +672,18 @@ unifiedMonitorOverviewH pid monitorId = do
               { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
-                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
+                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
                         faSprite_ "bell" "regular" "h-4 w-4"
                         "Unmute"
                       Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
+                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
                     when needsResolve
-                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Resolve", data_ "tip" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
+                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Resolve", data_ "tip" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
                         faSprite_ "check" "regular" "h-4 w-4"
                         "Resolve"
-                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" deactLabel, data_ "tip" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
+                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ deactLabel, data_ "tip" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
                       faSprite_ deactIcon "regular" "h-4 w-4"
                       toHtml deactLabel
                     div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
@@ -753,20 +694,20 @@ unifiedMonitorOverviewH pid monitorId = do
                           faSprite_ icon "regular" "h-3.5 w-3.5"
                           toHtml label
                   div_ [class_ "md:hidden inline-block"] do
-                    button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Actions", term "popovertarget" mobilePopId, style_ $ "anchor-name: --anchor-" <> mobilePopId] do
+                    button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", Aria.label_ "Actions", term "popovertarget" mobilePopId, style_ $ "anchor-name: --anchor-" <> mobilePopId] do
                       faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
                     div_ [id_ mobilePopId, term "popover" "auto", class_ "dropdown dropdown-end menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-44 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> mobilePopId] do
                       maybe (mobItem_ "bell-slash" "/mute" "Mute") (const $ mobItem_ "bell" "/unmute" "Unmute") alert.mutedUntil
                       when needsResolve $ mobItem_ "check" "/resolve" "Resolve"
                       mobItem_ deactIcon "/toggle_active" deactLabel
-                  a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm max-md:btn-ghost max-md:border max-md:border-strokeWeak btn-primary", term "aria-label" "Edit monitor", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
+                  a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm max-md:btn-ghost max-md:border max-md:border-strokeWeak btn-primary", Aria.label_ "Edit monitor", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
                     faSprite_ "pen-to-square" "regular" "h-4 w-4"
                     span_ [class_ "max-md:hidden"] "Edit monitor"
               }
       let nameOf cs x = maybe x (.channelName) $ find ((== x) . (.channelId)) cs
           teams' = (\t -> t{slack_channels = nameOf channels <$> t.slack_channels, discord_channels = nameOf discordChannels <$> t.discord_channels}) <$> teams
       addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
-    _ -> addRespHeaders $ PageCtx baseBwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
+    Nothing -> addRespHeaders $ PageCtx baseBwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
 
 
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
@@ -794,7 +735,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
         div_ [class_ "border border-strokeWeak rounded-lg max-md:p-2 p-3 h-48 md:h-80 overflow-hidden"] do
           Widget.widget_
             $ (def :: Widget)
-              { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
+              { Widget.wType = Widget.mapChartTypeToWidgetType alert.visualizationType
               , Widget.query = Just (rewriteBinAutoMins alert.timeWindowMins alert.logQuery)
               , Widget.title = Just "Query Results"
               , Widget.standalone = Just True
@@ -806,26 +747,19 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
               }
       div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ displayName alert currTime
 
-    tabbedSection_ "monitor-tabs" [("Execution History", monitorHistoryTab_ pid alert.id), ("Notification Channels", alertNotificationsTab_ alert teams)]
+    -- Which tab is open is DOM state (radio), so no script is needed and it survives a morph.
+    div_ [role_ "tablist", class_ "w-full group/mt", id_ "monitor-tabs"] do
+      div_ [class_ "w-full flex border-b border-strokeWeak"] do
+        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
+          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-exec-history", class_ "sr-only", checked_]
+          "Execution History"
+        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
+          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-notif-channels", class_ "sr-only"]
+          "Notification Channels"
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
     displayName = bool (statusInfo alert.currentStatus).statusLabel "Inactive" (isJust alert.deactivatedAt)
-
-
-tabbedSection_ :: Text -> [(Text, Html ())] -> Html ()
-tabbedSection_ containerId tabs = do
-  div_ [role_ "tablist", class_ "w-full", id_ containerId] do
-    div_ [class_ "w-full flex border-b border-strokeWeak"] do
-      forM_ (zip [0 :: Int ..] tabs) \(idx, (label, _)) -> do
-        let tabId = containerId <> "-tab-" <> show idx
-        button_
-          [ class_ $ "cursor-pointer shrink-0 tab-btn tab-box text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent" <> bool "" " t-tab-active" (idx == 0)
-          , role_ "tab"
-          , term "aria-label" label
-          , term "_" [text|on click set tl to #${containerId} then remove .t-tab-active from <.t-tab-active/> in tl then add .t-tab-active to me then add .hidden to <.t-tab-content/> in tl then remove .hidden from #${tabId}|]
-          ]
-          $ toHtml label
-    forM_ (zip [0 :: Int ..] tabs) \(idx, (_, content)) ->
-      div_ [role_ "tabpanel", class_ $ "overflow-y-auto t-tab-content" <> bool " hidden" "" (idx == 0), id_ $ containerId <> "-tab-" <> show idx] content
 
 
 monitorHistoryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorId -> Html ()

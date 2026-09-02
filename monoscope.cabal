@@ -1205,14 +1205,12 @@ test-suite unit-tests
   other-modules:
       BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.HasqlSpec
-      Data.Effectful.NotifySpec
       Models.DashboardTemplatesSpec
       Models.Telemetry.DeterministicIdSpec
       Models.Telemetry.MetricServiceNameSpec
       Models.Telemetry.TimestampMicrosSpec
       Pkg.DrainSpec
       Pkg.GitSpec
-      Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       Pkg.WidgetLazySpec

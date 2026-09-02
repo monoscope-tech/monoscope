@@ -178,7 +178,13 @@ spec = sequential $ aroundAll withTestResources do
       (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let dataPointsHtml = toString $ Lucid.renderText $ Lucid.toHtml dataPoints
       dataPointsHtml `shouldContain` "tab=datapoints&amp;expand=cpu.usage"
-      dataPointsHtml `shouldContain` "on keydown[key==&#39;Enter&#39;] halt the event then trigger click end"
+      -- The metric name is a real <a href> carrying hx-get, so Enter activates it the way
+      -- the browser already activates any anchor: keydown fires a click, htmx handles it
+      -- and preventDefaults the navigation. This used to also carry
+      -- @on keydown[key=='Enter'] halt the event then trigger click end@, which halted the
+      -- keydown only to synthesise the very click it had just suppressed. Assert the
+      -- reachable-and-focusable behaviour instead of that redundant glue.
+      dataPointsHtml `shouldContain` "focus-visible:ring-strokeFocus"
       dataPointsHtml `shouldContain` "window.evalScriptsFromContent(this)"
       dataPointsHtml `shouldContain` "role=\"button\""
       dataPointsHtml `shouldContain` "tabindex=\"0\""

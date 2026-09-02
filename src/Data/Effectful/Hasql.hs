@@ -8,6 +8,9 @@ module Data.Effectful.Hasql (
   SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
+  transientBackoffMicros,
+  retryTransientLoop,
+  retryTransientEff,
   isDeadlockError,
   isLockTimeout,
   isUniqueViolation,
@@ -25,15 +28,19 @@ module Data.Effectful.Hasql (
   withLabeled,
 ) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (throwIO)
 import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
+import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool (UsageError (..))
@@ -46,6 +53,7 @@ import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
+import UnliftIO qualified
 
 
 data SqlSource = SqlPostgres | SqlTimefusion
@@ -239,3 +247,48 @@ withHasqlTimefusion
   :: (Hasql :> es, Labeled "timefusion" Hasql :> es)
   => Bool -> Eff (Hasql ': es) a -> Eff es a
 withHasqlTimefusion = withLabeled @"timefusion" @Hasql
+
+
+-- | Exponential backoff schedule shared by the write ('retryHasqlWrite') and
+-- read ('retryTransientEff') retry loops: 100ms, 200ms, 400ms … capped at 5s.
+transientBackoffMicros :: Int -> Int
+transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
+
+
+-- | Retry @act@ on transient Hasql errors with exponential backoff
+-- ('transientBackoffMicros'), yielding the last exception once the budget is
+-- spent or the error is non-transient. @msg@/@key@/@label@ shape the retry log
+-- line so the write and read wrappers keep their distinct log identities.
+retryTransientLoop :: (IOE :> es, Log :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
+retryTransientLoop maxAttempts msg key label act = go 1
+  where
+    go attempt =
+      UnliftIO.tryAny act >>= \case
+        Right a -> pure (Right a)
+        Left e
+          | attempt < maxAttempts
+          , isTransientException e -> do
+              let delayMicros = transientBackoffMicros attempt
+              Log.logAttention msg
+                $ AE.object
+                  [ AEK.fromText key AE..= label
+                  , "attempt" AE..= attempt
+                  , "max_attempts" AE..= maxAttempts
+                  , "backoff_us" AE..= delayMicros
+                  , "error" AE..= show @Text e
+                  ]
+              liftIO $ threadDelay delayMicros
+              go (attempt + 1)
+          | otherwise -> pure (Left e)
+
+
+-- | Retry a read action on transient Hasql errors (dropped connection, empty
+-- SQLSTATE from a pgdog/pgwire reset — see 'Data.Effectful.Hasql.isTransientUsageError')
+-- with the same 100ms→5s backoff as 'retryHasqlWrite'. Rethrows the final
+-- exception when the budget is exhausted or the error is non-transient, so the
+-- caller's existing catch still routes the batch to the DLQ as the last resort.
+-- Guards the per-batch project-id / cache lookups that previously dead-lettered
+-- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
+retryTransientEff :: (IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
+retryTransientEff maxAttempts op act =
+  either UnliftIO.throwIO pure =<< retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op act

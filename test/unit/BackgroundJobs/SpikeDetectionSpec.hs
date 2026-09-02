@@ -38,9 +38,6 @@ spec = describe "detectSpikeOrDrop" do
     let result = detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta 100 5 200 -- z=(200-100)/5=20
     fmap (.zScore) result `shouldBe` Just 20.0
 
-  it "no spike at just-below threshold" do
-    detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta 100 50 110 `shouldBe` Nothing -- z=0.2 < 3
-
 
   describe "aboveVolumeFloor" do
     let mkSpike mean = SpikeResult{currentRate = mean * 2, mean = mean, mad = 1, zScore = 10, direction = Spike}

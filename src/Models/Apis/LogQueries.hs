@@ -9,7 +9,6 @@ module Models.Apis.LogQueries (
   SqlSource (..),
   SecuredSql (..),
   selectLogTable,
-  sessionTagId,
   executeSecuredQuery,
   LogEndpoint (..),
   logExplorerUrlPath,
@@ -25,10 +24,10 @@ module Models.Apis.LogQueries (
   bucketRange,
   densifyBuckets,
   aggregatePageSize,
+  sessionTagId,
 )
 where
 
-import Control.Concurrent qualified as IO
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -65,9 +64,9 @@ import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
+import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
-import UnliftIO (throwIO, tryAny)
 import Utils (listToIndexHashMap, lookupVecTextByKey, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -237,7 +236,6 @@ jsonArrayRows =
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
 hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"]
   where
-    pidTxt :: Text
     pidTxt = pid.toText
 
 
@@ -295,7 +293,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
       ]
       $ try @SomeException
-      $ retryLogExplorerRead
+      $ Hasql.retryTransientEff 3 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
       $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
@@ -337,15 +335,21 @@ gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colN
   Just i -> case ordNub [sid | r <- V.toList rows, Just cell <- [r V.!? i], sid <- summarySessionIds cell] of
     [] -> pure rows
     sids -> do
-      -- Keyed on the parsed UUID, not its text: an SDK emitting an uppercase id
-      -- round-trips through UUID.toText as lowercase and would never match itself.
-      replayed :: [UUID.UUID] <- Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
-      let ok = S.fromList replayed
-          keep (AE.String s) = maybe True (`S.member` ok) (sessionTagId s)
+      ok <- replayedSessionIds pid sids
+      let keep (AE.String s) = maybe True (`S.member` ok) (sessionTagId s)
           keep _ = True
           prune (AE.Array els) = AE.Array (V.filter keep els)
           prune v = v
       pure $ V.map (V.imap \j c -> if j == i then prune c else c) rows
+
+
+-- | Which of @sids@ have a screen recording (a @projects.replay_sessions@
+-- row). Shared by 'gateReplayTags' and 'fetchSessions'. Keyed on the parsed
+-- UUID, not its text: an SDK emitting an uppercase id round-trips through
+-- UUID.toText as lowercase and would never match itself.
+replayedSessionIds :: DB es => Projects.ProjectId -> [UUID.UUID] -> Eff es (S.Set UUID.UUID)
+replayedSessionIds _ [] = pure S.empty
+replayedSessionIds pid sids = S.fromList <$> Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
 
 
 -- | Session ids carried by a row's @to_json(summary)@ cell.
@@ -371,23 +375,6 @@ sessionTagId :: Text -> Maybe UUID.UUID
 sessionTagId el
   | "session;" `T.isPrefixOf` el = UUID.fromText $ T.drop 1 $ T.dropWhile (/= '⇒') el
   | otherwise = Nothing
-
-
--- | Retries connection and pool blips, but never retries a malformed query.
-retryLogExplorerRead :: (IOE :> es, Log :> es) => Eff es a -> Eff es a
-retryLogExplorerRead = go (1 :: Int)
-  where
-    maxAttempts = 3
-    go attempt action =
-      tryAny action >>= \case
-        Right value -> pure value
-        Left err
-          | attempt < maxAttempts && Hasql.isTransientException err -> do
-              let delay = 100000 * (2 ^ (attempt - 1))
-              Log.logAttention "log-explorer.data transient query failure, retrying" $ AE.object ["attempt" AE..= attempt, "max_attempts" AE..= maxAttempts, "backoff_us" AE..= delay, "error" AE..= show @Text err]
-              liftIO $ IO.threadDelay delay
-              go (attempt + 1) action
-          | otherwise -> throwIO err
 
 
 -- | Return spans that are transitive descendants of @seedSpanIds@ within
@@ -837,14 +824,8 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   -- Postgres (projects.replay_sessions), never in telemetry, so it's a second
   -- lookup over the page's ids only. Non-UUID session keys (sessions derived
   -- from user id/email) can never have a recording, so they're not even asked for.
-  replayedIds :: [UUID.UUID] <- case mapMaybe (UUID.fromText . (.sessionId)) rawRows of
-    [] -> pure []
-    sids -> Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
-  -- Keyed on the parsed UUID, not its text: an SDK that emits an uppercase id
-  -- round-trips through UUID.toText as lowercase and would never match itself.
-  let replayed = S.fromList replayedIds
-  let allBuckets = concatMap (\r -> map fromIntegral $ V.toList r.bis) rawRows
-      range = bucketRange allBuckets
+  replayed <- replayedSessionIds pid (mapMaybe (UUID.fromText . (.sessionId)) rawRows)
+  let range = bucketRange $ concatMap (ints . (.bis)) rawRows
       -- Densify the header's over-time buckets across the full picker range so
       -- empty periods render as blanks (mirrors the previous fetchSessionSummary).
       -- The summary columns are identical on every row (CROSS JOIN); read the head.
@@ -854,8 +835,8 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
             pMin = epochBucket fromT
             pMax = max pMin (epochBucket toT)
-            bisI = map fromIntegral (V.toList s.summBis) :: [Int]
-            dens v = densifyBuckets (pMin, pMax) $ zip bisI (map fromIntegral (V.toList v))
+            bisI = ints s.summBis
+            dens v = densifyBuckets (pMin, pMax) $ zip bisI (ints v)
          in SessionSummary
               { totalSessions = s.totalSessions
               , erroredSessions = s.erroredSessions
@@ -870,7 +851,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
               , clean = dens s.cleanBkt
               , errored = dens s.errBkt
               }
-      summary = maybe (SessionSummary 0 0 0 0 0 0 0 0 bucketW 0 [] []) mkSummary (listToMaybe rawRows)
+      summary = maybe def{bucketWidthSec = bucketW} mkSummary (listToMaybe rawRows)
       total = fromIntegral summary.totalSessions
       toRowWithVolume r =
         SessionRow
@@ -885,13 +866,16 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           , durationNs = r.durationNs
           , traceCount = r.traceCount
           , services = r.services
-          , volume = densifyBuckets range $ zip (map fromIntegral $ V.toList r.bis) (map fromIntegral $ V.toList r.cnts)
+          , volume = densifyBuckets range $ zip (ints r.bis) (ints r.cnts)
           , landingUrl = r.landingUrl
           , userAgent = r.userAgent
           , firstError = r.firstError
           , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
           }
   pure (summary, total, map toRowWithVolume rawRows)
+  where
+    ints :: V.Vector Int64 -> [Int]
+    ints = map fromIntegral . V.toList
 
 
 -- | Session-level aggregates for the Sessions viz header. Shares the filter
@@ -914,6 +898,7 @@ data SessionSummary = SessionSummary
   , errored :: [Int]
   }
   deriving stock (Generic, Show)
+  deriving anyclass (Default)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], DAE.OmitNothingFields] SessionSummary
 
 
@@ -1042,8 +1027,7 @@ bucketWidthSecs (from, to) n =
 -- >>> bucketRange [3, 1, 5]
 -- (1,5)
 bucketRange :: [Int] -> (Int, Int)
-bucketRange [] = (0, 0)
-bucketRange xs = (foldl' min maxBound xs, foldl' max minBound xs)
+bucketRange = fromMaybe (0, 0) . viaNonEmpty (\ne -> (minimum1 ne, maximum1 ne))
 
 
 -- | Densify one row's sparse (bucket, count) pairs into a fixed-length
@@ -1058,7 +1042,7 @@ bucketRange xs = (foldl' min maxBound xs, foldl' max minBound xs)
 densifyBuckets :: (Int, Int) -> [(Int, Int)] -> [Int]
 densifyBuckets (minB, maxB) bs =
   let bMap = HM.fromListWith (+) bs
-   in [fromMaybe 0 $ HM.lookup i bMap | i <- [minB .. maxB]]
+   in [HM.findWithDefault 0 i bMap | i <- [minB .. maxB]]
 
 
 -- | Build a fixed 24-slot hourly bucket array from sparse (UTCTime, Int) pairs.

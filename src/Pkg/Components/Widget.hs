@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -33,10 +33,10 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
-import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
+import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -44,20 +44,15 @@ import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+import Web.HttpApiData (FromHttpApiData)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
--- Generic instance for parsing JSON arrays from form data
-instance AE.FromJSON a => FromHttpApiData [a] where
-  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
-
-
--- Generic instance for parsing JSON values from form data
-instance {-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a where
-  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+-- | 'Charts.MetricsStats' lives in @shared/@, which cannot see 'JSONHttpApiData',
+-- so the deriving-via is written here at the one place that needs it.
+deriving via JSONHttpApiData Charts.MetricsStats instance FromHttpApiData Charts.MetricsStats
 
 
 data Query = Query
@@ -78,8 +73,28 @@ data Layout = Layout
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Layout
+  deriving (FromHttpApiData) via JSONHttpApiData Layout
 
 
+-- | The kind of visualisation a widget renders.
+--
+-- Regression guard for the query-param parsing. This type used to get its
+-- 'FromHttpApiData' from a blanket @FromJSON a => FromHttpApiData a@ orphan in this
+-- module, which ran the raw parameter through 'AE.eitherDecodeStrict' — so
+-- @widget_type=top_list@, which is what a form actually submits, did not parse, and only
+-- the quoted @"top_list"@ did. It now derives via 'WrappedEnumSC', matching the JSON
+-- encoding above.
+--
+-- >>> import Web.HttpApiData (parseQueryParam)
+-- >>> parseQueryParam "top_list" :: Either Text WidgetType
+-- Right WTTopList
+-- >>> parseQueryParam "timeseries_line" :: Either Text WidgetType
+-- Right WTTimeseriesLine
+--
+-- An unknown spelling is rejected rather than silently defaulting:
+--
+-- >>> isLeft (parseQueryParam "not_a_widget" :: Either Text WidgetType)
+-- True
 data WidgetType
   = WTGroup
   | WTLogs
@@ -103,9 +118,13 @@ data WidgetType
   -- Bounded so every widget type can be enumerated ([minBound ..]) rather than listed by
   -- hand: adding a constructor then extends the round-trip/render specs automatically
   -- instead of silently shipping untested.
-  deriving stock (Bounded, Enum, Eq, Generic, Show, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
+  -- Parses the bare snake_case spelling a form actually submits (@widget_type=top_list@).
+  -- The blanket orphan this replaces ran the raw param through 'AE.eitherDecodeStrict',
+  -- so it only ever accepted a *quoted* JSON string.
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
 
 
 data SummarizeBy
@@ -115,9 +134,10 @@ data SummarizeBy
   | SBCount
   | SBMean
   | SBRate
-  deriving stock (Enum, Eq, Generic, Show, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "SB" SummarizeBy
 
 
 -- | Prefix shown before a stat's big number. The value itself is computed and
@@ -222,6 +242,7 @@ data WidgetDataset = WidgetDataset
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetDataset
+  deriving (FromHttpApiData) via JSONHttpApiData WidgetDataset
 
 
 -- | The query to run for a widget, paired with the row shape it decodes into.
@@ -281,6 +302,7 @@ data WidgetAxis = WidgetAxis
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetAxis
+  deriving (FromHttpApiData) via JSONHttpApiData WidgetAxis
 
 
 data TableColumn = TableColumn
@@ -308,11 +330,7 @@ data RowClickAction = RowClickAction
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RowClickAction
-
-
--- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
-encodeText :: AE.ToJSON a => a -> Text
-encodeText = decodeUtf8 . AE.encode
+  deriving (FromHttpApiData) via JSONHttpApiData RowClickAction
 
 
 -- | Widget's project id as Text, or empty when absent.
@@ -328,7 +346,7 @@ isTrue = (== Just True)
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
 -- /widget endpoint with the widget JSON url-encoded as a query param.
 widgetFetchUrl :: Widget -> Text
-widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ encodeText w)
+widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetJSON=" <> toUriStr (encodeText w)
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
@@ -392,11 +410,13 @@ widget_ w' = case w.wType of
       WTGroup -> Just $ widgetHeightForWidth effectiveWidth w
       _ -> w.layout >>= (.h)
     (lx, ly) = (w.layout >>= (.x), w.layout >>= (.y))
+    gs :: Text -> Maybe Int -> [Attribute]
+    gs n = foldMap \v -> [term n (show v)]
     attrs =
-      foldMap (\v -> [term "gs-x" (show v)]) lx
-        <> foldMap (\v -> [term "gs-y" (show v)]) ly
-        <> [term "gs-w" $ show effectiveWidth]
-        <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
+      gs "gs-x" lx
+        <> gs "gs-y" ly
+        <> gs "gs-w" (Just effectiveWidth)
+        <> gs "gs-h" effectiveHeight
         <> [ style_
                $ T.intercalate ";"
                $ catMaybes
@@ -602,17 +622,16 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
                ]
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    when (isJust widget._dashboardId)
-      $ let dashId = maybeToMonoid widget._dashboardId
-            pid = projectIdText widget
-         in button_
-              [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
-              , Aria.label_ "Expand widget"
-              , data_ "tippy-content" "Expand widget"
-              , data_ "expand-btn" wId
-              , term
-                  "_"
-                  [text| on pointerdown or click
+    whenJust widget._dashboardId \dashId ->
+      let pid = projectIdText widget
+       in button_
+            [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
+            , Aria.label_ "Expand widget"
+            , data_ "tippy-content" "Expand widget"
+            , data_ "expand-btn" wId
+            , term
+                "_"
+                [text| on pointerdown or click
             add .pointer-events-none to me
             set :icon to my.querySelector('svg')
             if :icon then add .animate-spin to :icon end
@@ -627,8 +646,8 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
             then _hyperscript.processNode(#global-data-drawer-content)
             then window.evalScriptsFromContent(#global-data-drawer-content)
          |]
-              ]
-              $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
+            ]
+            $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     let widgetMenuPop = wId <> "-widget-menu"
     div_ [class_ "inline-block"] do
       button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
@@ -640,14 +659,12 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
         let onDashboard = isJust widget._dashboardId
             dashId = maybeToMonoid widget._dashboardId
             pid = projectIdText widget
-        li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" $ bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard
-            , id_ $ wId <> "_copy_link"
-            , term
-                "_"
-                [text|
+        menuItem_
+          (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
+          [ id_ $ wId <> "_copy_link"
+          , term
+              "_"
+              [text|
               on click
               set widgetEl to the closest <[data-widget]/>
               then set #dashboards-modal-widget-id.value to "${wId}"
@@ -657,15 +674,13 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               then trigger loadDashboards on #dashboards-modal-content
               then call (the closest <[popover]/>).hidePopover()
             |]
-            ]
-            (bool "Add to dashboard" "Copy to dashboard" onDashboard)
-        li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Copy generated SQL to clipboard"
-            , term
-                "_"
-                [text|
+          ]
+          (bool "Add to dashboard" "Copy to dashboard" onDashboard)
+        menuItem_
+          "Copy generated SQL to clipboard"
+          [ term
+              "_"
+              [text|
               on click
               set widgetEl to the closest <[data-widget]/>
               set widgetData to JSON.parse(widgetEl.dataset.widget)
@@ -680,15 +695,13 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
                 send successToast(value:['SQL copied to clipboard']) to <body/>
               end
             |]
-            ]
-            "Copy SQL"
-        li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Copy KQL query to clipboard"
-            , term
-                "_"
-                [text|
+          ]
+          "Copy SQL"
+        menuItem_
+          "Copy KQL query to clipboard"
+          [ term
+              "_"
+              [text|
               on click
               set widgetEl to the closest <[data-widget]/>
               set widgetData to JSON.parse(widgetEl.dataset.widget)
@@ -698,40 +711,32 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
                 send successToast(value:['KQL copied to clipboard']) to <body/>
               end
             |]
-            ]
-            "Copy KQL"
+          ]
+          "Copy KQL"
         whenJust widget.pngUrl \url ->
-          li_
-            $ a_
-              [ class_ "p-2 w-full text-left block cursor-pointer"
-              , data_ "tippy-content" "Download widget as PNG image"
-              , href_ url
-              , download_ $ maybeToMonoid widget.title <> ".png"
-              , target_ "_blank"
-              ]
-              "Download PNG"
+          menuItem_
+            "Download widget as PNG image"
+            [href_ url, download_ $ maybeToMonoid widget.title <> ".png", target_ "_blank"]
+            "Download PNG"
 
-        when (isJust widget._dashboardId) do
-          li_
-            $ a_
-              [ class_ "p-2 w-full text-left block cursor-pointer"
-              , data_ "tippy-content" "Create a copy of this widget"
-              , hxPost_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
-              , hxTrigger_ "click"
-              , hxTarget_ "closest .grid-stack"
-              , hxSwap_ "beforeend"
-              , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
-                -- hyperscript, which hooks htmx:load itself); only the grid adoption is
-                -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
-                -- widget already renders, and addWidget's options are dropped since v11.
-                -- after:swap, not after:request — under htmx 4 afterRequest fires before
-                -- the swap, when the new element is not yet in the DOM.
-                [__|on click call (the closest <[popover]/>).hidePopover()
+        when onDashboard do
+          menuItem_
+            "Create a copy of this widget"
+            [ hxPost_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
+            , hxTarget_ "closest .grid-stack"
+            , hxSwap_ "beforeend"
+            , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
+              -- hyperscript, which hooks htmx:load itself); only the grid adoption is
+              -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
+              -- widget already renders, and addWidget's options are dropped since v11.
+              -- after:swap, not after:request — under htmx 4 afterRequest fires before
+              -- the swap, when the new element is not yet in the DOM.
+              [__|on click call (the closest <[popover]/>).hidePopover()
                     on htmx:after:swap
                        set g to the closest <.grid-stack/> then call g.gridstack.makeWidget(g.lastElementChild)
                  |]
-              ]
-              "Duplicate widget"
+            ]
+            "Duplicate widget"
           li_
             $ button_
               [ class_ "p-2 w-full text-left text-textError cursor-pointer"
@@ -748,6 +753,8 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               "Delete widget"
   where
     wId = maybeToMonoid widget.id
+    menuItem_ :: Text -> [Attribute] -> Html () -> Html ()
+    menuItem_ tip extraAttrs = li_ . a_ ([class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" tip] <> extraAttrs)
 
 
 -- | Shared card-shell for renderLogsWidget / renderTraceTable / renderTable:
@@ -771,7 +778,7 @@ renderLogsWidget :: Widget -> Html ()
 renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
       pid = projectIdText widget
-      queryParam = maybe "" (\q -> "&query=" <> decodeUtf8 (urlEncode True (encodeUtf8 q))) widget.query
+      queryParam = foldMap (\q -> "&query=" <> toUriStr q) widget.query
       fetchUrl = "/p/" <> pid <> "/log_explorer/data?json=true&layout=1" <> queryParam
       action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)
   withCardFrame False widget action
@@ -935,7 +942,7 @@ renderChart widget = do
                 pid = encodeText $ widget._projectId <&> (.toText)
                 querySQL = maybeToMonoid widget.sql
                 chartType = mapWidgetTypeToChartType widget.wType
-                summarizeBy = T.toLower $ T.drop 2 $ show sumBy
+                summarizeBy = toText $ encodeEnumSC @"SB" sumBy
                 summarizeByPfx = summarizeByPrefix sumBy
                 wType = encodeText widget.wType
                 legendPos = fromMaybe "bottom" widget.legendPosition
@@ -1066,6 +1073,7 @@ widgetToECharts widget =
       -- Detect categorical widget types (no time axis)
       isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
       xAxisType = if isCategorical then "category" else "time"
+      legendTop = maybe False (T.isPrefixOf "top") widget.legendPosition
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -1109,8 +1117,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then if fromMaybe "sm" widget.legendSize == "xs" then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
-              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
+              , "top" AE..= if legendTop && legendVisibility then if fromMaybe "sm" widget.legendSize == "xs" then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
+              , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
@@ -1257,10 +1265,10 @@ mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
 mapWidgetTypeToChartType _ = "bar"
 
 
-mapChatTypeToWidgetType :: Text -> WidgetType
-mapChatTypeToWidgetType "line" = WTTimeseriesLine
-mapChatTypeToWidgetType "timeseries_line" = WTTimeseriesLine
-mapChatTypeToWidgetType _ = WTTimeseries
+mapChartTypeToWidgetType :: Text -> WidgetType
+mapChartTypeToWidgetType "line" = WTTimeseriesLine
+mapChartTypeToWidgetType "timeseries_line" = WTTimeseriesLine
+mapChartTypeToWidgetType _ = WTTimeseries
 
 
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()

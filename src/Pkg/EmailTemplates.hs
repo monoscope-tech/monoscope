@@ -412,24 +412,18 @@ logPatternEmail
   -> Bool -- isError
   -> (Text, Html ())
 logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount isError =
-  ( "[···] New " <> kindLabel <> " pattern - " <> projectName
-  , emailBody do
-      h1_ $ toHtml @Text ("New " <> kindLabel <> " pattern detected in " <> projectName)
-      emailStatRow
-        $ catMaybes
-          [ Just ("Level", fromMaybe "—" logLevel, Nothing)
-          , ("Service",,Nothing) <$> serviceName
-          , Just ("Occurrences", show occurrenceCount, Nothing)
-          , Just ("Source", sourceField, Nothing)
-          ]
-      emailDivider
-      p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      monoPre $ stripSummaryBadges patternText
-      whenJust sampleMessage \s -> do
-        p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Sample"
-        monoPre $ truncateText 400 (stripSummaryBadges s)
-      emailButton issueUrl "Open issue"
-  )
+  patternIssueEmail
+    ("[···] New " <> kindLabel <> " pattern - " <> projectName)
+    ("New " <> kindLabel <> " pattern detected in " <> projectName)
+    issueUrl
+    [ Just ("Level", fromMaybe "—" logLevel, Nothing)
+    , ("Service",,Nothing) <$> serviceName
+    , Just ("Occurrences", show occurrenceCount, Nothing)
+    , Just ("Source", sourceField, Nothing)
+    ]
+    ( ("Pattern", stripSummaryBadges patternText)
+        : [("Sample", truncateText 400 (stripSummaryBadges s)) | s <- maybeToList sampleMessage]
+    )
   where
     kindLabel
       | isError = "error log"
@@ -449,20 +443,31 @@ logPatternRateChangeEmail
   -> Double -- changePercent
   -> (Text, Html ())
 logPatternRateChangeEmail projectName issueUrl patternText logLevel serviceName direction currentRate baselineMean changePercent =
-  ( "[···] Log pattern " <> direction <> " - " <> projectName
+  patternIssueEmail
+    ("[···] Log pattern " <> direction <> " - " <> projectName)
+    ("Log pattern " <> direction <> " detected in " <> projectName)
+    issueUrl
+    [ Just ("Level", fromMaybe "—" logLevel, Nothing)
+    , ("Service",,Nothing) <$> serviceName
+    , Just ("Current", show (round currentRate :: Int) <> "/h", Just "#cf222e")
+    , Just ("Baseline", show (round baselineMean :: Int) <> "/h", Nothing)
+    , Just ("Change", show (round changePercent :: Int) <> "%", Just "#cf222e")
+    ]
+    [("Pattern", truncateText 400 (stripSummaryBadges patternText))]
+
+
+-- | Shared skeleton for log-pattern issue emails: heading, stat row, one
+-- labelled monospace block per entry, "Open issue" CTA.
+patternIssueEmail :: Text -> Text -> Text -> [Maybe (Text, Text, Maybe Text)] -> [(Text, Text)] -> (Text, Html ())
+patternIssueEmail subject heading issueUrl stats blocks =
+  ( subject
   , emailBody do
-      h1_ $ toHtml @Text ("Log pattern " <> direction <> " detected in " <> projectName)
-      emailStatRow
-        $ catMaybes
-          [ Just ("Level", fromMaybe "—" logLevel, Nothing)
-          , ("Service",,Nothing) <$> serviceName
-          , Just ("Current", show (round currentRate :: Int) <> "/h", Just "#cf222e")
-          , Just ("Baseline", show (round baselineMean :: Int) <> "/h", Nothing)
-          , Just ("Change", show (round changePercent :: Int) <> "%", Just "#cf222e")
-          ]
+      h1_ $ toHtml heading
+      emailStatRow $ catMaybes stats
       emailDivider
-      p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      monoPre $ truncateText 400 (stripSummaryBadges patternText)
+      forM_ blocks \(label, body) -> do
+        p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] $ toHtml label
+        monoPre body
       emailButton issueUrl "Open issue"
   )
 
@@ -495,9 +500,8 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
         toHtml $ maybe intro (const ("This error is still firing in your " :: Text)) ongoingForM
         b_ $ toHtml projectName
         "."
-      whenJust ongoingForM $ \d ->
-        p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text ("⏳ Still firing · " <> d)
-      whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
+      forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM]) \t ->
+        p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text t
       emailDivider
       forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
         errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err
@@ -990,25 +994,26 @@ sampleWeeklyReport eventsChart errorsChart =
 
 monitorAlertEmail :: Text -> Text -> Text -> Double -> Double -> Text -> Maybe Text -> (Text, Html ())
 monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold direction chartUrlM =
-  ( "[···] Monitor Alert: " <> monitorTitle <> " - " <> projectName
-  , emailBody do
-      h1_ "Monitor Alert Triggered"
-      p_ do
-        "The monitor "
-        b_ $ toHtml monitorTitle
-        " in your "
-        b_ $ toHtml projectName
-        " project has breached its threshold."
-      emailDivider
-      emailStatRow
-        [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
-        , ("Threshold", show (round threshold :: Int), Nothing)
-        , ("Direction", direction, Nothing)
-        ]
-      whenJust chartUrlM $ chartBlock "Monitor Trend"
-      emailButton monitorUrl "View Monitor"
-      emailFooter True monitorUrl
-  )
+  ctaEmail
+    ("[···] Monitor Alert: " <> monitorTitle <> " - " <> projectName)
+    "Monitor Alert Triggered"
+    ( do
+        p_ do
+          "The monitor "
+          b_ $ toHtml monitorTitle
+          " in your "
+          b_ $ toHtml projectName
+          " project has breached its threshold."
+        emailDivider
+        emailStatRow
+          [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
+          , ("Threshold", show (round threshold :: Int), Nothing)
+          , ("Direction", direction, Nothing)
+          ]
+        whenJust chartUrlM $ chartBlock "Monitor Trend"
+    )
+    "View Monitor"
+    monitorUrl
 
 
 monitorRecoveryEmail :: Text -> Text -> Text -> (Text, Html ())
@@ -1029,7 +1034,7 @@ monitorRecoveryEmail projectName monitorTitle monitorUrl =
 
 freeTierUsageEmail :: Text -> Text -> Int -> Int -> Bool -> (Text, Html ())
 freeTierUsageEmail projectName billingUrl used limit exceeded =
-  billingNotifEmail
+  ctaEmail
     ("[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName)
     (if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit")
     ( do
@@ -1049,22 +1054,22 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     billingUrl
 
 
--- | Shared skeleton for the plan-change billing emails: h1 heading, body
--- paragraph(s), CTA button, standard footer (all with @withHelp=True@).
-billingNotifEmail :: Text -> Html () -> Html () -> Text -> Text -> (Text, Html ())
-billingNotifEmail subject heading body ctaLabel billingUrl =
+-- | Shared skeleton for billing/monitor notifications: h1 heading, body,
+-- CTA button, standard footer (all with @withHelp=True@).
+ctaEmail :: Text -> Html () -> Html () -> Text -> Text -> (Text, Html ())
+ctaEmail subject heading body ctaLabel url =
   ( subject
   , emailBody do
       h1_ heading
       body
-      emailButton billingUrl ctaLabel
-      emailFooter True billingUrl
+      emailButton url ctaLabel
+      emailFooter True url
   )
 
 
 planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
 planUpgradedEmail projectName newPlan =
-  billingNotifEmail
+  ctaEmail
     ("[···] Plan upgraded to " <> newPlan <> " - " <> projectName)
     "Plan Upgraded"
     ( p_ do
@@ -1079,7 +1084,7 @@ planUpgradedEmail projectName newPlan =
 
 trialEndingEmail :: Text -> Int -> Text -> (Text, Html ())
 trialEndingEmail projectName daysLeft =
-  billingNotifEmail
+  ctaEmail
     ("[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName)
     (toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days")
     ( do
@@ -1096,7 +1101,7 @@ trialEndingEmail projectName daysLeft =
 
 planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
 planDowngradedEmail projectName reason =
-  billingNotifEmail
+  ctaEmail
     ("[···] Plan downgraded to Free - " <> projectName)
     "Plan Downgraded to Free"
     ( do

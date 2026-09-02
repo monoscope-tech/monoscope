@@ -145,7 +145,6 @@ type QPT a = QueryParam a Text
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
 type QPD a = QueryParam a PageDirection
-type QEID a = QueryParam a Endpoints.EndpointId
 type QPUUId a = QueryParam a UUID.UUID
 
 
@@ -321,7 +320,7 @@ data ApiV1Routes mode = ApiV1Routes
   , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] ApiT.DashboardYAMLDoc
   , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
   , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
-  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> QPT "tab" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
+  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
   , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
   , -- API keys
     apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]
@@ -505,7 +504,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
-    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders Settings.BillingGet)
+    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
   , replaySessionManifestGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "manifest" :> Get '[JSON] (RespHeaders Replay.ReplayManifest)
   , replaySessionShardGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "shard" :> QueryParam "key" Text :> Get '[JSON] (RespHeaders Replay.RawJson)
@@ -595,7 +594,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
+  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))

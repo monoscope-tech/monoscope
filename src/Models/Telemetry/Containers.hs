@@ -30,6 +30,7 @@ module Models.Telemetry.Containers (
   runtimeOf,
   cpuPctOfLimit,
   memPctOfLimit,
+  ratio,
   containerMetricNames,
   imageAndTag,
   swarmService,

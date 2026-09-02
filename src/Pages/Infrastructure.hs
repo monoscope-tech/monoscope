@@ -27,7 +27,7 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pages.Containers qualified as Containers
@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, infrastructureNavTabs_, kqlQuoted, toUriStr)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, toUriStr)
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -51,6 +51,37 @@ infraUrl pid path = TimePicker.windowUrl ("/p/" <> pid.toText <> path)
 -- the visible filter chips claim.
 deferUrl :: Projects.ProjectId -> Text -> [(Text, Maybe Text)] -> TimePicker.TimeWindow -> Text
 deferUrl pid path params = infraUrl pid path $ [(key, value) | (key, Just value) <- params] <> [("deferred", "1")]
+
+
+mkWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
+mkWindow fromParam toParam sinceParam = (\now -> TimePicker.mkTimeWindow now fromParam toParam sinceParam) <$> Time.currentTime
+
+
+-- | The one cached snapshot every infrastructure view is a projection of.
+infraSnapshot :: Projects.ProjectId -> TimePicker.TimeWindow -> ATAuthCtx (V.Vector ContainerRow)
+infraSnapshot pid window = do
+  appCtx <- Reader.ask @AuthContext
+  containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+
+
+-- | Group by an optional key, dropping rows without one. Per-key lists come out in reverse
+-- snapshot order, so @firstJust@ over them picks the most recently seen row.
+groupRows :: Ord k => (a -> Maybe k) -> V.Vector a -> [(k, [a])]
+groupRows key = M.toAscList . V.foldl' (\acc r -> maybe acc (\k -> M.insertWith (<>) k [r] acc) (key r)) M.empty
+
+
+firstJust :: (a -> Maybe b) -> [a] -> Maybe b
+firstJust f = listToMaybe . mapMaybe f
+
+
+-- | An absent or empty selection matches every row; otherwise the row has to carry the value.
+-- Every facet in this module goes through here, so "All" means the same thing on all of them.
+matchesAny :: Maybe Text -> [Text] -> Bool
+matchesAny selected values = maybe True (\v -> T.null v || v `elem` values) selected
+
+
+matchesFilter :: Maybe Text -> Maybe Text -> Bool
+matchesFilter selected = matchesAny selected . maybeToList
 
 
 data InfraIntegration = OpenTelemetryIntegration | KubernetesIntegration | DockerIntegration
@@ -89,9 +120,8 @@ data HostRow = HostRow
 
 
 hostsFromRows :: V.Vector ContainerRow -> V.Vector HostRow
-hostsFromRows = V.fromList . map build . M.toAscList . V.foldl' add M.empty
+hostsFromRows = V.fromList . map build . groupRows (.nodeName)
   where
-    add acc r = maybe acc (\n -> M.insertWith (<>) n [r] acc) r.nodeName
     build (name, rows) =
       HostRow
         { name
@@ -110,8 +140,7 @@ hostsFromRows = V.fromList . map build . M.toAscList . V.foldl' add M.empty
               <> [KubernetesIntegration | any ((== Kubernetes) . runtimeOf) rows]
               <> [DockerIntegration | any ((== Docker) . runtimeOf) rows]
         }
-    firstJust f = listToMaybe . mapMaybe f
-    hostValue f = listToMaybe . mapMaybe (\r -> if r.scope == ScopeHost then f r else Nothing)
+    hostValue f = firstJust f . filter ((== ScopeHost) . (.scope))
 
 
 data HostFilters = HostFilters
@@ -124,35 +153,47 @@ data HostFilters = HostFilters
 
 applyHostFilters :: HostFilters -> V.Vector HostRow -> V.Vector HostRow
 applyHostFilters f = V.filter \h ->
-  matches f.provider h.provider
-    && matches f.region h.region
-    && matches f.osType h.osType
-    && maybe True (\v -> T.null v || any ((== v) . integrationLabel) h.integrations) f.integration
-  where
-    matches selected actual = maybe True (\v -> T.null v || Just v == actual) selected
+  matchesFilter f.provider h.provider
+    && matchesFilter f.region h.region
+    && matchesFilter f.osType h.osType
+    && matchesAny f.integration (map integrationLabel h.integrations)
 
 
+-- | Constructor order is the "Group by" option order; the param doubles as the option value.
 data HostGroup = GroupNone | GroupProvider | GroupRegion | GroupOS | GroupIntegration
-  deriving stock (Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 parseHostGroup :: Maybe Text -> HostGroup
-parseHostGroup = \case
-  Just "provider" -> GroupProvider
-  Just "region" -> GroupRegion
-  Just "os" -> GroupOS
-  Just "integration" -> GroupIntegration
-  Just _ -> GroupNone
-  Nothing -> GroupNone
+parseHostGroup param = fromMaybe GroupNone $ find ((== param) . Just . hostGroupParam) [minBound ..]
 
 
 hostGroupParam :: HostGroup -> Text
-hostGroupParam = \case
-  GroupNone -> ""
-  GroupProvider -> "provider"
-  GroupRegion -> "region"
-  GroupOS -> "os"
-  GroupIntegration -> "integration"
+hostGroupParam = fst . hostGroupOption
+
+
+hostGroupOption :: HostGroup -> (Text, Text)
+hostGroupOption = \case
+  GroupNone -> ("", "None")
+  GroupProvider -> ("provider", "Provider")
+  GroupRegion -> ("region", "Region")
+  GroupOS -> ("os", "Operating system")
+  GroupIntegration -> ("integration", "Integration")
+
+
+-- | Bucket label a host falls into. @GroupNone@ has no buckets; both callers special-case it
+-- before ever reaching here.
+hostGroupValue :: HostGroup -> HostRow -> Text
+hostGroupValue grouping host = case grouping of
+  GroupNone -> "All hosts"
+  GroupProvider -> fromMaybe "Unknown provider" host.provider
+  GroupRegion -> fromMaybe "Unknown region" host.region
+  GroupOS -> fromMaybe "Unknown OS" host.osType
+  GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
+
+
+groupHosts :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
+groupHosts grouping = groupRows (Just . hostGroupValue grouping)
 
 
 data HostListRow = HostGroupRow Text Int | HostItem HostRow
@@ -160,28 +201,20 @@ data HostListRow = HostGroupRow Text Int | HostItem HostRow
 
 hostEntries :: HostGroup -> V.Vector HostRow -> V.Vector HostListRow
 hostEntries GroupNone = V.map HostItem
-hostEntries grouping = V.fromList . concatMap renderGroup . M.toAscList . V.foldl' add M.empty
+hostEntries grouping = V.fromList . concatMap renderGroup . groupHosts grouping
   where
-    add acc host = M.insertWith (<>) (groupValue host) [host] acc
     renderGroup (label, hosts) = HostGroupRow label (length hosts) : map HostItem (sortOn (.name) hosts)
-    groupValue host = case grouping of
-      GroupProvider -> fromMaybe "Unknown provider" host.provider
-      GroupRegion -> fromMaybe "Unknown region" host.region
-      GroupOS -> fromMaybe "Unknown OS" host.osType
-      GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
 
 
 hostsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostsGet)
 hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-      filters = HostFilters providerM regionM osM integrationM
+  window <- mkWindow fromParam toParam sinceParam
+  let filters = HostFilters providerM regionM osM integrationM
       grouping = parseHostGroup groupM
       url = deferUrl pid "/infrastructure/hosts" [("provider", providerM), ("region", regionM), ("os", osM), ("integration", integrationM), ("group", groupM)] window
   body <- withDeferredBody deferredM "hostsContainer" url (tableSkeleton_ 8) do
-    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allHosts <- hostsFromRows <$> infraSnapshot pid window
     pure $ hostsTable pid window filters grouping (applyHostFilters filters allHosts) allHosts
   addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) body
 
@@ -254,7 +287,7 @@ hostGroupControl pid window filters grouping count =
         whenJust valueM \value -> input_ [type_ "hidden", name_ field, value_ value]
       label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
       select_ [id_ "hosts-group", name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
-        $ forM_ ([("", "None"), ("provider", "Provider"), ("region", "Region"), ("os", "Operating system"), ("integration", "Integration")] :: [(Text, Text)]) \(value, label) ->
+        $ forM_ (map hostGroupOption [minBound ..]) \(value, label) ->
           option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
 
 
@@ -278,7 +311,7 @@ hostColumns pid window =
         faSprite_ "server" "solid" "h-3.5 w-3.5 text-iconNeutral"
         span_ [class_ "truncate"] $ toHtml host.name
     configCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] do
-      whenJust host.provider $ metadataChip "cloud" . titleCase
+      whenJust host.provider $ metadataChip "cloud" . T.toTitle
       whenJust host.region $ metadataChip "location-dot"
     systemCell = itemOnly \host -> div_ [class_ "flex items-center gap-1 text-xs text-textWeak"] do
       faSprite_ "server" "regular" "h-3 w-3"
@@ -292,7 +325,6 @@ hostColumns pid window =
       toHtml $ integrationLabel integration
     itemOnly render = \case HostGroupRow _ _ -> mempty; HostItem host -> render host
     metadataChip icon value = span_ [class_ "inline-flex items-center gap-1 rounded bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] $ faSprite_ icon "regular" "h-3 w-3" >> toHtml value
-    titleCase = T.toTitle
 
 
 hostDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Text
@@ -322,10 +354,8 @@ hostDetailGet_ (HostDetail pid host) = hostDetail_ pid host
 -- has already run instead of reusing it.
 hostDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostDetailGet)
 hostDetailGetH pid hostM fromParam toParam sinceParam = do
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  hosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  window <- mkWindow fromParam toParam sinceParam
+  hosts <- hostsFromRows <$> infraSnapshot pid window
   addRespHeaders $ maybe HostDetailMissing (HostDetail pid) $ V.find ((== hostM) . Just . (.name)) hosts
 
 
@@ -352,7 +382,7 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
     section_ [id_ "host-summary", class_ "space-y-3"] do
       div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
         h3_ [class_ "font-semibold text-textStrong"] "Host summary"
-        span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> coverageClass] do
+        span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> bool "bg-fillWarning-weak text-textWarning" "bg-fillSuccess-weak text-textSuccess" (availableSignals == 4)] do
           span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillSuccess-strong" (availableSignals == 4), Aria.hidden_ "true"] ""
           toHtml $ "Metrics coverage: " <> show availableSignals <> " of 4"
       factGrid_
@@ -391,7 +421,6 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
     availableSignals = length $ catMaybes [host.cpuPct, host.memoryPct, host.storagePct, host.load1]
-    coverageClass = bool "bg-fillWarning-weak text-textWarning" "bg-fillSuccess-weak text-textSuccess" (availableSignals == 4)
     summaryFacts
       | availableSignals == 0 = [("Containers", show host.containers)]
       | otherwise =
@@ -402,15 +431,14 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
           , ("Uptime", maybe "—" formatUptime host.uptime)
           , ("Containers", show host.containers)
           ]
-    pct = maybe "—" (\v -> Containers.showFFloat' 0 (v * 100) <> "%")
+    pct = maybe "—" pctText
     query = "resource.host.name==" <> kqlQuoted host.name
     path = "/p/" <> pid.toText
     logExplorerUrl = path <> "/log_explorer?query=" <> toUriStr query <> "&since=15M&source=logs"
     logDataUrl = path <> "/log_explorer/data?query=" <> toUriStr query <> "&since=15M&source=logs"
     metricsUrl = path <> "/metrics?metric_prefix=system."
     containersUrl = path <> "/infrastructure/containers?node=" <> toUriStr host.name
-    sectionClass = "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"
-    sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ sectionClass] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
+    sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
 
 
 hostWidgets :: Projects.ProjectId -> HostRow -> [Widget.Widget]
@@ -454,16 +482,15 @@ data ImageRow = ImageRow
 
 
 imagesFromRows :: V.Vector ContainerRow -> V.Vector ImageRow
-imagesFromRows = V.fromList . map build . M.toAscList . V.foldl' add M.empty
+imagesFromRows = V.fromList . map build . groupRows (.image)
   where
-    add acc row = maybe acc (\image -> M.insertWith (<>) image [row] acc) row.image
     build (image, rows) =
       ImageRow
         { image
         , registry = imageRegistry image
-        , tags = Relude.sort $ ordNub $ mapMaybe (.imageTag) rows
+        , tags = sortNub $ mapMaybe (.imageTag) rows
         , running = length rows
-        , runtimes = Relude.sort $ ordNub $ map runtimeOf rows
+        , runtimes = sortNub $ map runtimeOf rows
         , cpuCores = sumPresent (.cpuCores) rows
         , memoryBytes = sumPresent (.memBytes) rows
         }
@@ -471,21 +498,18 @@ imagesFromRows = V.fromList . map build . M.toAscList . V.foldl' add M.empty
 
 imageRegistry :: Text -> Text
 imageRegistry image = case T.breakOn "/" image of
-  (_, rest) | T.null rest -> "Docker Hub"
-  (registry, _) | "." `T.isInfixOf` registry || ":" `T.isInfixOf` registry || registry == "localhost" -> registry
+  (registry, rest) | not (T.null rest), T.any (`elem` (".:" :: [Char])) registry || registry == "localhost" -> registry
   _ -> "Docker Hub"
 
 
 imagesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ImagesGet)
 imagesGetH pid runtimeM registryM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-      url = deferUrl pid "/infrastructure/images" [("runtime", runtimeM), ("registry", registryM)] window
+  window <- mkWindow fromParam toParam sinceParam
+  let url = deferUrl pid "/infrastructure/images" [("runtime", runtimeM), ("registry", registryM)] window
   body <- withDeferredBody deferredM "imagesContainer" url (tableSkeleton_ 8) do
-    allImages <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-    let images = V.filter (\image -> maybe True (\wanted -> any ((== wanted) . Containers.runtimeLabel) image.runtimes) runtimeM && maybe True (== image.registry) registryM) allImages
+    allImages <- imagesFromRows <$> infraSnapshot pid window
+    let images = V.filter (\image -> matchesAny runtimeM (map Containers.runtimeLabel image.runtimes) && matchesFilter registryM (Just image.registry)) allImages
     pure $ imagesTable pid window runtimeM registryM images allImages
   addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) body
 
@@ -508,8 +532,8 @@ imagesTable pid window runtimeM registryM images allImages =
         , col "Source" (\image -> span_ [class_ "text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
         , col "Tags" renderTags & withAttrs [class_ "w-64 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
-        , col "CPU" (\image -> plainCell $ fmap (<> " cores") $ Containers.showFFloat' 2 <$> image.cpuCores) & withAttrs [class_ "w-24 text-right"]
-        , col "Memory" (\image -> plainCell $ Containers.formatBytes <$> image.memoryBytes) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU" (plainCell . fmap coresText . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
+        , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-md:hidden"]
         ]
     , rows = images
@@ -523,7 +547,7 @@ imagesTable pid window runtimeM registryM images allImages =
                 $ facetActions
                   (infraUrl pid "/infrastructure/images" [] window)
                   "imagesContainer"
-                  [ singleSelectFilter "Runtime" "runtime" runtimeM $ Relude.sort $ ordNub $ map Containers.runtimeLabel $ concatMap (.runtimes) $ V.toList allImages
+                  [ singleSelectFilter "Runtime" "runtime" runtimeM $ sortNub $ map Containers.runtimeLabel $ concatMap (.runtimes) $ V.toList allImages
                   , singleSelectFilter "Registry" "registry" registryM $ facetValues (Just . (.registry)) allImages
                   ]
           , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." "Container setup guide" (Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes")
@@ -557,10 +581,8 @@ imageDetailGet_ (ImageDetail pid image) = imageDetail_ pid image
 
 imageDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ImageDetailGet)
 imageDetailGetH pid imageM fromParam toParam sinceParam = do
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  images <- imagesFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  window <- mkWindow fromParam toParam sinceParam
+  images <- imagesFromRows <$> infraSnapshot pid window
   addRespHeaders $ maybe ImageDetailMissing (ImageDetail pid) $ V.find ((== imageM) . Just . (.image)) images
 
 
@@ -577,8 +599,8 @@ imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
       factGrid_
         "grid-cols-3 max-sm:grid-cols-1 max-sm:divide-x-0 max-sm:divide-y"
         [ ("Running containers", show image.running)
-        , ("CPU used", maybe "—" (\value -> Containers.showFFloat' 2 value <> " cores") image.cpuCores)
-        , ("Memory used", maybe "—" Containers.formatBytes image.memoryBytes)
+        , ("CPU used", maybe "—" coresText image.cpuCores)
+        , ("Memory used", maybe "—" formatBytes image.memoryBytes)
         ]
     section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
       h3_ [class_ "font-semibold text-textStrong"] "Image tags"
@@ -650,15 +672,14 @@ data KubeRow = KubeRow
 
 
 kubeRowsFromRows :: KubeResource -> V.Vector ContainerRow -> V.Vector KubeRow
-kubeRowsFromRows resource = V.fromList . map build . M.toAscList . V.foldl' add M.empty . V.filter ((== Kubernetes) . runtimeOf)
+kubeRowsFromRows resource = V.fromList . map build . groupRows kubeIdentity . V.filter ((== Kubernetes) . runtimeOf)
   where
-    add acc row = maybe acc (\key -> M.insertWith (<>) key [row] acc) $ kubeIdentity row
     kubeIdentity row = case resource of
-      KubePods -> (,,,) <$> row.podName <*> pure row.cluster <*> pure row.namespace <*> pure row.nodeName
-      KubeClusters -> (,,,) <$> row.cluster <*> pure row.cluster <*> pure Nothing <*> pure Nothing
-      KubeNamespaces -> (,,,) <$> row.namespace <*> pure row.cluster <*> pure row.namespace <*> pure Nothing
-      KubeNodes -> (,,,) <$> row.nodeName <*> pure row.cluster <*> pure Nothing <*> pure row.nodeName
-      KubeWorkloads -> (,,,) <$> row.workload <*> pure row.cluster <*> pure row.namespace <*> pure Nothing
+      KubePods -> (,row.cluster,row.namespace,row.nodeName) <$> row.podName
+      KubeClusters -> (,row.cluster,Nothing,Nothing) <$> row.cluster
+      KubeNamespaces -> (,row.cluster,row.namespace,Nothing) <$> row.namespace
+      KubeNodes -> (,row.cluster,Nothing,row.nodeName) <$> row.nodeName
+      KubeWorkloads -> (,row.cluster,row.namespace,Nothing) <$> row.workload
     build ((name, cluster, namespace, node), rows) =
       let readyValues = mapMaybe (.ready) rows
           cpu = sumPresent (.cpuCores) rows
@@ -679,24 +700,19 @@ kubeRowsFromRows resource = V.fromList . map build . M.toAscList . V.foldl' add 
             , memoryPct = ratio memory memoryLimit
             , restarts = sumPresent (.restarts) rows
             }
-    firstJust f = listToMaybe . mapMaybe f
 
 
 kubernetesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders KubernetesGet)
 kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
+  window <- mkWindow fromParam toParam sinceParam
   let resource = parseKubeResource resourceM
-      window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
       url = deferUrl pid "/infrastructure/kubernetes" [("resource", resourceM), ("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)] window
   body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
-    allRows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-    let rows = V.filter (\row -> matches clusterM row.cluster && matches namespaceM row.namespace && maybe True (\wanted -> wanted == kubeStatusLabel row.status) statusM) allRows
+    allRows <- kubeRowsFromRows resource <$> infraSnapshot pid window
+    let rows = V.filter (\row -> matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace && matchesFilter statusM (Just $ kubeStatusLabel row.status)) allRows
     pure $ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
   addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) body
-  where
-    matches selected actual = maybe True (\value -> T.null value || Just value == actual) selected
 
 
 newtype KubernetesGet = KubernetesPage (PageCtx (Deferred (Table KubeRow)))
@@ -714,15 +730,15 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
     , columns =
         [ col (resourceLabel resource) (\row -> div_ [class_ "flex items-center gap-2"] $ faSprite_ (if resource `elem` [KubeClusters, KubeNodes] then "server" else "cube") "solid" "h-3.5 w-3.5 text-iconNeutral" >> span_ [class_ "font-medium text-textStrong"] (toHtml row.name)) & withAttrs [class_ "min-w-56 w-full"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
-        , col "Cluster" (\row -> plainCell row.cluster) & withAttrs [class_ "w-36 max-lg:hidden"]
-        , col "Namespace" (\row -> plainCell row.namespace) & withAttrs [class_ "w-32 max-lg:hidden"]
-        , col "Node" (\row -> plainCell row.node) & withAttrs [class_ "w-36 max-xl:hidden"]
+        , col "Cluster" (plainCell . (.cluster)) & withAttrs [class_ "w-36 max-lg:hidden"]
+        , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
+        , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-xl:hidden"]
         , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right"]
-        , col "CPU" (\row -> plainCell $ fmap (<> " cores") $ Containers.showFFloat' 2 <$> row.cpuCores) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU" (plainCell . fmap coresText . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-36 max-md:hidden"]
-        , col "Memory" (\row -> plainCell $ Containers.formatBytes <$> row.memoryBytes) & withAttrs [class_ "w-24 text-right"]
+        , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-40 max-md:hidden"]
-        , col "Restarts" (\row -> plainCell $ Containers.showFFloat' 0 <$> row.restarts) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+        , col "Restarts" (plainCell . fmap (Containers.showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
     , rows
     , features =
@@ -782,12 +798,10 @@ kubernetesDetailGet_ (KubernetesDetail pid resource row) = kubernetesDetail_ pid
 
 kubernetesDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders KubernetesDetailGet)
 kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam sinceParam = do
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
+  window <- mkWindow fromParam toParam sinceParam
   let resource = parseKubeResource resourceM
-      window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  rows <- kubeRowsFromRows resource <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  addRespHeaders $ maybe KubernetesDetailMissing (KubernetesDetail pid resource) $ V.find (\row -> Just row.name == nameM && maybe True (\cluster -> row.cluster == Just cluster) clusterM && maybe True (\namespace -> row.namespace == Just namespace) namespaceM) rows
+  rows <- kubeRowsFromRows resource <$> infraSnapshot pid window
+  addRespHeaders $ maybe KubernetesDetailMissing (KubernetesDetail pid resource) $ V.find (\row -> Just row.name == nameM && matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace) rows
 
 
 kubernetesDetail_ :: Projects.ProjectId -> KubeResource -> KubeRow -> Html ()
@@ -804,9 +818,9 @@ kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
       factGrid_
         "grid-cols-5 max-lg:grid-cols-3 max-sm:grid-cols-2"
         [ ("Containers", show row.containers)
-        , ("CPU", maybe "—" (\value -> Containers.showFFloat' 2 value <> " cores") row.cpuCores)
-        , ("CPU / limit", maybe "—" (\value -> Containers.showFFloat' 0 (value * 100) <> "%") row.cpuPct)
-        , ("Memory", maybe "—" Containers.formatBytes row.memoryBytes)
+        , ("CPU", maybe "—" coresText row.cpuCores)
+        , ("CPU / limit", maybe "—" pctText row.cpuPct)
+        , ("Memory", maybe "—" formatBytes row.memoryBytes)
         , ("Restarts", maybe "—" (Containers.showFFloat' 0) row.restarts)
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
@@ -827,15 +841,23 @@ kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
 
 
 data HostMapFill = FillCPU | FillMemory | FillStorage
-  deriving stock (Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Show)
 
 
 parseHostMapFill :: Maybe Text -> HostMapFill
-parseHostMapFill = \case Just "memory" -> FillMemory; Just "storage" -> FillStorage; Just _ -> FillCPU; Nothing -> FillCPU
+parseHostMapFill param = fromMaybe FillCPU $ find ((== param) . Just . hostMapFillParam) [minBound ..]
+
+
+-- | URL param and select-option label, in one ladder so the two can't drift apart.
+hostMapFillOption :: HostMapFill -> (Text, Text)
+hostMapFillOption = \case
+  FillCPU -> ("cpu", "CPU usage")
+  FillMemory -> ("memory", "Memory usage")
+  FillStorage -> ("storage", "Storage usage")
 
 
 hostMapFillParam :: HostMapFill -> Text
-hostMapFillParam = \case FillCPU -> "cpu"; FillMemory -> "memory"; FillStorage -> "storage"
+hostMapFillParam = fst . hostMapFillOption
 
 
 data HostMapData = HostMapData
@@ -865,15 +887,13 @@ instance ToHtml HostMapData where
 hostMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostMapGet)
 hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-      filters = HostFilters providerM regionM osM Nothing
+  window <- mkWindow fromParam toParam sinceParam
+  let filters = HostFilters providerM regionM osM Nothing
       grouping = parseHostGroup groupM
       url = deferUrl pid "/infrastructure/host-map" [("fill", fillM), ("group", groupM), ("provider", providerM), ("region", regionM), ("os", osM)] window
   body <- withDeferredBody deferredM "hostMapContainer" url hostMapSkeleton_ do
-    allHosts <- hostsFromRows <$> containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-    let groups = hostMapGroups grouping $ applyHostFilters filters allHosts
+    allHosts <- hostsFromRows <$> infraSnapshot pid window
+    let groups = groupHosts grouping $ applyHostFilters filters allHosts
     pure HostMapData{pid, window, fill = parseHostMapFill fillM, grouping, filters, allHosts, groups}
   addRespHeaders $ HostMapPage $ PageCtx (infrastructureBW pid "Host Map" window bw) body
 
@@ -888,25 +908,12 @@ hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgSunken", role_ "s
     $ div_ [class_ "h-11 w-10 skeleton-shimmer", style_ "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"] ""
 
 
-hostMapGroups :: HostGroup -> V.Vector HostRow -> [(Text, [HostRow])]
-hostMapGroups GroupNone hosts
-  | V.null hosts = []
-  | otherwise = [("All hosts", V.toList hosts)]
-hostMapGroups grouping hosts = M.toAscList $ V.foldl' (\acc host -> M.insertWith (<>) (groupValue host) [host] acc) M.empty hosts
-  where
-    groupValue host = case grouping of
-      GroupProvider -> fromMaybe "Unknown provider" host.provider
-      GroupRegion -> fromMaybe "Unknown region" host.region
-      GroupOS -> fromMaybe "Unknown OS" host.osType
-      GroupIntegration -> maybe "OpenTelemetry" integrationLabel $ listToMaybe $ drop 1 host.integrations
-
-
 hostMap_ :: HostMapData -> Html ()
 hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgSunken"] do
   form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
-    mapSelect "fill" "Fill by" (hostMapFillParam page.fill) [("cpu", "CPU usage"), ("memory", "Memory usage"), ("storage", "Storage usage")]
-    mapSelect "group" "Group by" (hostGroupParam page.grouping) [("", "None"), ("provider", "Provider"), ("region", "Region"), ("os", "Operating system"), ("integration", "Integration")]
+    mapSelect "fill" "Fill by" (hostMapFillParam page.fill) (map hostMapFillOption [minBound ..])
+    mapSelect "group" "Group by" (hostGroupParam page.grouping) (map hostGroupOption [minBound ..])
     mapSelect "provider" "Provider" (fromMaybe "" page.filters.provider) $ ("", "All") : map dup (facetValues (.provider) page.allHosts)
     mapSelect "region" "Region" (fromMaybe "" page.filters.region) $ ("", "All") : map dup (facetValues (.region) page.allHosts)
     div_ [class_ "ml-auto flex flex-wrap items-center gap-3 text-xs text-textWeak", Aria.label_ "Utilization legend"] do
@@ -939,7 +946,7 @@ hostHex pid window fill enlarged host = div_ [class_ $ "flex flex-col items-cent
     ( [ class_ $ "inline-flex items-center justify-center text-textInverse-strong transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong motion-reduce:transform-none " <> utilizationClass value
       , type_ "button"
       , style_ $ (if enlarged then "height:54px;width:49px;" else "height:44px;width:40px;") <> "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"
-      , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" (\v -> Containers.showFFloat' 0 (v * 100) <> "%") value
+      , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" pctText value
       , Aria.label_ $ host.name <> ", " <> fillLabel fill <> ": " <> maybe "no data" (\v -> Containers.showFFloat' 0 (v * 100) <> " percent") value
       ]
         <> drawerLoadAttrs_ (hostDetailUrl pid window host.name)
@@ -978,15 +985,17 @@ infrastructureBW pid title window bw =
 
 
 sumPresent :: (a -> Maybe Double) -> [a] -> Maybe Double
-sumPresent getter values = case mapMaybe getter values of [] -> Nothing; present -> Just $ sum present
+sumPresent getter = viaNonEmpty sum . mapMaybe getter
 
 
-ratio :: Maybe Double -> Maybe Double -> Maybe Double
-ratio usage limit = do
-  used <- usage
-  capacity <- limit
-  guard $ capacity > 0
-  pure $ used / capacity
+-- | A 0–1 ratio as a whole-number percentage, and a core count. Every table cell, fact grid,
+-- and tooltip formats usage through these, so the same number never renders two ways.
+pctText :: Double -> Text
+pctText value = Containers.showFFloat' 0 (value * 100) <> "%"
+
+
+coresText :: Double -> Text
+coresText value = Containers.showFFloat' 2 value <> " cores"
 
 
 plainCell :: Maybe Text -> Html ()
@@ -997,8 +1006,8 @@ utilizationCell :: Maybe Double -> Html ()
 utilizationCell = \case
   Nothing -> plainCell Nothing
   Just value -> div_ [class_ "flex min-w-24 items-center gap-1.5"] do
-    span_ [class_ "w-10 shrink-0 text-right tabular-nums text-textStrong"] $ toHtml $ Containers.showFFloat' 0 (value * 100) <> "%"
-    div_ [class_ "h-1.5 grow overflow-hidden rounded-full bg-fillWeak"] $ div_ [class_ $ "h-full rounded-full " <> utilizationClass (Just value), style_ $ "width:" <> Containers.showFFloat' 0 (min 1 value * 100) <> "%"] mempty
+    span_ [class_ "w-10 shrink-0 text-right tabular-nums text-textStrong"] $ toHtml $ pctText value
+    div_ [class_ "h-1.5 grow overflow-hidden rounded-full bg-fillWeak"] $ div_ [class_ $ "h-full rounded-full " <> utilizationClass (Just value), style_ $ "width:" <> pctText (min 1 value)] mempty
 
 
 statusBadge :: KubeStatus -> Html ()

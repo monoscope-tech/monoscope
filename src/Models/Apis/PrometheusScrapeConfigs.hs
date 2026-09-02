@@ -28,7 +28,6 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, type (:>))
-import Effectful.Concurrent (Concurrent)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -158,7 +157,7 @@ markScraped cid status =
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.
 -- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them — but never
 -- silently: the dropped count is logged. Returns the number of samples ingested.
-ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+ingestScrapedBody :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
   appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))

@@ -13,13 +13,14 @@ module Utils (
   loadingIndicator_,
   loadingIndicatorWith_,
   htmxIndicator_,
-  htmxIndicatorWith_,
   htmxOverlayIndicator_,
   lookupVecIntByKey,
   lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
   formatUTCMicros,
+  fmtDate,
+  encodeText,
   insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
@@ -30,7 +31,6 @@ module Utils (
   FreeTierStatus (..),
   freeTierUsageBanner,
   checkFreeTierStatus,
-  checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
   displayTimestamp,
@@ -41,11 +41,12 @@ module Utils (
   getServiceColors,
   serviceFillColor,
   -- Hex color mapping for ECharts server-side rendering
-  themeColorsHex,
   getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
   formatWithCommas,
+  formatBytes,
+  showFFloat',
   sanitizeBackendError,
   extractMessageFromLog,
   nonEmptyT,
@@ -80,7 +81,6 @@ module Utils (
   summaryForDetailView,
   calculateCycleStartDate,
   usageWindowStart,
-  usageCountableDays,
   -- NUL-byte scrubbing for PG `jsonb` ingest paths.
   scrubNulText,
   scrubNulValue,
@@ -102,11 +102,11 @@ import Data.HashSet qualified as HS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
-import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM)
+import Data.Time (addUTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (formatTime)
+import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
@@ -126,26 +126,20 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
-import Numeric (showHex)
+import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
-import Relude hiding (notElem, show)
+import Relude hiding (notElem)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
-import Text.Show
 import Web.FormUrlEncoded (Form (..), FromForm (..), defaultFormOptions, genericFromForm)
 import Web.Internal.FormUrlEncoded (GFromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
--- Added only for satisfying the tests
-instance Eq ZonedTime where
-  (==) _ _ = True
-
-
 escapedQueryPartial :: Text -> Text
-escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
+escapedQueryPartial = toText . escapeURIString isUnescapedInURI . toString
 
 
 -- | Drop empty text so \"\" and Nothing collapse to one absent case.
@@ -301,9 +295,7 @@ fieldContextMenuItems_ ctx = traverse_ \case
     key_ = b_ [class_ "ctx-key font-semibold text-textStrong"] $ case ctx of
       StaticField k _ -> toHtml k
       DynamicField -> "field"
-    val_ = span_ [class_ "ctx-val"] $ case ctx of
-      StaticField _ (Just v) -> toHtml (truncateMiddle 52 v)
-      _ -> "value"
+    val_ = span_ [class_ "ctx-val"] $ maybe "value" (toHtml . truncateMiddle 52) valTxtM
     keyVal_ = key_ <> span_ [class_ "text-textWeak"] " == " <> val_
     -- Clipboard items differ only in the expression copied; `halt` stops the click
     -- reaching an enclosing <label for> (facet-section collapse header).
@@ -427,16 +419,12 @@ loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
 
 -- | Loading indicator with extra classes for custom styling
 loadingIndicatorWith_ :: Monad m => LoadingSize -> LoadingType -> Text -> HtmlT m ()
-loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
+loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> memptyIfFalse (not $ T.null extraClasses) (" " <> extraClasses), role_ "status", Aria.label_ "Loading"] ""
 
 
 htmxIndicator_ :: Monad m => Text -> LoadingSize -> HtmlT m ()
-htmxIndicator_ elId size = htmxIndicatorWith_ elId size ""
-
-
-htmxIndicatorWith_ :: Monad m => Text -> LoadingSize -> Text -> HtmlT m ()
-htmxIndicatorWith_ elId size extraCls =
-  span_ [id_ elId, class_ $ "htmx-indicator loading loading-dots loading-" <> loadingSizeClass size <> bool "" (" " <> extraCls) (not $ T.null extraCls), role_ "status", Aria.label_ "Loading"] ""
+htmxIndicator_ elId size =
+  span_ [id_ elId, class_ $ "htmx-indicator loading loading-dots loading-" <> loadingSizeClass size, role_ "status", Aria.label_ "Loading"] ""
 
 
 htmxOverlayIndicator_ :: Monad m => Text -> HtmlT m ()
@@ -467,12 +455,7 @@ replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDi
     replaceDigitPart :: Text -> Text
     replaceDigitPart part
       | T.all isDigit part = "[*]"
-      | otherwise = T.concatMap replaceDigitWithAsterisk part
-
-    replaceDigitWithAsterisk :: Char -> Text
-    replaceDigitWithAsterisk ch
-      | isDigit ch = "[*]"
-      | otherwise = one ch
+      | otherwise = T.concatMap (\ch -> if isDigit ch then "[*]" else one ch) part
 
 
 b64ToJson :: Text -> AE.Value
@@ -528,11 +511,11 @@ jsonValueToHtmlTree val pathM = do
             faSprite_ "download-f" "regular" "w-2 h-2"
       jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
-    json = decodeUtf8 $ AE.encode $ AE.toJSON val
+    json = encodeText val
     hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toAscList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, AEK.toText kk, vv)))
-    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
+    jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, T.show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
@@ -564,7 +547,7 @@ jsonValueToHtmlTree val pathM = do
         faSprite_ "chevron-right" "regular" "log-item-tree-chevron"
         span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
       div_ [class_ "pl-5 children "] do
-        span_ [class_ "tree-children-count"] $ toHtml $ show count
+        span_ [class_ "tree-children-count"] $ toHtml $ T.show count
         div_ [class_ "tree-children"] child
       span_ [class_ "pl-5 closing-token"] $ toHtml closing
 
@@ -572,21 +555,16 @@ jsonValueToHtmlTree val pathM = do
 unwrapJsonPrimValue :: Bool -> AE.Value -> Text
 unwrapJsonPrimValue stripped = \case
   AE.Bool b -> bool "false" "true" b
-  AE.String v -> if stripped then toText v else "\"" <> toText v <> "\""
-  AE.Number v -> toText $ show v
+  AE.String v -> if stripped then v else "\"" <> v <> "\""
+  AE.Number v -> T.show v
   AE.Null -> "null"
   AE.Object _ -> "{..}"
-  AE.Array items -> "[" <> toText (show (length items)) <> "]"
+  AE.Array items -> "[" <> T.show (length items) <> "]"
 
 
--- | Positional vector lookup: decode the i-th element via FromJSON.
-lookupVec :: AE.FromJSON a => V.Vector AE.Value -> Int -> Maybe a
-lookupVec vec idx = vec V.!? idx >>= AET.parseMaybe AE.parseJSON
-
-
--- | Key-indexed vector lookup via a column-index map.
+-- | Key-indexed vector lookup via a column-index map: decode the keyed element via FromJSON.
 lookupVecBy :: AE.FromJSON a => V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe a
-lookupVecBy vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVec vec
+lookupVecBy vec colIdxMap key = HM.lookup key colIdxMap >>= (vec V.!?) >>= AET.parseMaybe AE.parseJSON
 
 
 lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
@@ -602,10 +580,9 @@ lookupVecIntByKey v m k = fromMaybe 0 (lookupVecBy v m k)
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text
-lookupValueText (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
-  Just (AE.String textValue) -> Just textValue
+lookupValueText val key = case val of
+  AE.Object obj | Just (AE.String textValue) <- AEKM.lookup (AEK.fromText key) obj -> Just textValue
   _ -> Nothing
-lookupValueText _ _ = Nothing
 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
@@ -613,37 +590,38 @@ listToIndexHashMap list = HM.fromList $ zip list [0 ..]
 
 
 utcTimeToNanoseconds :: UTCTime -> Integer
-utcTimeToNanoseconds utcTime =
-  let posixTime = utcTimeToPOSIXSeconds utcTime
-   in round (posixTime * 1e9)
+utcTimeToNanoseconds = round . (* 1e9) . utcTimeToPOSIXSeconds
 
 
 getDurationNSMS :: Integer -> Text
-getDurationNSMS duration = toText @String str
+getDurationNSMS duration = toText @String $ printf "%.1f %s" (d / scale) unit
   where
-    str
-      | duration >= 60000000000 = printf "%.1f m" (fromIntegral @_ @Double duration / 60000000000)
-      | duration >= 1000000000 = printf "%.1f s" (fromIntegral @_ @Double duration / 1000000000)
-      | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
-      | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
-      | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
+    d = fromIntegral @_ @Double duration
+    (scale, unit) = fromMaybe (1, "ns" :: String) $ find ((<= d) . fst) [(6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "µs")]
 
 
 displayTimestamp :: Text -> Text
 displayTimestamp inputDateString =
-  maybe
-    T.empty
-    (toText . formatTime defaultTimeLocale "%b %d %H:%M")
-    (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
+  maybe T.empty (fmtDate "%b %d %H:%M") (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString inputDateString) :: Maybe UTCTime)
 
 
 formatUTC :: UTCTime -> Text
-formatUTC = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ"
+formatUTC = fmtDate "%Y-%m-%dT%H:%M:%S%QZ"
 
 
 -- | ISO-8601 with fixed 6-digit (microsecond) fractional seconds.
 formatUTCMicros :: UTCTime -> Text
-formatUTCMicros = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ"
+formatUTCMicros = fmtDate "%Y-%m-%dT%H:%M:%S%6QZ"
+
+
+-- | Format any time value with a strftime-style pattern.
+fmtDate :: FormatTime t => String -> t -> Text
+fmtDate f = toText . formatTime defaultTimeLocale f
+
+
+-- | Encode a value as JSON Text (data attributes, widget JSON, etc.)
+encodeText :: AE.ToJSON a => a -> Text
+encodeText = decodeUtf8 . AE.encode
 
 
 data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
@@ -680,10 +658,6 @@ checkFreeTierStatus pid paymentPlan =
           | count >= (limit * 80) `div` 100 -> FreeTierWarning count limit
           | otherwise -> FreeTierOk
     else pure NotFreeTier
-
-
-checkFreeTierExceeded :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
-checkFreeTierExceeded pid pp = (\case FreeTierExceeded{} -> True; _ -> False) <$> checkFreeTierStatus pid pp
 
 
 serviceColors :: V.Vector Text
@@ -766,17 +740,12 @@ getSeriesColorHex name
       | code >= 500 = "#ef4444"
       | otherwise = "#a855f7"
     percentileColorHex p = case T.toLower p of
-      "p50" -> "#16a34a"
-      "median" -> "#16a34a"
-      "min" -> "#16a34a"
-      "p75" -> "#059669"
-      "q1" -> "#059669"
+      v | v `elem` ["p50", "median", "min"] -> "#16a34a"
+      v | v `elem` ["p75", "q1"] -> "#059669"
       "p90" -> "#bd7d00"
-      "p95" -> "#ea580c"
-      "q3" -> "#ea580c"
+      v | v `elem` ["p95", "q3"] -> "#ea580c"
       "p99" -> "#ef4444"
-      "p100" -> "#f43f5e"
-      "max" -> "#f43f5e"
+      v | v `elem` ["p100", "max"] -> "#f43f5e"
       _ -> themeColorsHex V.! hashTextToIndex p
 
 
@@ -784,14 +753,11 @@ toXXHash :: Text -> Text
 toXXHash = T.justifyRight 8 '0' . T.take 8 . fromString . flip showHex "" . xxHash . encodeUtf8
 
 
--- | Turn a dot‑key path + value into a nested Object
-build :: [Text] -> AE.Value -> AE.Value
-build ks v = foldr (\k acc -> AE.Object $ AEKM.singleton (AEK.fromText k) acc) v ks
-
-
 -- | Succinct “dot‑notation → nested JSON”: lodash‑merge each singleton path into an empty object.
 nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
-nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ build (T.splitOn "." k) v) (AE.object [])
+nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ nest (T.splitOn "." k) v) (AE.object [])
+  where
+    nest ks v = foldr (\k acc -> AE.Object $ AEKM.singleton (AEK.fromText k) acc) v ks
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
@@ -825,7 +791,7 @@ parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
   Nothing ->
     let f = iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime
         t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
-        disp = toText . formatTime defaultTimeLocale "%F %T"
+        disp = fmtDate "%F %T"
      in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
 
 
@@ -840,6 +806,25 @@ insertIfNotExist x vec
 newtype JSONHttpApiData a = JSONHttpApiData a
 
 
+-- Container form fields arrive as one JSON array in a single value, so @FromForm@
+-- derivation needs these. They are deliberately narrow: they replaced a
+-- @{-# OVERLAPPABLE #-} AE.FromJSON a => FromHttpApiData a@ orphan in
+-- 'Pkg.Components.Widget' that rerouted query-param parsing for *every*
+-- JSON-decodable type through JSON decoding, in every module transitively
+-- importing it. For a single JSON-encoded param, use 'JSONHttpApiData' instead of
+-- widening these.
+instance AE.FromJSON a => FromHttpApiData [a] where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
+instance AE.FromJSON a => FromHttpApiData (V.Vector a) where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
+instance FromHttpApiData AE.Value where
+  parseQueryParam = first toText . AE.eitherDecodeStrict . encodeUtf8
+
+
 instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
   -- Parse as raw JSON; on failure retry quoted, so bare strings work unquoted in URLs.
   parseUrlPiece t = bimap fromString JSONHttpApiData $ case AE.eitherDecodeStrict' (encodeUtf8 t) of
@@ -849,12 +834,38 @@ instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
 
 instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
   toUrlPiece (JSONHttpApiData a) =
-    let t = decodeUtf8 (AE.encode a)
+    let t = encodeText a
      in fromMaybe t $ T.stripSuffix "\"" =<< T.stripPrefix "\"" t
 
 
 freeTierDailyMaxEvents :: Integer
 freeTierDailyMaxEvents = 10000
+
+
+-- | >>> showFFloat' 3 0.0158
+-- "0.016"
+-- >>> showFFloat' 0 79.6
+-- "80"
+showFFloat' :: Int -> Double -> Text
+showFFloat' places x = toText $ showFFloat (Just places) x ""
+
+
+-- | The one byte formatter. Binary units, matching how a kubelet limit is written
+-- (@1Gi@, not @1GB@) and what the chart axis formatter renders client-side (see
+-- @isBytes@ in "Pkg.Components.Widget").
+--
+-- 'Real' rather than a fixed width so the @Int@, @Int64@ and @Double@ call sites
+-- share it; it replaced three formatters that disagreed on both the divisor and
+-- the unit spelling.
+--
+-- >>> map formatBytes [0 :: Int, 1536, 1073741824]
+-- ["0 B","1.5 KiB","1 GiB"]
+formatBytes :: Real a => a -> Text
+formatBytes = go "B" ["KiB", "MiB", "GiB", "TiB", "PiB"] . realToFrac
+  where
+    go _ (next : rest) v | abs v >= 1024 = go next rest (v / 1024)
+    go unit _ v = trim v <> " " <> unit
+    trim v = let r = showFFloat' 1 v in fromMaybe r (T.stripSuffix ".0" r)
 
 
 -- | Pretty print count numbers, converting large values to K/M/B format.
@@ -896,25 +907,16 @@ sanitizeBackendError :: Text -> Text
 sanitizeBackendError raw
   | colNotFound = "Column not found"
   | tableNotFound = "Table not found"
-  | "canceling statement due to" `T.isInfixOf` msg = "Query timed out"
-  | "pool acquisition timeout" `T.isInfixOf` msg = "Database temporarily unavailable — retrying may help"
-  | "connection" `T.isInfixOf` msg && ("refused" `T.isInfixOf` msg || "closed" `T.isInfixOf` msg) = "Database temporarily unavailable — retrying may help"
-  | "starting up" `T.isInfixOf` msg = "Database temporarily unavailable — retrying may help"
-  | "not implemented" `T.isInfixOf` msg = "This query isn't supported on the current data source"
+  | has "canceling statement due to" = "Query timed out"
+  | dbUnavailable = "Database temporarily unavailable — retrying may help"
+  | has "not implemented" = "This query isn't supported on the current data source"
   | otherwise = "Query execution failed"
   where
     msg = T.toLower raw
-    colNotFound =
-      ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
-        || "no field named"
-        `T.isInfixOf` msg
-        || "unknown column"
-        `T.isInfixOf` msg
-    tableNotFound =
-      ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
-        || "unknown table"
-        `T.isInfixOf` msg
-        || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
+    has = (`T.isInfixOf` msg)
+    colNotFound = (has "does not exist" && has "column") || any has ["no field named", "unknown column"]
+    tableNotFound = (has "does not exist" && has "relation") || has "unknown table" || (has "table" && has "not found")
+    dbUnavailable = any has ["pool acquisition timeout", "starting up"] || (has "connection" && any has ["refused", "closed"])
 
 
 -- | Format a Double with thousand separators
@@ -923,7 +925,7 @@ formatWithCommas :: Double -> Text
 formatWithCommas d =
   let (intPart, fracPart) = properFraction d :: (Int, Double)
       intFormatted = fmt (commaizeF intPart)
-   in if fracPart == 0 then intFormatted else intFormatted <> toText (dropWhile (/= '.') (show d))
+   in if fracPart == 0 then intFormatted else intFormatted <> T.dropWhile (/= '.') (T.show d)
 
 
 messageKeys :: [T.Text]
@@ -1034,7 +1036,7 @@ extractMessageFromLog :: Value -> Maybe T.Text
 extractMessageFromLog (AE.Object obj) =
   asum [render <$> AEKM.lookup (AEK.fromText key) obj | key <- messageKeys]
   where
-    render = \case AE.String s -> s; v -> toText $ show v
+    render = \case AE.String s -> s; v -> T.show v
 extractMessageFromLog _ = Nothing
 
 
@@ -1056,11 +1058,9 @@ statusFillColorText val = case T.take 1 val of
 -- | Get fill color class for HTTP methods
 methodFillColor :: Text -> Text
 methodFillColor method = case T.toUpper method of
-  "GET" -> "bg-fillBrand-strong"
   "POST" -> "bg-fillSuccess-strong"
   "PUT" -> "bg-fillWarning-strong"
   "DELETE" -> "bg-fillError-strong"
-  "PATCH" -> "bg-fillBrand-strong"
   _ -> "bg-fillBrand-strong"
 
 
@@ -1571,7 +1571,10 @@ explorerNavTabs_ pid active =
               , term "aria-selected" (bool "false" "true" isActive)
               ]
                 <> [term "aria-current" "page" | isActive]
-                <> preserveTimeRangeAttrs
+                -- The href picks up the page's current from/to/since before it is followed; the
+                -- rewrite lives in the bundle (@preserve-time-range@ in main.ts) — real imperative
+                -- URL work, and inlining it re-serialized 200 chars of JS onto every nav link.
+                <> [data_ "preserve-time-range" ""]
                 <> navTabAttrs
             )
             (toHtml label)
@@ -1604,14 +1607,6 @@ infrastructureNavTabs_ pid active fromM toM sinceM =
 
 infrastructureTabs :: [(Text, Text)]
 infrastructureTabs = [("Hosts", "/infrastructure/hosts"), ("Containers", "/infrastructure/containers"), ("Images", "/infrastructure/images"), ("Kubernetes", "/infrastructure/kubernetes"), ("Host Map", "/infrastructure/host-map")]
-
-
--- | Marks a link whose href should pick up the page's current @from@/@to@/@since@ before it is
--- followed. The rewrite itself lives in the bundle (@preserve-time-range@ in main.ts) — it is
--- real imperative URL work, and inlining it re-serialized 200 characters of JS onto every nav
--- link on every render.
-preserveTimeRangeAttrs :: [Attribute]
-preserveTimeRangeAttrs = [data_ "preserve-time-range" ""]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.
@@ -2012,7 +2007,7 @@ scrubNulValue = \case
   AE.String t -> AE.String (scrubNulText t)
   AE.Array xs -> AE.Array (fmap scrubNulValue xs)
   AE.Object o
-    | Relude.any (T.any (== '\NUL') . AEK.toText) (AEKM.keys o) ->
+    | any (T.any (== '\NUL') . AEK.toText) (AEKM.keys o) ->
         AE.Object
           $ AEKM.fromList
             [(AEK.fromText (scrubNulText (AEK.toText k)), scrubNulValue v) | (k, v) <- AEKM.toList o]

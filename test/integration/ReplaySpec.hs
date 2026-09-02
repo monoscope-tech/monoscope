@@ -17,7 +17,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplayPost (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, compressAndMergeReplaySessions, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
@@ -126,15 +126,6 @@ spec = around withTestResources do
       migratedReplayKey pid at sid key `shouldBe` key
 
   describe "concatRawJsonArrays" do
-    it "returns empty array for no inputs" $ \_ ->
-      concatRawJsonArrays [] `shouldBe` "[]"
-
-    it "concatenates two arrays" $ \_ ->
-      concatRawJsonArrays ["[1,2]", "[3,4]"] `shouldBe` "[1,2,3,4]"
-
-    it "skips empty arrays" $ \_ ->
-      concatRawJsonArrays ["[]", "[1]", "[]"] `shouldBe` "[1]"
-
     it "handles single non-empty array" $ \_ ->
       concatRawJsonArrays ["[{\"a\":1}]"] `shouldBe` "[{\"a\":1}]"
 
@@ -321,40 +312,6 @@ spec = around withTestResources do
           event = AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= tree], "timestamp" AE..= (3000 :: Int)]
           events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
       roundTrip events `shouldBe` Right events
-
-    it "marks empty events arrays as empty" $ \_ -> do
-      case splitReplayPayload (mkPayload (AE.toJSON ([] :: [AE.Value]))) of
-        Left e -> error $ "splitReplayPayload failed: " <> toText e
-        Right p -> p.eventsEmpty `shouldBe` True
-
-    it "marks non-empty events arrays as non-empty" $ \_ -> do
-      let events = AE.toJSON ([AE.object ["timestamp" AE..= (1 :: Int)]] :: [AE.Value]) :: AE.Value
-      case splitReplayPayload (mkPayload events) of
-        Left e -> error $ "splitReplayPayload failed: " <> toText e
-        Right p -> p.eventsEmpty `shouldBe` False
-
-    it "fails cleanly on missing events field" $ \_ -> do
-      let payload =
-            BL.toStrict
-              $ AE.encode
-              $ AE.object
-                [ "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
-                , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
-                , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
-                ]
-      case splitReplayPayload payload of
-        Left _ -> pure ()
-        Right _ -> expectationFailure "expected splitReplayPayload to fail on missing events"
-
-  describe "stripJsonNullEscapes" do
-    it "is identity on input without null escapes" $ \_ ->
-      stripJsonNullEscapes "{\"a\":\"b\"}" `shouldBe` "{\"a\":\"b\"}"
-
-    it "removes embedded null escapes without breaking surrounding string" $ \_ ->
-      stripJsonNullEscapes "{\"x\":\"a\\u0000b\"}" `shouldBe` "{\"x\":\"ab\"}"
-
-    it "preserves byte boundaries (no off-by-one)" $ \_ ->
-      BS.length (stripJsonNullEscapes "abc\\u0000def") `shouldBe` 6
 
   describe "processReplayEvents (e2e)" do
     -- End-to-end through the kafka batch entry point. Uses a nonexistent

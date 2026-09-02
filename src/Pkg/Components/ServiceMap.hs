@@ -9,12 +9,14 @@ module Pkg.Components.ServiceMap (serviceMapPanel_, serviceMapLegend_) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
+import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
 import Relude
 import Utils (faSprite_, prettyPrintCount)
 
@@ -25,9 +27,9 @@ import Utils (faSprite_, prettyPrintCount)
 serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Maybe Text -> Html ()
 serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex flex-col gap-3 relative"] do
   case graph.error of
-    Just msg -> emptyState_ "triangle-exclamation" "Couldn't load the service map" msg
+    Just msg -> mapEmpty_ "triangle-exclamation" "Couldn't load the service map" msg
     Nothing
-      | V.null graph.nodes -> emptyState_ "diagram-project" "No service activity in this range" "Once traced requests arrive, the services they touch and the calls between them appear here."
+      | V.null graph.nodes -> mapEmpty_ "diagram-project" "No service activity in this range" "Once traced requests arrive, the services they touch and the calls between them appear here."
       | otherwise -> do
           when graph.truncated
             $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak px-1"]
@@ -282,9 +284,10 @@ prettyDuration ns
   | otherwise = T.take 4 (show (fromIntegral ns / 1e9 :: Double)) <> "s"
 
 
-emptyState_ :: Text -> Text -> Text -> Html ()
-emptyState_ icon title body =
-  div_ [class_ "border border-strokeStrong rounded-2xl w-full min-h-[260px] flex flex-col items-center justify-center gap-2 text-center px-6"] do
-    faSprite_ icon "regular" "w-5 h-5 text-iconNeutral"
-    span_ [class_ "text-sm text-textStrong font-medium"] $ toHtml title
-    span_ [class_ "text-xs text-textWeak max-w-md"] $ toHtml body
+-- | The map's empty/error slot: the shared compact empty state inside the fixed-height
+-- card the canvas would otherwise occupy, so the panel does not collapse. Named apart
+-- from 'Pages.Components.emptyState_', which it delegates to — it used to shadow it.
+mapEmpty_ :: Text -> Text -> Text -> Html ()
+mapEmpty_ icon title body =
+  div_ [class_ "border border-strokeStrong rounded-2xl w-full min-h-[260px] flex items-center justify-center px-6"]
+    $ emptyState_ def{icon = Just icon, size = ESCompact} title body

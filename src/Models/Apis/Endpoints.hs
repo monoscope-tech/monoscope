@@ -12,7 +12,6 @@ module Models.Apis.Endpoints (
   archiveHosts,
   unarchiveHosts,
   endpointRequestStatsByProject,
-  countEndpointInbox,
   listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
@@ -25,7 +24,6 @@ module Models.Apis.Endpoints (
   getGroupReviews,
   markGroupApplied,
   revertGroupApply,
-  quarantinedCanonicalHashes,
   getQuarantinedMerges,
   appliedCanonicalHashes,
   fleetShapeReport,
@@ -38,6 +36,7 @@ module Models.Apis.Endpoints (
   unmergedScanLimit,
   setEndpointCanonical,
   insertCanonicalEndpoints,
+  frameworkCanonicalHashes,
   -- Endpoint merge cleanup
   getMergedEndpointPairs,
   migrateAndDeleteMergedEndpoints,
@@ -420,19 +419,6 @@ unarchiveHosts pid outgoingM hosts =
          AND archived_at IS NOT NULL ^{directionClauseSql outgoingM} |]
 
 
-countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int
-countEndpointInbox pid host requestType =
-  let isOutgoing = requestType == "Outgoing"
-   in fromMaybe 0
-        <$> Hasql.interpOne
-          [HI.sql|
-            SELECT coalesce(COUNT(*)::BIGINT, 0)
-            FROM apis.endpoints enp
-            LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
-            WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing}
-              AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host} |]
-
-
 -- | Count of endpoints under a (project, direction), under the same row filters as
 -- 'endpointRequestStatsByProject'.
 countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
@@ -707,6 +693,32 @@ fleetShapeReport =
              FROM apis.endpoint_group_reviews
              WHERE verdict = 'param' AND shape <> '' AND reverted_at IS NULL
              GROUP BY shape ORDER BY 3 DESC LIMIT 40 |]
+
+
+-- | Mark endpoints whose path a framework's router supplied as their own
+-- canonical template.
+--
+-- No new column: being self-canonical /is/ the provenance, and it is the exact
+-- provenance the rest of the pipeline already reads.
+--
+--   * 'getUnmergedEndpoints' only sees @canonical_hash IS NULL@, so discovery
+--     and the LLM group review can never merge away a route the router gave us.
+--   * 'getMergedEndpointPairs' only deletes rows where @hash != canonical_hash@,
+--     so cleanup leaves these alone.
+--   * @Projects.projectCacheById@ collects @canonical_path IS NOT NULL@ into the
+--     ingest matcher, so a service that reports only @url.path@ resolves its
+--     concrete paths onto the template a /different/ service declared. That is
+--     the point of the feature: one instrumented framework teaches the project
+--     its routes.
+--
+-- Guarded on @canonical_hash IS NULL@ so re-ingesting a route can never restate
+-- the canonical of an endpoint some other mechanism has already merged.
+frameworkCanonicalHashes :: DB es => V.Vector Text -> Eff es ()
+frameworkCanonicalHashes hashes | V.null hashes = pass
+frameworkCanonicalHashes hashes =
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.endpoints SET canonical_hash = hash, canonical_path = url_path
+             WHERE hash = ANY(#{hashes}) AND canonical_hash IS NULL |]
 
 
 -- | What a previous review settled, as far as deciding whether to ask again goes.

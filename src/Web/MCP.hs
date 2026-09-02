@@ -47,7 +47,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import UnliftIO qualified
-import Utils (toUriStr)
+import Utils (encodeText, toUriStr)
 import Web.ApiHandlers qualified as ApiH
 
 
@@ -388,15 +388,11 @@ toolError msg = toolResult True msg Nothing
 
 
 okResult :: AE.Value -> AE.Value
-okResult v = toolResult False (renderJson v) (Just v)
+okResult v = toolResult False (encodeText v) (Just v)
 
 
 textContent :: Text -> AE.Value
 textContent t = AE.object ["type" AE..= ("text" :: Text), "text" AE..= t]
-
-
-renderJson :: AE.Value -> Text
-renderJson = decodeUtf8 . AE.encode
 
 
 rpcOk :: AE.Value -> AE.Value -> AE.Value
@@ -465,7 +461,7 @@ jsonToText :: AE.Value -> Text
 jsonToText (AE.String s) = s
 jsonToText AE.Null = ""
 jsonToText (AE.Bool b) = bool "false" "true" b
-jsonToText v = decodeUtf8 (AE.encode v)
+jsonToText v = encodeText v
 
 
 -- =============================================================================
@@ -544,7 +540,7 @@ analyzeIssue =
         -- Issue payload is treated as untrusted data — fence it so adversarial
         -- text inside (e.g. crafted log messages, stack traces) cannot be read
         -- as further instructions by the LLM.
-        let issueJson = renderJson (AE.toJSON issue)
+        let issueJson = encodeText (AE.toJSON issue)
             prompt =
               [text|
                 You are a senior SRE diagnosing a production issue from a single issue payload exposed by Monoscope's MCP tool. Your output is shown to engineers triaging the incident.

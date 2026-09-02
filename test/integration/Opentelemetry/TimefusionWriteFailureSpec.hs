@@ -216,7 +216,7 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       let flakyRead = do
             n <- atomicModifyIORef' counter \c -> (c + 1, c + 1)
             if n < 3 then throwIO (EHasql.HasqlException emptyResetError) else pure n
-      res <- runTestBg frozenTime tr $ Telemetry.retryTransientEff 5 "read-gate" flakyRead
+      res <- runTestBg frozenTime tr $ EHasql.retryTransientEff 5 "read-gate" flakyRead
       res `shouldBe` 3
       readIORef counter >>= (`shouldBe` 3)
 
@@ -225,7 +225,7 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       let poisonRead = do
             void $ atomicModifyIORef' counter \c -> (c + 1, ())
             throwIO (EHasql.HasqlException poisonError)
-      res <- try @_ @SomeException (runTestBg frozenTime tr (Telemetry.retryTransientEff 5 "read-gate" poisonRead) :: IO Int)
+      res <- try @_ @SomeException (runTestBg frozenTime tr (EHasql.retryTransientEff 5 "read-gate" poisonRead) :: IO Int)
       isLeft res `shouldBe` True
       readIORef counter >>= (`shouldBe` 1)
 

@@ -887,7 +887,7 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
       html `shouldSatisfy` T.isInfixOf "aria-disabled:border-strokeWeak"
-      html `shouldSatisfy` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-full"
+      html `shouldSatisfy` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-8"
       html `shouldSatisfy` T.isInfixOf "id=\"ai-search-submit\""
       html `shouldSatisfy` T.isInfixOf "aria-disabled=\"true\""
       html `shouldSatisfy` T.isInfixOf "set #ai-search-submit&#39;s @aria-disabled"

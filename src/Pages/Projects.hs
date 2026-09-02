@@ -70,7 +70,6 @@ import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (makeAttribute)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -101,7 +100,7 @@ import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -253,10 +252,10 @@ integrationsSettingsGetH pid = do
       -- Seed extras with the stored default channel name (captured at OAuth time),
       -- since the bot often can't query conversations.info for it later.
       defaultChannel = slackInfo >>= \d -> (\n -> BotUtils.Channel n d.channelId Nothing) <$> d.channelName
-      seededExtras = maybeToList $ mfilter (\c -> not $ S.member (BotUtils.channelId c) knownChannelIds) defaultChannel
+      seededExtras = maybeToList $ mfilter ((`S.notMember` knownChannelIds) . BotUtils.channelId) defaultChannel
       seededIds = S.fromList $ map BotUtils.channelId seededExtras
-      missingIds = filter (\c -> not (S.member c knownChannelIds) && not (S.member c seededIds)) $ V.toList existingSlackChannels
-  fetchedExtras <- maybe (pure []) (\d -> catMaybes <$> traverse (SlackP.getSlackChannelInfo d.botToken) missingIds) slackInfo
+      missingIds = filter (`S.notMember` (knownChannelIds <> seededIds)) $ V.toList existingSlackChannels
+  fetchedExtras <- maybe (pure []) (\d -> mapMaybeM (SlackP.getSlackChannelInfo d.botToken) missingIds) slackInfo
   projectM <- Projects.projectById pid
   let extraSlackChannels = seededExtras <> fetchedExtras
       bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
@@ -373,22 +372,14 @@ resolveSlackChannels = maybe (pure $ Right []) \d ->
         Just r -> Left $ fromMaybe "unknown" r.error
 
 
-projectSlackChannels :: Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
-projectSlackChannels pid = fromRight [] <$> (getProjectSlackData pid >>= resolveSlackChannels)
-
-
-projectDiscordChannels :: EnvConfig -> Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
-projectDiscordChannels env pid = getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels env.discordBotToken . (.guildId))
-
-
 -- | Shared prologue for the team list and team detail pages: project members
 -- plus the project's resolved Slack and Discord channels.
 teamPageData :: Projects.ProjectId -> ATAuthCtx (V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
 teamPageData pid = do
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- projectSlackChannels pid
-  discordChannels <- projectDiscordChannels appCtx.env pid
+  channels <- fromRight [] <$> (getProjectSlackData pid >>= resolveSlackChannels)
+  discordChannels <- getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   pure (projMembers, channels, discordChannels)
 
 
@@ -482,8 +473,8 @@ integrationsBody IntegrationsConfig{..} = do
     -- or it will silently be treated as "enabled" for every project.
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
-        let ems = decodeUtf8 $ AE.encode $ V.toList emails
-            tgs = decodeUtf8 $ AE.encode $ V.toList phones
+        let ems = encodeText $ V.toList emails
+            tgs = encodeText $ V.toList phones
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
@@ -496,7 +487,7 @@ integrationsBody IntegrationsConfig{..} = do
 
         div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
           forM_ integrations \(val, title, configured, icon, content) ->
-            renderNotificationOption pid everyoneTeamId title val (not $ S.member val disabledSet) configured icon content
+            renderNotificationOption pid everyoneTeamId title val (S.notMember val disabledSet) configured icon content
 
         div_ [class_ "mt-6"] do
           button_
@@ -551,7 +542,7 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
   div_ [] do
     -- Compact row: icon, name, test, toggle
     div_ [class_ "flex items-center gap-3 p-3"] do
-      div_ [class_ $ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md " <> if isActive then "bg-fillBrand-weak" else "bg-fillWeak"] icon
+      div_ [class_ $ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md " <> bool "bg-fillWeak" "bg-fillBrand-weak" isActive] icon
       span_ [class_ "text-sm font-medium text-textStrong flex-1 min-w-0"] $ toHtml title
       div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"] do
         if isActive
@@ -608,9 +599,9 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
       -- conversations.info (DMs, MPIMs, private channels the bot is a member of);
       -- for channels the bot can't see at all, fall back to the raw id as the name.
       let knownIds = S.fromList $ map BotUtils.channelId (channels <> extraChannels)
-          unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, not (S.member c knownIds)]
-          slackWhitelist = decodeUtf8 $ AE.encode $ map channelJSON (channels <> extraChannels) <> unresolved
-          existingJSON = decodeUtf8 $ AE.encode $ V.toList existingChannels
+          unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, S.notMember c knownIds]
+          slackWhitelist = encodeText $ map channelJSON (channels <> extraChannels) <> unresolved
+          existingJSON = encodeText $ V.toList existingChannels
           -- Enforcing a whitelist we couldn't fetch leaves the user unable to type
           -- anything at all; fall back to accepting a pasted channel id.
           enforce = [data_ "tagify-enforce-whitelist" "" | isNothing channelsError]
@@ -663,7 +654,7 @@ manageMembersPostH pid onboardingM form = do
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
-  let usersAndPermissions = filter (\(x, _) -> not (T.null x)) $ zip (form.emails <&> T.strip) form.permissions & uniq
+  let usersAndPermissions = filter (not . T.null . fst) $ zip (form.emails <&> T.strip) form.permissions & uniq
   let uAndPOldAndChanged =
         usersAndPermissions
           & mapMaybe \(email, permission) ->
@@ -742,14 +733,14 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
       | T.null (T.strip n) = Left "Team name is required"
       | T.length (T.strip n) < 3 = Left "Team name must be at least 3 characters"
       | T.length n > 100 = Left "Team name must be less than 100 characters"
-      | not $ T.all (\c -> isAlphaNum c || c `elem` (" -_" :: String)) n = Left "Invalid characters in team name"
+      | not $ T.all (\c -> isAlphaNum c || c `T.elem` " -_") n = Left "Invalid characters in team name"
       | otherwise = pass
     validateHandle h
       | T.null h = Left "Handle is required"
       | T.length h < 3 = Left "Handle must be at least 3 characters"
       | T.length h > 50 = Left "Handle must be less than 50 characters"
-      | not $ all (\c -> isLower c || isDigit c || c == '-') (toString h) = Left "Handle must be lowercase, no spaces, and hyphens only"
-      | not (isLower (T.head h)) = Left "Handle must start with a lowercase letter"
+      | not $ T.all (\c -> isLower c || isDigit c || c == '-') h = Left "Handle must be lowercase, no spaces, and hyphens only"
+      | not $ any (isLower . fst) (T.uncons h) = Left "Handle must start with a lowercase letter"
       | otherwise = pass
     validateEmail email = case T.splitOn "@" email of
       [localPart, domain] | not (T.null localPart) && not (T.null domain) && T.elem '.' domain -> pass
@@ -766,25 +757,22 @@ manageTeamPostH pid form tmView = do
       invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
       validationErr msg = toastError msg (ManageTeamsPostError msg)
+      success msg path = do
+        addSuccessToast msg Nothing
+        addTriggerEvent "closeModal" ""
+        redirectCS $ "/p/" <> pid.toText <> path
+        addRespHeaders $ ManageTeamsPostError ""
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
     (_, False, _, _) -> validationErr "Some team members are not project members"
     (_, _, Left e, _) -> addReswap "" >> validationErr e
     (_, _, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
-      addSuccessToast "Team updated successfully" Nothing
-      addTriggerEvent "closeModal" ""
-      redirectCS $ "/p/" <> pid.toText <> maybe "/manage_teams" (const $ "/team/" <> form.teamHandle) tmView
-      addRespHeaders $ ManageTeamsPostError ""
-    (_, _, _, Nothing) -> do
-      createdM <- ProjectMembers.createTeam pid (Just currUserId) teamDetails
-      if isJust createdM
-        then do
-          addSuccessToast "Team saved successfully" Nothing
-          addTriggerEvent "closeModal" ""
-          redirectCS $ "/p/" <> pid.toText <> "/manage_teams"
-          addRespHeaders $ ManageTeamsPostError ""
-        else validationErr "Team handle already exists for this project."
+      success "Team updated successfully" $ maybe "/manage_teams" (const $ "/team/" <> form.teamHandle) tmView
+    (_, _, _, Nothing) ->
+      ProjectMembers.createTeam pid (Just currUserId) teamDetails >>= \case
+        Just _ -> success "Team saved successfully" "/manage_teams"
+        Nothing -> validationErr "Team handle already exists for this project."
 
 
 newtype TBulkActionForm = TBulkActionForm
@@ -847,14 +835,14 @@ channelJSON x = AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.
 
 
 encodeChannels :: [BotUtils.Channel] -> Text
-encodeChannels = decodeUtf8 . AE.encode . map channelJSON
+encodeChannels = encodeText . map channelJSON
 
 
 -- | Tagify whitelists for the team modal: (members by user id, members by email).
 memberWhitelists :: V.Vector ProjectMembers.ProjectMemberVM -> (Text, Text)
 memberWhitelists projMembers =
-  ( decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-  , decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+  ( encodeText $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  , encodeText $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
   )
 
 
@@ -964,7 +952,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
           span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
             faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-            input_ [type_ "text", placeholder_ searchPh, makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
+            input_ [type_ "text", placeholder_ searchPh, term "_" [text|on input show <tr/> in #${secId} when its textContent.toLowerCase() contains my value.toLowerCase()|]]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""
@@ -1152,6 +1140,11 @@ deleteMemberH pid memberId = do
           addRespHeaders mempty
 
 
+-- | Client-side redirect to @url@, or surface @msg@ as an error toast when absent.
+redirectOrToast :: Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+redirectOrToast msg = maybe (toastError msg mempty) \url -> redirectCS url >> addRespHeaders mempty
+
+
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do
   (_, project) <- Projects.sessionAndProject pid
@@ -1162,16 +1155,12 @@ manageSubGetH pid = do
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
-          portalUrlM <- Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
-          case portalUrlM of
-            Just url -> redirectCS url >> addRespHeaders mempty
-            Nothing -> toastError "Failed to create billing portal" mempty
+          Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
+            >>= redirectOrToast "Failed to create billing portal"
         _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
       sub <- maybe (pure Nothing) (lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey . ("https://api.lemonsqueezy.com/v1/subscriptions/" <>)) project.subId
-      case sub of
-        Nothing -> toastError "Subscription ID not found" mempty
-        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders mempty
+      redirectOrToast "Subscription ID not found" $ (.dataVal.attributes.urls.customerPortal) <$> sub
     Projects.NoBillingProvider -> toastError "No active subscription" mempty
 
 
@@ -1188,8 +1177,8 @@ stripeCheckoutInitH pid form = do
   -- Keyed to the buyer, not the project: people run several projects, and each one
   -- used to mint its own Stripe customer and hand out its own 30-day trial.
   billing <- Projects.userBilling sess.user.id
-  urlM <-
-    Settings.createStripeCheckoutSession
+  redirectOrToast "Failed to create checkout session"
+    =<< Settings.createStripeCheckoutSession
       (not billing.hasSubscribedBefore)
       billing.stripeCustomerId
       envCfg.stripeSecretKey
@@ -1199,9 +1188,6 @@ stripeCheckoutInitH pid form = do
       envCfg.stripePriceIdGraduated
       envCfg.stripePriceIdGraduatedOverage
       envCfg.stripePriceIdByos
-  case urlM of
-    Just url -> redirectCS url >> addRespHeaders mempty
-    Nothing -> toastError "Failed to create checkout session" mempty
 
 
 -- | Lemon Squeezy responses come wrapped in @{"data": ...}@. The Haskell
@@ -1216,7 +1202,7 @@ newtype LSData a = LSData {dataVal :: a}
 lsGet :: forall a es. (AE.FromJSON a, HTTP :> es) => Text -> Text -> Eff es (Maybe (LSData a))
 lsGet apiKey url = do
   response <- W.getWith (Settings.lemonSqueezyOpts apiKey) (toString url)
-  pure $ rightToMaybe $ AE.eitherDecode $ response ^. responseBody
+  pure $ AE.decode $ response ^. responseBody
 
 
 newtype SubUrls = SubUrls {customerPortal :: Text}
@@ -1350,7 +1336,7 @@ deleteProjectGetH pid = do
   sess <- Projects.getSession
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
-    then addSuccessToast "Can't perform this action on the demon project" Nothing
+    then addSuccessToast "Can't perform this action on the demo project" Nothing
     else do
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
@@ -1568,7 +1554,7 @@ alertConfiguration cp =
 -- Main Modal Component
 teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Text -> Bool -> Html () -> Html ()
 teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList isInTeamView trigger = do
-  let encodeField f = decodeUtf8 $ AE.encode $ maybe [] f team
+  let encodeField f = encodeText $ maybe [] f team
       name = maybe "" (.name) team
       handle = maybe "" (.handle) team
       description = maybe "" (.description) team
