@@ -259,7 +259,7 @@ settingsTests = do
 stripeBillingTests :: SpecWith TestContext
 stripeBillingTests = do
   it "stores and decodes StripeProvider round-trip" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_test123" "si_test" "cus_test"
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_test123") (Projects.SubItemId "si_test") (Projects.CustomerId "cus_test")
     projectM <- runQueryEffect tr $ Projects.projectById testPid
     case projectM of
       Just project -> Projects.projectProvider project `shouldBe` Projects.StripeProvider
@@ -269,12 +269,12 @@ stripeBillingTests = do
   -- customer kept being billed for a project they could no longer see (a deleted
   -- project billed a full month on the day its trial ended).
   it "deleteProject cancels the project's Stripe subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_test123" "si_test" "cus_test"
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_test123") (Projects.SubItemId "si_test") (Projects.CustomerId "cus_test")
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
     map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_test123"]
 
   it "deleteProject cancels the project's LemonSqueezy subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid "GraduatedPricing" "987654" "si_test" "ord_test" V.empty
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test") V.empty
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
     map fst reqs `shouldContain` ["https://api.lemonsqueezy.com/v1/subscriptions/987654"]
 
@@ -290,7 +290,7 @@ stripeBillingTests = do
     fresh <- runQueryEffect tr $ Projects.userBilling uid
     fresh `shouldBe` Projects.UserBilling{stripeCustomerId = Nothing, hasSubscribedBefore = False}
 
-    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_first" "si_first" "cus_first"
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_first") (Projects.SubItemId "si_first") (Projects.CustomerId "cus_first")
     subscribed <- runQueryEffect tr $ Projects.userBilling uid
     subscribed `shouldBe` Projects.UserBilling{stripeCustomerId = Just "cus_first", hasSubscribedBefore = True}
 
@@ -314,7 +314,7 @@ stripeBillingTests = do
 
     -- Once that buyer has any billing history, a further checkout reuses their
     -- customer and withholds the trial — this is what a second project now hits.
-    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_first" "si_first" "cus_first"
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_first") (Projects.SubItemId "si_first") (Projects.CustomerId "cus_first")
     (secondReqs, _) <- checkout testPid
     case sessionBody secondReqs of
       Nothing -> fail "no checkout session request recorded"
@@ -326,7 +326,7 @@ stripeBillingTests = do
   -- running here bills the customer twice with nothing left pointing at it. Pins
   -- that the cancel reads the OLD sub_id, i.e. that it stays ahead of the write.
   it "stripe checkout webhook cancels the subscription the project held before" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_old" "si_old" "cus_test"
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_old") (Projects.SubItemId "si_old") (Projects.CustomerId "cus_test")
     now <- getTestTime tr.trTestClock
     let body =
           BL.toStrict
