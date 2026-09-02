@@ -1,4 +1,5 @@
 import { getContrastTextColor, resolveColor } from './colorMapping';
+import debounce from 'lodash/debounce';
 
 const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: number; range: number } => {
   let minStart = Infinity, maxEnd = -Infinity;
@@ -12,15 +13,6 @@ const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: n
 const SCROLL_BAR_WIDTH = 7;
 const FLAME_PAD_LEFT = 4;
 const RESIZE_EVENTS = ['resize', 'toggle-sidebar', 'loglist-resize'];
-
-// Simple debounce utility
-function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
-  let timeout: NodeJS.Timeout;
-  return ((...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  }) as T;
-}
 
 function setupTimeCursor(opts: {
   container: HTMLElement; indicator: HTMLElement; timeLabel: HTMLElement; ruler: HTMLElement;
@@ -227,7 +219,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         const data = filterJson(structuredClone(fData), item.name);
         flameGraph(data, renderAt, true);
         resetBtn?.classList.remove('hidden');
-        (window as any).htmx.trigger('#trigger-span-' + item.spanId, 'click');
+        window.htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
       onmouseenter: (e: MouseEvent) =>
         showTooltip(e, `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),

@@ -12,6 +12,9 @@
  * should die when nobody is watching it, and the only component that actually knows whether
  * someone is watching is this one. See `liveTailRenewH` for the server side.
  */
+// Type-only: erased at compile time, so this module stays free of the DOM-dependent
+// declarations types.ts carries.
+import type { ServerTraceEntry } from './types/types';
 
 export type LiveStreamOptions = {
   projectId: string;
@@ -243,7 +246,7 @@ export function tableRowToArray(cols: Record<string, unknown>, colIdxMap: Record
  * Rows that later turn out to belong to a larger trace are re-grouped when the durable read
  * replaces them, which is the same reconciliation a recent fetch already relies on.
  */
-export function traceEntriesFor(rows: unknown[][], colIdxMap: Record<string, number>): unknown[] {
+export function traceEntriesFor(rows: unknown[][], colIdxMap: Record<string, number>): ServerTraceEntry[] {
   const at = (r: unknown[], name: string) => (colIdxMap[name] === undefined ? null : r[colIdxMap[name]]);
   const projected = rows.map(r => {
     const rowId = String(at(r, 'id') ?? '');

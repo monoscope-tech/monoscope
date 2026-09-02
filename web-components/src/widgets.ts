@@ -2,9 +2,10 @@
 import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
-import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
+import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
 import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
+import debounce from 'lodash/debounce';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
@@ -20,8 +21,8 @@ const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
   document.head.append(script);
 });
 
-export const ensureECharts = () => {
-  if ((window as any).echarts) return Promise.resolve();
+const ensureECharts = () => {
+  if (window.echarts) return Promise.resolve();
   if (!echartsLoad) {
     const assets = echartsUrls();
     echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme));
@@ -128,7 +129,7 @@ const queueChartInit = (fn: () => void, chartId?: string) => {
 };
 
 // --- Shared ResizeObserver for all charts ---
-export const sharedResizeObserver = new ResizeObserver((entries) => {
+const sharedResizeObserver = new ResizeObserver((entries) => {
   for (const entry of entries) {
     const el = entry.target as HTMLElement;
     if (el.id) queueChartResize(el.id);
@@ -229,37 +230,80 @@ export const showNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.cla
 export const hideNoDataOverlay = (chartId: string) => $(`${chartId}_empty`)?.classList.add('hidden');
 
 
+// Loader + spotlight border move together, and both writes are deferred to a frame so a
+// fetch never forces layout in the middle of a scroll.
+const setChartLoading = (chartId: string, on: boolean) =>
+  requestAnimationFrame(() => {
+    $(`${chartId}_loader`)?.classList.toggle('hidden', !on);
+    $(`${chartId}_bordered`)?.classList.toggle('spotlight-border', on);
+  });
+
+// The parts of an echarts option that follow the theme rather than the data. Applied on
+// construction and again on every theme change, so the two can't drift apart. Returns the
+// styles it read, since both callers need more of them.
+const applyChartTheme = (opt: Record<string, any>) => {
+  const styles = getChartStyles();
+  if (styles.textColor) {
+    opt.legend = opt.legend || {};
+    opt.legend.textStyle = { ...opt.legend.textStyle, color: styles.textColor };
+  }
+  opt.tooltip = {
+    ...opt.tooltip,
+    backgroundColor: styles.tooltipBg,
+    textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor },
+    borderColor: styles.tooltipBorderColor,
+    borderWidth: 1,
+  };
+  opt.backgroundColor = 'transparent';
+  return styles;
+};
+
+/** One cell of a chart dataset row: the bin timestamp, then one value per series. */
+type ChartCell = string | number | null;
+type ChartRow = ChartCell[];
+
+/** The /chart_data response body. */
+type ChartDataResponse = {
+  from?: number;
+  to?: number;
+  headers?: string[];
+  dataset?: ChartRow[];
+  rows_per_min?: number;
+  stats?: (Partial<StatAggregates> & { max_group_sum?: number }) | null;
+  error?: string;
+};
+
 const MAX_VISIBLE_SERIES = 8;
 
 // Keep dense charts legible without changing their totals: rank series by peak value,
 // retain the leaders, and fold the rest into one explicitly labelled series.
-export const collapseLongTail = (data: any): any => {
+export const collapseLongTail = (data: ChartRow[]): ChartRow[] => {
   if (!Array.isArray(data) || !Array.isArray(data[0])) return data;
   const [headers, ...rows] = data;
-  const names = headers.slice(1);
+  const names = headers.slice(1) as string[];
   if (names.length <= MAX_VISIBLE_SERIES) return data;
 
   const ranked = names
     .map((name: string, index: number) => ({
       name,
       index,
-      peak: Math.max(...rows.map((row: any[]) => Number.isFinite(row?.[index + 1]) ? row[index + 1] : -Infinity)),
+      peak: Math.max(...rows.map((row) => (Number.isFinite(row?.[index + 1]) ? (row[index + 1] as number) : -Infinity))),
     }))
-    .sort((a: any, b: any) => b.peak - a.peak || a.index - b.index);
+    .sort((a, b) => b.peak - a.peak || a.index - b.index);
   const visible = ranked.slice(0, MAX_VISIBLE_SERIES);
   const hidden = ranked.slice(MAX_VISIBLE_SERIES);
 
   return [
-    [headers[0], ...visible.map((series: any) => series.name), `Other (${hidden.length})`],
-    ...rows.map((row: any[]) => {
+    [headers[0], ...visible.map((series) => series.name), `Other (${hidden.length})`],
+    ...rows.map((row) => {
       if (!Array.isArray(row)) return row;
-      const hiddenValues = hidden.map((series: any) => row[series.index + 1]).filter(Number.isFinite);
-      return [row[0], ...visible.map((series: any) => row[series.index + 1]), hiddenValues.length ? hiddenValues.reduce((sum: number, value: number) => sum + value, 0) : null];
+      const hiddenValues = hidden.map((series) => row[series.index + 1]).filter(Number.isFinite) as number[];
+      return [row[0], ...visible.map((series) => row[series.index + 1]), hiddenValues.length ? hiddenValues.reduce((sum, value) => sum + value, 0) : null];
     }),
   ];
 };
 
-export const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
+export const createSeriesConfig = (widgetData: WidGetData, name: string, i: number) => {
   // A thresholded stat (e.g. Error Rate) is treated as a caution metric — color
   // it red so the signal isn't an arbitrary hash color, rather than leaving it to
   // getSeriesColor's hash. Assumes higher = worse; revisit (explicit intent field)
@@ -271,9 +315,9 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
   const paletteColor = isErrorStat ? styles.errorColor : isGenericStatColumn ? styles.brandColor : getSeriesColor(name);
 
-  const gradientColor = (opacity: number) => new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, opacity) },
-    { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
+  const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+    { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },
+    { offset: 1, color: window.echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
   const backgroundStyle = { color: styles.chartBg };
@@ -324,7 +368,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   // Only update if legend data has actually changed
   if (JSON.stringify(cols) !== JSON.stringify(currentLegendData)) {
-    opt.series = cols?.map((n: any, i: number) => createSeriesConfig(widgetData, n, i, opt));
+    opt.series = cols?.map((n: ChartCell, i: number) => createSeriesConfig(widgetData, String(n ?? ''), i));
     opt.legend.data = cols;
   }
 
@@ -344,7 +388,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 // range) so the loading spinner always resolves rather than spinning under an
 // error overlay. Eager stat widgets keep their server-rendered value (no fetch).
 const NO_DATA_VALUE = '—';
-const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: number) => {
+const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'], from?: number, to?: number) => {
   const value = $(`${widgetData.chartId}Value`);
   if (!value) return;
   if (widgetData.hideValue) {
@@ -359,7 +403,7 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
     return;
   }
   // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
-  if (stats.count > 0) {
+  if ((stats.count ?? 0) > 0) {
     const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '');
     value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
   } else {
@@ -399,7 +443,7 @@ export const chartDataUrl = ({
   if (chartType) params.set('chart_type', chartType);
 
   // Add dashboard constants (from data-constants attribute)
-  const constants = (window as any).getDashboardConstants?.() || {};
+  const constants = window.getDashboardConstants?.() ?? {};
   Object.entries(constants).forEach(([key, value]) => {
     if (!params.has(key)) params.set(key, value as string);
   });
@@ -426,7 +470,7 @@ export const chartDataUrl = ({
 // construction and an IntersectionObserver — on the log explorer that put it ~2.8s into
 // the page. Nothing about the request depends on any of that, so it starts as soon as this
 // module evaluates and the chart picks up the in-flight promise when it's ready.
-const chartDataPrefetch = new Map<string, { url: string; response: Promise<any> }>();
+const chartDataPrefetch = new Map<string, { url: string; response: Promise<ChartDataResponse | null> }>();
 
 const prefetchChartData = (widgetData: WidGetData) => {
   const { chartId } = widgetData;
@@ -447,7 +491,7 @@ const prefetchChartData = (widgetData: WidGetData) => {
 
 // Single-use, and only for the URL it was issued against: if the query changed between
 // prefetch and first render, the stale body must not be adopted.
-const takePrefetched = async (chartId: string, url: string): Promise<any> => {
+const takePrefetched = async (chartId: string, url: string): Promise<ChartDataResponse | null> => {
   const entry = chartDataPrefetch.get(chartId);
   if (!entry) return null;
   chartDataPrefetch.delete(chartId);
@@ -469,18 +513,11 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
   // Batch DOM updates before fetch
-  if (showLoader)
-    requestAnimationFrame(() => {
-      const loader = $(`${chartId}_loader`);
-      const borderedItem = $(`${chartId}_bordered`);
-
-      loader?.classList.remove('hidden');
-      borderedItem?.classList.add('spotlight-border');
-    });
+  if (showLoader) setChartLoading(chartId, true);
 
   try {
     const url = chartDataUrl(widgetData);
-    const { from, to, headers, dataset, rows_per_min, stats, error } =
+    const { from, to, headers, dataset, rows_per_min, stats, error }: ChartDataResponse =
       (await takePrefetched(chartId, url)) ??
       (await limitedFetch(url, signal).then((res) => {
         // Not res.json() straight off: a non-2xx body is HTML (an error page, or a 404 from a
@@ -507,7 +544,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       setStatValue(widgetData, null); // clear the stat spinner; failed ≠ loading
       return;
     }
-    const trmHeaders = headers?.map((h: string) => {
+    const trmHeaders = headers?.map((h) => {
       if (h === 'timestamp' || h === 'created_at') {
         return h;
       }
@@ -516,7 +553,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     opt.xAxis = opt.xAxis || {};
     opt.xAxis.min = from;  // Already in ms from server
     opt.xAxis.max = to;
-    opt.dataset.source = [trmHeaders || [], ...dataset];
+    opt.dataset.source = [trmHeaders || [], ...(dataset ?? [])];
     if (stats) {
       opt.yAxis.max = stats.max;
       if (widgetData.chartType != 'line') {
@@ -557,14 +594,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       setStatValue(widgetData, null); // clear the stat spinner on fetch failure
     }
   } finally {
-    // Batch DOM updates after fetch completes
-    requestAnimationFrame(() => {
-      const loader = $(`${chartId}_loader`);
-      const borderedItem = $(`${chartId}_bordered`);
-
-      if (loader) loader.classList.add('hidden');
-      if (borderedItem) borderedItem.classList.remove('spotlight-border');
-    });
+    setChartLoading(chartId, false);
   }
 };
 
@@ -585,12 +615,14 @@ export const sumTimeseriesValues = (dataset: unknown): number | null => {
 
 declare global {
   interface Window {
-    formatNumber: (num: number) => string;
-    formatBytes: (num: number) => string;
+    formatNumber: (num: number | null | undefined) => string;
+    formatBytes: (num: number | null | undefined) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
     setVariable: (key: string, value: string) => void;
     getVariable: (key: string) => string;
+    // Installed by the dashboard page; supplies the dashboard's constant substitutions.
+    getDashboardConstants?: () => Record<string, string>;
   }
 }
 
@@ -699,12 +731,14 @@ const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => 
     itemStyle: { color: getChartStyles().brandColor, borderColor: '#fff', borderWidth: 1 },
     data: exemplars.map((e) => [new Date(e.timestamp).getTime(), e.value, e]),
     tooltip: {
-      formatter: (p: any) =>
+      formatter: (p: { data: [number, number, Exemplar] }) =>
         `<b>${p.data[2].metric_name}</b><br/>${p.data[2].value}<br/><span style="font-family:monospace">${p.data[2].trace_id}</span><br/>Click to open the trace`,
     },
   });
   chart.setOption({ series }, false);
-  chart.on('click', (p: any) => p.seriesName === 'Exemplars' && p.data?.[2]?.url && (window.location.href = p.data[2].url));
+  chart.on('click', (p: { seriesName?: string; data?: [number, number, Exemplar] }) =>
+    p.seriesName === 'Exemplars' && p.data?.[2]?.url ? (window.location.href = p.data[2].url) : undefined
+  );
 };
 
 const chartDisposers = new Map<string, () => void>();
@@ -733,7 +767,7 @@ const disposeChartsIn = (root: Element) => {
 // the old event name with the new payload — so read the swap target defensively and fall
 // back to the element the event was dispatched on.
 document.addEventListener('htmx:before:swap', (event) => {
-  const e = event as CustomEvent<any>;
+  const e = event as CustomEvent<{ target?: unknown; ctx?: { target?: unknown } }>;
   const target = e.detail?.target ?? e.detail?.ctx?.target ?? (e.target instanceof Element ? e.target : null);
   if (target instanceof Element) disposeChartsIn(target);
 });
@@ -762,7 +796,7 @@ const processResizeQueue = () => {
     if (chartEl) {
       // A page may observe an element without ever loading echarts — the service map is DOM,
       // not canvas — and a missing global must not throw for every other chart in the queue.
-      const chart = (window as any).echarts?.getInstanceByDom(chartEl);
+      const chart = window.echarts?.getInstanceByDom(chartEl);
       if (chart && !chart.isDisposed()) {
         chart.resize();
       }
@@ -792,12 +826,12 @@ const chartWidget = (widgetData: WidGetData) => {
   chartDisposers.get(chartId)?.();
 
   // Dispose of any existing chart instance before creating a new one
-  const existingChart = (window as any).echarts.getInstanceByDom(chartEl);
+  const existingChart = window.echarts.getInstanceByDom(chartEl);
   if (existingChart) existingChart.dispose();
 
   const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
-  const chart = (window as any).echarts.init(chartEl, theme);
+  const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
 
   const baseQuery = widgetData.query;
@@ -808,20 +842,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   (window as any)[`${chartType}Chart`] = chart;
 
-  const styles = getChartStyles();
-
-  if (styles.textColor) {
-    opt.legend = opt.legend || {};
-    opt.legend.textStyle = { ...opt.legend.textStyle, color: styles.textColor };
-  }
-  opt.tooltip = {
-    ...opt.tooltip,
-    backgroundColor: styles.tooltipBg,
-    textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor },
-    borderColor: styles.tooltipBorderColor,
-    borderWidth: 1,
-  };
-  opt.backgroundColor = 'transparent';
+  const styles = applyChartTheme(opt);
   if (opt.series?.[0]?.backgroundStyle) {
     opt.series[0].backgroundStyle = { color: styles.chartBg };
   }
@@ -882,28 +903,17 @@ const chartWidget = (widgetData: WidGetData) => {
     }, { signal: controller.signal });
   });
 
-  window.addEventListener('update-query', (e: any) => {
+  window.addEventListener('update-query', (e: Event) => {
     updateQuery();
-    if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
+    const ast = (e as CustomEvent<{ ast?: string }>).detail?.ast;
+    if (ast) widgetData.queryAST = ast;
     updateChartData(chart, opt, true, widgetData, controller.signal, false);
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
   const onThemeChange: ThemeCallback = (_isDark, _cbStyles) => {
     invalidateLogLevelColors();
-    const freshStyles = getChartStyles();
-    if (freshStyles.textColor) {
-      opt.legend = opt.legend || {};
-      opt.legend.textStyle = { ...opt.legend.textStyle, color: freshStyles.textColor };
-    }
-    opt.tooltip = {
-      ...opt.tooltip,
-      backgroundColor: freshStyles.tooltipBg,
-      textStyle: { ...opt.tooltip?.textStyle, color: freshStyles.tooltipTextColor },
-      borderColor: freshStyles.tooltipBorderColor,
-      borderWidth: 1,
-    };
-    opt.backgroundColor = 'transparent';
+    const freshStyles = applyChartTheme(opt);
     opt.series?.forEach((s: any) => {
       if (s.backgroundStyle) s.backgroundStyle = { color: freshStyles.chartBg };
       if (widgetData.widgetType !== 'timeseries_stat') {
@@ -999,15 +1009,6 @@ function getActiveGrid(): HTMLElement | null {
 (window as any).buildWidgetOrder = buildWidgetOrder;
 (window as any).getActiveGrid = getActiveGrid;
 
-function debounce(func: any, wait: number) {
-  let timeout: NodeJS.Timeout;
-  return (...args: any[]) => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    timeout = setTimeout(() => func(...args), wait);
-  };
-}
 (window as any).debounce = debounce;
 
 function bindFunctionsToObjects(rootObj: any, obj: any) {
@@ -1119,7 +1120,7 @@ document.addEventListener('click', (e) => {
 });
 
 // Create threshold markLines for ECharts (reads semantic colors from CSS tokens)
-export const createThresholdMarkLines = (thresholds: Record<string, number>) => {
+const createThresholdMarkLines = (thresholds: Record<string, number>) => {
   const styles = getChartStyles();
   const thresholdStyles: Record<string, { color: string; formatter: string }> = {
     alert: { color: styles.errorColor, formatter: 'Alert: {c}' },
@@ -1136,7 +1137,7 @@ export const createThresholdMarkLines = (thresholds: Record<string, number>) => 
 };
 
 // Apply thresholds to a chart
-export const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
+const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
   const option = chart?.getOption();
   if (!option?.series?.length) return;
 
