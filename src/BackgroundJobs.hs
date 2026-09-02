@@ -101,7 +101,7 @@ import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1500,11 +1500,9 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
--- | Dispatch an alert to every enabled channel configured on the project's @everyone team.
--- For slack/discord/phone/pagerduty a channel is "enabled" when its targets array is
--- non-empty AND the type isn't in disabled_channels. Email is the exception: it
--- routes to project members, so it dispatches whenever the "email" toggle is on,
--- regardless of notify_emails.
+-- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
+-- per-channel enablement rules), threading slack/discord replies under 'ThreadRefs'.
+-- Email routes to project members, not the team's notify_emails.
 --
 -- The returned Bool reports whether the @everyone team existed. Callers use it to
 -- decide whether to persist "last notified" state: when the team is missing that's
@@ -1518,43 +1516,85 @@ sendAlertToChannels
   -> Text
   -> Text
   -> Html ()
-  -> (Maybe Text, Maybe Text)
-  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
-sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, initDiscordMsgId) = do
-  teamM <- ProjectMembers.getEveryoneTeam pid
-  case teamM of
+  -> ThreadRefs
+  -> ATBackgroundCtx (ThreadRefs, Bool)
+sendAlertToChannels alert pid project users alertUrl subj html refs =
+  ProjectMembers.getEveryoneTeam pid >>= \case
     Nothing -> do
       Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= pid])
-      pure (initSlackTs, initDiscordMsgId, False)
+      pure (refs, False)
     Just team -> do
-      let enabled ch = ProjectMembers.isChannelEnabled ch team
-      slackTs <-
-        if enabled ProjectMembers.Slack && not (V.null team.slack_channels)
-          then foldlM (\acc cid -> (acc <|>) <$> sendSlackAlertWith acc alert pid project.title (Just cid)) initSlackTs team.slack_channels
-          else pure initSlackTs
-      discordMsgId <-
-        if enabled ProjectMembers.Discord && not (V.null team.discord_channels)
-          then foldlM (\acc cid -> (acc <|>) <$> sendDiscordAlertWith acc alert pid project.title (Just cid)) initDiscordMsgId team.discord_channels
-          else pure initDiscordMsgId
-      when (enabled ProjectMembers.Phone && not (V.null team.phone_numbers))
-        $ sendWhatsAppAlert alert pid project.title team.phone_numbers
-      when (enabled ProjectMembers.Email) do
-        let rendered = ET.renderEmail subj html
-        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
-      when (enabled ProjectMembers.Pagerduty)
-        $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title alertUrl
-      pure (slackTs, discordMsgId, True)
+      let fan = Fanout{threads = Just refs, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
+      (,True) <$> fanOutToTeam team fan alert pid project.title alertUrl
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
 -- Email stays with the caller: recipients and body differ per alert kind.
 broadcastToEveryone :: Maybe ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ()
-broadcastToEveryone teamM alert pid title url = whenJust teamM \t -> do
-  let ifCh ch = ProjectMembers.whenChannelEnabled ch t
-  ifCh ProjectMembers.Slack $ forM_ t.slack_channels (sendSlackAlert alert pid title . Just)
-  ifCh ProjectMembers.Discord $ forM_ t.discord_channels (sendDiscordAlert alert pid title . Just)
-  ifCh ProjectMembers.Phone $ sendWhatsAppAlert alert pid title t.phone_numbers
-  ifCh ProjectMembers.Pagerduty $ forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert title url
+broadcastToEveryone teamM alert pid title url =
+  whenJust teamM \t -> void $ fanOutToTeam t Fanout{threads = Nothing, email = Nothing} alert pid title url
+
+
+-- | Slack thread-ts / Discord message-id an alert threads its replies under.
+-- '<>' keeps the first known id, so folding across a team's channels preserves
+-- the parent message instead of overwriting it.
+data ThreadRefs = ThreadRefs {slackTs :: Maybe Text, discordMsgId :: Maybe Text}
+  deriving stock (Eq, Show)
+
+
+instance Semigroup ThreadRefs where
+  a <> b = ThreadRefs{slackTs = a.slackTs <|> b.slackTs, discordMsgId = a.discordMsgId <|> b.discordMsgId}
+
+
+instance Monoid ThreadRefs where
+  mempty = ThreadRefs{slackTs = Nothing, discordMsgId = Nothing}
+
+
+-- | Email leg of a fan-out. Recipients are resolved by the caller (project
+-- members for error alerts, the team's notify_emails for monitors); @body@ is
+-- lazy so rendering only happens when the email channel is actually enabled.
+data FanoutEmail = FanoutEmail {recipients :: [Text], subject :: Text, body :: Text}
+
+
+-- | The two axes on which the fan-out callers differ.
+data Fanout = Fanout
+  { threads :: Maybe ThreadRefs
+  -- ^ 'Just': thread slack/discord under these ids and return the resulting ones.
+  -- 'Nothing': post standalone messages and return 'mempty'.
+  , email :: Maybe FanoutEmail
+  -- ^ 'Nothing': this fan-out has no email leg.
+  }
+
+
+-- | Dispatch an alert to every enabled channel of one team.
+-- For slack/discord/phone/pagerduty a channel is "enabled" when its targets array is
+-- non-empty AND the type isn't in disabled_channels ('ProjectMembers.whenChannelEnabled').
+-- Email is the exception: its audience is resolved by the caller, so it dispatches
+-- whenever the "email" toggle is on, regardless of notify_emails.
+fanOutToTeam :: ProjectMembers.Team -> Fanout -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ThreadRefs
+fanOutToTeam team fan alert pid title alertUrl = do
+  whenJust fan.email \e ->
+    when (ProjectMembers.isChannelEnabled ProjectMembers.Email team)
+      $ forM_ e.recipients \to -> sendRenderedEmail to e.subject e.body
+  slackTs <- fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)
+  discordMsgId <- fanChannel ProjectMembers.Discord team.discord_channels (.discordMsgId) \parent cid -> sendDiscordAlertWith parent alert pid title (Just cid)
+  ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert pid title team.phone_numbers
+  ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert title alertUrl
+  pure ThreadRefs{slackTs, discordMsgId}
+  where
+    fanChannel
+      :: ProjectMembers.NotificationChannel
+      -> V.Vector Text
+      -> (ThreadRefs -> Maybe Text)
+      -> (Maybe Text -> Text -> ATBackgroundCtx (Maybe Text))
+      -> ATBackgroundCtx (Maybe Text)
+    fanChannel ch targets sel send
+      | not (ProjectMembers.isChannelEnabled ch team) || V.null targets = pure initial
+      | otherwise = case fan.threads of
+          Nothing -> Nothing <$ forM_ targets (send Nothing)
+          Just _ -> foldlM (\acc cid -> (acc <|>) <$> send acc cid) initial targets
+      where
+        initial = fan.threads >>= sel
 
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)
@@ -1596,6 +1636,27 @@ relTimeAgo now t
 -- | Alert-header first-seen line: "3m ago · Aug 1 2:15 PM".
 firstSeenLine :: UTCTime -> UTCTime -> Text
 firstSeenLine now t = relTimeAgo now t <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" t)
+
+
+-- | Assemble a runtime-error alert: the trend chart over the standard 15-minute
+-- window plus the alert payload. The chart URL comes back separately because the
+-- email body needs it too.
+runtimeErrorAlert
+  :: Log :> es
+  => Config.AuthContext
+  -> Projects.ProjectId
+  -> UTCTime -- now
+  -> Text -- issue id
+  -> Text -- issue title
+  -> RuntimeAlertType
+  -> ErrorPatterns.ATError
+  -> UTCTime -- first seen at
+  -> Maybe Text -- occurrence text
+  -> Maybe Text -- ongoing-for text
+  -> Eff es (Maybe Text, NotificationAlerts)
+runtimeErrorAlert ctx pid now issueId issueTitle runtimeAlertType errorData firstSeenAt occurrenceText ongoingFor = do
+  chartUrl <- errorTrendChartUrl ctx pid errorData.hash (formatUTC $ addUTCTime (-(15 * 60)) now) (formatUTC now)
+  pure (chartUrl, RuntimeErrorAlert{issueId, issueTitle, errorData, runtimeAlertType, chartUrl, occurrenceText, firstSeenText = Just $ firstSeenLine now firstSeenAt, ongoingFor})
 
 
 monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
@@ -1843,17 +1904,14 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               let alertType = alertTypeForState sub.errorState
                   errorsUrl = projectUrl ctx pid <> "/issues/" <> sub.issueId.toText
                   occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
-                  fromTime = addUTCTime (-(15 * 60)) now
-                  firstSeenTextM = Just $ firstSeenLine now sub.createdAt
                   -- Surface an ongoing-duration banner once we've already notified on this
                   -- issue and it's still in a non-regressed state; a regression restarts
                   -- the narrative and deserves its own fresh-looking alert.
                   ongoingForM =
                     humanDuration now sub.createdAt
                       <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= ErrorPatterns.ESRegressed)
-              chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-              let alert = RuntimeErrorAlert{issueId = sub.issueId.toText, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
-                  ~(subj, html) = case alertType of
+              (chartUrlM, alert) <- runtimeErrorAlert ctx pid now sub.issueId.toText sub.issueTitle alertType sub.errorData sub.createdAt occTextM ongoingForM
+              let ~(subj, html) = case alertType of
                     EscalatingErrors -> ET.escalatingErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     RegressedErrors -> ET.regressedErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     _ -> ET.runtimeErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
@@ -1863,21 +1921,21 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               allowed <- consumeNotificationToken pid now
               if allowed
                 then do
-                  (finalSlackTs, finalDiscordMsgId, dispatched) <-
-                    sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
+                  (finalRefs, dispatched) <-
+                    sendAlertToChannels alert pid project users errorsUrl subj html ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}
                   Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType, "dispatched" AE..= dispatched])
-                  pure (sub.errorId, finalSlackTs, finalDiscordMsgId, dispatched)
+                  pure (sub.errorId, finalRefs, dispatched)
                 else do
                   void $ ErrorPatterns.revertLastNotifiedAt sub.errorId sub.lastNotifiedAt now
                   enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
                   Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
-                  pure (sub.errorId, sub.slackThreadTs, sub.discordMessageId, False)
+                  pure (sub.errorId, ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}, False)
             -- last_notified_at is already stamped atomically by the claim query.
             -- Only persist slack/discord thread IDs when the send actually went out.
-            forM_ results \(errorId, slackTs, discordMsgId, delivered) ->
-              when (delivered && (isJust slackTs || isJust discordMsgId))
+            forM_ results \(errorId, refs, delivered) ->
+              when (delivered && (isJust refs.slackTs || isJust refs.discordMsgId))
                 $ void
-                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId slackTs discordMsgId now
+                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId refs.slackTs refs.discordMsgId now
 
 
 notificationsPerProjectPerHour :: Int
@@ -1961,9 +2019,9 @@ claimIssueNotification iid now cooldownHours =
 -- into one batched message by 'NotificationDigestJob'.
 -- Gated by 'project.errorAlerts' so customers can opt out without code changes.
 --
--- Returns (slackTs, discordMsgId, dispatched). Callers that track
+-- Returns (threadRefs, dispatched). Callers that track
 -- per-resource thread IDs (e.g. error_patterns) persist them so later
--- re-notifications thread under the original alert. Returns (Nothing, Nothing, False)
+-- re-notifications thread under the original alert. Returns (mempty, False)
 -- when suppressed by cooldown, errorAlerts=false, or rate-limit overflow.
 notifyIssue
   :: Issues.Issue
@@ -1975,23 +2033,23 @@ notifyIssue
   -> Text -- alert url
   -> Text -- email subject
   -> Html () -- email body
-  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
+  -> ATBackgroundCtx (ThreadRefs, Bool)
 notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html
-  | not project.errorAlerts = pure (Nothing, Nothing, False)
+  | not project.errorAlerts = pure (mempty, False)
   | otherwise = do
       now <- Time.currentTime
       claimed <- claimIssueNotification issue.id now cooldownHours
       allowed <- if claimed then consumeNotificationToken project.id now else pure False
       if
-        | not claimed -> pure (Nothing, Nothing, False)
+        | not claimed -> pure (mempty, False)
         | allowed -> do
-            (slackTs, discordMsgId, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html (Nothing, Nothing)
+            (refs, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html mempty
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
-            pure (slackTs, discordMsgId, dispatched)
+            pure (refs, dispatched)
         | otherwise -> do
             enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
             Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
-            pure (Nothing, Nothing, False)
+            pure (mempty, False)
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
@@ -2024,12 +2082,10 @@ processProjectErrors pid errors now = do
       authCtx <- ask @Config.AuthContext
       let notifyNewError :: Issues.Issue -> ErrorPatterns.ErrorPattern -> ErrorPatterns.ATError -> ATBackgroundCtx ()
           notifyNewError issue err atErr = whenJust projectM \project -> do
-            chartUrlM <- errorTrendChartUrl authCtx pid atErr.hash (formatUTC (addUTCTime (-(15 * 60)) now)) (formatUTC now)
+            (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title NewRuntimeError atErr atErr.when Nothing Nothing
             let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-                firstSeenTextM = Just $ firstSeenLine now atErr.when
-                alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
                 (subj, html) = ET.runtimeErrorsEmail project.title (projectUrl authCtx pid) issueUrl [atErr] chartUrlM Nothing Nothing
-            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
+            (refs, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
             -- Persist thread IDs + stamp error_patterns.last_notified_at so later
             -- escalation/regression sweeps thread under this alert instead of
             -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
@@ -2037,7 +2093,7 @@ processProjectErrors pid errors now = do
             -- path (notifyErrorSubscriptions) reads for per-pattern dedup.
             when dispatched
               $ void
-              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id slackTs discordMsgId now
+              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id refs.slackTs refs.discordMsgId now
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
@@ -2911,17 +2967,13 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
 dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj renderedBody = do
   let emails = ProjectMembers.resolveTeamEmails team
-      enabled = ProjectMembers.isChannelEnabled
   -- notify_emails is the authoritative audience now (no implicit member fallback) —
   -- if it's empty the alert goes to zero email recipients, which is almost never intended.
   when (null emails && ProjectMembers.isChannelEnabled ProjectMembers.Email team)
     $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
     $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
-  when (enabled ProjectMembers.Email team) $ for_ emails \email -> sendRenderedEmail (CI.original email) subj renderedBody
-  ProjectMembers.whenChannelEnabled ProjectMembers.Slack team $ for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
-  ProjectMembers.whenChannelEnabled ProjectMembers.Discord team $ for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
-  ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert projectId projectTitle team.phone_numbers
-  ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
+  void
+    $ fanOutToTeam team Fanout{threads = Nothing, email = Just FanoutEmail{recipients = map CI.original emails, subject = subj, body = renderedBody}} alert projectId projectTitle monitorUrl
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -5022,7 +5074,7 @@ detectErrorSpikes pid = do
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
-              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId (errRate.slackThreadTs, errRate.discordMessageId)
+              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId ThreadRefs{slackTs = errRate.slackThreadTs, discordMsgId = errRate.discordMessageId}
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           _ ->
             -- No spike (or drop): de-escalate if currently escalating
@@ -5042,23 +5094,19 @@ createAndNotifyErrorIssue
   -> ErrorPatterns.ATError
   -> (Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
   -> ErrorPatterns.ErrorPatternId
-  -> (Maybe Text, Maybe Text)
+  -> ThreadRefs
   -> ATBackgroundCtx ()
-createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId (existSlackTs, existDiscordId) = do
+createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId existingRefs = do
   authCtx <- ask @Config.AuthContext
   now <- Time.currentTime
   Issues.insertIssue issue
   enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
   whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
     users <- Projects.usersByProjectId pid
-    let fromTime = addUTCTime (-(15 * 60)) now
-    chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
-    let firstSeenTextM = Just $ firstSeenLine now errorData.when
-        alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
-        errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
+    (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title runtimeAlertType errorData errorData.when Nothing Nothing
+    let errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
         (subj, html) = emailFn project.title (projectUrl authCtx pid) errorsUrl [errorData] chartUrlM Nothing Nothing
-    (finalSlackTs, finalDiscordMsgId, dispatched) <-
-      sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
+    (finalRefs, dispatched) <- sendAlertToChannels alert pid project users errorsUrl subj html existingRefs
     when dispatched
       $ void
-      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalRefs.slackTs finalRefs.discordMsgId now

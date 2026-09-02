@@ -198,7 +198,11 @@ alertUpsertPostH pid form = do
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
   let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
-      queryMonitor = maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
+      -- The form has no active/inactive control, and convertToQueryMonitor defaults
+      -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
+      -- monitor here would silently re-activate it.
+      withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
+      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
