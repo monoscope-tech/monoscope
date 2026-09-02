@@ -169,7 +169,7 @@ tabs:
           SELECT
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
             COUNT(*)::text as count,
-            ROUND((COUNT(*) * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ()))::numeric, 1)::text as pct,
+            ROUND((COUNT(*)::float * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ())::float)::numeric, 1)::float::text as pct,
             ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'

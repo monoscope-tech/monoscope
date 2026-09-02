@@ -670,9 +670,9 @@ otelRecordByProjectAndId useTf pid createdAt rdId =
 -- can't drift out of sync.
 otelSpanColsSql :: HI.Sql
 otelSpanColsSql =
-  -- NB: no COALESCE(hashes, '{}') — DataFusion can't coerce a Utf8 literal to
-  -- List(Utf8View), which 500s every TF-routed lookup. NULL (legacy PG rows)
-  -- is absorbed by the Maybe on the 'hashes' field instead.
+  -- NB: no COALESCE(hashes, '{}'). The 500 that ruled it out is fixed (TF
+  -- @monoscope_query_shapes.slt@ §14), but the Maybe on 'hashes' already absorbs
+  -- NULL from legacy PG rows, so adding it back would buy nothing.
   --
   -- 'date' fills the partition column position. On PG it's TIMESTAMPTZ, but on
   -- TF it's the Date32 Hive partition key, and DataFusion's date::timestamptz

@@ -104,12 +104,10 @@ memPctOfLimit r = ratio r.memBytes r.memLimit
 --
 -- Never a @LIKE 'container.%'@: kubeletstats' @container.memory.usage@ is a strict prefix of
 -- docker_stats' @container.memory.usage.total@ and they mean different things. Naming both in
--- full is what makes it safe to read both. Never an
--- OR-chain either — TimeFusion miscomputes chained equality on its @Utf8View@ string columns
--- and silently returns a near-empty result, so this must lower to a single @IN@.
+-- full is what makes it safe to read both. Still a single @IN@ rather than an OR-chain, but
+-- now only because both stores prune on it — the wrong-rows bug is fixed (see 'ServiceGraph').
 -- These are compile-time constants, so rendering them into the statement rather than binding
--- them as a parameter carries no injection risk and keeps the predicate a plain @IN@ that both
--- stores can prune on.
+-- them as a parameter carries no injection risk.
 --
 -- >>> metricNameInList
 -- "('container.cpu.usage','container.cpu.utilization','container.memory.working_set','container.memory.usage.total','container.memory.usage','container.memory.usage.limit','k8s.container.cpu_limit','k8s.container.cpu_request','k8s.container.memory_limit','k8s.container.memory_request','k8s.container.restarts','k8s.container.ready','k8s.pod.cpu.usage','k8s.pod.memory.working_set','k8s.pod.memory.usage','system.cpu.utilization','system.memory.usage','system.cpu.load_average.1m','system.filesystem.utilization','system.uptime')"

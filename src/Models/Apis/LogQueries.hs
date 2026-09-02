@@ -721,7 +721,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
       -- Ordered-set aggregate: valid on both backends (PG ordered-set aggregate;
       -- DataFusion supports array_agg + ORDER BY + FILTER) and measured fastest
       -- (PG: 0.6s vs 1.9s for a row_number window equivalent; TF: equal, 7.0s).
-      -- FIRST_VALUE is a window function and errors without OVER on both.
+      -- FIRST_VALUE errors without OVER on Postgres only; DataFusion answers it
+      -- as a real aggregate (TF @monoscope_query_shapes.slt@ §16). One statement
+      -- serves both stores, so the array spelling stays.
       firstObservedSql =
         [HI.sql|
         (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,

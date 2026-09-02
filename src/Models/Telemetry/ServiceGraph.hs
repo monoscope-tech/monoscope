@@ -626,8 +626,10 @@ projectsWithSpansInRange useTf lo hi =
 -- place the expensive self-join runs, and it runs once per project per slice rather than
 -- once per page view.
 --
--- @kind IN (…)@ rather than an OR-of-equalities: TimeFusion's Utf8View OR predicate returns
--- wrong rows, and @kind@ is raw-indexed so @IN@ routes through the index.
+-- @kind IN (…)@ rather than an OR-of-equalities. The wrong-rows bug behind that is fixed
+-- (TimeFusion @e0bf291@; its @monoscope_query_shapes.slt@ §11b asserts the two agree), so
+-- @IN@ is now a speed choice — @kind@ is raw-indexed and @IN@ routes through the index.
+-- Changing it wants a measurement.
 --
 -- Every column @sp@ projects is aliased, including the ones whose base name would do. @sp@
 -- is self-joined, and DataFusion cannot resolve @c.kind@\/@p.kind@ when both sides carry the
