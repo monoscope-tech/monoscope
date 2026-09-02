@@ -173,11 +173,21 @@ spec = sequential $ aroundAll withTestResources do
       detailHtml `shouldNotContain` "Metric attributes"
       detailHtml `shouldContain` "resource.service.name"
       detailHtml `shouldContain` "Group chart by resource.service.name"
-      detailHtml `shouldContain` "cpu.limit"
-      detailHtml `shouldContain` "Same cpu namespace"
+      -- Related metrics are no longer rendered inline: ranking them needs the whole
+      -- catalogue, so the tab hx-gets them when it is first opened. Assert the deferral
+      -- here and the content itself against 'metricRelatedGetH'.
+      detailHtml `shouldContain` "id=\"metric-related-content\""
+      detailHtml `shouldNotContain` "Same cpu namespace"
+      (_, related) <- toServantResponse tr $ TelemetryPage.metricRelatedGetH mpid "cpu.usage" Nothing
+      let relatedHtml = toString $ Lucid.renderText related
+      relatedHtml `shouldContain` "cpu.limit"
+      relatedHtml `shouldContain` "Same cpu namespace"
       (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let dataPointsHtml = toString $ Lucid.renderText $ Lucid.toHtml dataPoints
-      dataPointsHtml `shouldContain` "tab=datapoints&amp;expand=cpu.usage"
+      -- The link carries the cursor as well as the metric, so a reload from a deep page
+      -- comes back to that page: `…&tab=datapoints&…&cursor=N&expand=<metric>`.
+      dataPointsHtml `shouldContain` "&amp;expand=cpu.usage"
+      dataPointsHtml `shouldContain` "tab=datapoints"
       -- The metric name is a real <a href> carrying hx-get, so Enter activates it the way
       -- the browser already activates any anchor: keydown fires a click, htmx handles it
       -- and preventDefaults the navigation. This used to also carry

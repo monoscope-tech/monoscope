@@ -108,7 +108,10 @@ spec = do
       (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
       firstHtml `shouldSatisfy` not . T.isInfixOf "page.metric.30"
-      firstHtml `shouldSatisfy` T.isInfixOf "&cursor=1"
+      -- `&amp;`, not `&`: this is the pager's rendered href, and Lucid escapes the
+      -- separator. The closing quote pins it to the next-page link rather than matching
+      -- the per-row `…&cursor=0&expand=…` hrefs.
+      firstHtml `shouldSatisfy` T.isInfixOf "&amp;cursor=1\""
 
       (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml secondPage) `shouldSatisfy` T.isInfixOf "page.metric.30"

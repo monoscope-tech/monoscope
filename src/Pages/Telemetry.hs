@@ -937,6 +937,15 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
                             , -- Carries the cursor, so a middle-click or reload from a deep
                               -- page lands back on that page rather than at the top.
                               href_ $ metricPageUrl r.fullPath
+                            , -- A real href, so middle-click and ⌘-click open a tab and the
+                              -- keyboard activates it like any anchor. A plain click is ours:
+                              -- the drawer loads over the current page, and pushState puts the
+                              -- metric in the URL so reload and Back agree with what is open.
+                              [__|on click
+      if not event.metaKey and not event.ctrlKey and not event.shiftKey and not event.altKey
+        call event.preventDefault()
+        call history.pushState({}, '', my.href)
+      end|]
                             ]
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
