@@ -131,3 +131,15 @@ spec = sequential $ aroundAll withTestResources do
 
       victims <- runQueryEffect tr $ queryMonitorsAll otherPid
       map (.id) victims `shouldBe` [QueryMonitorId otherMonId]
+
+    -- The upsert form has no active/inactive control and convertToQueryMonitor defaults
+    -- deactivatedAt to Nothing, so once the column became writable, saving an edit here
+    -- would silently re-activate a monitor the user had deactivated.
+    it "alertUpsertPost_onDeactivatedMonitor_staysDeactivated" \tr -> do
+      _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
+      deactivated <- runQueryEffect tr $ monitorDeactivateByIds testPid [QueryMonitorId alertId]
+      deactivated `shouldBe` 1
+      _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm{Alerts.title = "Renamed while deactivated"}
+      saved <- runQueryEffect tr $ queryMonitorById (QueryMonitorId alertId)
+      (saved >>= (.deactivatedAt)) `shouldSatisfy` isJust
+      fmap (.alertConfig.title) saved `shouldBe` Just "Renamed while deactivated"

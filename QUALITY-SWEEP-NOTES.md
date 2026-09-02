@@ -50,6 +50,21 @@ hand-roll one.
    absent from the enumeration documented at `:1914`. `digestReason` is a `Text` with its
    values in a comment; it wants a 4-constructor sum type.
 
+4. **`active` is DB-inert on monitor create/PUT/PATCH** — `Models/Apis/Monitors.hs:138-164`.
+   `queryMonitorUpsert` omits `deactivated_at` from both the INSERT column list and the
+   `ON CONFLICT DO UPDATE SET`. `monitorFromInput` (`ApiHandlers.hs:236`) computes
+   `deactivatedAt` from `inp.active`, and `saveMonitor` returns that in-memory record
+   rather than a re-read — so the API answers "disabled" while the row stays live and
+   keeps firing alerts. Only `monitorToggleActiveById`/`monitorReactivateByIds` ever
+   write the column. Guards added in `Web/ApiV1Spec.hs` assert against a re-read, not
+   against the handler's return value. **Fix in progress.**
+5. **`apiMonitorPatch` never recomputes `logQueryAsSql`** — `ApiHandlers.hs:333-351`.
+   Patching `query` or `time_window_mins` updates `log_query` but leaves the compiled SQL
+   that actually drives alert evaluation stale. `apiMonitorUpdate`/`apiMonitorApply` do
+   recompute it via `monitorFromInput`. Not yet fixed — it is a behavior change needing
+   its own test, and PATCH-through-`saveMonitor` would also reset `last_evaluated` and
+   `deactivated_at`, so the deltas must be pinned deliberately.
+
 ## Hazards (zero lines, real risk)
 
 - **`instance Eq ZonedTime where (==) _ _ = True`** — `Pkg/TestUtils.hs:496-499`. An orphan

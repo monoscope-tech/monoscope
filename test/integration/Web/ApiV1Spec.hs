@@ -229,6 +229,31 @@ spec = around withTestResources do
         NoContent <- runB $ ApiH.apiMonitorDelete testPid created.id
         pass
 
+      -- queryMonitorUpsert omitted deactivated_at from both the INSERT column list and
+      -- the ON CONFLICT SET, so `active` was DB-inert: the handler returned the record it
+      -- had built (showing the monitor disabled) while the row stayed live and kept firing.
+      -- Assert against a re-read, never against the handler's own return value.
+      it "monitorCreate_activeFalse_persistsDeactivatedAt" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input = (def :: ApiT.MonitorInput){ApiT.title = "inactive-on-create", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just False}
+        created <- runB $ ApiH.apiMonitorCreate testPid input
+        created.deactivatedAt `shouldSatisfy` isJust
+        stored <- runQueryEffect tr $ Monitors.queryMonitorById created.id
+        (stored >>= (.deactivatedAt)) `shouldSatisfy` isJust
+
+      it "monitorUpdate_activeToggle_persistsDeactivatedAt" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input act = (def :: ApiT.MonitorInput){ApiT.title = "toggle-active", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just act}
+        created <- runB $ ApiH.apiMonitorCreate testPid (input True)
+        void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input False)
+        disabled <- runQueryEffect tr $ Monitors.queryMonitorById created.id
+        (disabled >>= (.deactivatedAt)) `shouldSatisfy` isJust
+        void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input True)
+        reenabled <- runQueryEffect tr $ Monitors.queryMonitorById created.id
+        (reenabled >>= (.deactivatedAt)) `shouldBe` Nothing
+
       it "bulk delete marks monitors as deleted" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
