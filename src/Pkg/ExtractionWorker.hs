@@ -38,7 +38,6 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.Drain qualified as Drain
 import Pkg.SchemaLearning.Hot qualified as SchemaLearning
 import Relude
-import Relude.Extra.Enum (next, prev)
 import UnliftIO (tryAny)
 
 
@@ -176,7 +175,7 @@ submitBatch st batch = do
         then pure False
         else do
           writeTBQueue shard.ingressQ batch
-          modifyTVar' shard.queueDepth next
+          modifyTVar' shard.queueDepth (+ 1)
           pure True
 
 
@@ -200,7 +199,7 @@ runShardWorker
 runShardWorker logWarn processor shard = forever do
   batch <- atomically do
     b <- readTBQueue shard.ingressQ
-    modifyTVar' shard.queueDepth prev
+    modifyTVar' shard.queueDepth (subtract 1)
     pure b
   tryAny (processor batch shard) >>= \case
     Right () -> pass
@@ -251,17 +250,21 @@ appendBufferedSpans shard pid flushBatchSize now droppedCounter incoming = do
     unless ok $ atomicModifyIORef' droppedCounter \n -> (n + 1, ())
 
 
+-- | Evict every buffer matching `p` across all shards into their drainFlushQ.
+flushBuffersWhere :: WorkerState s -> (ServiceBuffer -> Bool) -> UTCTime -> IO ()
+flushBuffersWhere st p now =
+  V.forM_ st.shards \shard -> do
+    evicted <- atomicModifyIORef' shard.drainBuffers \bufs ->
+      let hit = HM.filter p bufs in (HM.difference bufs hit, hit)
+    for_ (HM.toList evicted) \((pid, svcName), sb) -> do
+      ok <- enqueueFlush shard pid svcName sb now
+      unless ok $ atomicModifyIORef' st.droppedFlushTasks \n -> (n + 1, ())
+
+
 -- | Evict buffers older than `maxAgeSecs` into drainFlushQ.
 collectAgedFlushes :: WorkerState s -> Int -> UTCTime -> IO ()
 collectAgedFlushes st maxAgeSecs now =
-  V.forM_ st.shards \shard -> do
-    let threshold = fromIntegral maxAgeSecs :: NominalDiffTime
-    aged <- atomicModifyIORef' shard.drainBuffers \bufs ->
-      let stale = HM.filter (\sb -> diffUTCTime now sb.oldestAt >= threshold) bufs
-       in (HM.difference bufs stale, stale)
-    for_ (HM.toList aged) \((pid, svcName), sb) -> do
-      ok <- enqueueFlush shard pid svcName sb now
-      unless ok $ atomicModifyIORef' st.droppedFlushTasks \n -> (n + 1, ())
+  flushBuffersWhere st (\sb -> diffUTCTime now sb.oldestAt >= fromIntegral @Int @NominalDiffTime maxAgeSecs) now
 
 
 -- | Force-flush largest buffers until total spans are under `maxSpans`.
@@ -310,12 +313,7 @@ evictStaleTrees st maxTrees now = do
 -- | Force-flush every drain buffer across all shards into their drainFlushQ.
 -- Used during graceful shutdown so buffered spans get pattern-tagged before exit.
 forceFlushAllBuffers :: WorkerState s -> UTCTime -> IO ()
-forceFlushAllBuffers st now =
-  V.forM_ st.shards \shard -> do
-    all' <- atomicModifyIORef' shard.drainBuffers \bufs -> (HM.empty, HM.toList bufs)
-    for_ all' \((pid, svcName), sb) -> do
-      ok <- enqueueFlush shard pid svcName sb now
-      unless ok $ atomicModifyIORef' st.droppedFlushTasks \n -> (n + 1, ())
+forceFlushAllBuffers st = flushBuffersWhere st (const True)
 
 
 -- | Non-blocking enqueue of a buffer into its shard's drainFlushQ.

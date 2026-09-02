@@ -40,12 +40,14 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Anomalies (AnomalyTypes)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
@@ -370,8 +372,7 @@ vacuumUnreferencedTemplates =
 -- @apis.endpoints@ (see migration 0092).
 data AnomalyInsertRow = AnomalyInsertRow
   { projectId :: !Projects.ProjectId
-  , anomalyType :: !Text
-  -- ^ matches @apis.anomaly_type@: "endpoint" | "shape" | "field" | "format"
+  , anomalyType :: !AnomalyTypes
   , targetHash :: !Text
   , method :: !(Maybe Text)
   , host :: !(Maybe Text)
@@ -382,9 +383,9 @@ data AnomalyInsertRow = AnomalyInsertRow
 
 
 -- | Of the given @(project_id, endpoint_hash)@ pairs, return those already
--- present in @apis.endpoints@ /and at least 5 minutes old/. Used by the
--- schema-learning flush to skip emitting "new endpoint" anomalies for
--- endpoints the project already knows about.
+-- present in @apis.endpoints@ /and at least 5 minutes old/. Used by
+-- @BackgroundJobs.processAPIChangeAnomalies@ to gate the "new endpoint"
+-- notification — the issue is always created, only the send is suppressed.
 --
 -- Endpoint newness is owned by @apis.endpoints@ (the canonical registry),
 -- not the in-memory schema catalog (which is empty for fresh projects and
@@ -429,7 +430,7 @@ insertAnomalies rows =
              ON CONFLICT (project_id, target_hash) DO NOTHING |]
   where
     pids = V.map (.projectId) rows
-    atypes = V.map (.anomalyType) rows
+    atypes = V.map (display . (.anomalyType)) rows
     ths = V.map (.targetHash) rows
     methods = V.map (.method) rows
     hosts = V.map (.host) rows
@@ -444,7 +445,7 @@ enqueueAnomalyJobs :: DB es => V.Vector AnomalyInsertRow -> Eff es ()
 enqueueAnomalyJobs rows | V.null rows = pass
 enqueueAnomalyJobs rows = do
   let groups :: HM.HashMap (Projects.ProjectId, Text) [Text]
-      groups = HM.fromListWith (<>) [((r.projectId, r.anomalyType), [r.targetHash]) | r <- V.toList rows]
+      groups = HM.fromListWith (<>) [((r.projectId, display r.anomalyType), [r.targetHash]) | r <- V.toList rows]
   forM_ (HM.toList groups) \((pid, atype), ths) -> do
     let payload = V.fromList ths
     Hasql.interpExecute_

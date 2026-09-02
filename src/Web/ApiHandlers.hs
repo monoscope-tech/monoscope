@@ -544,7 +544,7 @@ apiDashboardApply pid doc = do
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
   case existingM of
     Just existing -> do
-      _ <- Dashboards.updateSchemaAndUpdatedAt existing.id doc.schema now
+      _ <- Dashboards.updateSchema existing.id doc.schema (Just now)
       _ <- Dashboards.updateTitle existing.id newTitle
       whenJust doc.tags (void . Dashboards.updateTags existing.id . V.fromList)
       apiDashboardGet pid existing.id
@@ -563,13 +563,13 @@ apiDashboardPatch pid did patch = do
   _ <- apiDashboardGet pid did
   now <- Time.currentTime
   whenJust patch.title $ void . Dashboards.updateTitle did
-  whenJust patch.schema $ \s -> void $ Dashboards.updateSchemaAndUpdatedAt did s now
+  whenJust patch.schema $ \s -> void $ Dashboards.updateSchema did s (Just now)
   whenJust patch.tags $ void . Dashboards.updateTags did . V.fromList
   apiDashboardGet pid did
 
 
 apiDashboardDelete :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx NoContent
-apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.deleteDashboard did)
+apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.deleteDashboardsByIds pid (V.singleton did))
 
 
 apiDashboardDuplicate :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -609,7 +609,7 @@ withWidgets :: Projects.ProjectId -> Dashboards.DashboardId -> ([Widget.Widget] 
 withWidgets pid did f = do
   d <- apiDashboardGet pid did
   now <- Time.currentTime
-  void $ Dashboards.updateSchemaAndUpdatedAt did (fromMaybe def d.schema & #widgets %~ f) now
+  void $ Dashboards.updateSchema did (fromMaybe def d.schema & #widgets %~ f) (Just now)
 
 
 -- | Widget upsert: replace the widget (by id) within the dashboard schema.

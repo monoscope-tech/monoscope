@@ -15,8 +15,7 @@ module Models.Projects.Dashboards (
   getDashboardByFilePath,
   readDashboardsFromDirectory,
   readDashboardEndpoint,
-  replaceQueryVariables,
-  replaceConstantVariables,
+  replaceDashboardVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
   insert,
@@ -25,9 +24,7 @@ module Models.Projects.Dashboards (
   updateSchema,
   updateTitle,
   updateTags,
-  updateSchemaAndUpdatedAt,
   updateStarredSince,
-  deleteDashboard,
   getDashboardByBaseTemplate,
   autoProvisionedTemplates,
   markAutoProvisioned,
@@ -43,6 +40,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
+import Data.Generics.Product.Fields (HasField', field')
 import Data.List qualified as L (isSuffixOf, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -217,14 +215,14 @@ readDashboardEndpoint uri = do
     $ Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
 
 
-replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
-replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
-  where
-    replace = replacePlaceholders (variablePresets def pid.toText mf mt allParams currentTime)
-
-
-replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
-replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
+-- | Substitute the dashboard variable presets into whichever of @sql@ / @query@ a
+-- 'Variable' or a 'Constant' carries. One function over both, because the two shapes
+-- differ only in the fields they do /not/ share.
+replaceDashboardVariables
+  :: (HasField' "query" a (Maybe Text), HasField' "sql" a (Maybe SecuredSql))
+  => Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> a -> a
+replaceDashboardVariables pid mf mt allParams currentTime x =
+  x & field' @"sql" . _Just . #statement %~ replace & field' @"query" . _Just %~ replace
   where
     replace = replacePlaceholders (variablePresets def pid.toText mf mt allParams currentTime)
 
@@ -285,8 +283,15 @@ selectDashboardsSortedBy pid orderByParam =
     orderClause = fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
 
 
-updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
-updateSchema dashId dashboard = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
+-- | Replace a dashboard's schema, optionally stamping @updated_at@. In-page widget edits pass
+-- 'Nothing' so reordering a chart does not reshuffle the "recently updated" list; git sync and
+-- the API pass the sync clock.
+updateSchema :: DB es => DashboardId -> Dashboard -> Maybe UTCTime -> Eff es Int64
+updateSchema dashId dashboard updatedAt =
+  Hasql.interpExecute
+    $ [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} |]
+    <> foldMap (\t -> [HI.sql| , updated_at = #{t} |]) updatedAt
+    <> [HI.sql| WHERE id = #{dashId} |]
 
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
@@ -297,16 +302,8 @@ updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
 updateTags dashId tags = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
 
 
-updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
-updateSchemaAndUpdatedAt dashId dashboard updatedAt = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
-
-
 updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
 updateStarredSince dashId starredSince = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
-
-
-deleteDashboard :: DB es => DashboardId -> Eff es Int64
-deleteDashboard dashId = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)

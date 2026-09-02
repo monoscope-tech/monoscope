@@ -4400,7 +4400,7 @@ gitSyncFromRepo pid = do
                 Ki.atomically $ Ki.awaitAll scope
               -- Process deletes (no HTTP needed)
               forM_ deletes \(path, dashId) -> do
-                _ <- Dashboards.deleteDashboard dashId
+                _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
                 Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
               _ <- GitSync.updateLastRevision sync.id revision
               Log.logInfo "Completed git sync for project" pid
@@ -4439,7 +4439,7 @@ processGitSyncAction pid conn sync teamMap = \case
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
-      _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+      _ <- Dashboards.updateSchema dashId schema (Just now)
       whenJust schema.title $ void . Dashboards.updateTitle dashId
       _ <- Dashboards.updateTags dashId (V.fromList $ fold schema.tags)
       _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
