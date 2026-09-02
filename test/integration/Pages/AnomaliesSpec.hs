@@ -296,6 +296,45 @@ spec = sequential $ aroundAll withTestResources do
         (testPid, prefix <> ":anom")
         >>= (`shouldBe` 1)
 
+    -- Regression: archiveAnomaliesAndIssues took no project at all. The issue ids come off a
+    -- bulk-action form, so any tenant could archive any issue by id; and the anomaly cascade
+    -- matched on a content-derived target_hash, which collides across tenants.
+    it "archiveAnomaliesAndIssues_crossTenant_archivesOnlyTheCallersProject" \tr -> do
+      runTestBg frozenTime tr pass
+      let sharedHash = "arch-shared-hash-01" :: Text
+          insertIssue conn iid pid =
+            void
+              $ PGS.execute
+                conn
+                [sql| INSERT INTO apis.issues
+                        (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                         severity, critical, affected_requests, affected_clients,
+                         issue_data, created_at, updated_at)
+                      VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                              false, 1, 1, jsonb_build_object('anomaly_hashes', jsonb_build_array(?::text)), ?, ?) |]
+                (iid, pid, sharedHash, sharedHash, sharedHash, frozenTime, frozenTime)
+      ownIid <- UUIDId <$> UUID.nextRandom
+      otherPid <- UUIDId <$> UUID.nextRandom
+      otherIid <- UUIDId <$> UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql| INSERT INTO projects.projects (id, title, description, active) VALUES (?, 'other-arch', '', true) ON CONFLICT DO NOTHING |] (Only otherPid)
+        insertIssue conn ownIid testPid
+        insertIssue conn otherIid otherPid
+        forM_ [testPid, otherPid] \p ->
+          PGS.execute conn [sql| INSERT INTO apis.anomalies (project_id, target_hash) VALUES (?, ?) ON CONFLICT DO NOTHING |] (p, sharedHash)
+
+      -- Both ids submitted together, exactly as a tampered bulk form would.
+      void
+        $ runTestBg frozenTime tr
+        $ Anomalies.archiveAnomaliesAndIssues testPid (V.fromList $ DataUUID.toText . (.unUUIDId) <$> [ownIid, otherIid])
+
+      let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
+          archivedAnomaly p = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.anomalies WHERE project_id=? AND target_hash=? AND archived_at IS NOT NULL |] (p, sharedHash)
+      archivedIssue ownIid >>= (`shouldBe` 1)
+      archivedAnomaly testPid >>= (`shouldBe` 1)
+      archivedIssue otherIid >>= (`shouldBe` 0)
+      archivedAnomaly otherPid >>= (`shouldBe` 0)
+
     -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
     -- a valid superset while the target is at least that wide. A shorter one must fall back to
     -- the plain LIKE rather than silently matching nothing — this is the case where the fast

@@ -126,7 +126,7 @@ acknowledgeAnomalyGetH pid enable aid durationM = do
         pure $ Just until'
       else do
         void $ Issues.setAckState pid [issueId] Nothing
-        void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+        void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where project_id=#{pid} and id=#{aid} |]
         Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
         addSuccessToast "Back in the Inbox \x2014 notifications resumed" Nothing
         pure Nothing
@@ -139,8 +139,8 @@ archiveAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> ATAut
 archiveAnomalyGetH pid enable aid = do
   (sess, _) <- Projects.sessionAndProject pid
   archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
-  void $ Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
-  void $ Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
+  void $ Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where project_id=#{pid} and id=#{aid} |]
+  void $ Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where project_id=#{pid} and id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
   addSuccessToast (bool "Restored to the Inbox" "Archived \x2014 notifications stopped" enable) Nothing
   addTriggerEvent "issuesListChanged" AE.Null
@@ -185,7 +185,7 @@ anomalyBulkActionsPostH pid action durationM items = do
           void $ Issues.setAckState pid issueIds Nothing
           pure (Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         "archive" -> do
-          void $ Anomalies.archiveAnomaliesAndIssues vIds
+          void $ Anomalies.archiveAnomaliesAndIssues pid vIds
           pure (Issues.IEArchived, "Archived \x2014 notifications stopped")
         "unarchive" -> do
           void $ Issues.setArchiveState pid issueIds Nothing
