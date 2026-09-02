@@ -306,7 +306,7 @@ spec = sequential $ aroundAll withTestResources do
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
           -- Get all team IDs (not handles - the field name is misleading)
           let selectedTeams = V.filter (\t -> t.handle /= "broo") teams'
-          let teamIds = V.toList $ V.map (\t -> t.id) selectedTeams
+          let teamIds = V.toList $ V.map (\t -> t.id.unwrap) selectedTeams
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
@@ -324,7 +324,7 @@ spec = sequential $ aroundAll withTestResources do
                         -- Should have 3 teams: hello, hii, and @everyone
                         length db.teams `shouldBe` 3
                         -- Get team handles for assertions
-                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id == tid) teams' <&> (.handle)) (V.toList db.teams)
+                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id.unwrap == tid) teams' <&> (.handle)) (V.toList db.teams)
                         -- Verify required teams are present and broo is excluded
                         all (`elem` dbTeamHandles) ["hello", "hii", "everyone"] `shouldBe` True
                         dbTeamHandles `shouldSatisfy` notElem "broo"

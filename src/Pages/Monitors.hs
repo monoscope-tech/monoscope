@@ -60,6 +60,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -315,7 +316,7 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
       teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
-      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
+      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id.unwrap == tId) allTeams
       existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
@@ -548,7 +549,7 @@ bulkActionsFor filterType pid =
 
 
 buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map UUID.UUID Text)
-buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
+buildTeamMap pid = Map.fromList . map (\t -> (t.id.unwrap, t.handle)) <$> ManageMembers.getTeams pid
 
 
 monitorActionH :: (Projects.ProjectId -> [Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
@@ -660,7 +661,7 @@ unifiedMonitorOverviewH pid monitorId = do
     Just alert -> do
       (teams, (slackDataM, discordDataM)) <-
         concurrently
-          (ManageMembers.getTeamsById pid alert.teams)
+          (ManageMembers.getTeamsById pid (coerce alert.teams))
           (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       (channels, discordChannels) <-
         concurrently
@@ -831,7 +832,7 @@ alertNotificationsTab_ alert teams = do
               , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
               , Aria.label_ $ "Remove " <> team.name <> " team"
               , term "data-tippy-content" "Remove team"
-              , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
+              , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> team.id.toText
               , hxTarget_ $ "#" <> team.handle
               , hxSwap_ "outerHTML"
               ]

@@ -162,7 +162,7 @@ syncDashboardFileInfo :: (DB es, Time.Time :> es) => Dashboards.DashboardId -> E
 syncDashboardFileInfo dashId = do
   dashM <- Dashboards.getDashboardByIdUnscoped dashId
   forM_ dashM \dash -> when (isJust dash.schema) do
-    teams <- ManageMembers.getTeamsById dash.projectId dash.teams
+    teams <- ManageMembers.getTeamsById dash.projectId (coerce dash.teams)
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
         filePath = dashFilePath (folderFromPath dash.filePath) dash.title
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
@@ -1651,7 +1651,7 @@ dashboardsGet_ dg = do
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
-    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id.unwrap == xx) dg.teams) (V.toList x.teams)
         getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
         getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dg.dashTemplates dash)
         noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
@@ -2066,7 +2066,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList $ coerce teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else
@@ -2541,7 +2541,7 @@ dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (
 dashboardYamlGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
-  teams <- ManageMembers.getTeamsById pid dashVM.teams
+  teams <- ManageMembers.getTeamsById pid (coerce dashVM.teams)
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
       yamlText = decodeUtf8 $ GitSync.dashboardToYaml schema
   addRespHeaders $ yamlEditorContent_ yamlText

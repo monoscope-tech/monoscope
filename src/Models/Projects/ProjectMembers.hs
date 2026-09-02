@@ -5,6 +5,8 @@ module Models.Projects.ProjectMembers (
   ProjectMemberVM (..),
   ProjectMemberWithStatusVM (..),
   Permissions (..),
+  TeamId,
+  ProjectMemberId,
   selectActiveProjectMembers,
   getActiveProjectMemberByUserId,
   selectAllProjectMembers,
@@ -52,7 +54,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToSchema)
 import Data.Text.Display (Display, display)
 import Data.Time (UTCTime, ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (
   CamelToSnake,
@@ -73,11 +74,18 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData)
 import System.Logging qualified as Log
 import System.Types (DB)
+
+
+-- | Typed ids for the two tables this module owns.
+type TeamId = UUIDId "team"
+
+
+type ProjectMemberId = UUIDId "project_member"
 
 
 data Permissions
@@ -94,7 +102,7 @@ instance HI.DecodeRow Permissions where
 
 
 data ProjectMembers = ProjectMembers
-  { id :: UUID.UUID
+  { id :: ProjectMemberId
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
   , deletedAt :: Maybe ZonedTime
@@ -155,7 +163,7 @@ insertProjectMembers members = do
 
 
 data ProjectMemberVM = ProjectMemberVM
-  { id :: UUID.UUID
+  { id :: ProjectMemberId
   , userId :: Projects.UserId
   , permission :: Permissions
   , email :: CI Text
@@ -191,7 +199,7 @@ getUserPermission pid uid =
            WHERE project_id = #{pid} AND user_id = #{uid} AND active = TRUE |]
 
 
-updateProjectMembersPermissons :: DB es => [(UUID.UUID, Permissions)] -> Eff es ()
+updateProjectMembersPermissons :: DB es => [(ProjectMemberId, Permissions)] -> Eff es ()
 updateProjectMembersPermissons [] = pass
 updateProjectMembersPermissons vals =
   Hasql.interpExecute_
@@ -206,7 +214,7 @@ updateProjectMembersPermissons vals =
 -- | Soft-delete members and strip their emails from the matching @everyone
 -- notify_emails — the list is the authoritative audience, so leaving stale
 -- addresses would keep paging ex-members.
-softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty UUID.UUID -> Eff es ()
+softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty ProjectMemberId -> Eff es ()
 softDeleteProjectMembers ids = do
   now <- Time.currentTime
   Hasql.interpExecute_
@@ -253,7 +261,7 @@ activateAllMembers pid = Hasql.interpExecute [HI.sql| UPDATE projects.project_me
 
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
-  { id :: UUID.UUID
+  { id :: ProjectMemberId
   , userId :: Projects.UserId
   , permission :: Permissions
   , email :: CI Text
@@ -288,7 +296,7 @@ data TeamDetails = TeamDetails
   deriving stock (Eq, Generic, Show)
 
 
-createTeam :: DB es => Projects.ProjectId -> Maybe Projects.UserId -> TeamDetails -> Eff es (Maybe UUID.UUID)
+createTeam :: DB es => Projects.ProjectId -> Maybe Projects.UserId -> TeamDetails -> Eff es (Maybe TeamId)
 createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels}
   | handle == "everyone" = pure Nothing -- Prevent creating team with reserved handle
   | otherwise =
@@ -316,7 +324,7 @@ getEveryoneTeam pid =
     (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL |])
 
 
-updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
+updateTeam :: DB es => Projects.ProjectId -> TeamId -> TeamDetails -> Eff es Int64
 updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels} =
   Hasql.interpExecute
     [HI.sql| UPDATE projects.teams
@@ -325,7 +333,7 @@ updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails,
 
 
 data Team = Team
-  { id :: UUID.UUID
+  { id :: TeamId
   , name :: Text
   , description :: Text
   , handle :: Text
@@ -399,7 +407,7 @@ getTeamsVM pid = Hasql.interp $ teamsVMQuery [HI.sql| t.project_id = #{pid} |]
 
 
 data TeamVM = TeamVM
-  { id :: UUID.UUID
+  { id :: TeamId
   , created_at :: UTCTime
   , updated_at :: UTCTime
   , created_by :: Maybe Projects.UserId
@@ -420,7 +428,7 @@ data TeamVM = TeamVM
 
 
 data TeamMemberVM = TeamMemberVM
-  { memberId :: UUID.UUID
+  { memberId :: Projects.UserId
   , memberEmail :: Text
   , memberName :: Text
   , memberAvatar :: Text
@@ -435,7 +443,7 @@ getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
 getTeamByHandle pid handle = listToMaybe <$> getTeamsByHandles pid [handle]
 
 
-deleteTeams :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
+deleteTeams :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector TeamId -> Eff es ()
 deleteTeams pid tids
   | V.null tids = pass
   | otherwise = do
@@ -444,13 +452,13 @@ deleteTeams pid tids
         [HI.sql| UPDATE projects.teams SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND is_everyone = FALSE |]
 
 
-getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
+getTeamsById :: DB es => Projects.ProjectId -> V.Vector TeamId -> Eff es [Team]
 getTeamsById pid tids
   | V.null tids = pure []
   | otherwise = Hasql.interp (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
 
 
-getTeamById :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe Team)
+getTeamById :: DB es => Projects.ProjectId -> TeamId -> Eff es (Maybe Team)
 getTeamById pid tid =
   Hasql.interpOne
     (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = #{tid} AND deleted_at IS NULL |])

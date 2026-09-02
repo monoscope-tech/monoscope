@@ -103,7 +103,7 @@ snippetCacheSpec = around withTestResources do
   describe "Frame source caching" do
     it "fetches a blob once however many frames ask for it" \tr -> do
       let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-      _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "checkout-service" "main" "ghp_test" Nothing ""
+      _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "checkout-service" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
       _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just ""))
 
       calls <- newIORef (0 :: Int)
@@ -170,7 +170,7 @@ spec = do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         -- The config-sync repo. It is the project's monoscope YAML, NOT where the services live —
         -- the whole point of 0124 is that these are different repositories.
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" "ghp_test" Nothing ""
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
 
         let add repo svc prefix root =
               testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just repo) (Just "main") svc Nothing (Just prefix) (Just root))
@@ -213,7 +213,7 @@ spec = do
       -- the comment above 'codeContextCredential' always claimed was adopted.
       it "reads source from the sync repo's account, not the first one alphabetically" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "zzz-ours" "monoscope-config" "main" "ghp_test" Nothing ""
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "zzz-ours" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
         _ <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "aaa-stray" (Just 111) Nothing
         _ <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "zzz-ours" (Just 222) Nothing
 
@@ -225,7 +225,7 @@ spec = do
       -- the one thing they cannot be expected to retype is the path they were just looking at.
       it "carries the unmapped frame's path into the form" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" "ghp_test" Nothing ""
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
 
         (_, unmapped) <- testServant tr $ PageCodeContext.codeContextH testPid (Just "/srv/app/checkout.py") (Just 88) Nothing Nothing
         render unmapped `shouldSatisfy` T.isInfixOf "code-mappings?sample=/srv/app/checkout.py"

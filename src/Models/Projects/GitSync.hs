@@ -13,10 +13,7 @@ module Models.Projects.GitSync (
   getGitHubSyncDecrypted,
   getGitSyncByRepo,
   insertGitHubSync,
-  insertGitHubAppSync,
   updateGitHubSync,
-  updateGitHubSyncKeepToken,
-  updateGitHubSyncRepo,
   updateLastRevision,
   setAnnouncedRevision,
   clearAnnouncedRevision,
@@ -315,52 +312,39 @@ getGitSyncByRepo host owner repo =
     (selectFrom @GitHubSync <> [HI.sql| WHERE host = #{host} AND owner = #{owner} AND repo = #{repo} |])
 
 
--- | Insert a sync config authenticated by a token the user created — the only option on every
--- host except GitHub, and still available there.
-insertGitHubSync :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal token webhookSecretVal prefix = do
-  let encToken = encryptToken encKey token
+-- | Split the two auth states back into the two nullable columns that denote them. The sum
+-- type is what makes the row's @installation_id IS NOT NULL OR access_token IS NOT NULL@
+-- check hold by construction rather than by every caller remembering to fill one in.
+credColumns :: ByteString -> GitCreds -> (Maybe Int64, Maybe Text)
+credColumns encKey = \case
+  AppInstallation i -> (Just i, Nothing)
+  PersonalToken t -> (Nothing, Just (encryptToken encKey t))
+
+
+-- | Insert a sync config, authenticated either by a GitHub App installation or by a token the
+-- user created — the only option on every host except GitHub, and still available there.
+insertGitHubSync :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Text -> GitCreds -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
+insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal creds webhookSecretVal prefix = do
+  let (instM, tokenM) = credColumns encKey creds
   Hasql.interp
-    [HI.sql| INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, access_token, webhook_secret, path_prefix)
-             VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal}, #{branchVal}, #{encToken}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
+    [HI.sql| INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, installation_id, access_token, webhook_secret, path_prefix)
+             VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instM}, #{tokenM}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
 
 
--- | Insert a new GitHub sync config using GitHub App installation
-insertGitHubAppSync :: DB es => ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
-  Hasql.interp
-    [HI.sql| INSERT INTO projects.git_sync (project_id, owner, repo, branch, installation_id, path_prefix)
-           VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instId}, #{prefix}) RETURNING * |]
-
-
-updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled = do
+-- | Re-point a sync row at a repository. 'Nothing' keeps what is stored: a form that left the
+-- token box empty must not blank the credential, and the App path has no folder field to send.
+-- Saving always re-enables sync, matching the column default a fresh connection gets.
+updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe GitHubSync)
+updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
   now <- Time.currentTime
-  let encToken = encryptToken encKey token
   Hasql.interp
-    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, access_token = #{encToken}, sync_enabled = #{enabled}, updated_at = #{now}
+    [HI.sql| UPDATE projects.git_sync
+             SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
+               , access_token = COALESCE(#{encryptToken encKey <$> tokenM}, access_token)
+               , path_prefix = COALESCE(#{prefixM}, path_prefix)
              WHERE id = #{sid} RETURNING * |]
 
 
-updateGitHubSyncKeepToken :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled = do
-  now <- Time.currentTime
-  Hasql.interp
-    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = #{enabled}, updated_at = #{now}
-             WHERE id = #{sid} RETURNING * |]
-
-
--- | Update repo selection for GitHub App installation
-updateGitHubSyncRepo :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
-updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix = do
-  now <- Time.currentTime
-  Hasql.interp
-    [HI.sql| UPDATE projects.git_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, path_prefix = #{prefix}, updated_at = #{now}
-             WHERE id = #{sid} RETURNING * |]
-
-
--- | Remember the head commit we last synced to, so the next pull can tell "nothing changed"
--- from "everything was deleted".
 -- | Record a pull, and retire the announcement it satisfied.
 --
 -- Clearing the announcement only when it matches what was actually fetched is what stops a

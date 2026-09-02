@@ -27,7 +27,6 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
-import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Reader.Static (ask)
@@ -302,116 +301,74 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled prov
           faQ "What makes us better than others?" "Aside from the standard observability features like traces, logs, and metrics, Monoscope takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reporting, and payload-change detection — giving engineering teams all the information they need to seamlessly debug and fix issues in their servers."
 
 
--- Group is a tuple of (Group Name, List of languages in that group)
-integrationGroups :: [(Text, [(Text, Text, [(Text, Text, Text)])])]
+-- | One SDK guide: the framework's display name, its logo file, and the docs path proxied
+-- for it. @icon@ empty means the tab renders without a logo.
+data Framework = Framework {name :: Text, icon :: Text, docsPath :: Text}
+
+
+-- | A language/platform tile. @slug@ is load-bearing: it names the checkbox id the
+-- @group-has-[#check-SLUG:checked]@ classes and the @SLUG.svg@ tile logo are keyed on.
+data Language = Language {slug :: Text, label :: Text, frameworks :: [Framework]}
+
+
+data IntegrationGroup = IntegrationGroup {name :: Text, languages :: [Language]}
+
+
+integrationGroups :: [IntegrationGroup]
 integrationGroups =
-  [
-    ( "Applications"
-    ,
-      [
-        ( "js"
-        , "Javascript"
-        ,
-          [ ("ExpressJS", "express-icon.png", "nodejs/expressjs")
-          , ("AdonisJS", "adonis-icon.svg", "nodejs/adonisjs")
-          , ("Fastify", "fastify-icon.png", "nodejs/fastifyjs")
-          , ("NestJS", "nest-icon.png", "nodejs/nestjs")
-          , ("NextJS", "next-icon.svg", "nodejs/nextjs")
+  [ IntegrationGroup
+      "Applications"
+      [ Language
+          "js"
+          "Javascript"
+          [ Framework "ExpressJS" "express-icon.png" "nodejs/expressjs"
+          , Framework "AdonisJS" "adonis-icon.svg" "nodejs/adonisjs"
+          , Framework "Fastify" "fastify-icon.png" "nodejs/fastifyjs"
+          , Framework "NestJS" "nest-icon.png" "nodejs/nestjs"
+          , Framework "NextJS" "next-icon.svg" "nodejs/nextjs"
           ]
-        )
-      ,
-        ( "go"
-        , "Golang"
-        ,
-          [ ("Chi", "chi-logo.svg", "golang/chi")
-          , ("Echo", "echo-logo.png", "golang/echo")
-          , ("Fiber", "fiber-logo.svg", "golang/fiber")
-          , ("Gin", "gin-logo.png", "golang/gin")
-          , ("Gorilla Mux", "mux-logo.png", "golang/gorillamux")
-          , ("Native", "go-logo.svg", "golang/native")
+      , Language
+          "go"
+          "Golang"
+          [ Framework "Chi" "chi-logo.svg" "golang/chi"
+          , Framework "Echo" "echo-logo.png" "golang/echo"
+          , Framework "Fiber" "fiber-logo.svg" "golang/fiber"
+          , Framework "Gin" "gin-logo.png" "golang/gin"
+          , Framework "Gorilla Mux" "mux-logo.png" "golang/gorillamux"
+          , Framework "Native" "go-logo.svg" "golang/native"
           ]
-        )
-      ,
-        ( "py"
-        , "Python"
-        ,
-          [ ("Django", "django-icon.png", "python/django")
-          , ("FastAPI", "fastapi-icon.png", "python/fastapi")
-          , ("Flask", "flask-icon.png", "python/flask")
-          , ("Pyramid", "pyramid-icon.png", "python/pyramid")
+      , Language
+          "py"
+          "Python"
+          [ Framework "Django" "django-icon.png" "python/django"
+          , Framework "FastAPI" "fastapi-icon.png" "python/fastapi"
+          , Framework "Flask" "flask-icon.png" "python/flask"
+          , Framework "Pyramid" "pyramid-icon.png" "python/pyramid"
           ]
-        )
-      ,
-        ( "elixir"
-        , "Elixir"
-        , [("Phoenix", "phoenix-logo.png", "elixir/phoenix")]
-        )
-      ,
-        ( "php"
-        , "PHP"
-        ,
-          [ ("Laravel", "laravel-icon.png", "php/laravel")
-          , ("Slim", "slim-icon.png", "php/slim")
-          , ("Symfony", "symfony-icon.png", "php/symfony")
+      , Language "elixir" "Elixir" [Framework "Phoenix" "phoenix-logo.png" "elixir/phoenix"]
+      , Language
+          "php"
+          "PHP"
+          [ Framework "Laravel" "laravel-icon.png" "php/laravel"
+          , Framework "Slim" "slim-icon.png" "php/slim"
+          , Framework "Symfony" "symfony-icon.png" "php/symfony"
           ]
-        )
-      ,
-        ( "java"
-        , "Java"
-        , [("Spring Boot", "springboot-logo.svg", "java/springboot")]
-        )
-      ,
-        ( "cs"
-        , "C#"
-        , [(".Net Core", "netcore-logo.png", "dotnet/dotnetcore")]
-        )
+      , Language "java" "Java" [Framework "Spring Boot" "springboot-logo.svg" "java/springboot"]
+      , Language "cs" "C#" [Framework ".Net Core" "netcore-logo.png" "dotnet/dotnetcore"]
       ]
-    )
-  ,
-    ( "Infrastructure"
-    ,
-      [
-        ( "linux"
-        , "Linux"
-        , [("Linux", "linux.svg", "infrastructure/linux")]
-        )
-      ,
-        ( "docker"
-        , "Docker"
-        , [("Docker", "docker.svg", "infrastructure/docker")]
-        )
-      ,
-        ( "kubernetes"
-        , "Kubernetes"
-        , [("Kubernetes", "kubernetes.svg", "infrastructure/kubernetes")]
-        )
-      ,
-        ( "kafka"
-        , "Kafka"
-        , [("Kafka", "kafka.svg", "infrastructure/kafka")]
-        )
+  , IntegrationGroup
+      "Infrastructure"
+      [ Language "linux" "Linux" [Framework "Linux" "linux.svg" "infrastructure/linux"]
+      , Language "docker" "Docker" [Framework "Docker" "docker.svg" "infrastructure/docker"]
+      , Language "kubernetes" "Kubernetes" [Framework "Kubernetes" "kubernetes.svg" "infrastructure/kubernetes"]
+      , Language "kafka" "Kafka" [Framework "Kafka" "kafka.svg" "infrastructure/kafka"]
       ]
-    )
-  ,
-    ( "Databases"
-    ,
-      [
-        ( "postgresql"
-        , "PostgreSQL"
-        , [("PostgreSQL", "postgresql.svg", "databases/postgres")]
-        )
-      ,
-        ( "mongodb"
-        , "MongoDB"
-        , [("MongoDB", "mongodb.svg", "databases/mongodb")]
-        )
-      ,
-        ( "mysql"
-        , "MySQL"
-        , [("MySQL", "mysql.svg", "databases/mysql")]
-        )
+  , IntegrationGroup
+      "Databases"
+      [ Language "postgresql" "PostgreSQL" [Framework "PostgreSQL" "postgresql.svg" "databases/postgres"]
+      , Language "mongodb" "MongoDB" [Framework "MongoDB" "mongodb.svg" "databases/mongodb"]
+      , Language "mysql" "MySQL" [Framework "MySQL" "mysql.svg" "databases/mysql"]
       ]
-    )
   ]
 
 
@@ -440,14 +397,7 @@ integrationsPage pid apikey =
           div_ [class_ "mb-1.5 md:mb-2 text-textWeak text-sm"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 monospace bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
-            button_
-              [ class_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
-              , type_ "button"
-              , [__|on pointerdown call navigator.clipboard.writeText(#api-key-display's innerText) then put 'Copied!' into me|]
-              ]
-              do
-                span_ "Copy"
-                faSprite_ "copy" "regular" "h-4 w-4"
+            copyButton_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer" "h-4 w-4" "#api-key-display's innerText" []
 
         div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
@@ -459,11 +409,9 @@ integrationsPage pid apikey =
               "Use telemetrygen"
             " to send sample data in seconds"
 
-        forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-4 md:mb-6"] do
-          div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml groupName
-          div_ [class_ "grid grid-cols-2 gap-2"]
-            $ forM_ langsList \(lang, langName, _) ->
-              languageItem pid langName lang
+        forM_ integrationGroups \grp -> div_ [class_ "mb-4 md:mb-6"] do
+          div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml grp.name
+          div_ [class_ "grid grid-cols-2 gap-2"] $ forM_ grp.languages (languageItem pid)
 
         integrationCta_ pid "max-md:hidden flex items-center gap-4 py-8" "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center" "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer"
       integrationCta_ pid "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30" "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center" "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer"
@@ -480,69 +428,44 @@ integrationsPage pid apikey =
             span_ "Back to selection"
       div_ [class_ "md:h-full flex flex-col"] do
         div_ [class_ "w-full md:h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
-          div_ [class_ "max-md:hidden p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"] do
-            div_ [class_ "flex flex-col w-full items-center gap-8"] do
-              div_ [class_ "p-6 bg-fillWeak rounded-full"] do
-                faSprite_ "brackets-curly" "regular" "h-16 w-16 text-iconBrand"
+          div_ [class_ "max-md:hidden p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"]
+            $ emptyState_ def{icon = Just "brackets-curly", action = ESCustom walkthroughs} "👈 Select your stack on the left to begin" "You can also check out our youtube videos for more interactive walkthroughs."
 
-              h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
-              p_ [class_ "text-lg text-textWeak max-w-md leading-relaxed"] do
-                "You can also check out our youtube videos for more interactive walkthroughs."
-
-                div_ [class_ "grid grid-cols-2 gap-4 w-full"]
-                  $ forM_ ["Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v", "OALS4ckfOdI"] \vid ->
-                    div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"]
-                      $ iframe_
-                        [ class_ "absolute top-0 left-0 w-full h-full"
-                        , src_ $ "https://www.youtube.com/embed/" <> vid
-                        , title_ "YouTube video player"
-                        , term "frameborder" "0"
-                        , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        , term "referrerpolicy" "strict-origin-when-cross-origin"
-                        , term "allowfullscreen" ""
+          forM_ (concatMap (.languages) integrationGroups) \l ->
+            div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> l.slug <> ":checked]/pg:block", id_ $ l.slug <> "_main"] do
+              div_ [class_ "px-2 md:px-8 sticky top-0 z-10 bg-bgBase py-2"]
+                $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
+                $ forM_ (zip [0 :: Int ..] l.frameworks) \(idx, fw) ->
+                  label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> l.slug <> "-" <> show idx] do
+                    input_
+                      $ [ type_ "radio"
+                        , name_ $ "tab-" <> l.slug
+                        , id_ $ "fw-tab-" <> l.slug <> "-" <> show idx
+                        , class_ "hidden"
+                        , Aria.label_ fw.name
+                        , hxGet_ $ "/proxy/docs/sdks/" <> fw.docsPath
+                        , hxTarget_ $ "#fw-content-" <> l.slug
+                        , hxTrigger_ "change"
+                        , hxSwap_ "innerHTML"
+                        , hxSelect_ "#mainArticle"
+                        , hxIndicator_ $ "#fw-indicator-" <> l.slug
                         ]
-                        ""
+                      <> [checked_ | idx == 0]
+                    unless (T.null fw.icon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fw.icon]
+                    span_ $ toHtml fw.name
 
-                div_ [class_ "text-center mt-3"]
-                  $ a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] do
-                    "Watch more tutorials →"
-
-          forM_ integrationGroups \(_, integrations) -> do
-            forM_ integrations \(lang, _, frameworks) ->
-              div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
-                div_ [class_ "px-2 md:px-8 sticky top-0 z-10 bg-bgBase py-2"]
-                  $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
-                  $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
-                    label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
-                      input_
-                        $ [ type_ "radio"
-                          , name_ $ "tab-" <> lang
-                          , id_ $ "fw-tab-" <> lang <> "-" <> show idx
-                          , class_ "hidden"
-                          , Aria.label_ fwName
-                          , hxGet_ $ "/proxy/docs/sdks/" <> fwPath
-                          , hxTarget_ $ "#fw-content-" <> lang
-                          , hxTrigger_ "change"
-                          , hxSwap_ "innerHTML"
-                          , hxSelect_ "#mainArticle"
-                          , hxIndicator_ $ "#fw-indicator-" <> lang
-                          ]
-                        <> [checked_ | idx == 0]
-                      unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fwIcon]
-                      span_ $ toHtml fwName
-
-                div_ [class_ "relative p-2 md:p-8"] do
-                  div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
-                    $ loadingIndicator_ LdMD LdDots
-                  div_
-                    [ id_ $ "fw-content-" <> lang
-                    , hxGet_ $ "/proxy/docs/sdks/" <> foldMap thd3 (listToMaybe frameworks)
-                    , hxTrigger_ "load"
-                    , hxSwap_ "innerHTML"
-                    , hxSelect_ "#mainArticle"
-                    , class_ "prose-a:!text-textBrand prose-a:!underline"
-                    ]
-                    ""
+              div_ [class_ "relative p-2 md:p-8"] do
+                div_ [id_ $ "fw-indicator-" <> l.slug, class_ "htmx-indicator flex justify-center py-5"]
+                  $ loadingIndicator_ LdMD LdDots
+                div_
+                  [ id_ $ "fw-content-" <> l.slug
+                  , hxGet_ $ "/proxy/docs/sdks/" <> foldMap (.docsPath) (listToMaybe l.frameworks)
+                  , hxTrigger_ "load"
+                  , hxSwap_ "innerHTML"
+                  , hxSelect_ "#mainArticle"
+                  , class_ "prose-a:!text-textBrand prose-a:!underline"
+                  ]
+                  ""
 
     modalWith_ "telemetrygen-modal" def{boxClass = "max-w-2xl", hideClose = True} Nothing do
       h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
@@ -569,14 +492,7 @@ integrationsPage pid apikey =
               $ code_
               $ toHtml
                 "monoscope telemetrygen --kind=trace --count=10"
-            button_
-              [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
-              , type_ "button"
-              , [__|on click call navigator.clipboard.writeText(#telemetrygen-cmd's innerText) then put 'Copied!' into me|]
-              ]
-              do
-                span_ "Copy"
-                faSprite_ "copy" "regular" "h-3 w-3"
+            copyButton_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90" "h-3 w-3" "#telemetrygen-cmd's innerText" []
 
       div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
         faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess flex-shrink-0 mt-0.5"
@@ -666,6 +582,25 @@ integrationsPage pid apikey =
       |]
 
 
+-- | The video half of the docs-panel placeholder, handed to 'emptyState_' as its action slot.
+walkthroughs :: Html ()
+walkthroughs = div_ [class_ "flex flex-col gap-3 w-full max-w-md"] do
+  div_ [class_ "grid grid-cols-2 gap-4 w-full"]
+    $ forM_ ["Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v", "OALS4ckfOdI"] \vid ->
+      div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"]
+        $ iframe_
+          [ class_ "absolute top-0 left-0 w-full h-full"
+          , src_ $ "https://www.youtube.com/embed/" <> vid
+          , title_ "YouTube video player"
+          , term "frameborder" "0"
+          , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          , term "referrerpolicy" "strict-origin-when-cross-origin"
+          , term "allowfullscreen" ""
+          ]
+          ""
+  a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] "Watch more tutorials →"
+
+
 -- | "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
 integrationCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
 integrationCta_ pid wrapCls btnCls skipCls = div_ [class_ wrapCls] do
@@ -673,8 +608,9 @@ integrationCta_ pid wrapCls btnCls skipCls = div_ [class_ wrapCls] do
   a_ [class_ skipCls, type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"] "Skip"
 
 
-languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
-languageItem pid langName lang = do
+languageItem :: Projects.ProjectId -> Language -> Html ()
+languageItem pid l = do
+  let (lang, langName) = (l.slug, l.label)
   label_
     [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"
     ]
@@ -710,7 +646,7 @@ integrationCard serviceName iconPath isConnected connectUrl = do
       img_ [src_ iconPath]
       span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
     if isConnected
-      then button_ [class_ "text-textSuccess "] "Connected"
+      then connectionBadge_ "Connected"
       else a_ [target_ "_blank", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand ", href_ connectUrl] "Connect"
 
 
@@ -859,10 +795,8 @@ inviteMemberItem emailM = do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
       input_ ([type_ "hidden", value_ email] <> [name_ "emails" | not isTemplate])
       span_ [class_ "text-textStrong text-sm font-normal"] $ toHtml email
-    select_ [name_ "permissions", class_ "select select-xs"] do
-      option_ [class_ "text-textWeak", value_ "admin"] "Admin"
-      option_ [class_ "text-textWeak", value_ "edit"] "Can Edit"
-      option_ [class_ "text-textWeak", value_ "view"] "Can View"
+    select_ [name_ "permissions", class_ "select select-xs"]
+      $ options_ Nothing [("admin", "Admin"), ("edit", "Can Edit"), ("view", "Can View")]
     button_
       [ [__| on click remove the closest parent <div/> then halt |]
       , class_ "text-textBrand ml-4 text-sm underline"
