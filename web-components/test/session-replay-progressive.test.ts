@@ -120,9 +120,9 @@ describe('session-replay progressive shard loading', () => {
       meta: { userEmail: 'u@example.com', userName: null, userId: null },
       errorMsg: null,
       segments: [
-        { key: 'sess-1/shard-000001-10', firstTs: 10, gzipped: true },
-        { key: 'sess-1/shard-000002-20', firstTs: 20, gzipped: true },
-        { key: 'sess-1/shard-000003-30', firstTs: 30, gzipped: true },
+        { key: 'sess-1/shard-000001-10', firstTs: 10 },
+        { key: 'sess-1/shard-000002-20', firstTs: 20 },
+        { key: 'sess-1/shard-000003-30', firstTs: 30 },
       ],
     };
     const routes: Record<string, any> = {
@@ -163,8 +163,8 @@ describe('session-replay progressive shard loading', () => {
       meta: null,
       errorMsg: null,
       segments: [
-        { key: 's2/shard-000001-1', firstTs: 1, gzipped: true },
-        { key: 's2/shard-000002-2', firstTs: 2, gzipped: true },
+        { key: 's2/shard-000001-1', firstTs: 1 },
+        { key: 's2/shard-000002-2', firstTs: 2 },
       ],
     };
     const routes: Record<string, any> = {
@@ -193,7 +193,7 @@ describe('session-replay progressive shard loading', () => {
     const manifest = {
       meta: null,
       errorMsg: null,
-      segments: [{ key: 's/shard-1', firstTs: 1, gzipped: true }],
+      segments: [{ key: 's/shard-1', firstTs: 1 }],
     };
     (global as any).fetch = vi.fn(async (url: string) => {
       const body = url.includes('/manifest') ? manifest : [ev(1), ev(2)];
@@ -220,9 +220,9 @@ describe('session-replay progressive shard loading', () => {
       meta: null,
       errorMsg: null,
       segments: [
-        { key: 's3/shard-1', firstTs: 1, gzipped: true },
-        { key: 's3/shard-2', firstTs: 2, gzipped: true },
-        { key: 's3/shard-3', firstTs: 3, gzipped: true },
+        { key: 's3/shard-1', firstTs: 1 },
+        { key: 's3/shard-2', firstTs: 2 },
+        { key: 's3/shard-3', firstTs: 3 },
       ],
     };
     (global as any).fetch = vi.fn(async (url: string) => {

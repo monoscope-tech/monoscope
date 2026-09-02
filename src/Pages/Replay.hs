@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard, projectMinioConn) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard, projectMinioConn) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -535,6 +535,30 @@ replayKeyScoped pid sid k =
     <> ".json"
 
 
+-- | One batch of per-key object fetches, split by how each one ended. Every read path in
+-- this module classifies its results the same way, so they share this rather than each
+-- re-deriving the same four comprehensions (and each deciding for itself what NoSuchKey
+-- means).
+data FetchSplit a = FetchSplit
+  { ok :: [a]
+  , decodeErrs :: [(Text, String)]
+  , transportErrs :: [(Text, String)]
+  , missing :: [Text]
+  -- ^ NoSuchKey. Never a transport failure here: it means a concurrent merge already
+  -- sealed and removed the source.
+  }
+
+
+classifyFetches :: [(Text, Either MinioErr (Either String a))] -> FetchSplit a
+classifyFetches rs =
+  FetchSplit
+    { ok = [a | (_, Right (Right a)) <- rs]
+    , decodeErrs = [(k, e) | (k, Right (Left e)) <- rs]
+    , transportErrs = [(k, displayException e) | (k, Left e) <- rs, not (isNoSuchKey e)]
+    , missing = [k | (k, Left e) <- rs, isNoSuchKey e]
+    }
+
+
 -- | Fetch every tracked key individually, tolerating per-key failures (NoSuchKey is
 -- silently skipped as a concurrent-merge artifact; transport and decode errors are
 -- logged and the key is dropped). Returns merged arrays plus a partial-failure flag
@@ -547,23 +571,18 @@ fetchIndividualsRaw
   -> HashMap Text Text
   -> Eff es ([(Double, BL.ByteString)], Bool, Int)
 fetchIndividualsRaw conn bucket fileKeys logCtx = do
-  perKey <- liftIO $ forM fileKeys $ \k ->
-    Minio.runMinio conn (fetchRawForMerge bucket k False) <&> (k,)
-  let raws = [r | (_, Right (Right r)) <- perKey]
-      decodeErrs = [(k, de) | (k, Right (Left de)) <- perKey]
-      transportErrs = [(k, displayException me) | (k, Left me) <- perKey, not (isNoSuchKey me)]
-      missing = [k | (k, Left me) <- perKey, isNoSuchKey me]
-  unless (null decodeErrs)
-    $ Log.logAttention "Decode errors while reading replay event files" (HM.insert "errors" (toText $ show decodeErrs) logCtx)
-  unless (null transportErrs)
-    $ Log.logAttention "Transport errors while reading replay event files" (HM.insert "errors" (toText $ show transportErrs) logCtx)
+  split <- classifyFetches <$> liftIO (forM fileKeys \k -> (k,) <$> Minio.runMinio conn (fetchRawForMerge bucket k False))
+  unless (null split.decodeErrs)
+    $ Log.logAttention "Decode errors while reading replay event files" (HM.insert "errors" (toText $ show split.decodeErrs) logCtx)
+  unless (null split.transportErrs)
+    $ Log.logAttention "Transport errors while reading replay event files" (HM.insert "errors" (toText $ show split.transportErrs) logCtx)
   -- Tracked keys pointing at missing objects is silent data loss: the DB said
   -- the file exists, S3 disagrees. Always surface, even if some siblings survived.
-  unless (null missing)
+  unless (null split.missing)
     $ Log.logAttention
       "Tracked replay file_keys missing from S3"
-      (HM.insert "missing_keys" (toText $ show missing) $ HM.insert "missing_count" (show $ length missing) logCtx)
-  pure (raws, not (null decodeErrs && null transportErrs), length missing)
+      (HM.insert "missing_keys" (toText $ show split.missing) $ HM.insert "missing_count" (show $ length split.missing) logCtx)
+  pure (split.ok, not (null split.decodeErrs && null split.transportErrs), length split.missing)
 
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
@@ -594,23 +613,20 @@ getSessionEvents conn pid bucket sessionId = do
   -- individual tail both come from the DB — never from listing S3 (minio-hs can't
   -- list R2). Fetch each key by getObject, gzip-decoding by suffix.
   (shardKeys, fileKeys) <- sessionKeys pid sessionId
-  shardRes <- liftIO $ forM shardKeys $ \sk -> Minio.runMinio conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk))
-  let shardRaws = [r | Right (Right r) <- shardRes]
-      shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
-      shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
-      shardCorrupt = not (null shardDecodeErrs) -- data-integrity event
-      -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
-      -- flags the recording partial, same contract as a missing individual file.
-  unless (null shardDecodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shardDecodeErrs) logCtx)
-  unless (null shardTransportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shardTransportErrs) logCtx)
+  shards <- classifyFetches <$> liftIO (forM shardKeys \sk -> (sk,) <$> Minio.runMinio conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk)))
+  -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
+  -- flags the recording partial, same contract as a missing individual file.
+  let shardCorrupt = not (null shards.decodeErrs) -- data-integrity event
+  unless (null shards.decodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shards.decodeErrs) logCtx)
+  unless (null shards.transportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shards.transportErrs) logCtx)
   (individuals, indivPartial, missingCount) <-
     if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw conn bucket fileKeys logCtx
-  let partial = indivPartial || not (null shardTransportErrs)
+  let partial = indivPartial || not (null shards.transportErrs)
       -- Individuals collapse (sorted by first event) into one blob, ordered against
       -- the shards by first event. concatRawJsonArrays drops empty arrays.
       indivBlob = concatRawJsonArrays $ map snd $ sortWith fst individuals
       indivEntry = [(fromRight 0 (firstEventTimestampRaw indivBlob), indivBlob) | not (null individuals)]
-      combined = concatRawJsonArrays $ map snd $ sortWith fst (shardRaws <> indivEntry)
+      combined = concatRawJsonArrays $ map snd $ sortWith fst (shards.ok <> indivEntry)
   if
     | shardCorrupt -> pure corruptedErr
     | combined /= "[]" -> pure $ Right (combined, partial)
@@ -823,12 +839,12 @@ fetchReplaySession p sessionId = do
 
 -- | One fetchable segment of a session's recording, oldest→newest. `key` is the
 -- storage object key (always session-scoped); the shard endpoint validates that
--- scoping before streaming. `firstTs` (first event's ms-epoch timestamp) lets the
--- player pick which segment covers a seek target without downloading it.
+-- scoping before streaming, and decides compression from the key's own suffix — the
+-- client never has to know. `firstTs` (first event's ms-epoch timestamp) is what puts
+-- the segments in playback order.
 data ReplaySegment = ReplaySegment
   { key :: Text
   , firstTs :: Double
-  , gzipped :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
@@ -859,9 +875,9 @@ buildReplayManifest p sessionId = do
   (shardKeys, tailKeys) <- sessionKeys pid sessionId
   -- Order shards by embedded first-event ts (the legacy monolith key doesn't
   -- parse → 0 → sorts first, which is correct: it's the oldest). gzip by suffix.
-  let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral (maybe 0 snd (parseShardKey k)), gzipped = ".gz" `T.isSuffixOf` k} | k <- shardKeys]
+  let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral (maybe 0 snd (parseShardKey k))} | k <- shardKeys]
       tailTs = maybe 0 (.firstTs) (viaNonEmpty last shardSegs) -- keep the unmerged tail sorting after all shards
-      tailSegs = [ReplaySegment{key = k, firstTs = tailTs, gzipped = False} | k <- tailKeys]
+      tailSegs = [ReplaySegment{key = k, firstTs = tailTs} | k <- tailKeys]
       segs = shardSegs <> tailSegs
   pure ReplayManifest{segments = segs, meta, errorMsg = if null segs then Just "No recorded events found for this session." else Nothing}
 

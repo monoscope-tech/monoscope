@@ -25,6 +25,8 @@ module Utils (
   insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
+  lookupVecNonEmptyText,
+  lookupVecBy,
   deleteParam,
   unwrapJsonPrimValue,
   listToIndexHashMap,
@@ -572,6 +574,13 @@ lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe 
 lookupVecTextByKey = lookupVecBy
 
 
+-- | 'lookupVecTextByKey' treating an empty cell as absent. The row matrix spells
+-- a missing @parent_id@\/@trace_id@ as @""@ as often as @null@, so every caller
+-- that walks the trace tree wants this rather than the raw text.
+lookupVecNonEmptyText :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
+lookupVecNonEmptyText v m k = mfilter (not . T.null) (lookupVecBy v m k)
+
+
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
 lookupVecBoolByKey v m k = fromMaybe False (lookupVecBy v m k)
 
@@ -1059,7 +1068,8 @@ extractMessageFromLog (AE.Object obj) =
 extractMessageFromLog _ = Nothing
 
 
--- | Get service color class by hashing the service name (matches getServiceColors logic)
+-- | Tailwind fill class for a service, chosen by hashing its name. The single source of
+-- the mapping: 'getServiceColors' is this function over a vector of names.
 serviceFillColor :: Text -> Text
 serviceFillColor name = serviceColors V.! (fromIntegral (xxHash (encodeUtf8 name)) `mod` V.length serviceColors)
 

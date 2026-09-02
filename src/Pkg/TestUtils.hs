@@ -103,7 +103,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
@@ -493,10 +493,15 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
--- | Test-only structural equality for ZonedTime, which has no Eq upstream.
+-- | Test-only equality for ZonedTime, which has no Eq upstream. Compares the
+-- instant, so two renderings of the same moment in different zones are equal.
 -- Lives here (not in Utils) so it can't leak into production comparisons.
+--
+-- This was @_ == _ = True@, which made every ZonedTime field of every record
+-- compare equal — 'Issues.Issue' alone carries three, so any test asserting on a
+-- whole Issue was silently vacuous on all of them.
 instance Eq ZonedTime where
-  (==) _ _ = True
+  a == b = zonedTimeToUTC a == zonedTimeToUTC b
 
 
 -- | Default frozen time used in tests

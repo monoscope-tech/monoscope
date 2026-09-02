@@ -3,6 +3,7 @@
 // the echarts `graph` series at `layout:'none'` (we supply every coordinate).
 // The layout half is pure and DOM-free so it can be unit tested.
 import { resolveColor } from './colorMapping';
+import { formatDuration, formatNumber } from './stat-value';
 import { subscribeChartTheme, registerChartDisposer, getChartStyles } from './widgets';
 import ELKConstructor from 'elkjs/lib/elk.bundled.js';
 
@@ -29,6 +30,7 @@ export type ServiceEdge = { source: string; target: string; stats: MapStats };
 export type ServiceGraph = {
   nodes: ServiceNode[]; edges: ServiceEdge[];
   range_seconds: number; truncated: boolean; error: string | null;
+  environments: string[];
 };
 
 // --- pure layout -------------------------------------------------------------
@@ -242,18 +244,6 @@ export function filterSelection(
   return { litNodes, litEdges };
 }
 
-// --- formatting --------------------------------------------------------------
-const fmtDur = (ns: number): string => {
-  if (!Number.isFinite(ns) || ns <= 0) return '0';
-  if (ns < 1e3) return `${Math.round(ns)}ns`;
-  if (ns < 1e6) return `${(ns / 1e3).toPrecision(3)}µs`;
-  if (ns < 1e9) return `${(ns / 1e6).toPrecision(3)}ms`;
-  return `${(ns / 1e9).toPrecision(3)}s`;
-};
-const fmtNum = (n: number): string =>
-  n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
-    : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`;
-
 // Health thresholds. "error_rate > 0" is not a health signal on an aggregate view: across
 // hundreds of third-party integrations essentially everything has had one error in an hour,
 // so flagging that paints the whole map red and hides the dependency that is actually down.
@@ -328,7 +318,7 @@ export const FILTER_EVENT = 'service-map-filter';
 export const serviceMapFilter = (q: string, id?: string): void => {
   document.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { q, id } }));
 };
-(window as any).serviceMapFilter = serviceMapFilter;
+window.serviceMapFilter = serviceMapFilter;
 
 /**
  * Where a node-menu action goes. Spans and logs are one explorer surface (`pSource` knows only
@@ -370,7 +360,7 @@ const reachableFrom = (start: string, adj: Map<string, string[]>): Set<string> =
   return seen;
 };
 
-const fmtRps = (v: number) => (v < 10 ? v.toFixed(2) : fmtNum(Math.round(v)));
+const fmtRps = (v: number) => (v < 10 ? v.toFixed(2) : formatNumber(Math.round(v)));
 
 export function serviceMapChart(
   containerId: string,
@@ -519,7 +509,7 @@ async function render(
         withHook(card, '[data-node-count]', c => { c.textContent = `×${n.member_count}`; c.classList.remove('hidden'); });
       withHook(card, '[data-node-errors]', e => (e.textContent = `${(n.stats.error_rate * 100).toFixed(2)}% errors`));
       withHook(card, '[data-node-latency]', e => (e.textContent =
-        n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${fmtDur(n.stats.p95_ns)} latency`));
+        n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${formatDuration(n.stats.p95_ns)} latency`));
       withHook(card, '[data-node-rps]', e => (e.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`));
       // A collapsed head's stats are the *sum* of its members, so one endpoint failing
       // outright inside forty healthy ones is a ~2% aggregate — invisible, and exactly the
@@ -698,7 +688,6 @@ async function render(
     dispose: () => registerChartDisposer(containerId, () => {}),
   };
   handles.set(containerId, handle);
-  (el as any).__serviceMap = handle;
 
   document.addEventListener(FILTER_EVENT, (ev: Event) => {
     const d = (ev as CustomEvent<{ q?: string; id?: string }>).detail ?? {};
@@ -711,8 +700,7 @@ async function render(
     unsubscribeTheme();
     ro.disconnect();
     handles.delete(containerId);
-    delete (el as any).__serviceMap;
   });
 }
 
-(window as any).serviceMapChart = serviceMapChart;
+window.serviceMapChart = serviceMapChart;
