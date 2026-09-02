@@ -218,19 +218,46 @@ acknowledgeAnomalies pid uid until' issueIds
 -- acknowledging in one would then silence the other. Scoping is also what lets the sweep use
 -- an index: every index on these tables leads with @project_id@, so without it both statements
 -- were sequential scans of tables that are 1.7 GB (issues) and 2.4 GB / 6.3M rows (anomalies).
--- Measured on prod with EXPLAIN, the issues sweep goes from cost 11,438 to 375.
+-- A @LIKE@ against a parameter array is not sargable on its own, so the sweep also narrows on
+-- @LEFT(target_hash, 8)@ — the expression migration 0130 already built an index on for exactly
+-- this shape, on both tables. The LIKE stays as the exact test; the prefix equality only picks
+-- the pages to look at. Measured on prod with EXPLAIN, per statement:
 --
--- The anomalies sweep is still a bitmap scan filtered by the LIKE (cost ~170k): the prefix is
--- variable-width, so it needs @(project_id, target_hash text_pattern_ops)@ to range-scan. See
--- the note in scripts/local/page-perf/FINDINGS.md — that one wants a migration, not a patch.
+-- @
+--   issues     Seq Scan 11,438  ->  +project_id 375  ->  +prefix index    2.64
+--   anomalies  Seq Scan 224,708 ->  +project_id ~170k -> +prefix index   41.66
+-- @
+--
+-- The pre-filter is only a valid superset while every target is at least the 8 characters the
+-- index is built on: for a shorter target, @LEFT(row, 8)@ is longer than the target itself and
+-- the filter would drop rows the LIKE would have matched. Hence the guard rather than an
+-- unconditional narrowing — an 8-char hash is what the schema produces, but this function also
+-- sweeps legacy hashes and must not quietly stop finding them.
 acknowlegeCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UTCTime -> V.Vector Text -> Eff es Int64
 acknowlegeCascade pid uid until' targets
   | V.null targets = pure 0
   | otherwise = do
       now <- Time.currentTime
       let hashes = (<> "%") <$> targets
-      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE project_id = #{pid} AND target_hash LIKE ANY(#{hashes}) |]
-      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE project_id = #{pid} AND target_hash LIKE ANY(#{hashes}) |]
+          prefixes = T.take hashPrefixWidth <$> targets
+          prefixNarrowing
+            | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
+            | otherwise = mempty
+      Hasql.interpExecute_
+        $ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE project_id = #{pid} |]
+        <> prefixNarrowing
+        <> [HI.sql| AND target_hash LIKE ANY(#{hashes}) |]
+      Hasql.interpExecute
+        $ [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE project_id = #{pid} |]
+        <> prefixNarrowing
+        <> [HI.sql| AND target_hash LIKE ANY(#{hashes}) |]
+
+
+-- | Width of the endpoint hash that @idx_{issues,anomalies}_project_endpoint_prefix@ index.
+-- Migration 0130: a @target_hash@ is an 8-char endpoint hash optionally followed by a
+-- 16-char field/shape suffix.
+hashPrefixWidth :: Int
+hashPrefixWidth = 8
 
 
 -- | Archive issues by id and cascade-archive their underlying anomalies via

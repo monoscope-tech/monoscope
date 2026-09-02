@@ -290,6 +290,32 @@ spec = sequential $ aroundAll withTestResources do
         (testPid, prefix <> ":anom")
         >>= (`shouldBe` 1)
 
+    -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
+    -- a valid superset while the target is at least that wide. A shorter one must fall back to
+    -- the plain LIKE rather than silently matching nothing — this is the case where the fast
+    -- path would be wrong, so it is the one worth a test of its own.
+    it "still sweeps a target shorter than the indexed hash prefix" \tr -> do
+      runTestBg frozenTime tr pass
+      let sess = Servant.getResponse tr.trSessAndHeader
+          shortPrefix = "ab1" :: Text
+      shortIid <- UUIDId <$> UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+            (shortIid, testPid, shortPrefix <> "cdef9999", shortPrefix <> "cdef9999", frozenTime, frozenTime)
+
+      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade testPid sess.user.id Issues.indefiniteUntil (V.singleton shortPrefix)
+
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only shortIid)
+        >>= (`shouldBe` 1)
+
     -- Regression: createAPIChangeIssue hard-coded a string that differed from
     -- defaultRecommendedAction, so the detail page's "not yet LLM-enhanced" check
     -- never matched api_change issues and always rendered the boilerplate.
