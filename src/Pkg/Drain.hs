@@ -2,9 +2,7 @@
 
 module Pkg.Drain (
   DrainTree (..),
-  DrainConfig (..),
   DrainResult (..),
-  defaultDrainConfig,
   emptyDrainTree,
   updateTreeWithLog,
   buildDrainTree,
@@ -14,6 +12,7 @@ module Pkg.Drain (
   tokenizeForDrain,
   getAllLogGroups,
   normalizePlaceholder,
+  normalizePlaceholders,
   drainPlaceholders,
   stripMetadataBlobs,
 ) where
@@ -29,6 +28,21 @@ import Utils (replaceAllFormats)
 
 maxLogIdSamples :: Int
 maxLogIdSamples = 500
+
+
+-- | Drain tuning. These three values define pattern identity (which logs land in
+-- which leaf cluster and how templates wildcard) — changing any of them changes
+-- what every template hashes to.
+similarityThreshold :: Double
+similarityThreshold = 0.7
+
+
+maxLogGroups :: Int
+maxLogGroups = 1000
+
+
+wildcardToken :: Text
+wildcardToken = "<*>"
 
 
 data LogGroup = LogGroup
@@ -65,38 +79,13 @@ data DrainTree = DrainTree
   { children :: V.Vector DrainLevelOne
   , totalLogs :: Int
   , totalPatterns :: Int
-  , config :: DrainConfig
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
-
-
-data DrainConfig = DrainConfig
-  { similarityThreshold :: Double
-  , maxLogGroups :: Int
-  , wildcardToken :: Text
-  }
-  deriving (Generic, Show)
-  deriving anyclass (NFData)
-
-
-defaultDrainConfig :: DrainConfig
-defaultDrainConfig =
-  DrainConfig
-    { similarityThreshold = 0.7
-    , maxLogGroups = 1000
-    , wildcardToken = "<*>"
-    }
 
 
 emptyDrainTree :: DrainTree
-emptyDrainTree =
-  DrainTree
-    { children = V.empty
-    , totalLogs = 0
-    , totalPatterns = 0
-    , config = defaultDrainConfig
-    }
+emptyDrainTree = DrainTree{children = V.empty, totalLogs = 0, totalPatterns = 0}
 
 
 templateText :: V.Vector Text -> Text
@@ -130,7 +119,7 @@ calculateSimilarity tokens1 tokens2
 -- | Returns (updatedTree, matchedTemplateStr)
 updateTreeWithLogM :: Bool -> DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (DrainTree, Text)
 updateTreeWithLogM trackIds tree tokenCount' firstToken tokensVec logId sampleContent now =
-  let (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelOne trackIds (children tree) tokenCount' firstToken tokensVec logId sampleContent now (config tree)
+  let (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelOne trackIds (children tree) tokenCount' firstToken tokensVec logId sampleContent now
       newTotalLogs = totalLogs tree + 1
       newTotalPatterns = if wasUpdated then totalPatterns tree else totalPatterns tree + 1
    in (tree{children = updatedChildren, totalLogs = newTotalLogs, totalPatterns = newTotalPatterns}, tpl)
@@ -140,12 +129,12 @@ updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe 
 updateTreeWithLog tree tc ft tv lid sc now = fst $ updateTreeWithLogM True tree tc ft tv lid sc now
 
 
-updateOrCreateLevelOne :: Bool -> V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool, Text)
-updateOrCreateLevelOne trackIds levelOnes targetCount firstToken tokensVec logId sampleContent now cfg =
+updateOrCreateLevelOne :: Bool -> V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelOne, Bool, Text)
+updateOrCreateLevelOne trackIds levelOnes targetCount firstToken tokensVec logId sampleContent now =
   case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
     Just index ->
       let existing = levelOnes V.! index
-          (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelTwo trackIds (nodes existing) firstToken tokensVec logId sampleContent now cfg
+          (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelTwo trackIds (nodes existing) firstToken tokensVec logId sampleContent now
        in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated, tpl)
     Nothing -> (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False, newTpl)
   where
@@ -153,12 +142,12 @@ updateOrCreateLevelOne trackIds levelOnes targetCount firstToken tokensVec logId
     newGroup = createLogGroup tokensVec newTpl logId sampleContent now
 
 
-updateOrCreateLevelTwo :: Bool -> V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool, Text)
-updateOrCreateLevelTwo trackIds levelTwos targetToken tokensVec logId sampleContent now cfg =
+updateOrCreateLevelTwo :: Bool -> V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelTwo, Bool, Text)
+updateOrCreateLevelTwo trackIds levelTwos targetToken tokensVec logId sampleContent now =
   case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
     Just index ->
       let existing = levelTwos V.! index
-          (updatedLogGroups, wasUpdated, tpl) = updateOrCreateLogGroup trackIds (logGroups existing) tokensVec logId sampleContent now cfg
+          (updatedLogGroups, wasUpdated, tpl) = updateOrCreateLogGroup trackIds (logGroups existing) tokensVec logId sampleContent now
        in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated, tpl)
     Nothing -> (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False, newTpl)
   where
@@ -171,13 +160,13 @@ leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
 leastRecentlyUsedIndex = V.minIndexBy (comparing lastSeen)
 
 
-updateOrCreateLogGroup :: Bool -> V.Vector LogGroup -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool, Text)
-updateOrCreateLogGroup trackIds lgs tokensVec logId sampleContent now cfg =
-  case findBestMatch lgs tokensVec (similarityThreshold cfg) of
+updateOrCreateLogGroup :: Bool -> V.Vector LogGroup -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector LogGroup, Bool, Text)
+updateOrCreateLogGroup trackIds lgs tokensVec logId sampleContent now =
+  case findBestMatch lgs tokensVec of
     Just (index, bestGroup) ->
       let updatedTemplate =
             if V.length tokensVec == V.length (template bestGroup)
-              then mergeTemplates (template bestGroup) tokensVec (wildcardToken cfg)
+              then mergeTemplates (template bestGroup) tokensVec
               else template bestGroup
           updatedGroup = updateLogGroupWithTemplate trackIds bestGroup updatedTemplate logId sampleContent now
           updatedGroups = lgs V.// [(index, updatedGroup)]
@@ -185,31 +174,24 @@ updateOrCreateLogGroup trackIds lgs tokensVec logId sampleContent now cfg =
     Nothing ->
       let newTpl = templateText tokensVec
           newGroup = createLogGroup tokensVec newTpl logId sampleContent now
-       in if V.length lgs >= maxLogGroups cfg
+       in if V.length lgs >= maxLogGroups
             then (lgs V.// [(leastRecentlyUsedIndex lgs, newGroup)], False, newTpl)
             else (V.cons newGroup lgs, False, newTpl)
 
 
-findBestMatch :: V.Vector LogGroup -> V.Vector Text -> Double -> Maybe (Int, LogGroup)
-findBestMatch logGroups tokensVec threshold =
-  let candidates = V.indexed logGroups
-      similarities =
-        V.map
-          ( \(idx, grp) ->
-              (idx, grp, calculateSimilarity (template grp) tokensVec)
-          )
-          candidates
-      validMatches = V.filter (\(_, _, sim) -> sim >= threshold) similarities
+findBestMatch :: V.Vector LogGroup -> V.Vector Text -> Maybe (Int, LogGroup)
+findBestMatch logGroups tokensVec =
+  let similarities = V.map (\(idx, grp) -> (idx, grp, calculateSimilarity (template grp) tokensVec)) (V.indexed logGroups)
+      validMatches = V.filter (\(_, _, sim) -> sim >= similarityThreshold) similarities
    in if V.null validMatches
         then Nothing
         else
-          let (bestIdx, bestGroup, _) = V.maximumBy (\(_, _, s1) (_, _, s2) -> compare s1 s2) validMatches
+          let (bestIdx, bestGroup, _) = V.maximumBy (comparing (\(_, _, s) -> s)) validMatches
            in Just (bestIdx, bestGroup)
 
 
-mergeTemplates :: V.Vector Text -> V.Vector Text -> Text -> V.Vector Text
-mergeTemplates template1 template2 wildcardToken =
-  V.zipWith (\t1 t2 -> if t1 == t2 then t1 else wildcardToken) template1 template2
+mergeTemplates :: V.Vector Text -> V.Vector Text -> V.Vector Text
+mergeTemplates = V.zipWith \t1 t2 -> if t1 == t2 then t1 else wildcardToken
 
 
 -- Update log group with new template and log information
@@ -319,16 +301,42 @@ normalizePlaceholder :: Text -> Text
 normalizePlaceholder t = if S.member t drainPlaceholders then "<*>" else t
 
 
+-- | Word-wise placeholder normalization. Shared with the embedding and
+-- merge-verification paths so a template and its embedding text can never
+-- disagree about what a placeholder is. Only the closed 'drainPlaceholders' set
+-- collapses; JSON blobs and braced URL segments survive verbatim.
+--
+-- >>> normalizePlaceholders "user {uuid} logged in from {ipv4}"
+-- "user <*> logged in from <*>"
+--
+-- >>> normalizePlaceholders "user <*> logged in from <*>"
+-- "user <*> logged in from <*>"
+--
+-- >>> normalizePlaceholders "{\"context\":\"NestApplication\"}"
+-- "{\"context\":\"NestApplication\"}"
+--
+-- >>> normalizePlaceholders "error {/payments} not found"
+-- "error {/payments} not found"
+normalizePlaceholders :: Text -> Text
+normalizePlaceholders = unwords . map normalizePlaceholder . words
+
+
+-- | 'replaceAllFormats' then 'tokenizeForDrain'.
+--
+-- >>> import Data.Vector qualified as V
+-- >>> V.toList $ generateDrainTokens "User c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd not found"
+-- ["User","<*>","not","found"]
 generateDrainTokens :: T.Text -> V.Vector T.Text
-generateDrainTokens content =
-  let replaced = replaceAllFormats content
-   in V.map normalizePlaceholder
-        $ if looksLikeJson replaced
-          then V.fromList (tokenizeJsonLike replaced)
-          else V.fromList $ words replaced
+generateDrainTokens = tokenizeForDrain . replaceAllFormats
 
 
 -- | Tokenize already-normalized text for Drain without re-running replaceAllFormats.
+--
+-- JSON-ish lines take the structural tokenizer, so punctuation becomes its own token:
+--
+-- >>> import Data.Vector qualified as V
+-- >>> V.toList $ tokenizeForDrain "{\"msg\":\"ok\"}"
+-- ["{","\"msg\"",":","\"ok\"","}"]
 tokenizeForDrain :: T.Text -> V.Vector T.Text
 tokenizeForDrain content =
   V.map normalizePlaceholder
@@ -402,7 +410,6 @@ generateSummaryDrainTokens content =
       (prefix, rest)
         | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> normalizePlaceholders (replaceAllFormats val)
         | otherwise -> normalizePlaceholders (replaceAllFormats tok)
-    normalizePlaceholders = unwords . map normalizePlaceholder . words
 
 
 -- | Fold items into a DrainTree using a custom tokenizer. Tracks logIds in tree for later retrieval.

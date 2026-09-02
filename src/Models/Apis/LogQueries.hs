@@ -1,6 +1,7 @@
 module Models.Apis.LogQueries (
+  cursorEpsilon,
+  nudgeCursorBy,
   SDKTypes (..),
-  RequestTypes (..),
   ATError (..),
   PatternRow (..),
   SessionRow (..),
@@ -39,10 +40,9 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.Time.Format
-import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -67,7 +67,7 @@ import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
-import Utils (listToIndexHashMap, lookupVecTextByKey, replaceAllFormats)
+import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -107,17 +107,6 @@ data SDKTypes
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
   deriving (FromField, ToField) via WrappedEnumShow SDKTypes
-
-
-data RequestTypes
-  = Incoming
-  | Outgoing
-  | Background
-  | System
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestTypes
-  deriving (FromField, ToField) via WrappedEnumShow RequestTypes
 
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
@@ -164,9 +153,26 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
-incrementByOneMicrosecond :: Text -> Text
-incrementByOneMicrosecond dateStr =
-  maybe "" (toText . iso8601Show . addUTCTime 0.000001) (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString dateStr) :: Maybe UTCTime)
+-- | The page predicate is inclusive (@timestamp <= cursor@, see "Pkg.Parser"), so a
+-- cursor must be nudged off the boundary or the last row of a page repeats as the
+-- first row of the next. One microsecond is the smallest step that achieves that;
+-- anything larger silently *skips* every row in the gap. The load-more path used
+-- @-0.001@ (a millisecond) and so could drop up to 999us of rows between pages —
+-- easy to hit, since a busy project writes thousands of rows per millisecond.
+cursorEpsilon :: NominalDiffTime
+cursorEpsilon = 0.000001
+
+
+-- | Shift an ISO-8601 cursor by @delta@; 'Nothing' if it doesn't parse.
+--
+-- >>> nudgeCursorBy cursorEpsilon "2026-05-08T10:00:00.000000Z"
+-- Just "2026-05-08T10:00:00.000001Z"
+-- >>> nudgeCursorBy (negate cursorEpsilon) "2026-05-08T10:00:00.000001Z"
+-- Just "2026-05-08T10:00:00Z"
+-- >>> nudgeCursorBy cursorEpsilon "not a timestamp"
+-- Nothing
+nudgeCursorBy :: NominalDiffTime -> Text -> Maybe Text
+nudgeCursorBy delta = fmap (toText . iso8601Show . addUTCTime delta) . iso8601ParseM @Maybe @UTCTime . toString
 
 
 -- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
@@ -190,7 +196,7 @@ logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source rece
           , param "cursor" (unlessRecent cursor)
           , param "since" (unlessRecent since)
           , param "from" fromV
-          , param "to" (if recent then incrementByOneMicrosecond <$> cursor else toV)
+          , param "to" (if recent then nudgeCursorBy cursorEpsilon =<< cursor else toV)
           , param "layout" layout
           , param "source" source
           ]
@@ -429,9 +435,9 @@ selectChildSpansAndLogs useTf pid projectedColsByUser traceIds seedSpanIds dateR
 -- them (in 'requestVecs') and we only return strict descendants.
 keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> V.Vector (V.Vector AE.Value) -> [V.Vector AE.Value]
 keepDescendantsOf colIdxMap seedSpanIds rows =
-  let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
+  let sid r = lookupVecNonEmptyText r colIdxMap "latency_breakdown"
       childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
-      childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [lookupVecTextByKey r colIdxMap "parent_id"]]
+      childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [lookupVecNonEmptyText r colIdxMap "parent_id"]]
       seeds = V.toList seedSpanIds
       go _ [] acc = reverse acc
       go visited (s : rest) acc =
@@ -480,7 +486,6 @@ data SessionRow = SessionRow
   , durationNs :: Int64
   , traceCount :: Int64
   , services :: V.Vector Text
-  , volume :: [Int]
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
   , firstError :: Maybe Text
@@ -500,8 +505,7 @@ data SessionRow = SessionRow
 -- session-level summary, CROSS JOINed onto every page row so the header
 -- aggregates ride the same single scan (decoded once, from the head row).
 -- (hasql-interpolate decodes a flat column list, so these live in one record
--- rather than a tuple of sub-rows; @summBis@ is prefixed only to avoid clashing
--- with the per-session hourly @bis@ above.)
+-- rather than a tuple of sub-rows.)
 data RawSessionRow = RawSessionRow
   { sessionId :: Text
   , userId :: Maybe Text
@@ -514,8 +518,6 @@ data RawSessionRow = RawSessionRow
   , durationNs :: Int64
   , traceCount :: Int64
   , services :: V.Vector Text
-  , bis :: V.Vector Int64
-  , cnts :: V.Vector Int64
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
   , firstError :: Maybe Text
@@ -800,22 +802,15 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
         ), svcs AS (
           SELECT session_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT service_name), NULL) AS services
           FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id
-        ), hourly AS (
-          SELECT session_id, bi, COUNT(*)::BIGINT AS cnt
-          FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id, bi
-        ), hourly_agg AS (
-          SELECT session_id, ARRAY_AGG(bi ORDER BY bi) AS bis, ARRAY_AGG(cnt ORDER BY bi) AS cnts
-          FROM hourly GROUP BY session_id
         ) SELECT p.session_id, p.user_id, p.user_email, p.user_name,
             p.event_count, p.error_count, p.first_seen,
             p.last_seen, p.duration_ns, p.trace_count,
             COALESCE(s.services, '{}'::TEXT[]),
-            COALESCE(h.bis, '{}'::BIGINT[]), COALESCE(h.cnts, '{}'::BIGINT[]),
             p.landing_url, p.user_agent, p.first_error,
             sm.total_sessions, sm.errored_sessions, sm.unique_users, sm.unique_services,
             sm.med_dur, sm.p95_dur, sm.med_evt, sm.total_events,
             sm.bis, sm.clean_bkt, sm.err_bkt
-          FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
+          FROM page p LEFT JOIN svcs s USING (session_id)
           CROSS JOIN summ sm
           ORDER BY p.|]
           <> sortColSql
@@ -827,53 +822,52 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   -- lookup over the page's ids only. Non-UUID session keys (sessions derived
   -- from user id/email) can never have a recording, so they're not even asked for.
   replayed <- replayedSessionIds pid (mapMaybe (UUID.fromText . (.sessionId)) rawRows)
-  let range = bucketRange $ concatMap (ints . (.bis)) rawRows
-      -- Densify the header's over-time buckets across the full picker range so
-      -- empty periods render as blanks (mirrors the previous fetchSessionSummary).
-      -- The summary columns are identical on every row (CROSS JOIN); read the head.
-      mkSummary s =
-        let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
-            toT = fromMaybe now (snd dateRange)
-            epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
-            pMin = epochBucket fromT
-            pMax = max pMin (epochBucket toT)
-            bisI = ints s.summBis
-            dens v = densifyBuckets (pMin, pMax) $ zip bisI (ints v)
-         in SessionSummary
-              { totalSessions = s.totalSessions
-              , erroredSessions = s.erroredSessions
-              , uniqueUsers = s.uniqueUsers
-              , uniqueServices = s.uniqueServices
-              , medianDurationNs = s.medDur
-              , p95DurationNs = s.p95Dur
-              , medianEvents = s.medEvt
-              , totalEvents = s.totalEvents
-              , bucketWidthSec = bucketW
-              , bucketStartEpoch = pMin * bucketW
-              , clean = dens s.cleanBkt
-              , errored = dens s.errBkt
-              }
-      summary = maybe def{bucketWidthSec = bucketW} mkSummary (listToMaybe rawRows)
-      total = fromIntegral summary.totalSessions
-      toRowWithVolume r =
-        SessionRow
-          { sessionId = r.sessionId
-          , userId = r.userId
-          , userEmail = r.userEmail
-          , userName = r.userName
-          , eventCount = r.eventCount
-          , errorCount = r.errorCount
-          , firstSeen = r.firstSeen
-          , lastSeen = r.lastSeen
-          , durationNs = r.durationNs
-          , traceCount = r.traceCount
-          , services = r.services
-          , volume = densifyBuckets range $ zip (ints r.bis) (ints r.cnts)
-          , landingUrl = r.landingUrl
-          , userAgent = r.userAgent
-          , firstError = r.firstError
-          , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
-          }
+  let
+    -- Densify the header's over-time buckets across the full picker range so
+    -- empty periods render as blanks (mirrors the previous fetchSessionSummary).
+    -- The summary columns are identical on every row (CROSS JOIN); read the head.
+    mkSummary s =
+      let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+          toT = fromMaybe now (snd dateRange)
+          epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
+          pMin = epochBucket fromT
+          pMax = max pMin (epochBucket toT)
+          bisI = ints s.summBis
+          dens v = densifyBuckets (pMin, pMax) $ zip bisI (ints v)
+       in SessionSummary
+            { totalSessions = s.totalSessions
+            , erroredSessions = s.erroredSessions
+            , uniqueUsers = s.uniqueUsers
+            , uniqueServices = s.uniqueServices
+            , medianDurationNs = s.medDur
+            , p95DurationNs = s.p95Dur
+            , medianEvents = s.medEvt
+            , totalEvents = s.totalEvents
+            , bucketWidthSec = bucketW
+            , bucketStartEpoch = pMin * bucketW
+            , clean = dens s.cleanBkt
+            , errored = dens s.errBkt
+            }
+    summary = maybe def{bucketWidthSec = bucketW} mkSummary (listToMaybe rawRows)
+    total = fromIntegral summary.totalSessions
+    toRowWithVolume r =
+      SessionRow
+        { sessionId = r.sessionId
+        , userId = r.userId
+        , userEmail = r.userEmail
+        , userName = r.userName
+        , eventCount = r.eventCount
+        , errorCount = r.errorCount
+        , firstSeen = r.firstSeen
+        , lastSeen = r.lastSeen
+        , durationNs = r.durationNs
+        , traceCount = r.traceCount
+        , services = r.services
+        , landingUrl = r.landingUrl
+        , userAgent = r.userAgent
+        , firstError = r.firstError
+        , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
+        }
   pure (summary, total, map toRowWithVolume rawRows)
   where
     ints :: V.Vector Int64 -> [Int]

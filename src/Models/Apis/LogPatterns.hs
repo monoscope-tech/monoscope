@@ -6,7 +6,6 @@ module Models.Apis.LogPatterns (
   RateChangeDirection (..),
   getLogPatterns,
   getLogPatternTexts,
-  getLogPatternTextsByService,
   getLogPatternByHash,
   getNewLogPatterns,
   acknowledgeLogPatterns,
@@ -143,17 +142,18 @@ getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPatter
 getLogPatterns pid limit offset = Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE project_id = #{pid} AND canonical_id IS NULL ORDER BY last_seen_at DESC LIMIT #{limit} OFFSET #{offset} |])
 
 
--- | All pattern templates for a source field, used to seed Drain trees.
--- Capped at 5000: the DrainTree's maxLogGroups=1000, so loading more is wasteful.
+-- | Pattern templates for a source field (optionally one service), used to seed
+-- Drain trees, plus MAX(last_seen_at) for change detection.
+-- Capped at 5000: the Drain tree's maxLogGroups=1000, so loading more is wasteful.
 -- ORDER BY last_seen_at DESC keeps the most recently active patterns as seeds.
-getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000) FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
-
-
--- | Per-service variant with MAX(last_seen_at) for change detection.
-getLogPatternTextsByService :: DB es => Projects.ProjectId -> Text -> Text -> Eff es ([Text], Maybe UTCTime)
-getLogPatternTextsByService pid sourceField svcName = do
-  rows :: [(Text, Maybe UTCTime)] <- Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND service_name = #{svcName} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
+getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Maybe Text -> Eff es ([Text], Maybe UTCTime)
+getLogPatternTexts pid sourceField svcName = do
+  rows :: [(Text, Maybe UTCTime)] <-
+    Hasql.interp
+      [HI.sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns
+        WHERE project_id = #{pid} AND source_field = #{sourceField} AND canonical_id IS NULL
+          AND (#{svcName}::text IS NULL OR service_name = #{svcName})
+        ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
   pure $ second asum $ unzip rows -- ordered DESC NULLS LAST, so the first non-null is the max
 
 

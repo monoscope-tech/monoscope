@@ -1,7 +1,8 @@
 module Models.Projects.Projects (
   -- Users
   User (..),
-  UserId (..),
+  UserId,
+  pattern UserId,
   createUser,
   userIdByEmail,
   createUserId,
@@ -17,6 +18,7 @@ module Models.Projects.Projects (
   ProjectS3Bucket (..),
   insertProject,
   projectIdFromText,
+  demoProjectId,
   usersByProjectId,
   usersByIds,
   selectProjectsForUser,
@@ -31,6 +33,11 @@ module Models.Projects.Projects (
   deleteProject,
   updateProjectPricing,
   updateProjectBilling,
+  PlanName (..),
+  SubId (..),
+  SubItemId (..),
+  OrderId (..),
+  CustomerId (..),
   projectById,
   activeProjectById,
   projectByOrderId,
@@ -69,6 +76,7 @@ module Models.Projects.Projects (
   DailyUsage (..),
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
+  UsageSubmissionId,
   ChunkQuantity,
   mkChunkQuantity,
   chunkQuantityInt,
@@ -142,7 +150,6 @@ import Effectful
 import Effectful.Error.Static qualified as EffError
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
-import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
@@ -167,17 +174,17 @@ instance AE.ToJSON (CI.CI Text) where
   toJSON = AE.toJSON . CI.original
 
 
-newtype UserId = UserId {getUserId :: UUID.UUID}
-  deriving stock (Eq, Generic, Show)
-  deriving newtype (NFData)
-  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
-  deriving
-    (AE.FromJSON, AE.ToJSON, Default, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Ord, ToField)
-    via UUID.UUID
+-- | Typed user id. Aliased to 'UUIDId' rather than given its own newtype so it
+-- inherits the shared encode/decode/schema instances and the @.toText@/@.unwrap@
+-- accessors instead of restating them.
+type UserId = UUIDId "user"
 
 
-instance HasField "toText" UserId Text where
-  getField u = UUID.toText u.getUserId
+pattern UserId :: UUID.UUID -> UserId
+pattern UserId u = UUIDId u
+
+
+{-# COMPLETE UserId #-}
 
 
 data User = User
@@ -251,6 +258,14 @@ type ProjectId = UUIDId "project"
 
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
+
+
+-- | The public demo project. World-readable by design, and the id the auth layers
+-- special-case: the nil UUID. Spelled once so the web bypass ('Web.Auth.sessionByID'),
+-- the API bypass ('Web.Auth.apiKeyAuthHandler'), the write guard
+-- ('Utils.isDemoAndNotSudo') and 'sessionAndProject' below cannot drift apart.
+demoProjectId :: ProjectId
+demoProjectId = UUIDId UUID.nil
 
 
 data Project = Project
@@ -562,7 +577,7 @@ usersByProjectId pid =
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=#{pid} and u.active IS True and pm.active = TRUE;|]
 
 
-usersByIds :: DB es => V.Vector UUID.UUID -> Eff es [User]
+usersByIds :: DB es => V.Vector UserId -> Eff es [User]
 usersByIds uids
   | V.null uids = pure []
   | otherwise = EHasql.interp (selectFrom @User <> [HI.sql| WHERE id = ANY(#{uids}::uuid[]) |])
@@ -611,14 +626,42 @@ patchProjectSettings pid p now =
     |]
 
 
-updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
+-- | The billing identifiers a plan-change writes. Each is a distinct type only so
+-- that the four adjacent strings cannot be transposed at a call site; every one
+-- encodes as its bare 'Text', so the values reaching the columns are unchanged.
+--
+-- 'PlanName' stays open-valued 'Text' rather than 'Plan': paid tiers carry
+-- provider-supplied names ("Startup", "Bring your own storage") and the stored
+-- spelling is a contract with Stripe/LemonSqueezy. 'parsePlan' folds it for
+-- gating; the column keeps the name verbatim.
+newtype PlanName = PlanName {unPlanName :: Text}
+  deriving newtype (Eq, HI.EncodeValue, Show)
+
+
+newtype SubId = SubId {unSubId :: Text}
+  deriving newtype (Eq, HI.EncodeValue, Show)
+
+
+newtype SubItemId = SubItemId {unSubItemId :: Text}
+  deriving newtype (Eq, HI.EncodeValue, Show)
+
+
+newtype OrderId = OrderId {unOrderId :: Text}
+  deriving newtype (Eq, HI.EncodeValue, Show)
+
+
+newtype CustomerId = CustomerId {unCustomerId :: Text}
+  deriving newtype (Eq, HI.EncodeValue, Show)
+
+
+updateProjectPricing :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> V.Vector Text -> Eff es Int64
 -- billing_provider inferred from the sub_id shape (same source as the webhooks/backfill):
 -- this shared onboarding path carries a real LemonSqueezy sub_id (numeric) for paid plans and "" for Free/Open Source.
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted}, billing_provider=#{billingProviderFromSubId (Just subId)} where id=#{pid};|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)} where id=#{pid};|]
 
 
-updateProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
+updateProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
@@ -739,10 +782,6 @@ newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
   deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField)
 
 
-instance HasField "toText" LemonSubId Text where
-  getField l = UUID.toText l.lemonSubId
-
-
 data LemonSub = LemonSub
   { id :: LemonSubId
   , createdAt :: ZonedTime
@@ -848,13 +887,16 @@ chunkCap :: Int
 chunkCap = 900_000
 
 
+type UsageSubmissionId = UUIDId "usage_submission"
+
+
 -- | Per-chunk record of a usage submission to a billing provider. One window
 -- may produce several rows. Bookkeeping (apis.daily_usage + usage_last_reported)
 -- is committed atomically with 'Pending' rows BEFORE any provider HTTP call;
 -- the outcome is then updated per submission. Non-'Submitted' rows are retried
 -- on the next daily ReportUsage tick for the same project.
 data UsageSubmission = UsageSubmission
-  { id :: UUID.UUID
+  { id :: UsageSubmissionId
   , projectId :: ProjectId
   , windowStart :: UTCTime
   , windowEnd :: UTCTime
@@ -967,7 +1009,7 @@ recordUsageWindow pid wStart wEnd totals chunks = do
                       VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}, #{meter}) |]
 
 
-markUsageSubmissionSucceeded :: DB es => UUID.UUID -> Eff es Int64
+markUsageSubmissionSucceeded :: DB es => UsageSubmissionId -> Eff es Int64
 markUsageSubmissionSucceeded sid =
   EHasql.interpExecute
     [HI.sql|
@@ -977,7 +1019,7 @@ markUsageSubmissionSucceeded sid =
     |]
 
 
-markUsageSubmissionFailed :: DB es => UUID.UUID -> Text -> Eff es Int64
+markUsageSubmissionFailed :: DB es => UsageSubmissionId -> Text -> Eff es Int64
 markUsageSubmissionFailed sid err =
   EHasql.interpExecute
     [HI.sql|
@@ -996,7 +1038,7 @@ downgradeToFree orderId = EHasql.interpExecute [HI.sql|UPDATE projects.projects 
 
 -- Match on sub_id when available (stable across plan/order changes), else fall back to order_id.
 -- Using OR with both risks matching a stale preserved row on a different project after downgrade.
-upgradeToPaid :: DB es => Int -> Int -> Int -> Text -> Eff es Int64
+upgradeToPaid :: DB es => Int -> Int -> Int -> PlanName -> Eff es Int64
 upgradeToPaid orderId subId subItemId plan =
   EHasql.interpExecute
     [HI.sql|
@@ -1305,12 +1347,12 @@ downgradeToFreeBySubId sid =
 
 -- Re-enable a previously-downgraded subscription (paused → active, past_due → active).
 -- IDs were preserved by downgradeToFree* so we match by sub_id.
-setPlanBySubId :: DB es => Text -> Text -> Text -> Eff es Int64
+setPlanBySubId :: DB es => PlanName -> SubItemId -> SubId -> Eff es Int64
 setPlanBySubId plan firstSubItemId sid =
   EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, first_sub_item_id = #{firstSubItemId} WHERE sub_id = #{sid}|]
 
 
-updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
+updateStripeProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> CustomerId -> Eff es Int64
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
   -- Clear order_id so a late LemonSqueezy cancel webhook (from a prior LS→Stripe
   -- switch) can't rematch this project by order_id and downgrade to Free.
@@ -1459,7 +1501,7 @@ sessionAndProject pid = do
     Just p | not (isOnboarding p.paymentPlan) -> pure (sess, p)
     Just _ -> fetch
     Nothing
-      | pid == UUIDId UUID.nil || sess.user.isSudo -> fetch
+      | pid == demoProjectId || sess.user.isSudo -> fetch
       | otherwise -> redirect
 
 

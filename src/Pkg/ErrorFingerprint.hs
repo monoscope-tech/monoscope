@@ -112,6 +112,14 @@ splitDotted q = case T.breakOnEnd "." q of
   (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
+-- | Basename of a path with the first matching extension dropped. Shared by the
+-- JS/Python/PHP frame parsers so all three agree on what a module name is.
+moduleFromPath :: [Text] -> Text -> Text
+moduleFromPath exts path =
+  let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
+   in fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) exts
+
+
 -- | O(log n) prefix check via S.lookupLE: the largest entry <= the input
 -- is the only possible prefix match in a sorted set of prefixes.
 isGoStdlib :: Text -> Bool
@@ -273,9 +281,7 @@ parseJsFrame line
             [l] -> (readText l, Nothing)
             _ -> (Nothing, Nothing)
 
-    extractJsModule path =
-      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in T.toLower $ fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) [".js", ".ts", ".mjs", ".cjs"]
+    extractJsModule = T.toLower . moduleFromPath [".js", ".ts", ".mjs", ".cjs"]
 
     cleanJsFunction func =
       -- Remove namespacing: Object.foo.bar -> bar
@@ -312,9 +318,7 @@ parsePythonFrame line
               }
   | otherwise = Nothing
   where
-    extractPythonModule path =
-      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in fromMaybe baseName $ T.stripSuffix ".py" baseName
+    extractPythonModule = moduleFromPath [".py"]
 
     cleanPythonFunction = flip (foldr (uncurry T.replace)) ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
 
@@ -380,9 +384,7 @@ parsePhpFrame line
           lineNum = readText $ T.takeWhile (/= ')') $ T.drop 1 lineStr
        in (file, lineNum)
 
-    extractPhpModule path =
-      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in fromMaybe baseName $ T.stripSuffix ".php" baseName
+    extractPhpModule = moduleFromPath [".php"]
 
     cleanPhpFunction func =
       T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::"

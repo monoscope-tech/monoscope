@@ -85,8 +85,14 @@ spec = sequential $ aroundAll withTestResources do
       let sess = Servant.getResponse tr.trSessAndHeader
       runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
-      acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
+      acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       maybe (error "Issue not found after acknowledgment") (isJust . (.acknowledgedAt)) acknowledgedIssue `shouldBe` True
+
+      -- Regression (selectIssueById_otherProject_returnsNothing): the lookup used to be
+      -- unscoped, so any tenant knowing an issue id could read the row.
+      otherPid <- UUIDId @"project" <$> UUID.nextRandom
+      -- isNothing rather than `shouldReturn Nothing`: Issue has no Eq instance.
+      runTestBg frozenTime tr (Issues.selectIssueById otherPid issueId) >>= (`shouldSatisfy` isNothing)
 
       -- After acknowledging, the issue should appear in the Acknowledged filter
       acked <- listAnomalies tr (Just "Acknowledged")
@@ -367,7 +373,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
-      issue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
+      issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
       (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
       renderPage pageByHash `shouldSatisfy` T.isInfixOf "since=14D"
@@ -540,14 +546,14 @@ spec = sequential $ aroundAll withTestResources do
       advanceHours tr 23
       (within, _) <-
         runHasqlEffect tr
-          $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+          $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
       map (.base.id) within `shouldSatisfy` elem iid
 
       -- 25h in: outside window — query still returns row, but activityBuckets all zero
       advanceHours tr 2
       (after, _) <-
         runHasqlEffect tr
-          $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+          $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
       whenJust (find (\r -> r.base.id == iid) after) \row ->
         V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
 

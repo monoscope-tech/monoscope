@@ -20,7 +20,7 @@ import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
+import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
@@ -141,8 +141,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       { icon = "cube"
                       , title = "No containers reporting"
                       , description = "Point an OpenTelemetry Collector with the kubeletstats, k8s_cluster or docker_stats receivers at this project and your containers appear here."
-                      , actionText = "Collector setup guide"
-                      , destination = Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes"
+                      , action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Collector setup guide"
                       }
               }
         }
@@ -292,7 +291,7 @@ containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
   rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
   let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
-  addRespHeaders $ maybe (div_ [class_ "p-4 text-textWeak"] "This container is no longer reporting.") (containerDetail_ pid) found
+  addRespHeaders $ maybe (emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." "") (containerDetail_ pid) found
 
 
 containerDetail_ :: Projects.ProjectId -> ContainerRow -> Html ()

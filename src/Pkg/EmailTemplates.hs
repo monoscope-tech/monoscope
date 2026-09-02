@@ -55,10 +55,9 @@ import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
-import Network.HTTP.Types (urlEncode)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Utils (formatWithCommas)
+import Utils (formatWithCommas, toUriStr)
 
 
 -- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
@@ -311,15 +310,6 @@ emailFallbackUrl url = do
   p_ [class_ "sub"] $ toHtml url
 
 
--- | Standard email footer: divider, optional help links, signoff, fallback URL.
-emailFooter :: Bool -> Text -> Html ()
-emailFooter withHelp url = do
-  emailDivider
-  when withHelp (emailHelpLinks >> br_ [])
-  emailSignoff
-  emailFallbackUrl url
-
-
 emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
 emailStatRow cols =
   p_ [style_ "margin: 8px 0 20px; font-size: 13px; color: #57606a; line-height: 1.8;"]
@@ -346,41 +336,34 @@ emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi "; b_ (toHtml name); "
 -- Simple Project Templates
 -- =============================================================================
 
-data ProjectNotifKind = PNInvite | PNCreated | PNDeleted
-
-
-projectNotifEmail :: ProjectNotifKind -> Maybe Text -> Text -> Maybe (Text, Text) -> (Text, Html ())
-projectNotifEmail kind userNameM projectName ctaM =
+-- | @message@ is raw HTML; the CTA doubles as the fallback URL shown at the foot.
+projectNotifEmail :: Text -> Text -> Maybe Text -> (Text, Text) -> (Text, Html ())
+projectNotifEmail subject message userNameM (url, ctaLabel) =
   ( subject
   , emailBody do
       emailGreeting userNameM
-      p_ $ toHtmlRaw @Text message
-      whenJust ctaM $ uncurry emailButton
+      p_ $ toHtmlRaw message
+      emailButton url ctaLabel
       emailHelpLinks
       br_ []
       emailSignoff
-      whenJust ctaM \(url, _) -> emailFallbackUrl url
+      emailFallbackUrl url
   )
-  where
-    (subject, message) = case kind of
-      PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! Click the button below and <b>sign up using this email address</b> (or sign in with Google/GitHub if it's already linked to one) to access the project.")
-      PNCreated -> ("[···] New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
-      PNDeleted -> ("[···] Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
 
 
 projectInviteEmail :: Text -> Text -> Text -> (Text, Html ())
 projectInviteEmail userName projectName projectUrl =
-  projectNotifEmail PNInvite (Just userName) projectName (Just (projectUrl, "Access Project"))
+  projectNotifEmail "[···] Project Invitation" ("<b>" <> userName <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! Click the button below and <b>sign up using this email address</b> (or sign in with Google/GitHub if it's already linked to one) to access the project.") (Just userName) (projectUrl, "Access Project")
 
 
 projectCreatedEmail :: Text -> Text -> Text -> (Text, Html ())
 projectCreatedEmail userName projectName projectUrl =
-  projectNotifEmail PNCreated (Just userName) projectName (Just (projectUrl, "Access Project"))
+  projectNotifEmail "[···] New Project Created" ("You have created a new <b>" <> projectName <> "</b> project on Monoscope.") (Just userName) (projectUrl, "Access Project")
 
 
 projectDeletedEmail :: Text -> Text -> (Text, Html ())
 projectDeletedEmail userName projectName =
-  projectNotifEmail PNDeleted (Just userName) projectName (Just ("https://app.monoscope.tech/p/new", "Create a New Project"))
+  projectNotifEmail "[···] Project Deleted" ("You have successfully deleted the <b>" <> projectName <> "</b> project.") (Just userName) ("https://app.monoscope.tech/p/new", "Create a New Project")
 
 
 -- =============================================================================
@@ -534,7 +517,7 @@ traceExplorerUrl :: Text -> Text -> UTCTime -> Text
 traceExplorerUrl projectUrl tid when' =
   projectUrl
     <> "/log_explorer?query="
-    <> decodeUtf8 (urlEncode True $ encodeUtf8 ("trace_id == \"" <> tid <> "\""))
+    <> toUriStr ("trace_id == \"" <> tid <> "\"")
     <> "&from="
     <> isoT (addUTCTime (-1800) when')
     <> "&to="
@@ -597,28 +580,30 @@ truncateText n t = if T.length t > n then T.take n t <> "…" else t
 
 anomalyEndpointEmail :: Text -> Text -> Text -> [EndpointAlertRow] -> (Text, Html ())
 anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
-  ( "[···] New Endpoint(s) Detected for Your \"" <> projectName <> "\" Project"
-  , emailBody do
-      emailGreeting (Just userName)
-      p_ do
-        "We detected new endpoints on your "
-        b_ $ toHtml projectName
-        " project:"
-      div_ [class_ "highlight-box"]
-        $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-          tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
-          forM_ (groupedByContext endpointRows) \((hostM, ctxM), labels) -> do
-            whenJust hostM \h ->
-              tr_ $ td_ [style_ "padding: 10px 0 2px 0; font-weight: 600; font-size: 14px; color: #111827;"] do
-                "🌐 "
-                toHtml h
-                whenJust ctxM (span_ [style_ "color: #6b7280; font-weight: 400; margin-left: 8px; font-size: 13px;"] . toHtml)
-            -- When host is absent but a service/env caption is present, still show it on its own line.
-            when (isNothing hostM) $ whenJust ctxM (tr_ . td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] . toHtml)
-            forM_ labels (tr_ . td_ [style_ "padding: 3px 0 3px 18px;"] . span_ [class_ "monoscope-code"] . toHtml)
-      emailButton anomalyUrl "Explore the Endpoint"
-      emailFooter True anomalyUrl
-  )
+  ctaEmail
+    ("[···] New Endpoint(s) Detected for Your \"" <> projectName <> "\" Project")
+    True
+    ( do
+        emailGreeting (Just userName)
+        p_ do
+          "We detected new endpoints on your "
+          b_ $ toHtml projectName
+          " project:"
+        div_ [class_ "highlight-box"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+            tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
+            forM_ (groupedByContext endpointRows) \((hostM, ctxM), labels) -> do
+              whenJust hostM \h ->
+                tr_ $ td_ [style_ "padding: 10px 0 2px 0; font-weight: 600; font-size: 14px; color: #111827;"] do
+                  "🌐 "
+                  toHtml h
+                  whenJust ctxM (span_ [style_ "color: #6b7280; font-weight: 400; margin-left: 8px; font-size: 13px;"] . toHtml)
+              -- When host is absent but a service/env caption is present, still show it on its own line.
+              when (isNothing hostM) $ whenJust ctxM (tr_ . td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] . toHtml)
+              forM_ labels (tr_ . td_ [style_ "padding: 3px 0 3px 18px;"] . span_ [class_ "monoscope-code"] . toHtml)
+    )
+    "Explore the Endpoint"
+    anomalyUrl
 
 
 -- =============================================================================
@@ -628,26 +613,28 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
 issueAssignedEmail :: Text -> Text -> Text -> Text -> Text -> Text -> (Text, Html ())
 issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMessage =
   let issueTitle = stripSummaryBadges issueTitleRaw
-   in ( "[···] Issue Assigned: " <> issueTitle
-      , emailBody do
-          emailGreeting (Just userName)
-          p_ do
-            "You have been assigned to an issue in the "
-            b_ $ toHtml projectName
-            " project."
-          table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-            tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
-              p_ [class_ "error-card-header"] $ toHtml errorType
-              p_ [class_ "error-card-sub"] $ toHtml errorMessage
-            tr_
-              $ td_ [style_ "padding: 10px 20px 20px 20px;"]
-              $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
-              $ tr_ do
-                metaCell "Issue:" issueTitle
-                metaCell "Project:" projectName
-          emailButton issueUrl "View Issue"
-          emailFooter False issueUrl
-      )
+   in ctaEmail
+        ("[···] Issue Assigned: " <> issueTitle)
+        False
+        ( do
+            emailGreeting (Just userName)
+            p_ do
+              "You have been assigned to an issue in the "
+              b_ $ toHtml projectName
+              " project."
+            table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+              tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
+                p_ [class_ "error-card-header"] $ toHtml errorType
+                p_ [class_ "error-card-sub"] $ toHtml errorMessage
+              tr_
+                $ td_ [style_ "padding: 10px 20px 20px 20px;"]
+                $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+                $ tr_ do
+                  metaCell "Issue:" issueTitle
+                  metaCell "Project:" projectName
+        )
+        "View Issue"
+        issueUrl
 
 
 -- =============================================================================
@@ -996,8 +983,9 @@ monitorAlertEmail :: Text -> Text -> Text -> Double -> Double -> Text -> Maybe T
 monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold direction chartUrlM =
   ctaEmail
     ("[···] Monitor Alert: " <> monitorTitle <> " - " <> projectName)
-    "Monitor Alert Triggered"
+    True
     ( do
+        h1_ "Monitor Alert Triggered"
         p_ do
           "The monitor "
           b_ $ toHtml monitorTitle
@@ -1017,27 +1005,29 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
 
 
 monitorRecoveryEmail :: Text -> Text -> Text -> (Text, Html ())
-monitorRecoveryEmail projectName monitorTitle monitorUrl =
-  ( "[···] Monitor Recovered: " <> monitorTitle <> " - " <> projectName
-  , emailBody do
-      h1_ [style_ "color: #1a7f37;"] "Monitor Recovered"
-      p_ do
-        "The monitor "
-        b_ $ toHtml monitorTitle
-        " in your "
-        b_ $ toHtml projectName
-        " project has recovered and is back to normal."
-      emailButton monitorUrl "View Monitor"
-      emailFooter True monitorUrl
-  )
+monitorRecoveryEmail projectName monitorTitle =
+  ctaEmail
+    ("[···] Monitor Recovered: " <> monitorTitle <> " - " <> projectName)
+    True
+    ( do
+        h1_ [style_ "color: #1a7f37;"] "Monitor Recovered"
+        p_ do
+          "The monitor "
+          b_ $ toHtml monitorTitle
+          " in your "
+          b_ $ toHtml projectName
+          " project has recovered and is back to normal."
+    )
+    "View Monitor"
 
 
 freeTierUsageEmail :: Text -> Text -> Int -> Int -> Bool -> (Text, Html ())
 freeTierUsageEmail projectName billingUrl used limit exceeded =
   ctaEmail
     ("[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName)
-    (if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit")
+    True
     ( do
+        h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
         p_ do
           "Your "
           b_ $ toHtml projectName
@@ -1054,16 +1044,18 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     billingUrl
 
 
--- | Shared skeleton for billing/monitor notifications: h1 heading, body,
--- CTA button, standard footer (all with @withHelp=True@).
-ctaEmail :: Text -> Html () -> Html () -> Text -> Text -> (Text, Html ())
-ctaEmail subject heading body ctaLabel url =
+-- | Shared skeleton for every notification email that ends in a CTA: content,
+-- button, then divider / optional help links / signoff / fallback URL.
+ctaEmail :: Text -> Bool -> Html () -> Text -> Text -> (Text, Html ())
+ctaEmail subject withHelp content ctaLabel url =
   ( subject
   , emailBody do
-      h1_ heading
-      body
+      content
       emailButton url ctaLabel
-      emailFooter True url
+      emailDivider
+      when withHelp (emailHelpLinks >> br_ [])
+      emailSignoff
+      emailFallbackUrl url
   )
 
 
@@ -1071,13 +1063,15 @@ planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
 planUpgradedEmail projectName newPlan =
   ctaEmail
     ("[···] Plan upgraded to " <> newPlan <> " - " <> projectName)
-    "Plan Upgraded"
-    ( p_ do
-        "Your "
-        b_ $ toHtml projectName
-        " project has been upgraded to the "
-        b_ $ toHtml newPlan
-        " plan. Thank you for your support!"
+    True
+    ( do
+        h1_ "Plan Upgraded"
+        p_ do
+          "Your "
+          b_ $ toHtml projectName
+          " project has been upgraded to the "
+          b_ $ toHtml newPlan
+          " plan. Thank you for your support!"
     )
     "View Billing"
 
@@ -1086,8 +1080,9 @@ trialEndingEmail :: Text -> Int -> Text -> (Text, Html ())
 trialEndingEmail projectName daysLeft =
   ctaEmail
     ("[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName)
-    (toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days")
+    True
     ( do
+        h1_ $ toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days"
         p_ do
           "The 30-day free trial on "
           b_ $ toHtml projectName
@@ -1103,8 +1098,9 @@ planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
 planDowngradedEmail projectName reason =
   ctaEmail
     ("[···] Plan downgraded to Free - " <> projectName)
-    "Plan Downgraded to Free"
+    True
     ( do
+        h1_ "Plan Downgraded to Free"
         p_ do
           "Your "
           b_ $ toHtml projectName

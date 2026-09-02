@@ -549,7 +549,10 @@ spec = around withTestResources do
         -- Manifest: at least two gzip shard segments (byte budget split the batches),
         -- keyed under <sid>/shard-, with non-decreasing first-event timestamps.
         manifest <- runTestBg frozen tr $ buildReplayManifest project sid
-        let shardSegs = filter (\s -> s.gzipped) manifest.segments
+        -- Sealed shards are always `<prefix>/shard-<idx>-<ts>.json.gz`; the suffix is how
+        -- the read path itself decides to gunzip (see fetchReplayShard), so the test keys
+        -- off the same signal rather than a manifest field the client never read.
+        let shardSegs = filter (\s -> ".gz" `T.isSuffixOf` s.key) manifest.segments
         length shardSegs `shouldSatisfy` (>= 2)
         all (\s -> ("/shard-" :: Text) `T.isInfixOf` s.key) shardSegs `shouldBe` True
         map (\s -> s.firstTs) shardSegs `shouldBe` sort (map (\s -> s.firstTs) shardSegs)

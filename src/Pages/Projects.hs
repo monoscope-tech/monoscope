@@ -84,7 +84,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRowPad_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -139,7 +139,7 @@ instance ToHtml ListProjectsGet where
 listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
-    headerRowPad_ [] do
+    div_ [class_ "flex items-center justify-between px-4 py-3"] do
       a_ [href_ "/", class_ "flex items-center"] do
         img_ [class_ "h-6 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-6 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
@@ -494,7 +494,12 @@ integrationsBody IntegrationsConfig{..} = do
             ( [ class_ "btn btn-sm btn-ghost"
               , hxPost_ [text|/p/$pid/notifications-channels|]
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
-              , [__| on change from closest <div/> put 'btn btn-sm btn-primary' into my.className |]
+              , -- Same intent as Components.dirtyFormSaveAttr_, but that one listens on
+                -- `closest <form/>` and this control lives in a plain div (#notifsForm is
+                -- a div, not a form — the button hx-posts with hx-vals rather than
+                -- submitting). Swapping the classes rather than assigning className keeps
+                -- any other class on the button intact.
+                [__| on change from closest <div/> remove .btn-ghost from me then add .btn-primary to me |]
               ]
                 <> integrationsSwapAttrs_
             )
@@ -857,9 +862,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
     div_ [class_ "max-w-2xl"] $ teamTabsHeader_ pid "teams" (V.length projMembers) (V.length teams)
 
     if V.null teams
-      then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] do
-        div_ [class_ "text-sm text-textStrong font-medium"] "No teams yet"
-        div_ [class_ "text-xs text-textWeak mt-1"] "Create a team to route alerts to the right people."
+      then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] $ emptyState_ def{size = ESCompact} "No teams yet" "Create a team to route alerts to the right people."
       else
         div_ [class_ "w-full"]
           $ toHtml
@@ -1012,10 +1015,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
 teamPageNF pid handle = do
-  section_ [id_ "main-content", class_ "w-full py-16"] do
-    div_ [class_ "p-6 w-[606px] mx-auto"] do
-      h2_ [class_ "text-textStrong mb-4 text-xl font-semibold"] $ "Team not found: " <> toHtml handle
-      p_ [class_ "text-textWeak text-sm leading-tight"] "We couldn't find the team you're looking for."
+  section_ [id_ "main-content", class_ "w-full py-16"]
+    $ emptyState_ def{icon = Just "circle-xmark"} ("Team not found: " <> handle) "We couldn't find the team you're looking for."
 
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
@@ -1095,7 +1096,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
-              then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
+              then emptyState_ def{size = ESCompact} "No members yet" "Invite someone to get started."
               else V.imapM_ (memberRowWithStatus pid) projMembers
   where
     roleTooltip :: Text
@@ -1391,7 +1392,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
       newStepsComp = insertIfNotExist "Pricing" project.onboardingStepsCompleted
-      updatePricing name sid fid oid = Projects.updateProjectPricing pid name sid fid oid newStepsComp
+      updatePricing name sid fid oid = Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid) newStepsComp
       handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName

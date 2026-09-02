@@ -428,7 +428,7 @@ data ProducedAnomaly = ProducedAnomaly
 -- | Stable 8-char suffix for a field path. Keeps target_hash bounded
 -- and gives the read path a deterministic way back to the field.
 fieldHashSuffix :: Text -> Text
-fieldHashSuffix path = T.take 8 (toXXHash path)
+fieldHashSuffix = toXXHash -- toXXHash is already exactly 8 chars
 
 
 -- | Diff a (possibly absent) prior entry against the current one.

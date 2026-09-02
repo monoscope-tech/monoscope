@@ -12,7 +12,7 @@ import { LitElement, html, nothing, PropertyValues, TemplateResult } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { faSprite_ } from './assets';
 import { LiveStream, LiveState } from './live-stream';
-import { getStyleClass, parseSummaryElement } from './log-list-utils';
+import { atBottom, classifyLevel, getStyleClass, parseSummaryElement, type LevelSeverity } from './log-list-utils';
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type FieldValue = JsonValue | undefined;
@@ -117,21 +117,23 @@ const prepareRow = (row: LiveRow): PreparedRow => {
   return { ...row, displayFields, parsedBody, bodyPrefix, bodyFields };
 };
 
-const levelTextClass = (raw: string | null): string => {
-  const level = (raw ?? '').toLowerCase();
-  if (level.includes('error') || level.includes('fatal')) return 'text-textError';
-  if (level.includes('warn')) return 'text-textWarning';
-  if (level.includes('debug') || level.includes('trace')) return 'text-textWeak';
-  return 'text-textInformation';
+// Severity vocabulary is shared (classifyLevel); only the class names are this surface's.
+// `null` (a level this vocabulary does not recognise) keeps live tail's informational look.
+const LEVEL_TEXT: Record<LevelSeverity, string> = {
+  error: 'text-textError',
+  warn: 'text-textWarning',
+  debug: 'text-textWeak',
+  info: 'text-textInformation',
+};
+const LEVEL_CHIP: Record<LevelSeverity, string> = {
+  error: 'bg-fillError-weak text-textError border-strokeError-weak',
+  warn: 'bg-fillWarning-weak text-textWarning border-strokeWarning-weak',
+  debug: 'bg-fillWeak text-textWeak border-strokeWeak',
+  info: 'bg-fillInformation-weak text-textInformation border-strokeInformation-weak',
 };
 
-const levelClasses = (raw: string | null): string => {
-  const text = levelTextClass(raw);
-  if (text === 'text-textError') return 'bg-fillError-weak text-textError border-strokeError-weak';
-  if (text === 'text-textWarning') return 'bg-fillWarning-weak text-textWarning border-strokeWarning-weak';
-  if (text === 'text-textWeak') return 'bg-fillWeak text-textWeak border-strokeWeak';
-  return 'bg-fillInformation-weak text-textInformation border-strokeInformation-weak';
-};
+const levelTextClass = (raw: string | null): string => LEVEL_TEXT[classifyLevel(raw) ?? 'info'];
+const levelClasses = (raw: string | null): string => LEVEL_CHIP[classifyLevel(raw) ?? 'info'];
 
 const scalarTemplate = (value: FieldValue): TemplateResult => {
   const text = formatValue(value);
@@ -562,7 +564,7 @@ export class LiveTail extends LitElement {
   private trackScrollPosition = (event: Event) => {
     const list = event.currentTarget as HTMLElement;
     if (list.tagName === 'LIT-VIRTUALIZER' && this.followFrame !== null) return;
-    this.stickToBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+    this.stickToBottom = atBottom(list, 40);
   };
 
   private jumpToLive() {

@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, dispatchAIResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -10,32 +10,39 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Error.Static (Error)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Lucid
-import Models.Apis.Issues qualified as Reports
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (BWConfig, PageCtx (..))
 import Pages.Components (navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId, idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude
+import Servant.API (Header)
+import Servant.API.ResponseHeaders (Headers, addHeader)
+import Servant.Server (ServerError)
 import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB)
+import UnliftIO.Exception (tryAny)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 
 
@@ -139,6 +146,25 @@ imageBlock url alt = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..
 -- | Slack in-channel response replacing the ephemeral loading message.
 slackResponse :: [AE.Value] -> AE.Value
 slackResponse blocks = AE.object ["blocks" AE..= blocks, "response_type" AE..= ("in_channel" :: Text), "replace_original" AE..= True, "delete_original" AE..= True]
+
+
+-- Discord "components v2" building blocks (flag 32768 opts the message into the new layout).
+
+dcContainer :: Int -> [AE.Value] -> AE.Value
+dcContainer accent components = AE.object ["flags" AE..= (32768 :: Int), "components" AE..= arr [AE.object ["type" AE..= (17 :: Int), "accent_color" AE..= accent, "components" AE..= arr components]]]
+
+
+dcText :: Text -> AE.Value
+dcText content = AE.object ["type" AE..= (10 :: Int), "content" AE..= content]
+
+
+-- | Media gallery; one entry per (url, alt-text) pair.
+dcGallery :: [(Text, Text)] -> AE.Value
+dcGallery items = AE.object ["type" AE..= (12 :: Int), "items" AE..= arr [AE.object ["media" AE..= AE.object ["url" AE..= u], "description" AE..= d] | (u, d) <- items]]
+
+
+dcLinkButton :: Text -> Text -> AE.Value
+dcLinkButton label url = AE.object ["type" AE..= (1 :: Int), "components" AE..= arr [AE.object ["type" AE..= (2 :: Int), "label" AE..= label, "url" AE..= url, "style" AE..= (5 :: Int)]]]
 
 
 handleTableResponse :: BotType -> Either Text (V.Vector (V.Vector AE.Value), [Text], Int) -> EnvConfig -> Projects.ProjectId -> Text -> AE.Value
@@ -326,10 +352,10 @@ detectReportIntent query =
 
 
 -- | Process report query - retrieves latest report from DB
-processReportQuery :: (DB es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Reports.Report, Text, Text))
+processReportQuery :: (DB es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Issues.Report, Text, Text))
 processReportQuery pid reportType envCfg = do
   let typeTxt = case reportType of DailyReport -> "daily"; WeeklyReport -> "weekly"
-  Reports.getLatestReportByType pid typeTxt >>= \case
+  Issues.getLatestReportByType pid typeTxt >>= \case
     Nothing -> pure $ Left $ "No " <> typeTxt <> " report found. Reports are generated automatically on schedule."
     Just report -> do
       let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
@@ -337,63 +363,38 @@ processReportQuery pid reportType envCfg = do
       fmap Right $ (,,) report <$> png "summarize count(*) by bin_auto(timestamp), status_code" Nothing <*> png "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code" (Just "roma")
 
 
--- | Shared report-render preamble: (reportUrl, startTxt, endTxt, totalEvents, totalErrors)
-reportHeader :: Reports.Report -> Projects.ProjectId -> EnvConfig -> (Text, Text, Text, Int, Int)
-reportHeader report pid envCfg =
-  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-      startTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
-      endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
-      (totalEvents, totalErrors) = parseReportStats report.reportJson
-   in (reportUrl, startTxt, endTxt, totalEvents, totalErrors)
-
-
--- | Format report for Slack
-formatReportForSlack :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> AE.Value
-formatReportForSlack report pid envCfg eventsUrl errorsUrl =
-  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
-   in slackResponse
-        [ textBlock "header" (plainTxt $ botEmoji "chart" <> " " <> T.toTitle report.reportType <> " Report")
-        , elemsBlock "context" [mrkdwn $ "*Period:* " <> startTxt <> " → " <> endTxt]
-        , textBlock "section" (mrkdwn $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*")
-        , AE.object ["type" AE..= ("divider" :: Text)]
-        , imageBlock eventsUrl $ "Events chart for " <> report.reportType <> " report showing " <> show totalEvents <> " total events"
-        , imageBlock errorsUrl $ "Errors chart for " <> report.reportType <> " report showing " <> show totalErrors <> " total errors"
-        , elemsBlock "actions" [linkButton "view-full-report" (botEmoji "search" <> " View Full Report") reportUrl]
-        ]
-
-
--- | Format report for Discord
-formatReportForDiscord :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> AE.Value
-formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
-  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
-   in AE.object
-        [ "flags" AE..= (32768 :: Int)
-        , "components"
-            AE..= arr
-              [ AE.object
-                  [ "type" AE..= (17 :: Int)
-                  , "accent_color" AE..= (26879 :: Int)
-                  , "components"
-                      AE..= arr
-                        [ txtComp $ botEmoji "chart" <> " **" <> T.toTitle report.reportType <> " Report**"
-                        , txtComp $ "**Period:** " <> startTxt <> " → " <> endTxt
-                        , txtComp $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
-                        , AE.object ["type" AE..= (12 :: Int), "items" AE..= arr [media eventsUrl $ "Events chart for " <> report.reportType <> " report: " <> show totalEvents <> " total events", media errorsUrl $ "Errors chart for " <> report.reportType <> " report: " <> show totalErrors <> " total errors"]]
-                        , AE.object ["type" AE..= (1 :: Int), "components" AE..= arr [AE.object ["type" AE..= (2 :: Int), "label" AE..= (botEmoji "search" <> " View Full Report"), "url" AE..= reportUrl, "style" AE..= (5 :: Int)]]]
-                        ]
-                  ]
-              ]
-        ]
+-- | Render a stored report for a platform. WhatsApp goes out as a plain-text
+-- template body (Twilio has no rich-message equivalent), so it reuses the
+-- text envelope rather than embedding the two signed chart PNGs.
+formatReport :: BotType -> Issues.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> AE.Value
+formatReport target report pid envCfg eventsUrl errorsUrl = case target of
+  Slack ->
+    slackResponse
+      [ textBlock "header" (plainTxt $ title " Report")
+      , elemsBlock "context" [mrkdwn $ "*Period:* " <> period " → "]
+      , textBlock "section" (mrkdwn $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*")
+      , AE.object ["type" AE..= ("divider" :: Text)]
+      , imageBlock eventsUrl $ chartAlt "Events" " showing " totalEvents
+      , imageBlock errorsUrl $ chartAlt "Errors" " showing " totalErrors
+      , elemsBlock "actions" [linkButton "view-full-report" (botEmoji "search" <> " View Full Report") reportUrl]
+      ]
+  Discord ->
+    dcContainer
+      26879
+      [ dcText $ botEmoji "chart" <> " **" <> T.toTitle report.reportType <> " Report**"
+      , dcText $ "**Period:** " <> period " → "
+      , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
+      , dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
+      , dcLinkButton (botEmoji "search" <> " View Full Report") reportUrl
+      ]
+  WhatsApp -> formatTextResponse WhatsApp $ title " Report\nPeriod: " <> period " - " <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
   where
-    txtComp c = AE.object ["type" AE..= (10 :: Int), "content" AE..= (c :: Text)]
-    media u d = AE.object ["media" AE..= AE.object ["url" AE..= (u :: Text)], "description" AE..= (d :: Text)]
-
-
--- | Format report for WhatsApp
-formatReportForWhatsApp :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text
-formatReportForWhatsApp report pid envCfg =
-  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
-   in botEmoji "chart" <> " " <> T.toTitle report.reportType <> " Report\nPeriod: " <> startTxt <> " - " <> endTxt <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
+    reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+    day = toText . formatTime defaultTimeLocale "%Y-%m-%d"
+    period sep = day report.startTime <> sep <> day report.endTime
+    title suffix = botEmoji "chart" <> " " <> T.toTitle report.reportType <> suffix
+    chartAlt what sep n = what <> " chart for " <> report.reportType <> " report" <> sep <> show @Text n <> " total " <> T.toLower what
+    (totalEvents, totalErrors) = parseReportStats report.reportJson
 
 
 -- | Parse total events and errors from report JSON
@@ -410,42 +411,203 @@ formatTextResponse WhatsApp txt = AE.object ["body" AE..= txt]
 formatTextResponse Slack txt =
   AE.object
     [ "blocks" AE..= arr [textBlock "section" (mrkdwn txt)]
-    , "response_type" AE..= "in_channel"
+    , "response_type" AE..= ("in_channel" :: Text)
     , "replace_original" AE..= True
+    , "delete_original" AE..= True
     ]
 
 
--- | Generic AI response dispatch — renders a widget when a query is present
--- (plus any accompanying explanation), otherwise falls back to text-only.
--- Shared by all bot platforms.
-dispatchAIResponse
-  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+-- | Everything a per-platform chart message can be built from. Slack and
+-- Discord embed the pre-signed PNG; WhatsApp's Twilio content template renders
+-- the chart itself from the raw query parameters, so both forms are carried.
+data ChartCtx = ChartCtx
+  { question :: Text
+  , query :: Text
+  , chartType :: Text
+  , queryUrl :: Text
+  , imageUrl :: Text
+  , projectId :: Projects.ProjectId
+  , now :: UTCTime
+  , fromTime :: Maybe UTCTime
+  , toTime :: Maybe UTCTime
+  }
+
+
+formatChart :: BotType -> ChartCtx -> AE.Value
+formatChart target c = case target of
+  Slack ->
+    AE.object
+      [ "blocks"
+          AE..= arr
+            [ textBlock "header" $ plainTxt (botEmoji "chart" <> " " <> c.question)
+            , imageBlock c.imageUrl ("Chart: " <> c.question)
+            , elemsBlock "context" [mrkdwn ("*Query:* `" <> c.query <> "`")]
+            , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji "search" <> " View in Log Explorer") c.queryUrl]
+            ]
+      , "response_type" AE..= ("in_channel" :: Text)
+      , "replace_original" AE..= True
+      ]
+  Discord ->
+    dcContainer
+      26879
+      [ dcText $ botEmoji "chart" <> " **" <> c.question <> "**"
+      , dcGallery [(c.imageUrl, "Chart visualization: " <> c.question)]
+      , dcText $ "**Query:** `" <> c.query <> "`"
+      , dcLinkButton (botEmoji "search" <> " View in Log Explorer") c.queryUrl
+      ]
+  -- Twilio content-template variables; "3" is the query string the template
+  -- appends to the chart endpoint, "4" the (host-relative) explorer link.
+  WhatsApp ->
+    AE.object
+      [ "1" AE..= ("*" <> c.question <> "*")
+      , "2" AE..= ("`" <> c.query <> "`")
+      , "3" AE..= ("time=" <> toUriStr (show c.now) <> "&q=" <> toUriStr c.query <> "&p=" <> toUriStr c.projectId.toText <> "&t=" <> toUriStr c.chartType <> "&from=" <> toUriStr (iso c.fromTime) <> "&to=" <> toUriStr (iso c.toTime))
+      , "4" AE..= (c.projectId.toText <> "/log_explorer?viz_type=" <> c.chartType <> "&query=" <> toUriStr c.query)
+      ]
+  where
+    iso = maybe "" (toText . iso8601Show)
+
+
+-- | A rendered bot reply. The payload is already platform-shaped by
+-- 'formatTextResponse' / 'formatReport' / 'formatChart'; the constructor records
+-- which outbound /form/ it is, because WhatsApp must select a different Twilio
+-- content template for each. The pipeline knows this at every send site, so it
+-- is carried in the type rather than re-derived downstream by sniffing whichever
+-- JSON key the renderer happened to emit.
+data BotReply = ReplyText AE.Value | ReplyChart AE.Value
+
+
+-- | Slack and Discord post both forms the same way, so they discard the
+-- distinction that WhatsApp needs. Spelled out per constructor rather than
+-- pattern-matched with a wildcard, so a third form can't be added silently.
+botReplyPayload :: BotReply -> AE.Value
+botReplyPayload = \case
+  ReplyText v -> v
+  ReplyChart v -> v
+
+
+-- | A bot conversation thread: where replies are persisted, plus the formatted
+-- history handed to the model.
+data BotThread = BotThread
+  { convId :: UUIDId "conversation"
+  , context :: Text
+  }
+
+
+-- | The shared bot ask pipeline: intent detection → report or agentic query →
+-- per-platform rendering → outbound send. The only platform-specific inputs are
+-- the 'BotType' (which selects every renderer) and @send@ (the transport, which
+-- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
+-- Discord interaction followup, Twilio).
+runBotQuery
+  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => BotType
+  -> (BotReply -> Eff es ())
   -> EnvConfig
   -> Projects.ProjectId
   -> Text
-  -- ^ user question (for chart content builder)
-  -> AI.LLMResponse
-  -> (AE.Value -> Eff es ())
-  -- ^ send response callback
-  -> (Text -> Text -> Text -> Text -> AE.Value)
-  -- ^ build chart content: question query queryUrl imageUrl
+  -> Eff es (Maybe BotThread)
+  -- ^ resolves the conversation thread; run only for agentic queries, so a
+  -- report request never pays for a thread backfill
   -> Eff es ()
-dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartContent = do
-  now <- Time.currentTime
-  let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-  case resp.query of
-    Nothing -> sendResponse $ formatTextResponse botType $ fromMaybe "No response available" resp.explanation
-    Just query -> do
-      case resp.visualization of
-        Just vizType -> do
-          let wType = Widget.mapChartTypeToWidgetType vizType
-              queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> Widget.mapWidgetTypeToChartType wType <> "&query=" <> toUriStr query
-          imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (toText . iso8601Show <$> fromTimeM) (toText . iso8601Show <$> toTimeM)
-          sendResponse $ buildChartContent userQuestion query queryUrl imageUrl
-        Nothing -> case parseQueryToAST query of
-          Left _ -> sendResponse $ formatBotError botType (QueryParseError query)
-          Right query' -> do
-            tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
-            sendResponse $ handleTableResponse botType tableAsVecE envCfg pid query
-      whenJust resp.explanation (sendResponse . formatTextResponse botType)
+runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIntent userQuery of
+  ReportIntent reportType ->
+    processReportQuery pid reportType envCfg
+      >>= send
+      . ReplyText
+      . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
+  GeneralQueryIntent -> do
+    threadM <- resolveThread
+    result <- processAIQuery envCfg.enableTimefusionReads pid userQuery ((.context) <$> threadM) envCfg.openaiModel envCfg.openaiApiKey
+    whenJust threadM \t -> do
+      Issues.insertChatMessage pid t.convId Issues.ChatUser userQuery Nothing Nothing
+      whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage pid t.convId Issues.ChatAssistant q Nothing Nothing
+    case result of
+      Left _ -> send $ ReplyText $ formatBotError target ServiceError
+      Right resp -> dispatchAIResponse resp
+  where
+    -- Renders a chart when the model picked a visualization, a result table when
+    -- it produced a bare query, then any accompanying explanation.
+    dispatchAIResponse resp = do
+      now <- Time.currentTime
+      let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+      case resp.query of
+        Nothing -> send $ ReplyText $ formatTextResponse target $ fromMaybe "No response available" resp.explanation
+        Just query -> do
+          case resp.visualization of
+            Just vizType -> do
+              let wType = Widget.mapChartTypeToWidgetType vizType
+                  chartType = Widget.mapWidgetTypeToChartType wType
+              imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing (toText . iso8601Show <$> fromTimeM) (toText . iso8601Show <$> toTimeM)
+              send
+                $ ReplyChart
+                $ formatChart
+                  target
+                  ChartCtx
+                    { question = userQuery
+                    , query
+                    , chartType
+                    , queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+                    , imageUrl
+                    , projectId = pid
+                    , now
+                    , fromTime = fromTimeM
+                    , toTime = toTimeM
+                    }
+            Nothing -> case parseQueryToAST query of
+              Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
+              Right query' -> do
+                tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
+                send $ ReplyText $ handleTableResponse target tableAsVecE envCfg pid query
+          whenJust resp.explanation (send . ReplyText . formatTextResponse target)
+
+
+-- | Resolve a bot thread's conversation, backfilling it from the platform's own
+-- thread API on first contact, and return the history formatted for the model.
+-- @backfill@ is the only platform-specific part: it fetches the platform's
+-- messages and classifies their roles (@Nothing@ = fetch failed).
+withBotThread
+  :: (DB es, Error ServerError :> es, Log :> es, Time.Time :> es)
+  => BotType
+  -> Projects.ProjectId
+  -> UUIDId "conversation"
+  -> Issues.ConversationType
+  -> AE.Value
+  -> Eff es (Maybe [(Issues.ChatRole, Text)])
+  -> Eff es BotThread
+withBotThread target pid convId convType meta backfill = do
+  _ <- Issues.getOrCreateConversation pid convId convType meta
+  existingHistory <- Issues.selectChatHistory convId
+  -- Advisory lock: only the first interaction seeds the thread's history.
+  when (null existingHistory) $ whenM (Issues.tryAcquireChatMigrationLock convId) do
+    result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (mapM_ \(role, txt) -> Issues.insertChatMessage pid convId role txt Nothing Nothing)
+    Issues.releaseChatMigrationLock convId
+    whenLeft_ result \err -> Log.logAttention "Bot thread backfill failed" $ AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId, "error" AE..= show @Text err]
+  BotThread convId . formatHistoryAsContext (show target) . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory convId
+  where
+    ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]
+
+
+-- | Resolve a dashboard id to its on-disk template, scoped to @pid@. The id
+-- arrives inside client-controlled payloads (component custom_id, message
+-- body), so an unscoped lookup would render another tenant's dashboard.
+withDashboardTemplate :: DB es => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
+withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \did ->
+  whenJustM (Dashboards.getDashboardByProjectId pid did) \dashboardVM -> do
+    dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
+    whenJust dashboardM act
+
+
+-- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.
+parseInstallState :: Maybe Text -> (Maybe Projects.ProjectId, Bool)
+parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head parts, length parts > 1)
+  where
+    parts = maybe [] (T.splitOn "__") stateM
+
+
+-- | Post-install reply: onboarding resumes in the app, otherwise the
+-- "installed" confirmation page.
+installedResponse :: Text -> Projects.ProjectId -> Bool -> BWConfig -> Headers '[Header "Location" Text] BotResponse
+installedResponse platform pid isOnboarding bwconf
+  | isOnboarding = addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+  | otherwise = addHeader "" $ BotLinked $ PageCtx bwconf (platform, Just pid)

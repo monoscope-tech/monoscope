@@ -35,8 +35,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, elemsBlock, formatBotError, formatHistoryAsContext, formatReportForSlack, getLoadingMessage, imageBlock, linkButton, mrkdwn, plainTxt, processAIQuery, processReportQuery, textBlock)
-import Pkg.AI qualified as AI
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, parseInstallState, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
 import PyF
@@ -124,18 +123,9 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
       Nothing <$ Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)])
 
 
--- | Parse state parameter: "projectId" or "projectId__onboarding"
-parseSlackState :: Maybe Text -> (Maybe Projects.ProjectId, Bool)
-parseSlackState stateM = (pidM, isOnboarding)
-  where
-    parts = maybe [] (T.splitOn "__") stateM
-    pidM = Projects.projectIdFromText =<< viaNonEmpty head parts
-    isOnboarding = length parts > 1
-
-
 linkProjectGetH :: Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
 linkProjectGetH slack_code stateM = do
-  let (pidM, isOnboarding) = parseSlackState stateM
+  let (pidM, isOnboarding) = parseInstallState stateM
   let bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Slack app installed"}
   case pidM of
     Nothing -> pure $ addHeader "" $ NoTokenFound $ PageCtx bwconf ()
@@ -162,9 +152,7 @@ linkProjectGetH slack_code stateM = do
             -- so post the welcome via the channel-bound incoming webhook URL.
             result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
-          if isOnboarding
-            then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
+          pure $ installedResponse "Slack" pid isOnboarding bwconf
         _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
@@ -188,7 +176,10 @@ slackInteractionsH interaction = do
       slackDataM <- getSlackDataByTeamId interaction.team_id
       when (isNothing slackDataM) $ Log.logAttention ("Slack slash command for unlinked workspace" :: Text) $ AE.object ["team_id" AE..= interaction.team_id, "command" AE..= interaction.command]
       forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
-        $ maybe (sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)) (handleAskCommand interaction authCtx.env) slackDataM
+        $ maybe
+          (sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError))
+          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env sd.projectId interaction.text (pure Nothing))
+          slackDataM
       traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
@@ -227,19 +218,6 @@ slackInteractionsH interaction = do
           , "replace_original" AE..= True
           , "delete_original" AE..= True
           ]
-
-    handleAskCommand :: SlackInteraction -> EnvConfig -> SlackData -> ATBaseCtx ()
-    handleAskCommand inter envCfg slackData = case detectReportIntent inter.text of
-      ReportIntent reportType ->
-        processReportQuery slackData.projectId reportType envCfg >>= \case
-          Left err -> send "Slack followup response (report error)" $ AE.object ["text" AE..= err, "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
-          Right (report, eventsUrl, errorsUrl) -> send "Slack followup response (report)" $ formatReportForSlack report slackData.projectId envCfg eventsUrl errorsUrl
-      GeneralQueryIntent ->
-        processAIQuery envCfg.enableTimefusionReads slackData.projectId inter.text Nothing envCfg.openaiModel envCfg.openaiApiKey >>= \case
-          Left _ -> send "Slack followup response (AI error)" $ formatBotError Slack ServiceError
-          Right resp -> dispatchAIResponse Slack envCfg slackData.projectId inter.text resp (sendSlackFollowupResponse inter.response_url) getBotContentWithUrl
-      where
-        send label resp = Log.logTrace (label :: Text) resp >> sendSlackFollowupResponse inter.response_url resp
 
 
 newtype SlackActionForm = SlackActionForm {payload :: Text}
@@ -405,6 +383,7 @@ lookupSelectedValueByKey key' v = v ^? key "values" . key k . key k . key "selec
 -- follow-ups don't vanish silently.
 sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
+  Log.logTrace ("Slack followup response" :: Text) content
   rs <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
   unless (statusIsSuccessful (rs ^. Wreq.responseStatus))
     $ Log.logAttention "Slack followup POST non-2xx"
@@ -440,24 +419,6 @@ data SlackInteraction = SlackInteraction
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
-
-
--- | Build Slack message content with a chart image URL using Block Kit
-getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
-getBotContentWithUrl question query query_url imageUrl =
-  AE.object
-    [ "blocks"
-        AE..= AE.Array
-          ( V.fromList
-              [ textBlock "header" $ plainTxt (botEmoji "chart" <> " " <> question)
-              , imageBlock imageUrl ("Chart: " <> question)
-              , elemsBlock "context" [mrkdwn ("*Query:* `" <> query <> "`")]
-              , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji "search" <> " View in Log Explorer") query_url]
-              ]
-          )
-    , "response_type" AE..= ("in_channel" :: Text)
-    , "replace_original" AE..= True
-    ]
 
 
 -- | Merge two Slack JSON objects (for adding channel/thread_ts to block content)
@@ -639,35 +600,17 @@ slackEventsPostH payload = do
       Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
 
     processThreadedEvent envCfg slackData event workspaceId threadTs = do
-      let convId = Issues.slackThreadToConversationId event.channel threadTs
-      _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
-      existingHistory <- Issues.selectChatHistory convId
-
-      -- One-time migration: if DB is empty, backfill the thread from Slack's API
-      when (null existingHistory) do
-        lockAcquired <- Issues.tryAcquireChatMigrationLock convId
-        when lockAcquired do
-          result <-
-            tryAny
-              $ getChannelMessages slackData.botToken event.channel threadTs
-              >>= \case
-                Nothing -> Log.logAttention "Slack chat migration: getChannelMessages failed" $ AE.object ["conv_id" AE..= show @Text convId, "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
-                Just replies -> forM_ replies.messages \m ->
-                  Issues.insertChatMessage slackData.projectId convId Issues.ChatUser m.text Nothing Nothing
-          Issues.releaseChatMigrationLock convId
-          whenLeft_ result \err ->
-            Log.logAttention "Slack chat migration failed" $ AE.object ["error" AE..= show @Text err, "conv_id" AE..= show @Text convId]
-
-      threadContext <- formatHistoryAsContext "Slack" . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory convId
-      processAIQuery envCfg.enableTimefusionReads slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey >>= \case
-        Left err -> do
-          Log.logAttention "Slack fallback_error_message (threaded AI query failed)" $ AE.object ["team_id" AE..= slackData.teamId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "ai_error" AE..= err]
-          sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
-        Right resp -> do
-          Issues.insertChatMessage slackData.projectId convId Issues.ChatUser event.text Nothing Nothing
-          whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId Issues.ChatAssistant q Nothing Nothing
-          let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-          dispatchAIResponse Slack envCfg slackData.projectId event.text resp (sendSlackChatMessage slackData.botToken . addThread) getBotContentWithUrl
+      let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+          resolveThread =
+            Just
+              <$> withBotThread
+                Slack
+                slackData.projectId
+                (Issues.slackThreadToConversationId event.channel threadTs)
+                Issues.CTSlackThread
+                (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
+                (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)
+      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg slackData.projectId event.text resolveThread
 
 
 newtype SlackThreadedMessage = SlackThreadedMessage {text :: Text}

@@ -454,7 +454,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       it "unarchive from the Archived tab works without a request_type filter" \(tr, testPid) -> do
         -- Production path: user clicks Unarchive while on the Archived tab,
         -- where the form posts no request_type. The handler must apply across
-        -- both directions (mirror of archiveHosts pid Nothing in the model).
+        -- both directions (mirror of setHostsArchived pid Nothing in the model).
         _ <- bulk tr testPid "archive" "Incoming" ["172.31.29.11"]
         _ <- bulk tr testPid "archive" "Outgoing" ["api.upstream.example"]
         archivedAny <- listHosts tr testPid "Incoming" (Just "Archived")
@@ -553,5 +553,5 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                   (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
         insertSpan "/old" 5
         insertSpan "/new" 120
-      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid False (Just hostName) (Just "last_seen") Nothing 0 10 "Incoming" "7d"
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Just "last_seen", page = 0, perPage = 10, period = Endpoints.Window7d}
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]

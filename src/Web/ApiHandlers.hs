@@ -139,6 +139,7 @@ import Servant (NoContent (..), ServerError (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Text.Slugify (slugify)
+import Utils (hostPath)
 import Web.ApiTypes
 import Web.FacetsFallback (facetsFallback)
 
@@ -717,7 +718,7 @@ apiShareLinkCreate pid req = do
   _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
   ShareEvents.createShareLink shareId pid req.eventId (fromMaybe "request" req.eventType) req.eventCreatedAt
-  let url = authCtx.config.hostUrl <> "/share/r/" <> UUID.toText shareId
+  let url = hostPath authCtx.config.hostUrl $ "share/r/" <> UUID.toText shareId
   pure ShareLinkCreated{id = shareId, url}
 
 
@@ -901,17 +902,31 @@ apiIssuesList
   -> Maybe Int -- per_page
   -> ATBaseCtx (Paged IssueApiSummary)
 apiIssuesList pid statusM typeM svcM pageM perPageM = paged pageM perPageM 200 $ \perPage offset ->
-  -- Map high-level status to (isAck, isArch) filters.
+  -- Map high-level status to ack/archive column filters.
   let (ackF, archF) = case fromMaybe ISOpen statusM of
-        ISOpen -> (Just False, Just False)
-        ISAcknowledged -> (Just True, Just False)
-        ISArchived -> (Nothing, Just True)
-        ISAll -> (Nothing, Nothing)
-   in first (fmap issueToSummary) <$> Issues.selectIssuesByFilters pid ackF archF typeM svcM perPage offset
+        ISOpen -> (Issues.IsNull, Issues.IsNull)
+        ISAcknowledged -> (Issues.IsNotNull, Issues.IsNull)
+        ISArchived -> (Issues.AnyValue, Issues.IsNotNull)
+        ISAll -> (Issues.AnyValue, Issues.AnyValue)
+      -- An empty query param means "no filter", not "match the empty string".
+      oneOf = filter (not . T.null) . maybeToList
+   in first (fmap issueToSummary)
+        <$> Issues.selectIssues
+          pid
+          Issues.PIssue
+          Issues.defIssueFilters
+            { Issues.ack = ackF
+            , Issues.archive = archF
+            , Issues.types = oneOf typeM
+            , Issues.services = oneOf svcM
+            , Issues.order = Just "-updated_at"
+            , Issues.limit = perPage
+            , Issues.offset = offset
+            }
 
 
 fetchIssue :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx Issues.Issue
-fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueByIdScoped pid iid
+fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueById pid iid
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -1028,11 +1043,11 @@ toTeamSummary t =
 -- | Project the team's member UUIDs to 'UserRef's via a single users lookup.
 -- ('Projects.usersByIds' already short-circuits on an empty vector.)
 resolveTeamMembers :: V.Vector Projects.UserId -> ATBaseCtx [UserRef]
-resolveTeamMembers uids = fmap toUserRef <$> Projects.usersByIds (V.map Projects.getUserId uids)
+resolveTeamMembers uids = fmap toUserRef <$> Projects.usersByIds uids
   where
     toUserRef u =
       UserRef
-        { id = Projects.getUserId u.id
+        { id = u.id.unwrap
         , email = CI.original u.email
         , name = guarded (not . T.null) (T.strip (u.firstName <> " " <> u.lastName))
         }
@@ -1165,7 +1180,7 @@ toMemberSummary :: PM.ProjectMemberVM -> MemberSummary
 toMemberSummary m =
   MemberSummary
     { id = m.id
-    , userId = Projects.getUserId m.userId
+    , userId = m.userId.unwrap
     , email = CI.original m.email
     , firstName = m.first_name
     , lastName = m.last_name
@@ -1179,7 +1194,7 @@ apiMembersList pid = fmap toMemberSummary <$> PM.selectActiveProjectMembers pid
 
 -- | Locate a single member row via its user_id (project-scoped).
 fetchMemberByUserId :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx PM.ProjectMemberVM
-fetchMemberByUserId pid uid = notFoundOr "Member not found" =<< PM.getActiveProjectMemberByUserId pid uid
+fetchMemberByUserId pid uid = notFoundOr "Member not found" =<< PM.getActiveProjectMemberByUserId pid (Projects.UserId uid)
 
 
 apiMemberGet :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx MemberSummary
@@ -1199,7 +1214,7 @@ apiMemberAdd pid req = do
     (Nothing, Nothing) ->
       throwError err400{errBody = "Either email or user_id is required"}
   _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
-  apiMemberGet pid (Projects.getUserId uid)
+  apiMemberGet pid uid.unwrap
 
 
 apiMemberPatch :: Projects.ProjectId -> UUID.UUID -> MemberPatch -> ATBaseCtx MemberSummary

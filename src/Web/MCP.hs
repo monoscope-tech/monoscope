@@ -39,6 +39,8 @@ import Network.Wai qualified as Wai
 -- Despite the "test" in its name, @Network.Wai.Test@ (from @wai-extra@, an
 -- explicit lib dep) is the cheapest stable way to drive a 'Wai.Application'
 -- synchronously and capture its full response.
+
+import Data.Effectful.LLM qualified as ELLM
 import Network.Wai.Test qualified as WT
 import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
@@ -563,7 +565,7 @@ analyzeIssue =
                 $issueJson
                 </issue>
                 |]
-        AI.callOpenAIAPIEff authCtx.env.openaiModel prompt authCtx.env.openaiApiKey >>= \case
+        ELLM.callLLM authCtx.env.openaiModel prompt authCtx.env.openaiApiKey >>= \case
           Left err -> pure $ toolError ("LLM call failed: " <> err)
           Right analysis -> pure $ okResult $ AE.object ["issue" AE..= issue, "analysis" AE..= analysis]
 

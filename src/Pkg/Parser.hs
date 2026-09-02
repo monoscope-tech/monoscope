@@ -143,10 +143,9 @@ buildLimit qc = case (qc.takeLimit, qc.finalSummarizeQuery) of
 buildHaving :: QueryComponents -> Text
 buildHaving qc = case qc.havingClause of
   Nothing -> ""
-  Just cond -> "HAVING (" <> foldr substitute cond aliases <> ")"
+  Just cond -> "HAVING (" <> Map.foldrWithKey substitute cond (aggregationAliases qc) <> ")"
   where
-    aliases = [(alias, expr) | agg <- qc.aggregations, (expr, Just alias) <- [splitTrailingAlias agg]]
-    substitute (alias, expr) = T.replace alias ("(" <> expr <> ")")
+    substitute alias expr = T.replace alias ("(" <> expr <> ")")
 
 
 buildWhereCondition :: Maybe Text -> Text

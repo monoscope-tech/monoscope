@@ -15,10 +15,6 @@ module Pkg.AI (
   parseAgenticResponse,
   getNormalTupleResponse,
 
-  -- * Basic LLM Calls
-  callOpenAIAPI,
-  callOpenAIAPIEff,
-
   -- * System Prompt
   systemPrompt,
   kqlGuide,
@@ -48,7 +44,6 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Lens (key, _Array, _Number, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
@@ -119,10 +114,6 @@ data LLMResponse = LLMResponse
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LLMResponse
-
-
-callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Text -> Eff es (Either Text Text)
-callOpenAIAPIEff = ELLM.callLLM
 
 
 getNormalTupleResponse :: Text -> Either Text (Text, Maybe Text)

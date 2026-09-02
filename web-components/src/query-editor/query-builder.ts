@@ -1,17 +1,9 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { schemaManager } from './query-editor';
+import debounce from 'lodash/debounce';
 
 type FieldOption = { label: string; value: string; type: string };
-
-// Simple debounce utility
-function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
-  let timeout: NodeJS.Timeout;
-  return ((...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  }) as T;
-}
 
 /**
  * Query builder component for GROUP BY, AGG, SORT, LIMIT operations
@@ -836,22 +828,19 @@ export class QueryBuilderComponent extends LitElement {
     this.requestUpdate();
   }
 
-  /**
-   * Filter group by fields by search term
-   */
-  private filterGroupByFieldsBySearchTerm(searchTerm: string): void {
-    this.filteredGroupByFields = this.fieldsOptions.filter(
+  /** Fields whose value or label contains @searchTerm@ (already lowercased by the caller). */
+  private fieldsMatching(searchTerm: string) {
+    return this.fieldsOptions.filter(
       (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
     );
   }
 
-  /**
-   * Filter fields by search term
-   */
+  private filterGroupByFieldsBySearchTerm(searchTerm: string): void {
+    this.filteredGroupByFields = this.fieldsMatching(searchTerm);
+  }
+
   private filterFieldsBySearchTerm(searchTerm: string): void {
-    this.filteredFields = this.fieldsOptions.filter(
-      (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
-    );
+    this.filteredFields = this.fieldsMatching(searchTerm);
   }
 
   /**

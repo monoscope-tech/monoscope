@@ -1,4 +1,5 @@
 module Utils (
+  sinceWindows,
   onpointerdown_,
   jsonValueToHtmlTree,
   freeTierDailyMaxEvents,
@@ -18,12 +19,15 @@ module Utils (
   lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
+  hostPath,
   formatUTCMicros,
   fmtDate,
   encodeText,
   insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
+  lookupVecNonEmptyText,
+  lookupVecBy,
   deleteParam,
   unwrapJsonPrimValue,
   listToIndexHashMap,
@@ -571,6 +575,13 @@ lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe 
 lookupVecTextByKey = lookupVecBy
 
 
+-- | 'lookupVecTextByKey' treating an empty cell as absent. The row matrix spells
+-- a missing @parent_id@\/@trace_id@ as @""@ as often as @null@, so every caller
+-- that walks the trace tree wants this rather than the raw text.
+lookupVecNonEmptyText :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
+lookupVecNonEmptyText v m k = mfilter (not . T.null) (lookupVecBy v m k)
+
+
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
 lookupVecBoolByKey v m k = fromMaybe False (lookupVecBy v m k)
 
@@ -617,6 +628,24 @@ formatUTCMicros = fmtDate "%Y-%m-%dT%H:%M:%S%6QZ"
 -- | Format any time value with a strftime-style pattern.
 fmtDate :: FormatTime t => String -> t -> Text
 fmtDate f = toText . formatTime defaultTimeLocale f
+
+
+-- | Join the configured @HOST_URL@ to a path with exactly one separating slash,
+-- whichever way either side is spelled. @HOST_URL@ carries a trailing slash in
+-- practice (@https://app.monoscope.tech/@), so sites that wrote @hostUrl <> "/p/"@
+-- emitted a double slash while sites that wrote @hostUrl <> "p/"@ depended on that
+-- trailing slash being present. Neither spelling is safe on its own; use this instead.
+--
+-- >>> hostPath "https://app.monoscope.tech/" "p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech" "/p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech/" "/p/abc"
+-- "https://app.monoscope.tech/p/abc"
+-- >>> hostPath "https://app.monoscope.tech" ""
+-- "https://app.monoscope.tech/"
+hostPath :: Text -> Text -> Text
+hostPath host path = T.dropWhileEnd (== '/') host <> "/" <> T.dropWhile (== '/') path
 
 
 -- | Encode a value as JSON Text (data attributes, widget JSON, etc.)
@@ -761,7 +790,7 @@ nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ nest (T.spl
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
-isDemoAndNotSudo pid isSudo = pid.toText == "00000000-0000-0000-0000-000000000000" && not isSudo
+isDemoAndNotSudo pid isSudo = pid == Projects.demoProjectId && not isSudo
 
 
 toUriStr :: Text -> Text
@@ -769,19 +798,25 @@ toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 
 -- | Relative-window tokens accepted by 'parseTime': token → (window in seconds, display label).
+-- | The canonical since-window vocabulary: key, width in seconds, and the label the
+-- user sees. 'Pkg.Components.TimePicker.timePickerItems' is derived from this, so the
+-- two cannot drift. They had: every one of these eleven labels differed in case or
+-- plural from the picker's ("Last Hour" vs "Last hour", "Last 5 min" vs "Last 5 mins"),
+-- and since the picker resolves a label by looking the key up in its own list, the same
+-- control read differently depending on which parser the handler happened to use.
 sinceWindows :: [(Text, (Integer, Text))]
 sinceWindows =
-  [ ("5M", (300, "Last 5 min"))
-  , ("15M", (900, "Last 15 min"))
-  , ("30M", (1800, "Last 30 min"))
-  , ("1H", (3600, "Last Hour"))
-  , ("3H", (3600 * 3, "Last 3 Hours"))
-  , ("6H", (3600 * 6, "Last 6 Hours"))
-  , ("12H", (3600 * 12, "Last 12 Hours"))
-  , ("24H", (3600 * 24, "Last 24 Hours"))
-  , ("3D", (3600 * 24 * 3, "Last 3 Days"))
-  , ("7D", (3600 * 24 * 7, "Last 7 Days"))
-  , ("14D", (3600 * 24 * 14, "Last 14 Days"))
+  [ ("5M", (300, "Last 5 mins"))
+  , ("15M", (900, "Last 15 mins"))
+  , ("30M", (1800, "Last 30 mins"))
+  , ("1H", (3600, "Last hour"))
+  , ("3H", (3600 * 3, "Last 3 hours"))
+  , ("6H", (3600 * 6, "Last 6 hours"))
+  , ("12H", (3600 * 12, "Last 12 hours"))
+  , ("24H", (3600 * 24, "Last 24 hours"))
+  , ("3D", (3600 * 24 * 3, "Last 3 days"))
+  , ("7D", (3600 * 24 * 7, "Last 7 days"))
+  , ("14D", (3600 * 24 * 14, "Last 14 days"))
   ]
 
 
@@ -1040,7 +1075,8 @@ extractMessageFromLog (AE.Object obj) =
 extractMessageFromLog _ = Nothing
 
 
--- | Get service color class by hashing the service name (matches getServiceColors logic)
+-- | Tailwind fill class for a service, chosen by hashing its name. The single source of
+-- the mapping: 'getServiceColors' is this function over a vector of names.
 serviceFillColor :: Text -> Text
 serviceFillColor name = serviceColors V.! (fromIntegral (xxHash (encodeUtf8 name)) `mod` V.length serviceColors)
 

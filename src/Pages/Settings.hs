@@ -100,7 +100,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -363,7 +363,7 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = apiKeys
-    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}}
+    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", action = Table.ESNone}}
     }
 
 
@@ -379,7 +379,7 @@ apiKeyColumns pid =
       div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
         input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
         span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-        span_ [class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
+        span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
         div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
           let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
           label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
@@ -390,11 +390,10 @@ apiKeyColumns pid =
             [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
             , type_ "button"
             , Aria.label_ $ "Copy " <> apiKey.title
-            , term "data-key" apiKey.keyPrefix
-            , [__| on click if 'clipboard' in window.navigator then
-                            call navigator.clipboard.writeText(my @data-key)
-                            send successToast(value:['API key copied to clipboard']) to <body/>
-                          end |]
+            , -- Shared Copy behavior (BodyWrapper): copies the element's innerText and
+              -- adds the .copy-success flash. The hand-rolled version here had no flash,
+              -- so copy feedback differed from the log detail panel.
+              term "_" ("install Copy(content: #key-value-" <> apiKey.id.toText <> ")")
             , data_ "tip" "Copy key"
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
@@ -434,13 +433,7 @@ copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
               button_
                 [ type_ "button"
                 , class_ "btn btn-sm btn-success"
-                , [__|
-                      on click
-                        if 'clipboard' in window.navigator then
-                          call navigator.clipboard.writeText(#newKey's innerText)
-                          send successToast(value:['API Key has been added to the Clipboard']) to <body/>
-                        end
-                        |]
+                , [__|install Copy(content: #newKey)|]
                 ]
                 "Copy Key"
               if hasNext
@@ -969,9 +962,7 @@ notificationsTestHistoryGetH pid = do
 
 
 historyHtml_ :: [TestHistory] -> Html ()
-historyHtml_ [] = div_ [class_ "text-center py-12"] do
-  div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
-  p_ [class_ "text-sm text-textWeak"] "Test your integrations to see results here"
+historyHtml_ [] = emptyState_ def{size = ESCompact} "No test notifications sent yet" "Test your integrations to see results here"
 historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
     renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
@@ -1093,7 +1084,7 @@ webhookPostH sigHeaderM rawBody = do
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
       upgrade = do
-        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id plan
+        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id (Projects.PlanName plan)
         when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
         when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
         Projects.projectBySubId (show subItem.subscriptionId) >>= \case
@@ -1120,7 +1111,7 @@ webhookPostH sigHeaderM rawBody = do
       _ <- Projects.addSubscription sub
       -- Safety net: update project billing if frontend checkout callback failed
       whenJust (Projects.projectIdFromText projectId) \pid -> do
-        void $ Projects.updateProjectBilling pid plan (show subItem.subscriptionId) (show subItem.id) (show orderId)
+        void $ Projects.updateProjectBilling pid (Projects.PlanName plan) (Projects.SubId $ show subItem.subscriptionId) (Projects.SubItemId $ show subItem.id) (Projects.OrderId $ show orderId)
         whenJustM (Projects.projectById pid) \project ->
           notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
       pure "subscription created"
@@ -1303,7 +1294,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
   if null rows
-    then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
+    then emptyState_ def{size = ESCompact} "No usage recorded yet this cycle." ""
     else do
       let activeDays = length rows
           maxDay = foldr (max . (.requests)) 1 rows
@@ -1590,7 +1581,7 @@ handleStripeCheckout envConfig obj = do
           subDetails <- BJ.getStripeSubDetails envConfig.stripeSecretKey subId
           when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
           let subItemId = maybe "" (.subItemId) subDetails
-          void $ Projects.updateStripeProjectBilling pid plan subId subItemId customerId
+          void $ Projects.updateStripeProjectBilling pid (Projects.PlanName plan) (Projects.SubId subId) (Projects.SubItemId subItemId) (Projects.CustomerId customerId)
           void $ ProjectMembers.activateAllMembers pid
           case subDetails of
             Just BJ.StripeSubDetails{trialEnd = Just epoch} -> BJ.scheduleTrialReminders pid epoch
@@ -1658,7 +1649,7 @@ handleStripeSubResumed envConfig obj =
           let plan
                 | priceId == envConfig.stripePriceIdByos = "SystemsPricing"
                 | otherwise = "GraduatedPricing"
-          rows <- Projects.setPlanBySubId plan itemId subId
+          rows <- Projects.setPlanBySubId (Projects.PlanName plan) (Projects.SubItemId itemId) (Projects.SubId subId)
           when (rows == 0) $ Log.logAttention "Stripe subscription.resumed: no project for sub_id" (subId, plan)
           when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
           when (rows > 0)

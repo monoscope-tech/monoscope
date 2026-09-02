@@ -20,6 +20,9 @@ import {
   oldestRowTimestamp,
   newestRowTimestamp,
   MIN_COLUMN_WIDTH,
+  classifyLevel,
+  evictOldest,
+  atBottom,
 } from '../src/log-list-utils';
 
 describe('parseSummaryElement', () => {
@@ -301,5 +304,67 @@ describe('row timestamp extremes', () => {
   test('rows missing a timestamp value are skipped, not read as epoch zero', () => {
     const withGaps = [{ data: [null] }, ...rows, { data: [undefined] }];
     expect(oldestRowTimestamp(withGaps as any, cols)).toBe(Date.parse('2024-03-05T07:00:00.000Z'));
+  });
+});
+
+// One vocabulary for level severity. The three surfaces that colour by level (the level
+// badge, the row tint, live tail) used to disagree on `critical`/`exception`/`trace`, so a
+// row could be red-tinted next to a grey badge reading CRITICAL.
+describe('classifyLevel', () => {
+  test('the error set is the inclusive one, and case/affixes do not hide it', () => {
+    for (const raw of ['error', 'ERROR', 'fatal', 'critical', 'exception', 'SEVERE_ERROR', 'Fatal'])
+      expect(classifyLevel(raw)).toBe('error');
+  });
+
+  test('warn, debug and trace, and info', () => {
+    expect(classifyLevel('warning')).toBe('warn');
+    expect(classifyLevel('WARN')).toBe('warn');
+    expect(classifyLevel('debug')).toBe('debug');
+    expect(classifyLevel('trace')).toBe('debug');
+    expect(classifyLevel('info')).toBe('info');
+  });
+
+  test('error outranks warn when a level names both', () => {
+    expect(classifyLevel('warn_error')).toBe('error');
+  });
+
+  test('unrecognised and empty levels are null, so each surface keeps its own default', () => {
+    for (const raw of ['notice', '', null, undefined]) expect(classifyLevel(raw)).toBeNull();
+  });
+});
+
+describe('evictOldest', () => {
+  const seed = (n: number) => new Map(Array.from({ length: n }, (_, i) => [i, i]));
+
+  test('drops the oldest entry only once the cache is at its limit', () => {
+    const under = seed(2);
+    evictOldest(under, 3);
+    expect(under.size).toBe(2);
+
+    const at = seed(3);
+    evictOldest(at, 3);
+    expect([...at.keys()]).toEqual([1, 2]);
+  });
+
+  test('batch drops that many oldest entries in insertion order', () => {
+    const cache = seed(10);
+    evictOldest(cache, 10, 4);
+    expect([...cache.keys()]).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
+  test('a batch larger than the cache empties it rather than throwing', () => {
+    const cache = seed(2);
+    evictOldest(cache, 1, 99);
+    expect(cache.size).toBe(0);
+  });
+});
+
+describe('atBottom', () => {
+  test('1px of rounding slack by default; the slack is the caller’s to widen', () => {
+    const el = { scrollTop: 900.5, clientHeight: 100, scrollHeight: 1001 };
+    expect(atBottom(el)).toBe(true);
+    expect(atBottom({ ...el, scrollTop: 800 })).toBe(false);
+    expect(atBottom({ ...el, scrollTop: 800 }, 40)).toBe(false);
+    expect(atBottom({ ...el, scrollTop: 870 }, 40)).toBe(true);
   });
 });

@@ -29,7 +29,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, timeScopedUrl)
+import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl)
 
 
 -- $setup
@@ -79,9 +79,10 @@ parseSince now since =
     unitSecs u = fromMaybe 0 $ lookup (T.toUpper u) [("S", 1), ("M", 60), ("H", 3600), ("D", 86400)]
 
 
--- | The one place the default time range is decided. Every layer (server SQL,
--- the picker label, the frontend) either forwards an explicit user pick through
--- here or defers to this — nobody else names a default.
+-- | The default range for query surfaces (Explorer, dashboards): every layer
+-- (server SQL, the picker label, the frontend) either forwards an explicit user
+-- pick through here or defers to this. 'mkTimeWindow' pages use 'defaultWindow'
+-- instead — those are the only two defaults in the app.
 defaultSince :: Text
 defaultSince = "1H"
 
@@ -119,20 +120,11 @@ parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT t
 -----------------------------------------------------------------------------------------------------
 -- Timepicker component. To be used at call site
 -----------------------------------------------------------------------------------------------------
+
+-- | Derived from 'Utils.sinceWindows' so the dropdown and the labels
+-- 'Utils.parseTime' resolves are the same strings by construction.
 timePickerItems :: [(Text, Text)]
-timePickerItems =
-  [ ("5M", "Last 5 mins")
-  , ("15M", "Last 15 mins")
-  , ("30M", "Last 30 mins")
-  , ("1H", "Last hour")
-  , ("3H", "Last 3 hours")
-  , ("6H", "Last 6 hours")
-  , ("12H", "Last 12 hours")
-  , ("24H", "Last 24 hours")
-  , ("3D", "Last 3 days")
-  , ("7D", "Last 7 days")
-  , ("14D", "Last 14 days")
-  ]
+timePickerItems = map (second snd) sinceWindows
 
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
@@ -254,6 +246,8 @@ data TimeWindow = TimeWindow
   }
 
 
+-- | The default range for 'mkTimeWindow' surfaces (infrastructure, RUM), which
+-- refresh live and so open on a tighter window than 'defaultSince'.
 defaultWindow :: Text
 defaultWindow = "5M"
 

@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -101,7 +101,7 @@ import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -121,7 +121,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash, usageWindowStart)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
 
 
 data BgJobs
@@ -265,9 +265,18 @@ unlessStale jobName scheduledTime buffer action = do
 -- | Self-chained ticker: enqueue the next tick so a mid-run failure still
 -- produces a successor.
 rescheduleSelf :: Config.AuthContext -> (UTCTime -> BgJobs) -> UTCTime -> ATBackgroundCtx ()
-rescheduleSelf authCtx mkJob at =
-  liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ scheduleJob conn "background_jobs" (mkJob at) at
+rescheduleSelf authCtx mkJob at = enqueueAt authCtx at [mkJob at]
+
+
+-- | Enqueue background jobs for immediate execution. The pool checkout and the
+-- @"background_jobs"@ queue name were respelled at 22 call sites before this.
+enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
+enqueueJobs ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (void . createJob conn "background_jobs") jobs
+
+
+-- | Enqueue background jobs to run at a given time.
+enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
+enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn "background_jobs" j at) jobs
 
 
 -- | Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
@@ -279,7 +288,7 @@ seedJobs conn from count step mkJob = forM_ [0 .. count - 1] \i -> do
 
 -- | URL for a project's main view.
 projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
-projectUrl ctx pid = ctx.env.hostUrl <> "p/" <> pid.toText
+projectUrl ctx pid = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -301,25 +310,7 @@ processBackgroundJob authCtx bgJob =
         let enc = decodeUtf8 . urlEncode True . encodeUtf8
             inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc ("/p/" <> projectId.toText)
         renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
-    SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
-      users <- Projects.usersByProjectId projectId
-      let stackString = T.intercalate ", " stack
-      forM_ users \user -> do
-        let userEmail = CI.original user.email
-        let project_url = projectUrl authCtx projectId
-        let project_title = project.title
-        let msg =
-              [fmtTrim|
-  🎉 New project created on monoscope.tech! 🎉
-  - **User Full Name**: {fullName}
-  - **User Email**: {userEmail}
-  - **Project Title**: [{project_title}]({project_url})
-  - **User ID**: {userId.toText}
-  - **Payment Plan**: {project.paymentPlan}
-  - **Stack**: {stackString}
-  - **Found us from**: {foundUsFrom}
-  |]
-        sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+    SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordData authCtx userId projectId fullName stack foundUsFrom
     CreatedProjectSuccessfully userId projectId reciever projectTitle ->
       whenJustM (Projects.userById userId) \user ->
         renderAndSend reciever (ET.projectCreatedEmail user.firstName projectTitle (projectUrl authCtx projectId))
@@ -335,309 +326,19 @@ processBackgroundJob authCtx bgJob =
         (Just project, Just err, Just user) | err.projectId == pid -> do
           let userEmail = CI.original user.email
               userName = if T.null user.firstName then userEmail else user.firstName
-          issueM <- Issues.selectIssueByHash pid err.hash
+          issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
           let (issueTitle, issuePath) = case issueM of
                 Just issue -> (issue.title, issue.id.toText)
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
               issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
           renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
         _ -> pass
-    DailyJob ->
-      if authCtx.config.enableDailyJobScheduling
-        then withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling
-        else Log.logInfo "Daily job scheduling is disabled, skipping" ()
-      where
-        -- Advisory lock for distributed coordination. Uses session-level locks which auto-release
-        -- on connection close, providing a safety net if explicit unlock fails.
-        withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-        withAdvisoryLock lockName action = do
-          let acquireLock = Hasql.statement lockName [singletonStatement|SELECT pg_try_advisory_lock(hashtext($1 :: text)) :: bool|]
-              releaseLock =
-                ( Hasql.statement lockName [singletonStatement|SELECT pg_advisory_unlock(hashtext($1 :: text)) :: bool|] >>= \ok ->
-                    unless ok
-                      $ Log.logAttention
-                        "Advisory unlock returned FALSE (lock was not held by this session)"
-                        (AE.object ["lock_name" AE..= lockName, "released" AE..= ok])
-                )
-                  `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
-          bracket acquireLock (when ?? releaseLock) \acquired ->
-            if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
-
-        runDailyJobScheduling = do
-          Log.logInfo "Running daily job" ()
-          currentTime <- Time.currentTime
-          let currentDay = utctDay currentTime
-          -- Book tomorrow before doing any work. odd-jobs deletes this job's own row on
-          -- success, so without a future-dated DailyJob the 30-minute backstop in
-          -- 'jobsWorkerInit' would re-insert one every half hour. Booking it at the start
-          -- rather than the end means a crash mid-scheduling still leaves tomorrow covered;
-          -- the backstop stays as the net for a crash before this line.
-          liftIO $ withResource authCtx.jobsPool \conn -> do
-            let tomorrow = UTCTime (addDays 1 currentDay) 0
-            void $ scheduleJob conn "background_jobs" BackgroundJobs.DailyJob tomorrow
-          -- Check if app-wide jobs already scheduled for today (idempotent check)
-          hourlyJobsExist <-
-            (>= (24 :: Int64))
-              . HI.getOneColumn
-              . HI.getOneRow
-              <$> Hasql.interp
-                [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-               WHERE payload->>'tag' = 'HourlyJob'
-                 AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
-                 AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
-                 AND status IN ('queued', 'locked')|]
-
-          if hourlyJobsExist
-            then Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
-            else do
-              Log.logInfo "Scheduling hourly jobs for today" ()
-              liftIO $ withResource authCtx.jobsPool \conn -> do
-                void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
-                void $ createJob conn "background_jobs" BackgroundJobs.UsageAuditReport
-                -- 30-day replay retention sweep. The handler re-enqueues itself if
-                -- it hit the batch cap, so backlog drains across multiple runs.
-                void $ createJob conn "background_jobs" BackgroundJobs.ExpireReplayData
-                void $ createJob conn "background_jobs" BackgroundJobs.ExpireShareEvents
-                -- background job to cleanup demo project
-                when (dayOfWeek currentDay == Monday)
-                  $ void
-                  $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
-                -- Each handler re-enqueues itself; the daily loop seeds a full day's
-                -- ticks so a single restart can't leave a gap when the chain broke.
-                forM_ [0 .. 23 :: Int] \i -> do
-                  let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
-                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
-                seedJobs conn currentTime 24 3600 BackgroundJobs.ProcessIssuesEnhancement
-                seedJobs conn currentTime 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
-                seedJobs conn currentTime 1440 60 BackgroundJobs.PrometheusScrapeTick
-                seedJobs conn currentTime 288 300 BackgroundJobs.ServiceMapRollupTick
-                seedJobs conn currentTime 144 600 BackgroundJobs.NotificationSweepJob
-                seedJobs conn currentTime 24 3600 BackgroundJobs.NotificationDigestJob
-                seedJobs conn currentTime 24 3600 BackgroundJobs.InfraHealthCheck
-
-          projects <- Projects.recentlyActiveProjectIds currentTime
-          Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
-          -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
-          -- for the extraction worker's live path).
-          let guardTag = "SafetyNetReprocess" :: Text
-              guardThreshold = 24 :: Int64
-          forM_ projects \p -> do
-            projectJobsExistCount <-
-              HI.getOneColumn
-                . HI.getOneRow
-                <$> Hasql.interp
-                  [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-                 WHERE payload->>'tag' = #{guardTag}
-                   AND payload->>'projectId' = #{p.toText}
-                   AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
-                   AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
-                   AND status IN ('queued', 'locked')|]
-            let projectJobsExist = (projectJobsExistCount :: Int64) >= guardThreshold
-
-            if projectJobsExist
-              then Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
-              else liftIO $ withResource authCtx.jobsPool \conn -> do
-                void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-                let sched = seedJobs conn currentTime
-                -- Derived-table maintenance jobs read from `apis.*` tables, not
-                -- the hypertable, and are unaffected by the derivation path.
-                sched 96 900 (`PatternEmbeddingAndMerge` p)
-                sched 96 900 (`LogPatternPeriodicProcessing` p)
-                -- Discovery is what releases deferred new-endpoint alerts, so
-                -- its period is the worst-case delay on one. Cleanup gates
-                -- nothing and is the destructive half, so it stays hourly.
-                sched 96 900 (`EndpointTemplateDiscovery` p)
-                sched 24 3600 (`EndpointMergeCleanup` p)
-                sched 24 3600 (`LogPatternHourlyProcessing` p)
-                -- The extraction worker owns live span/log/error derivation.
-                -- SafetyNetReprocess is the hourly catch-up for
-                -- `processed_at IS NULL` rows (near-empty steady state).
-                sched 24 3600 (\_ -> SafetyNetReprocess p)
-
-            -- Weekly reports scheduled independently of per-project idempotency guard,
-            -- so they aren't skipped when periodic jobs were already scheduled earlier.
-            when (dayOfWeek currentDay == Monday) $ liftIO $ withResource authCtx.jobsPool \conn -> do
-              existing <-
-                SimplePG.query
-                  conn
-                  [sql|SELECT COUNT(*)::bigint FROM background_jobs
-                       WHERE payload->>'tag' = 'WeeklyReports'
-                         AND payload->>'projectId' = ?
-                         AND run_at >= date_trunc('day', ?::timestamptz)
-                         AND status IN ('queued', 'locked', 'retry')|]
-                  (p, currentTime)
-              unless (any (\(Only (c :: Int)) -> c > 0) existing)
-                $ void
-                $ createJob conn "background_jobs"
-                $ BackgroundJobs.WeeklyReports p
+    DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
-    ReportUsage pid -> do
-      projectM <- Projects.projectById pid
-      case projectM of
-        Nothing -> Log.logAttention "ReportUsage: project not found, skipping" ("project_id", pid.toText)
-        Just project -> do
-          let provider = Projects.projectProvider project
-          Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
-          -- Both arms used to be a silent `when`/`whenJust`, so a paid project that could not
-          -- be billed produced no line at all: DSI-APP and TestCorp sat unbilled for 41 days
-          -- behind a first_sub_item_id of "" (empty, not NULL — an `IS NOT NULL` audit passes).
-          -- A skip on a paid plan is revenue going missing and has to be page-worthy.
-          case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), mfilter (not . T.null) project.firstSubItemId) of
-            (False, _) -> Log.logInfo "Usage reporting skipped: plan is not billable" ("project_id", pid.toText, "plan", project.paymentPlan)
-            (True, Nothing) -> Log.logAttention "Usage reporting skipped: paid plan has no subscription item" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
-            (True, Just fSubId) -> do
-              -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
-              --    always advances; daily_usage + usage_report_submissions rows are
-              --    inserted in the same tx only when totalUsage > 0. See
-              --    'splitUsageIntoChunks' for the per-provider quantity policy.
-              nowU <- Time.currentTime
-              let
-                -- Cap wStart to the cycle start (never charge for a previous cycle —
-                -- that's our fault) AND to the retention horizon (telemetry older than
-                -- that is deleted, so asking for it times out and the watermark can
-                -- never advance). See 'usageWindowStart'.
-                wStart =
-                  usageWindowStart
-                    project.usageLastReported
-                    (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
-                    nowU
-              -- Bracketing the count is what separates "skipped the gate" from "never came back
-              -- from the store": both look identical from the outside — one "Reporting usage"
-              -- line and no "Usage to report" line — and they need opposite fixes.
-              Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
-              totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
-              subItems <- Projects.meterSubItemIds pid
-              let meterCfg = Projects.projectMeterConfig project subItems
-              -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
-              -- all. A dormant meter records its total and nothing else: draining
-              -- months of buffered backlog the day a meter goes live is the
-              -- backlog-leak failure we have already hit on a provider switch. A
-              -- misconfigured one cuts chunks anyway, so the drain leaves an
-              -- auditable, retriable failed row for money we are actually owed.
-              chunks <-
-                concat <$> forM [minBound .. maxBound] \kind -> do
-                  let qty = Projects.meterQuantity kind totals
-                  case Projects.resolveMeterTarget meterCfg kind of
-                    Left reason
-                      | Projects.meterIsDormant reason -> do
-                          -- Events dormant on a paid project is a silent revenue-off
-                          -- switch — the exact shape of the 5-week zero-usage incident.
-                          let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
-                          when (qty > 0 || kind == Projects.Events)
-                            $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
-                          pure []
-                    -- Both paid providers chunk identically. LS's 1M POST cap forces
-                    -- splitting; Stripe has no documented cap but N meter-events with
-                    -- the same meter+customer aggregate identically to one big event.
-                    --
-                    -- The quantity is converted to the target's units BEFORE chunking, so
-                    -- the stored quantity is the number actually sent and the 1M cap is
-                    -- applied to the value the cap is about. Raw counts stay in
-                    -- apis.daily_usage, which is what a reconciliation reads.
-                    Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
-                      -- Only the shared events item needs restating; a dimension with an
-                      -- item of its own is already priced for it.
-                      Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
-                      Projects.LemonSqueezyMeter _ -> qty
-                      Projects.StripeMeter _ _ -> qty
-                    Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
-              Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
-              Projects.recordUsageWindow pid wStart nowU totals chunks
-
-              -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
-              --    Provider failures are logged + recorded per-row; we never throw, so
-              --    odd-jobs does not retry the whole job and we never double-submit a
-              --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
-              pending <- Projects.pendingUsageSubmissions pid
-              unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
-              case provider of
-                -- Paid plan with no usable provider: mark every pending chunk 'failed'
-                -- once so it persists in pendingUsageSubmissions as an audit signal
-                -- (rather than being quietly marked 'submitted' by the happy path).
-                Projects.NoBillingProvider -> do
-                  Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
-                  for_ pending \row -> do
-                    mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
-                    whenLeft_ mr \e ->
-                      Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
-                _ -> for_ pending \row -> do
-                  let chunkId = show row.id :: Text
-                      qty = Projects.chunkQuantityInt row.quantity
-                      -- window_end + sub_id surface in logs so on-call can pivot to
-                      -- the provider UI, which is not indexed by our chunk UUIDs.
-                      logFields extra =
-                        ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-                  -- A chunk is only ever cut while its meter is live, so a dormant
-                  -- reason here means the meter was switched off (or its LS item
-                  -- removed) between record and drain. Leave the row pending rather
-                  -- than failed: the backlog is bounded and drains cleanly on
-                  -- re-enable, whereas 'failed' would re-log it every tick forever.
-                  -- A misconfig reason falls through and is marked failed as before.
-                  case Projects.resolveMeterTarget meterCfg row.meter of
-                    Left reason
-                      | Projects.meterIsDormant reason ->
-                          Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                    target -> do
-                      res <- tryAny $ case target of
-                        Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                        Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                        Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                        -- Not a transient error: throw so the Left branch below marks
-                        -- the chunk failed, rather than no-oping into a 'submitted'.
-                        Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
-                      -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                      -- and the status UPDATE would re-select this row next tick and
-                      -- double-submit. Emit a loud manual-reconcile signal on that path.
-                      either
-                        ( \e -> do
-                            let errText = toText (displayException e)
-                            Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                            markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
-                            whenLeft_ markRes \e2 ->
-                              Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                        )
-                        ( \() -> do
-                            markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                            case markRes of
-                              Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                              Left e2 ->
-                                Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                        )
-                        res
-    TrialEndingReminder pid scheduledDaysLeft -> do
-      projectM <- Projects.projectById pid
-      case projectM of
-        Nothing -> Log.logAttention "TrialEndingReminder: project not found" (pid.toText, scheduledDaysLeft :: Int)
-        Just project -> case project.subId of
-          Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft :: Int)
-          Just subId
-            | Projects.projectProvider project /= Projects.StripeProvider ->
-                Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
-            | otherwise -> do
-                details <- getStripeSubDetails authCtx.config.stripeSecretKey subId
-                case details of
-                  Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft :: Int, subId)
-                  Just StripeSubDetails{status, trialEnd} -> case status of
-                    "past_due" -> Log.logAttention "TrialEndingReminder: sub past_due at reminder time" (pid.toText, scheduledDaysLeft :: Int, subId)
-                    "trialing" -> do
-                      -- Re-derive days left from Stripe's current trial_end so email copy
-                      -- reflects any mid-trial extension rather than the scheduled value.
-                      now <- liftIO getCurrentTime
-                      let actualDaysLeft = case trialEnd of
-                            Just epoch ->
-                              let secs = fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime
-                               in max 0 (ceiling (secs / 86400))
-                            Nothing -> scheduledDaysLeft
-                      users <- Projects.usersByProjectId pid
-                      let billingUrl = projectUrl authCtx pid <> "/manage_billing"
-                          (subj, html) = ET.trialEndingEmail project.title actualDaysLeft billingUrl
-                      forM_ users \u -> do
-                        sendRes <- tryAny $ sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-                        whenLeft_ sendRes \e ->
-                          Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
-                    _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft :: Int, subId, status)
+    ReportUsage pid -> reportProjectUsage authCtx pid
+    TrialEndingReminder pid scheduledDaysLeft -> sendTrialEndingReminder authCtx pid scheduledDaysLeft
     CleanupDemoProject ->
       -- ReadCommitted is sufficient: we need atomicity across the three deletes,
       -- not Serializable's anti-conflict guarantees (which would surface as opaque
@@ -700,249 +401,578 @@ processBackgroundJob authCtx bgJob =
       Log.logInfo "ReplayParkedMessages moved parking -> DLQ" ("moved", moved)
       -- Still messages left (hit the cap): re-enqueue to keep draining.
       when (moved >= cap) $ Time.currentTime >>= rescheduleSelf authCtx (const (BackgroundJobs.ReplayParkedMessages cap))
-    MonoscopeAdminDaily -> do
-      -- GC orphaned schema_template rows (no catalog refs, idle 7d)
-      deletedTemplates <- SchemaCatalog.vacuumUnreferencedTemplates
-      Log.logInfo "vacuumUnreferencedTemplates" deletedTemplates
-      now <- Time.currentTime
-      let since = addUTCTime (-86400) now
-          dateStr = toText $ formatTime defaultTimeLocale "%Y-%m-%d" now
-          send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
-          -- Pack lines into ~1800-char Discord messages; always consumes at
-          -- least one line so an over-long line can't stall the unfold.
-          chunkLines = unfoldr \case
-            [] -> Nothing
-            (x : xs) -> let (taken, rest) = splitAccum (1800 - T.length x - 1) xs in Just (unlines (x : taken), rest)
-          splitAccum _ [] = ([], [])
-          splitAccum remaining (x : xs)
-            | T.length x > remaining = ([], x : xs)
-            | otherwise = let (taken, left) = splitAccum (remaining - T.length x - 1) xs in (x : taken, left)
-          fmtNum n = bool (show n) (show (n `div` 1000) <> "K") (n >= 10000)
-          -- (project, key, count) rows → per-project key/count lists, biggest project first.
-          byProjectCounts rows = Map.toDescList $ Map.fromListWith (<>) [(pid, [(k, c)]) | (pid, k, c) <- rows]
+    MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
+    UsageAuditReport -> runUsageAuditReport authCtx
 
-      -- Gather all projects and usage data
-      allProjects <- Projects.activeProjects
-      let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
-          lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
-      allRows <- forM allProjects \(project :: Projects.Project) -> do
-        events <- Telemetry.getTotalEventsToReport project.id since
-        metrics <- Telemetry.getTotalMetricsCount authCtx.env.enableTimefusionReads project.id since
-        pure (project, events, metrics, events + metrics)
-      let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
-          sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
+-- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
+runMonoscopeAdminDaily :: Config.AuthContext -> ATBackgroundCtx ()
+runMonoscopeAdminDaily authCtx = do
+  -- GC orphaned schema_template rows (no catalog refs, idle 7d)
+  deletedTemplates <- SchemaCatalog.vacuumUnreferencedTemplates
+  Log.logInfo "vacuumUnreferencedTemplates" deletedTemplates
+  now <- Time.currentTime
+  let since = addUTCTime (-86400) now
+      dateStr = toText $ formatTime defaultTimeLocale "%Y-%m-%d" now
+      send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+      -- Pack lines into ~1800-char Discord messages; always consumes at
+      -- least one line so an over-long line can't stall the unfold.
+      chunkLines = unfoldr \case
+        [] -> Nothing
+        (x : xs) -> let (taken, rest) = splitAccum (1800 - T.length x - 1) xs in Just (unlines (x : taken), rest)
+      splitAccum _ [] = ([], [])
+      splitAccum remaining (x : xs)
+        | T.length x > remaining = ([], x : xs)
+        | otherwise = let (taken, left) = splitAccum (remaining - T.length x - 1) xs in (x : taken, left)
+      fmtNum n = bool (show n) (show (n `div` 1000) <> "K") (n >= 10000)
+      -- (project, key, count) rows → per-project key/count lists, biggest project first.
+      byProjectCounts rows = Map.toDescList $ Map.fromListWith (<>) [(pid, [(k, c)]) | (pid, k, c) <- rows]
 
-      -- Section 1: Usage summary
-      let totalEvents = sum $ map (\(_, e, _, _) -> e) sorted
-          totalMetrics = sum $ map (\(_, _, m, _) -> m) sorted
-          summaryHeader = "**Daily Usage Summary** (" <> dateStr <> ")\n" <> show (length sorted) <> " active projects | " <> show totalEvents <> " events | " <> show totalMetrics <> " metrics"
-          fmtRow (p, e, m, t) = T.justifyLeft 25 ' ' p.title <> T.justifyLeft 12 ' ' p.paymentPlan <> T.justifyRight 10 ' ' (show e) <> T.justifyRight 10 ' ' (show m) <> T.justifyRight 10 ' ' (show t)
-          tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
-          tableBody = tableHeader : map fmtRow sorted
-      send summaryHeader
-      send $ "```\n" <> unlines tableBody <> "```"
+  -- Gather all projects and usage data
+  allProjects <- Projects.activeProjects
+  let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
+      lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
-      -- Section 2: New projects (created in last 24h)
-      tryStep "newProjects" do
-        newProjects <- Projects.newProjectsSince since
-        let fmtNew (p :: Projects.Project) =
-              let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
-               in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
-        send
-          $ bool
-            ("**New Projects** (" <> show (length newProjects) <> ")\n" <> unlines (map fmtNew newProjects))
-            "**New Projects**: None"
-            (null newProjects)
+  allRows <- forM allProjects \(project :: Projects.Project) -> do
+    events <- Telemetry.countRowsSince [HI.sql|otel_logs_and_spans|] False project.id since
+    metrics <- Telemetry.countRowsSince [HI.sql|otel_metrics|] authCtx.env.enableTimefusionReads project.id since
+    pure (project, events, metrics, events + metrics)
+  let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
+      sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
 
-      -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
-      tryStep "churnSignals" do
-        let churn = filter (\(p, _, _, _) -> not (Projects.isOnboarding p.paymentPlan)) inactiveRows
-        unless (null churn)
-          $ send
-          $ "**Inactive Projects** ("
-          <> show (length churn)
-          <> " with 0 events in 24h)\n"
-          <> unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
+  -- Section 1: Usage summary
+  let totalEvents = sum $ map (\(_, e, _, _) -> e) sorted
+      totalMetrics = sum $ map (\(_, _, m, _) -> m) sorted
+      summaryHeader = "**Daily Usage Summary** (" <> dateStr <> ")\n" <> show (length sorted) <> " active projects | " <> show totalEvents <> " events | " <> show totalMetrics <> " metrics"
+      fmtRow (p, e, m, t) = T.justifyLeft 25 ' ' p.title <> T.justifyLeft 12 ' ' p.paymentPlan <> T.justifyRight 10 ' ' (show e) <> T.justifyRight 10 ' ' (show m) <> T.justifyRight 10 ' ' (show t)
+      tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
+      tableBody = tableHeader : map fmtRow sorted
+  send summaryHeader
+  send $ "```\n" <> unlines tableBody <> "```"
 
-      -- Section 4: New issues
-      tryStep "newIssues" do
-        issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
-          Hasql.interp
-            [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
-        unless (null issueCounts) do
-          let total = sum $ map (view _3) issueCounts
-              byProject = byProjectCounts issueCounts
-              projectCount = length byProject
-              fmtProject (pid, types) =
-                let pTotal = sum $ map snd types
-                    details = T.intercalate ", " $ map (\(t, c) -> t <> ": " <> show c) types
-                 in "- " <> lookupTitle pid <> ": " <> show pTotal <> " (" <> details <> ")"
-          send
-            $ "**New Issues** ("
-            <> show total
-            <> " across "
-            <> show projectCount
-            <> " projects)\n"
-            <> unlines (map fmtProject $ take 10 byProject)
+  -- Section 2: New projects (created in last 24h)
+  tryStep "newProjects" do
+    newProjects <- Projects.newProjectsSince since
+    let fmtNew (p :: Projects.Project) =
+          let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
+           in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
+    send
+      $ bool
+        ("**New Projects** (" <> show (length newProjects) <> ")\n" <> unlines (map fmtNew newProjects))
+        "**New Projects**: None"
+        (null newProjects)
 
-      -- Section 5: Monitor alerts
-      tryStep "monitorAlerts" do
-        alertCounts :: [(Projects.ProjectId, Text, Int64)] <-
-          Hasql.interp
-            [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
-               WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
-               GROUP BY m.project_id, m.current_status|]
-        unless (null alertCounts) do
-          let totalAlerting = sum [c | (_, s, c) <- alertCounts, s == "alerting"]
-              totalWarning = sum [c | (_, s, c) <- alertCounts, s == "warning"]
-              byProject = byProjectCounts alertCounts
-              fmtProject (pid, statuses) =
-                "- " <> lookupTitle pid <> ": " <> T.intercalate ", " (map (\(s, c) -> show c <> " " <> s) statuses)
-          send
-            $ "**Monitor Alerts**\n"
-            <> show totalAlerting
-            <> " alerting | "
-            <> show totalWarning
-            <> " warning across "
-            <> show (length byProject)
-            <> " projects\n"
-            <> unlines (map fmtProject $ take 10 byProject)
+  -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
+  tryStep "churnSignals" do
+    let churn = filter (\(p, _, _, _) -> not (Projects.isOnboarding p.paymentPlan)) inactiveRows
+    unless (null churn)
+      $ send
+      $ "**Inactive Projects** ("
+      <> show (length churn)
+      <> " with 0 events in 24h)\n"
+      <> unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
 
-      -- Section 6: Background job health
-      tryStep "jobHealth" do
-        jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
-        stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
-        let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
-            stuck = headDef 0 stuckJobs
-        send
-          $ "**Job Health** (last 24h)\n"
-          <> statsLine
-          <> bool ("\n!! " <> show stuck <> " stuck jobs (locked > 30min)") "" (stuck == 0)
+  -- Section 4: New issues
+  tryStep "newIssues" do
+    issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
+      Hasql.interp
+        [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
+    unless (null issueCounts) do
+      let total = sum $ map (view _3) issueCounts
+          byProject = byProjectCounts issueCounts
+          projectCount = length byProject
+          fmtProject (pid, types) =
+            let pTotal = sum $ map snd types
+                details = T.intercalate ", " $ map (\(t, c) -> t <> ": " <> show c) types
+             in "- " <> lookupTitle pid <> ": " <> show pTotal <> " (" <> details <> ")"
+      send
+        $ "**New Issues** ("
+        <> show total
+        <> " across "
+        <> show projectCount
+        <> " projects)\n"
+        <> unlines (map fmtProject $ take 10 byProject)
 
-      -- Section 7: Top growing projects (day-over-day)
-      tryStep "topGrowing" do
-        growthData :: [(Projects.ProjectId, Int, Int)] <-
-          Hasql.interp
-            [HI.sql|SELECT du.project_id::uuid,
-                 COALESCE(SUM(CASE WHEN du.created_at >= (#{now}::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::bigint as yesterday,
-                 COALESCE(SUM(CASE WHEN du.created_at < (#{now}::date - interval '1 day') AND du.created_at >= (#{now}::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::bigint as day_before
-               FROM apis.daily_usage du WHERE du.created_at >= (#{now}::date - interval '2 days')
-               GROUP BY du.project_id|]
-        let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
-            fmtGrowth (pid, y, db, _) =
-              let pct = show (round @Double @Int $ fromIntegral (y - db) / fromIntegral db * 100)
-               in "- " <> lookupTitle pid <> ": " <> fmtNum db <> " -> " <> fmtNum y <> " (+" <> pct <> "%)"
-        unless (null withGrowth)
-          $ send
-          $ "**Top Growing** (vs previous day)\n"
-          <> unlines (map fmtGrowth $ take 5 withGrowth)
+  -- Section 5: Monitor alerts
+  tryStep "monitorAlerts" do
+    alertCounts :: [(Projects.ProjectId, Text, Int64)] <-
+      Hasql.interp
+        [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
+           WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
+           GROUP BY m.project_id, m.current_status|]
+    unless (null alertCounts) do
+      let totalAlerting = sum [c | (_, s, c) <- alertCounts, s == "alerting"]
+          totalWarning = sum [c | (_, s, c) <- alertCounts, s == "warning"]
+          byProject = byProjectCounts alertCounts
+          fmtProject (pid, statuses) =
+            "- " <> lookupTitle pid <> ": " <> T.intercalate ", " (map (\(s, c) -> show c <> " " <> s) statuses)
+      send
+        $ "**Monitor Alerts**\n"
+        <> show totalAlerting
+        <> " alerting | "
+        <> show totalWarning
+        <> " warning across "
+        <> show (length byProject)
+        <> " projects\n"
+        <> unlines (map fmtProject $ take 10 byProject)
 
-      -- Section 8: Active users (last 24h)
-      tryStep "activeUsers" do
-        activeUsers :: [(Text, Text, Text, V.Vector Projects.ProjectId)] <-
-          Hasql.interp
-            [HI.sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
-               FROM users.persistent_sessions ps
-               JOIN users.users u ON u.id = ps.user_id
-               LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
-               WHERE ps.updated_at >= #{since}::timestamptz
-               GROUP BY u.id, u.email, u.first_name, u.last_name ORDER BY u.email|]
-        let fmtUser (email, _, _, pidsVec) =
-              let pids = V.toList pidsVec
-                  projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
-               in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
-        send
-          $ "**Active Users** ("
-          <> show (length activeUsers)
-          <> " in last 24h)\n"
-          <> unlines (map fmtUser activeUsers)
+  -- Section 6: Background job health
+  tryStep "jobHealth" do
+    jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
+    stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
+    let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
+        stuck = headDef 0 stuckJobs
+    send
+      $ "**Job Health** (last 24h)\n"
+      <> statsLine
+      <> bool ("\n!! " <> show stuck <> " stuck jobs (locked > 30min)") "" (stuck == 0)
 
-      -- Reclaim index bloat on apis.log_patterns. Every pattern upsert rewrites the
-      -- indexed last_seen_at, so idx_log_patterns_last_seen can't HOT-update and bloats
-      -- ~65x/day (1.5 GB observed vs 23 MB rebuilt). REINDEX CONCURRENTLY runs online
-      -- (brief locks only) so ingestion keeps writing; it must go through the simple
-      -- query protocol (Session.script) — the prepared/extended protocol used by interp
-      -- rejects REINDEX. The index earns its keep: it backs the last_seen_at-ordered
-      -- pattern list (ApiHandlers/Reports) over projects with 1M+ patterns.
-      tryStep "reindexLogPatternsLastSeen"
-        $ Hasql.use (Session.script "REINDEX INDEX CONCURRENTLY apis.idx_log_patterns_last_seen")
+  -- Section 7: Top growing projects (day-over-day)
+  tryStep "topGrowing" do
+    growthData :: [(Projects.ProjectId, Int, Int)] <-
+      Hasql.interp
+        [HI.sql|SELECT du.project_id::uuid,
+             COALESCE(SUM(CASE WHEN du.created_at >= (#{now}::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::bigint as yesterday,
+             COALESCE(SUM(CASE WHEN du.created_at < (#{now}::date - interval '1 day') AND du.created_at >= (#{now}::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::bigint as day_before
+           FROM apis.daily_usage du WHERE du.created_at >= (#{now}::date - interval '2 days')
+           GROUP BY du.project_id|]
+    let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
+        fmtGrowth (pid, y, db, _) =
+          let pct = show (round @Double @Int $ fromIntegral (y - db) / fromIntegral db * 100)
+           in "- " <> lookupTitle pid <> ": " <> fmtNum db <> " -> " <> fmtNum y <> " (+" <> pct <> "%)"
+    unless (null withGrowth)
+      $ send
+      $ "**Top Growing** (vs previous day)\n"
+      <> unlines (map fmtGrowth $ take 5 withGrowth)
 
-      -- Section 9: Project links
-      let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> projectUrl authCtx p.id <> ")"
-      forM_ (chunkLines $ map linkRow sorted) send
-      Log.logInfo "Sent daily admin summary to Discord" ("project_count", length sorted)
-    UsageAuditReport -> do
-      now <- Time.currentTime
-      let since = addUTCTime (-86400) now
-          send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
-      -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
-      rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
-        Hasql.interp
-          [HI.sql|
-            WITH reported AS (
-              SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::bigint AS r
-                FROM apis.daily_usage
-               WHERE created_at >= #{since}::timestamptz
-               GROUP BY project_id
-            ),
-            ingested_events AS (
-              SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
-                FROM public.otel_logs_and_spans
-               WHERE timestamp >= #{since}::timestamptz
-               GROUP BY project_id
-            ),
-            ingested_metrics AS (
-              SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
-                FROM otel_metrics
-               WHERE timestamp >= #{since}::timestamptz
-               GROUP BY project_id
+  -- Section 8: Active users (last 24h)
+  tryStep "activeUsers" do
+    activeUsers :: [(Text, Text, Text, V.Vector Projects.ProjectId)] <-
+      Hasql.interp
+        [HI.sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
+           FROM users.persistent_sessions ps
+           JOIN users.users u ON u.id = ps.user_id
+           LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
+           WHERE ps.updated_at >= #{since}::timestamptz
+           GROUP BY u.id, u.email, u.first_name, u.last_name ORDER BY u.email|]
+    let fmtUser (email, _, _, pidsVec) =
+          let pids = V.toList pidsVec
+              projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
+           in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
+    send
+      $ "**Active Users** ("
+      <> show (length activeUsers)
+      <> " in last 24h)\n"
+      <> unlines (map fmtUser activeUsers)
+
+  -- Reclaim index bloat on apis.log_patterns. Every pattern upsert rewrites the
+  -- indexed last_seen_at, so idx_log_patterns_last_seen can't HOT-update and bloats
+  -- ~65x/day (1.5 GB observed vs 23 MB rebuilt). REINDEX CONCURRENTLY runs online
+  -- (brief locks only) so ingestion keeps writing; it must go through the simple
+  -- query protocol (Session.script) — the prepared/extended protocol used by interp
+  -- rejects REINDEX. The index earns its keep: it backs the last_seen_at-ordered
+  -- pattern list (ApiHandlers/Reports) over projects with 1M+ patterns.
+  tryStep "reindexLogPatternsLastSeen"
+    $ Hasql.use (Session.script "REINDEX INDEX CONCURRENTLY apis.idx_log_patterns_last_seen")
+
+  -- Section 9: Project links
+  let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> projectUrl authCtx p.id <> ")"
+  forM_ (chunkLines $ map linkRow sorted) send
+  Log.logInfo "Sent daily admin summary to Discord" ("project_count", length sorted)
+
+
+-- | Compare reported vs ingested usage over the last 24h for paying projects and report drift to Discord.
+runUsageAuditReport :: Config.AuthContext -> ATBackgroundCtx ()
+runUsageAuditReport authCtx = do
+  now <- Time.currentTime
+  let since = addUTCTime (-86400) now
+      send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+  -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
+  rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
+    Hasql.interp
+      [HI.sql|
+        WITH reported AS (
+          SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::bigint AS r
+            FROM apis.daily_usage
+           WHERE created_at >= #{since}::timestamptz
+           GROUP BY project_id
+        ),
+        ingested_events AS (
+          SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
+            FROM public.otel_logs_and_spans
+           WHERE timestamp >= #{since}::timestamptz
+           GROUP BY project_id
+        ),
+        ingested_metrics AS (
+          SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
+            FROM otel_metrics
+           WHERE timestamp >= #{since}::timestamptz
+           GROUP BY project_id
+        )
+        SELECT p.id::uuid, p.title, p.payment_plan,
+               COALESCE(r.r, 0)::bigint AS reported,
+               (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::bigint AS ingested
+          FROM projects.projects p
+          LEFT JOIN reported r ON r.pid = p.id
+          LEFT JOIN ingested_events ie ON ie.pid = p.id
+          LEFT JOIN ingested_metrics im ON im.pid = p.id
+         WHERE p.payment_plan NOT IN ('Free','ONBOARDING','Bring nothing')
+           AND p.deleted_at IS NULL
+      |]
+  let mismatches =
+        [ (pid, title, plan, reported, ingested, reported - ingested, pct)
+        | (pid, title, plan, reported, ingested) <- rows
+        , let denom = max 1 (max reported ingested)
+        , let pct = round @Double @Int (fromIntegral (abs (reported - ingested)) / fromIntegral denom * 100)
+        , ingested > 100 || reported > 100
+        , pct > 5
+        ]
+      sorted = sortOn (\(_, _, _, _, _, _, pct) -> negate pct) mismatches
+  forM_ sorted \(pid, title, plan, reported, ingested, delta, pct) ->
+    Log.logAttention "usage_audit_mismatch" (pid.toText, title, plan, reported, ingested, delta, pct)
+  unless (null sorted) do
+    let fmtRow (_, title, plan, reported, ingested, delta, pct) =
+          T.justifyLeft 25 ' ' title
+            <> T.justifyLeft 12 ' ' plan
+            <> T.justifyRight 10 ' ' (show reported)
+            <> T.justifyRight 10 ' ' (show ingested)
+            <> T.justifyRight 10 ' ' (show delta)
+            <> T.justifyRight 6 ' ' (show pct <> "%")
+        hdr =
+          T.justifyLeft 25 ' ' "Project"
+            <> T.justifyLeft 12 ' ' "Plan"
+            <> T.justifyRight 10 ' ' "Reported"
+            <> T.justifyRight 10 ' ' "Ingested"
+            <> T.justifyRight 10 ' ' "Delta"
+            <> T.justifyRight 6 ' ' "Pct"
+        top = take 20 sorted
+        heading =
+          "**Usage Audit** (last 24h) — "
+            <> show (length sorted)
+            <> " projects with >5% drift"
+            <> if length sorted > length top then " (showing top " <> show (length top) <> ")" else ""
+    send heading
+    send $ "```\n" <> hdr <> "\n" <> unlines (map fmtRow top) <> "```"
+  Log.logInfo "Usage audit complete" ("mismatch_count", length sorted)
+
+
+-- | Email a project's members that their Stripe trial is ending, using Stripe's current trial_end.
+sendTrialEndingReminder :: Config.AuthContext -> Projects.ProjectId -> Int -> ATBackgroundCtx ()
+sendTrialEndingReminder authCtx pid scheduledDaysLeft =
+  Projects.projectById pid >>= \case
+    Nothing -> Log.logAttention "TrialEndingReminder: project not found" (pid.toText, scheduledDaysLeft)
+    Just project -> case project.subId of
+      Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft)
+      Just subId
+        | Projects.projectProvider project /= Projects.StripeProvider ->
+            Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft, subId)
+        | otherwise ->
+            getStripeSubDetails authCtx.config.stripeSecretKey subId >>= \case
+              Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft, subId)
+              Just StripeSubDetails{status, trialEnd} -> case status of
+                "past_due" -> Log.logAttention "TrialEndingReminder: sub past_due at reminder time" (pid.toText, scheduledDaysLeft, subId)
+                "trialing" -> do
+                  -- Re-derive days left from Stripe's current trial_end so email copy
+                  -- reflects any mid-trial extension rather than the scheduled value.
+                  now <- liftIO getCurrentTime
+                  let actualDaysLeft =
+                        maybe scheduledDaysLeft (\epoch -> max 0 $ ceiling $ (fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime) / 86400) trialEnd
+                  users <- Projects.usersByProjectId pid
+                  let billingUrl = projectUrl authCtx pid <> "/manage_billing"
+                      (subj, html) = ET.trialEndingEmail project.title actualDaysLeft billingUrl
+                  forM_ users \u -> do
+                    sendRes <- tryAny $ sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                    whenLeft_ sendRes \e ->
+                      Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
+                _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft, subId, status)
+
+
+-- | Count a project's billable usage for the window and drain pending chunks to its billing provider.
+reportProjectUsage :: Config.AuthContext -> Projects.ProjectId -> ATBackgroundCtx ()
+reportProjectUsage authCtx pid =
+  Projects.projectById pid >>= \case
+    Nothing -> Log.logAttention "ReportUsage: project not found, skipping" ("project_id", pid.toText)
+    Just project -> do
+      let provider = Projects.projectProvider project
+      Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
+      -- Both arms used to be a silent `when`/`whenJust`, so a paid project that could not
+      -- be billed produced no line at all: DSI-APP and TestCorp sat unbilled for 41 days
+      -- behind a first_sub_item_id of "" (empty, not NULL — an `IS NOT NULL` audit passes).
+      -- A skip on a paid plan is revenue going missing and has to be page-worthy.
+      case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), mfilter (not . T.null) project.firstSubItemId) of
+        (False, _) -> Log.logInfo "Usage reporting skipped: plan is not billable" ("project_id", pid.toText, "plan", project.paymentPlan)
+        (True, Nothing) -> Log.logAttention "Usage reporting skipped: paid plan has no subscription item" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
+        (True, Just fSubId) -> do
+          -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
+          --    always advances; daily_usage + usage_report_submissions rows are
+          --    inserted in the same tx only when totalUsage > 0. See
+          --    'splitUsageIntoChunks' for the per-provider quantity policy.
+          nowU <- Time.currentTime
+          let
+            -- Cap wStart to the cycle start (never charge for a previous cycle —
+            -- that's our fault) AND to the retention horizon (telemetry older than
+            -- that is deleted, so asking for it times out and the watermark can
+            -- never advance). See 'usageWindowStart'.
+            wStart =
+              usageWindowStart
+                project.usageLastReported
+                (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
+                nowU
+          -- Bracketing the count is what separates "skipped the gate" from "never came back
+          -- from the store": both look identical from the outside — one "Reporting usage"
+          -- line and no "Usage to report" line — and they need opposite fixes.
+          Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
+          totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
+          subItems <- Projects.meterSubItemIds pid
+          let meterCfg = Projects.projectMeterConfig project subItems
+          -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
+          -- all. A dormant meter records its total and nothing else: draining
+          -- months of buffered backlog the day a meter goes live is the
+          -- backlog-leak failure we have already hit on a provider switch. A
+          -- misconfigured one cuts chunks anyway, so the drain leaves an
+          -- auditable, retriable failed row for money we are actually owed.
+          chunks <-
+            concat <$> forM [minBound .. maxBound] \kind -> do
+              let qty = Projects.meterQuantity kind totals
+              case Projects.resolveMeterTarget meterCfg kind of
+                Left reason
+                  | Projects.meterIsDormant reason -> do
+                      -- Events dormant on a paid project is a silent revenue-off
+                      -- switch — the exact shape of the 5-week zero-usage incident.
+                      let say = if kind == Projects.Events then Log.logAttention else Log.logInfo
+                      when (qty > 0 || kind == Projects.Events)
+                        $ say "Usage meter dormant — counted but not submitted" ("project_id", pid.toText, "meter", show kind :: Text, "reason", show reason :: Text, "quantity", qty, "provider", show provider :: Text)
+                      pure []
+                -- Both paid providers chunk identically. LS's 1M POST cap forces
+                -- splitting; Stripe has no documented cap but N meter-events with
+                -- the same meter+customer aggregate identically to one big event.
+                --
+                -- The quantity is converted to the target's units BEFORE chunking, so
+                -- the stored quantity is the number actually sent and the 1M cap is
+                -- applied to the value the cap is about. Raw counts stay in
+                -- apis.daily_usage, which is what a reconciliation reads.
+                Right target -> pure $ Projects.splitUsageIntoChunks kind $ case target of
+                  -- Only the shared events item needs restating; a dimension with an
+                  -- item of its own is already priced for it.
+                  Projects.LemonSqueezyEventsItem _ -> Projects.lemonSqueezyEventsEquivalent kind qty
+                  Projects.LemonSqueezyMeter _ -> qty
+                  Projects.StripeMeter _ _ -> qty
+                Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
+          Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
+          Projects.recordUsageWindow pid wStart nowU totals chunks
+
+          -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
+          --    Provider failures are logged + recorded per-row; we never throw, so
+          --    odd-jobs does not retry the whole job and we never double-submit a
+          --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
+          pending <- Projects.pendingUsageSubmissions pid
+          unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
+          case provider of
+            -- Paid plan with no usable provider: mark every pending chunk 'failed'
+            -- once so it persists in pendingUsageSubmissions as an audit signal
+            -- (rather than being quietly marked 'submitted' by the happy path).
+            Projects.NoBillingProvider -> do
+              Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
+              for_ pending \row -> do
+                mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
+                whenLeft_ mr \e ->
+                  Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
+            _ -> for_ pending \row -> do
+              let chunkId = show row.id :: Text
+                  qty = Projects.chunkQuantityInt row.quantity
+                  -- window_end + sub_id surface in logs so on-call can pivot to
+                  -- the provider UI, which is not indexed by our chunk UUIDs.
+                  logFields extra =
+                    ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+              -- A chunk is only ever cut while its meter is live, so a dormant
+              -- reason here means the meter was switched off (or its LS item
+              -- removed) between record and drain. Leave the row pending rather
+              -- than failed: the backlog is bounded and drains cleanly on
+              -- re-enable, whereas 'failed' would re-log it every tick forever.
+              -- A misconfig reason falls through and is marked failed as before.
+              case Projects.resolveMeterTarget meterCfg row.meter of
+                Left reason
+                  | Projects.meterIsDormant reason ->
+                      Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
+                target -> do
+                  res <- tryAny $ case target of
+                    Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                    Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                    Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                    -- Not a transient error: throw so the Left branch below marks
+                    -- the chunk failed, rather than no-oping into a 'submitted'.
+                    Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
+                  -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                  -- and the status UPDATE would re-select this row next tick and
+                  -- double-submit. Emit a loud manual-reconcile signal on that path.
+                  either
+                    ( \e -> do
+                        let errText = toText (displayException e)
+                        Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                        markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
+                        whenLeft_ markRes \e2 ->
+                          Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                    )
+                    ( \() -> do
+                        markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                        case markRes of
+                          Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                          Left e2 ->
+                            Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                    )
+                    res
+
+
+-- | Daily scheduler tick: books tomorrow, then seeds the day's app-wide and per-project jobs.
+runDailyJobScheduling :: Config.AuthContext -> ATBackgroundCtx ()
+runDailyJobScheduling authCtx =
+  if authCtx.config.enableDailyJobScheduling
+    then withAdvisoryLock "daily_job_scheduling" schedule
+    else Log.logInfo "Daily job scheduling is disabled, skipping" ()
+  where
+    -- Advisory lock for distributed coordination. Uses session-level locks which auto-release
+    -- on connection close, providing a safety net if explicit unlock fails.
+    withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+    withAdvisoryLock lockName action = do
+      let acquireLock = Hasql.statement lockName [singletonStatement|SELECT pg_try_advisory_lock(hashtext($1 :: text)) :: bool|]
+          releaseLock =
+            ( Hasql.statement lockName [singletonStatement|SELECT pg_advisory_unlock(hashtext($1 :: text)) :: bool|] >>= \ok ->
+                unless ok
+                  $ Log.logAttention
+                    "Advisory unlock returned FALSE (lock was not held by this session)"
+                    (AE.object ["lock_name" AE..= lockName, "released" AE..= ok])
             )
-            SELECT p.id::uuid, p.title, p.payment_plan,
-                   COALESCE(r.r, 0)::bigint AS reported,
-                   (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::bigint AS ingested
-              FROM projects.projects p
-              LEFT JOIN reported r ON r.pid = p.id
-              LEFT JOIN ingested_events ie ON ie.pid = p.id
-              LEFT JOIN ingested_metrics im ON im.pid = p.id
-             WHERE p.payment_plan NOT IN ('Free','ONBOARDING','Bring nothing')
-               AND p.deleted_at IS NULL
-          |]
-      let mismatches =
-            [ (pid, title, plan, reported, ingested, reported - ingested, pct)
-            | (pid, title, plan, reported, ingested) <- rows
-            , let denom = max 1 (max reported ingested)
-            , let pct = round @Double @Int (fromIntegral (abs (reported - ingested)) / fromIntegral denom * 100)
-            , ingested > 100 || reported > 100
-            , pct > 5
-            ]
-          sorted = sortOn (\(_, _, _, _, _, _, pct) -> negate pct) mismatches
-      forM_ sorted \(pid, title, plan, reported, ingested, delta, pct) ->
-        Log.logAttention "usage_audit_mismatch" (pid.toText, title, plan, reported, ingested, delta, pct)
-      unless (null sorted) do
-        let fmtRow (_, title, plan, reported, ingested, delta, pct) =
-              T.justifyLeft 25 ' ' title
-                <> T.justifyLeft 12 ' ' plan
-                <> T.justifyRight 10 ' ' (show reported)
-                <> T.justifyRight 10 ' ' (show ingested)
-                <> T.justifyRight 10 ' ' (show delta)
-                <> T.justifyRight 6 ' ' (show pct <> "%")
-            hdr =
-              T.justifyLeft 25 ' ' "Project"
-                <> T.justifyLeft 12 ' ' "Plan"
-                <> T.justifyRight 10 ' ' "Reported"
-                <> T.justifyRight 10 ' ' "Ingested"
-                <> T.justifyRight 10 ' ' "Delta"
-                <> T.justifyRight 6 ' ' "Pct"
-            top = take 20 sorted
-            heading =
-              "**Usage Audit** (last 24h) — "
-                <> show (length sorted)
-                <> " projects with >5% drift"
-                <> if length sorted > length top then " (showing top " <> show (length top) <> ")" else ""
-        send heading
-        send $ "```\n" <> hdr <> "\n" <> unlines (map fmtRow top) <> "```"
-      Log.logInfo "Usage audit complete" ("mismatch_count", length sorted)
+              `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
+      bracket acquireLock (when ?? releaseLock) \acquired ->
+        if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
+
+    schedule = do
+      Log.logInfo "Running daily job" ()
+      currentTime <- Time.currentTime
+      let currentDay = utctDay currentTime
+      -- Book tomorrow before doing any work. odd-jobs deletes this job's own row on
+      -- success, so without a future-dated DailyJob the 30-minute backstop in
+      -- 'jobsWorkerInit' would re-insert one every half hour. Booking it at the start
+      -- rather than the end means a crash mid-scheduling still leaves tomorrow covered;
+      -- the backstop stays as the net for a crash before this line.
+      enqueueAt authCtx (UTCTime (addDays 1 currentDay) 0) [BackgroundJobs.DailyJob]
+      hourlyJobsExist <-
+        (>= (24 :: Int64))
+          . HI.getOneColumn
+          . HI.getOneRow
+          <$> Hasql.interp
+            [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
+           WHERE payload->>'tag' = 'HourlyJob'
+             AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
+             AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
+             AND status IN ('queued', 'locked')|]
+
+      if hourlyJobsExist
+        then Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
+        else do
+          Log.logInfo "Scheduling hourly jobs for today" ()
+          liftIO $ withResource authCtx.jobsPool \conn -> do
+            void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
+            void $ createJob conn "background_jobs" BackgroundJobs.UsageAuditReport
+            -- 30-day replay retention sweep. The handler re-enqueues itself if
+            -- it hit the batch cap, so backlog drains across multiple runs.
+            void $ createJob conn "background_jobs" BackgroundJobs.ExpireReplayData
+            void $ createJob conn "background_jobs" BackgroundJobs.ExpireShareEvents
+            -- background job to cleanup demo project
+            when (dayOfWeek currentDay == Monday)
+              $ void
+              $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
+            -- Each handler re-enqueues itself; the daily loop seeds a full day's
+            -- ticks so a single restart can't leave a gap when the chain broke.
+            forM_ [0 .. 23 :: Int] \i -> do
+              let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
+              void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
+            seedJobs conn currentTime 24 3600 BackgroundJobs.ProcessIssuesEnhancement
+            seedJobs conn currentTime 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
+            seedJobs conn currentTime 1440 60 BackgroundJobs.PrometheusScrapeTick
+            seedJobs conn currentTime 288 300 BackgroundJobs.ServiceMapRollupTick
+            seedJobs conn currentTime 144 600 BackgroundJobs.NotificationSweepJob
+            seedJobs conn currentTime 24 3600 BackgroundJobs.NotificationDigestJob
+            seedJobs conn currentTime 24 3600 BackgroundJobs.InfraHealthCheck
+
+      projects <- Projects.recentlyActiveProjectIds currentTime
+      Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
+      -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
+      -- for the extraction worker's live path).
+      let guardTag = "SafetyNetReprocess" :: Text
+          guardThreshold = 24 :: Int64
+      forM_ projects \p -> do
+        projectJobsExistCount <-
+          HI.getOneColumn
+            . HI.getOneRow
+            <$> Hasql.interp
+              [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
+             WHERE payload->>'tag' = #{guardTag}
+               AND payload->>'projectId' = #{p.toText}
+               AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
+               AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
+               AND status IN ('queued', 'locked')|]
+        let projectJobsExist = (projectJobsExistCount :: Int64) >= guardThreshold
+
+        if projectJobsExist
+          then Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
+          else liftIO $ withResource authCtx.jobsPool \conn -> do
+            void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+            let sched = seedJobs conn currentTime
+            -- Derived-table maintenance jobs read from `apis.*` tables, not
+            -- the hypertable, and are unaffected by the derivation path.
+            sched 96 900 (`PatternEmbeddingAndMerge` p)
+            sched 96 900 (`LogPatternPeriodicProcessing` p)
+            -- Discovery is what releases deferred new-endpoint alerts, so
+            -- its period is the worst-case delay on one. Cleanup gates
+            -- nothing and is the destructive half, so it stays hourly.
+            sched 96 900 (`EndpointTemplateDiscovery` p)
+            sched 24 3600 (`EndpointMergeCleanup` p)
+            sched 24 3600 (`LogPatternHourlyProcessing` p)
+            -- The extraction worker owns live span/log/error derivation.
+            -- SafetyNetReprocess is the hourly catch-up for
+            -- `processed_at IS NULL` rows (near-empty steady state).
+            sched 24 3600 (\_ -> SafetyNetReprocess p)
+
+        -- Weekly reports scheduled independently of per-project idempotency guard,
+        -- so they aren't skipped when periodic jobs were already scheduled earlier.
+        when (dayOfWeek currentDay == Monday) $ liftIO $ withResource authCtx.jobsPool \conn -> do
+          existing <-
+            SimplePG.query
+              conn
+              [sql|SELECT COUNT(*)::bigint FROM background_jobs
+                   WHERE payload->>'tag' = 'WeeklyReports'
+                     AND payload->>'projectId' = ?
+                     AND run_at >= date_trunc('day', ?::timestamptz)
+                     AND status IN ('queued', 'locked', 'retry')|]
+              (p, currentTime)
+          unless (any (\(Only (c :: Int)) -> c > 0) existing)
+            $ void
+            $ createJob conn "background_jobs"
+            $ BackgroundJobs.WeeklyReports p
+
+
+-- | Announce a newly created project to the team Discord channel, once per project member.
+sendDiscordData :: Config.AuthContext -> Projects.UserId -> Projects.ProjectId -> Text -> [Text] -> Text -> ATBackgroundCtx ()
+sendDiscordData authCtx userId projectId fullName stack foundUsFrom = whenJustM (Projects.projectById projectId) \project -> do
+  users <- Projects.usersByProjectId projectId
+  let stackString = T.intercalate ", " stack
+  forM_ users \user -> do
+    let userEmail = CI.original user.email
+        project_url = projectUrl authCtx projectId
+        project_title = project.title
+        msg =
+          [fmtTrim|
+  🎉 New project created on monoscope.tech! 🎉
+  - **User Full Name**: {fullName}
+  - **User Email**: {userEmail}
+  - **Project Title**: [{project_title}]({project_url})
+  - **User ID**: {userId.toText}
+  - **Payment Plan**: {project.paymentPlan}
+  - **Stack**: {stackString}
+  - **Found us from**: {foundUsFrom}
+  |]
+    sendMessageToDiscord msg authCtx.config.discordWebhookUrl
 
 
 -- | Run a step; if it throws, log the failure with the given label and continue.
@@ -1340,13 +1370,9 @@ runHourlyJob scheduledTime hour = do
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
   let projectBatches = chunksOf 10 activeProjects
 
-  liftIO $ withResource ctx.jobsPool \conn -> do
-    forM_ projectBatches \batch ->
-      createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
-    forM_ activeProjects \pid -> do
-      void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage pid
-      void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
-      void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
+  enqueueJobs ctx
+    $ map (\batch -> BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
+    <> concatMap (\pid -> [BackgroundJobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1358,9 +1384,7 @@ runHourlyJob scheduledTime hour = do
   staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
   when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
-  liftIO $ withResource ctx.jobsPool \conn -> do
-    void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
-    void $ createJob conn "background_jobs" $ BackgroundJobs.DashboardsAutoProvision scheduledTime
+  enqueueJobs ctx [BackgroundJobs.CompressReplaySessions, BackgroundJobs.DashboardsAutoProvision scheduledTime]
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
@@ -1497,11 +1521,9 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
--- | Dispatch an alert to every enabled channel configured on the project's @everyone team.
--- For slack/discord/phone/pagerduty a channel is "enabled" when its targets array is
--- non-empty AND the type isn't in disabled_channels. Email is the exception: it
--- routes to project members, so it dispatches whenever the "email" toggle is on,
--- regardless of notify_emails.
+-- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
+-- per-channel enablement rules), threading slack/discord replies under 'ThreadRefs'.
+-- Email routes to project members, not the team's notify_emails.
 --
 -- The returned Bool reports whether the @everyone team existed. Callers use it to
 -- decide whether to persist "last notified" state: when the team is missing that's
@@ -1515,43 +1537,85 @@ sendAlertToChannels
   -> Text
   -> Text
   -> Html ()
-  -> (Maybe Text, Maybe Text)
-  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
-sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, initDiscordMsgId) = do
-  teamM <- ProjectMembers.getEveryoneTeam pid
-  case teamM of
+  -> ThreadRefs
+  -> ATBackgroundCtx (ThreadRefs, Bool)
+sendAlertToChannels alert pid project users alertUrl subj html refs =
+  ProjectMembers.getEveryoneTeam pid >>= \case
     Nothing -> do
       Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= pid])
-      pure (initSlackTs, initDiscordMsgId, False)
+      pure (refs, False)
     Just team -> do
-      let enabled ch = ProjectMembers.isChannelEnabled ch team
-      slackTs <-
-        if enabled ProjectMembers.Slack && not (V.null team.slack_channels)
-          then foldlM (\acc cid -> (acc <|>) <$> sendSlackAlertWith acc alert pid project.title (Just cid)) initSlackTs team.slack_channels
-          else pure initSlackTs
-      discordMsgId <-
-        if enabled ProjectMembers.Discord && not (V.null team.discord_channels)
-          then foldlM (\acc cid -> (acc <|>) <$> sendDiscordAlertWith acc alert pid project.title (Just cid)) initDiscordMsgId team.discord_channels
-          else pure initDiscordMsgId
-      when (enabled ProjectMembers.Phone && not (V.null team.phone_numbers))
-        $ sendWhatsAppAlert alert pid project.title team.phone_numbers
-      when (enabled ProjectMembers.Email) do
-        let rendered = ET.renderEmail subj html
-        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
-      when (enabled ProjectMembers.Pagerduty)
-        $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title alertUrl
-      pure (slackTs, discordMsgId, True)
+      let fan = Fanout{threads = Just refs, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
+      (,True) <$> fanOutToTeam team fan alert pid project.title alertUrl
 
 
 -- | Fan an alert out to every enabled non-email channel of the @everyone team.
 -- Email stays with the caller: recipients and body differ per alert kind.
 broadcastToEveryone :: Maybe ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ()
-broadcastToEveryone teamM alert pid title url = whenJust teamM \t -> do
-  let ifCh ch = ProjectMembers.whenChannelEnabled ch t
-  ifCh ProjectMembers.Slack $ forM_ t.slack_channels (sendSlackAlert alert pid title . Just)
-  ifCh ProjectMembers.Discord $ forM_ t.discord_channels (sendDiscordAlert alert pid title . Just)
-  ifCh ProjectMembers.Phone $ sendWhatsAppAlert alert pid title t.phone_numbers
-  ifCh ProjectMembers.Pagerduty $ forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert title url
+broadcastToEveryone teamM alert pid title url =
+  whenJust teamM \t -> void $ fanOutToTeam t Fanout{threads = Nothing, email = Nothing} alert pid title url
+
+
+-- | Slack thread-ts / Discord message-id an alert threads its replies under.
+-- '<>' keeps the first known id, so folding across a team's channels preserves
+-- the parent message instead of overwriting it.
+data ThreadRefs = ThreadRefs {slackTs :: Maybe Text, discordMsgId :: Maybe Text}
+  deriving stock (Eq, Show)
+
+
+instance Semigroup ThreadRefs where
+  a <> b = ThreadRefs{slackTs = a.slackTs <|> b.slackTs, discordMsgId = a.discordMsgId <|> b.discordMsgId}
+
+
+instance Monoid ThreadRefs where
+  mempty = ThreadRefs{slackTs = Nothing, discordMsgId = Nothing}
+
+
+-- | Email leg of a fan-out. Recipients are resolved by the caller (project
+-- members for error alerts, the team's notify_emails for monitors); @body@ is
+-- lazy so rendering only happens when the email channel is actually enabled.
+data FanoutEmail = FanoutEmail {recipients :: [Text], subject :: Text, body :: Text}
+
+
+-- | The two axes on which the fan-out callers differ.
+data Fanout = Fanout
+  { threads :: Maybe ThreadRefs
+  -- ^ 'Just': thread slack/discord under these ids and return the resulting ones.
+  -- 'Nothing': post standalone messages and return 'mempty'.
+  , email :: Maybe FanoutEmail
+  -- ^ 'Nothing': this fan-out has no email leg.
+  }
+
+
+-- | Dispatch an alert to every enabled channel of one team.
+-- For slack/discord/phone/pagerduty a channel is "enabled" when its targets array is
+-- non-empty AND the type isn't in disabled_channels ('ProjectMembers.whenChannelEnabled').
+-- Email is the exception: its audience is resolved by the caller, so it dispatches
+-- whenever the "email" toggle is on, regardless of notify_emails.
+fanOutToTeam :: ProjectMembers.Team -> Fanout -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ThreadRefs
+fanOutToTeam team fan alert pid title alertUrl = do
+  whenJust fan.email \e ->
+    when (ProjectMembers.isChannelEnabled ProjectMembers.Email team)
+      $ forM_ e.recipients \to -> sendRenderedEmail to e.subject e.body
+  slackTs <- fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)
+  discordMsgId <- fanChannel ProjectMembers.Discord team.discord_channels (.discordMsgId) \parent cid -> sendDiscordAlertWith parent alert pid title (Just cid)
+  ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert pid title team.phone_numbers
+  ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert title alertUrl
+  pure ThreadRefs{slackTs, discordMsgId}
+  where
+    fanChannel
+      :: ProjectMembers.NotificationChannel
+      -> V.Vector Text
+      -> (ThreadRefs -> Maybe Text)
+      -> (Maybe Text -> Text -> ATBackgroundCtx (Maybe Text))
+      -> ATBackgroundCtx (Maybe Text)
+    fanChannel ch targets sel send
+      | not (ProjectMembers.isChannelEnabled ch team) || V.null targets = pure initial
+      | otherwise = case fan.threads of
+          Nothing -> Nothing <$ forM_ targets (send Nothing)
+          Just _ -> foldlM (\acc cid -> (acc <|>) <$> send acc cid) initial targets
+      where
+        initial = fan.threads >>= sel
 
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)
@@ -1593,6 +1657,27 @@ relTimeAgo now t
 -- | Alert-header first-seen line: "3m ago · Aug 1 2:15 PM".
 firstSeenLine :: UTCTime -> UTCTime -> Text
 firstSeenLine now t = relTimeAgo now t <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" t)
+
+
+-- | Assemble a runtime-error alert: the trend chart over the standard 15-minute
+-- window plus the alert payload. The chart URL comes back separately because the
+-- email body needs it too.
+runtimeErrorAlert
+  :: Log :> es
+  => Config.AuthContext
+  -> Projects.ProjectId
+  -> UTCTime -- now
+  -> Text -- issue id
+  -> Text -- issue title
+  -> RuntimeAlertType
+  -> ErrorPatterns.ATError
+  -> UTCTime -- first seen at
+  -> Maybe Text -- occurrence text
+  -> Maybe Text -- ongoing-for text
+  -> Eff es (Maybe Text, NotificationAlerts)
+runtimeErrorAlert ctx pid now issueId issueTitle runtimeAlertType errorData firstSeenAt occurrenceText ongoingFor = do
+  chartUrl <- errorTrendChartUrl ctx pid errorData.hash (formatUTC $ addUTCTime (-(15 * 60)) now) (formatUTC now)
+  pure (chartUrl, RuntimeErrorAlert{issueId, issueTitle, errorData, runtimeAlertType, chartUrl, occurrenceText, firstSeenText = Just $ firstSeenLine now firstSeenAt, ongoingFor})
 
 
 monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
@@ -1840,17 +1925,14 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               let alertType = alertTypeForState sub.errorState
                   errorsUrl = projectUrl ctx pid <> "/issues/" <> sub.issueId.toText
                   occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
-                  fromTime = addUTCTime (-(15 * 60)) now
-                  firstSeenTextM = Just $ firstSeenLine now sub.createdAt
                   -- Surface an ongoing-duration banner once we've already notified on this
                   -- issue and it's still in a non-regressed state; a regression restarts
                   -- the narrative and deserves its own fresh-looking alert.
                   ongoingForM =
                     humanDuration now sub.createdAt
                       <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= ErrorPatterns.ESRegressed)
-              chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-              let alert = RuntimeErrorAlert{issueId = sub.issueId.toText, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
-                  ~(subj, html) = case alertType of
+              (chartUrlM, alert) <- runtimeErrorAlert ctx pid now sub.issueId.toText sub.issueTitle alertType sub.errorData sub.createdAt occTextM ongoingForM
+              let ~(subj, html) = case alertType of
                     EscalatingErrors -> ET.escalatingErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     RegressedErrors -> ET.regressedErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     _ -> ET.runtimeErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
@@ -1860,21 +1942,21 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               allowed <- consumeNotificationToken pid now
               if allowed
                 then do
-                  (finalSlackTs, finalDiscordMsgId, dispatched) <-
-                    sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
+                  (finalRefs, dispatched) <-
+                    sendAlertToChannels alert pid project users errorsUrl subj html ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}
                   Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType, "dispatched" AE..= dispatched])
-                  pure (sub.errorId, finalSlackTs, finalDiscordMsgId, dispatched)
+                  pure (sub.errorId, finalRefs, dispatched)
                 else do
                   void $ ErrorPatterns.revertLastNotifiedAt sub.errorId sub.lastNotifiedAt now
                   enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
                   Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
-                  pure (sub.errorId, sub.slackThreadTs, sub.discordMessageId, False)
+                  pure (sub.errorId, ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}, False)
             -- last_notified_at is already stamped atomically by the claim query.
             -- Only persist slack/discord thread IDs when the send actually went out.
-            forM_ results \(errorId, slackTs, discordMsgId, delivered) ->
-              when (delivered && (isJust slackTs || isJust discordMsgId))
+            forM_ results \(errorId, refs, delivered) ->
+              when (delivered && (isJust refs.slackTs || isJust refs.discordMsgId))
                 $ void
-                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId slackTs discordMsgId now
+                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId refs.slackTs refs.discordMsgId now
 
 
 notificationsPerProjectPerHour :: Int
@@ -1958,9 +2040,9 @@ claimIssueNotification iid now cooldownHours =
 -- into one batched message by 'NotificationDigestJob'.
 -- Gated by 'project.errorAlerts' so customers can opt out without code changes.
 --
--- Returns (slackTs, discordMsgId, dispatched). Callers that track
+-- Returns (threadRefs, dispatched). Callers that track
 -- per-resource thread IDs (e.g. error_patterns) persist them so later
--- re-notifications thread under the original alert. Returns (Nothing, Nothing, False)
+-- re-notifications thread under the original alert. Returns (mempty, False)
 -- when suppressed by cooldown, errorAlerts=false, or rate-limit overflow.
 notifyIssue
   :: Issues.Issue
@@ -1972,23 +2054,23 @@ notifyIssue
   -> Text -- alert url
   -> Text -- email subject
   -> Html () -- email body
-  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
+  -> ATBackgroundCtx (ThreadRefs, Bool)
 notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html
-  | not project.errorAlerts = pure (Nothing, Nothing, False)
+  | not project.errorAlerts = pure (mempty, False)
   | otherwise = do
       now <- Time.currentTime
       claimed <- claimIssueNotification issue.id now cooldownHours
       allowed <- if claimed then consumeNotificationToken project.id now else pure False
       if
-        | not claimed -> pure (Nothing, Nothing, False)
+        | not claimed -> pure (mempty, False)
         | allowed -> do
-            (slackTs, discordMsgId, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html (Nothing, Nothing)
+            (refs, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html mempty
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
-            pure (slackTs, discordMsgId, dispatched)
+            pure (refs, dispatched)
         | otherwise -> do
             enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
             Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
-            pure (Nothing, Nothing, False)
+            pure (mempty, False)
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
@@ -2021,12 +2103,10 @@ processProjectErrors pid errors now = do
       authCtx <- ask @Config.AuthContext
       let notifyNewError :: Issues.Issue -> ErrorPatterns.ErrorPattern -> ErrorPatterns.ATError -> ATBackgroundCtx ()
           notifyNewError issue err atErr = whenJust projectM \project -> do
-            chartUrlM <- errorTrendChartUrl authCtx pid atErr.hash (formatUTC (addUTCTime (-(15 * 60)) now)) (formatUTC now)
+            (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title NewRuntimeError atErr atErr.when Nothing Nothing
             let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-                firstSeenTextM = Just $ firstSeenLine now atErr.when
-                alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
                 (subj, html) = ET.runtimeErrorsEmail project.title (projectUrl authCtx pid) issueUrl [atErr] chartUrlM Nothing Nothing
-            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
+            (refs, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
             -- Persist thread IDs + stamp error_patterns.last_notified_at so later
             -- escalation/regression sweeps thread under this alert instead of
             -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
@@ -2034,13 +2114,13 @@ processProjectErrors pid errors now = do
             -- path (notifyErrorSubscriptions) reads for per-pattern dedup.
             when dispatched
               $ void
-              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id slackTs discordMsgId now
+              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id refs.slackTs refs.discordMsgId now
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
           if outcome == ErrorPatterns.UORegressed
             then do
-              existingM <- Issues.selectLatestIssueByHash pid errorHash
+              existingM <- Issues.selectIssueByHash pid errorHash (Issues.OfType Issues.RuntimeException)
               maybe
                 ( do
                     issue <- createIssueForError pid err
@@ -2058,8 +2138,7 @@ processProjectErrors pid errors now = do
                   Log.logTrace "Pre-merged new error into canonical" (pid, err.id, canonicalId)
                 _ -> do
                   issue <- createIssueForError pid err
-                  liftIO $ withResource authCtx.jobsPool \conn ->
-                    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+                  enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
                   Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
                   whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
   where
@@ -2352,8 +2431,7 @@ processEagerBatch batch shard
           -- Legacy apis.shapes/fields/formats writes removed; the
           -- in-memory schema-learning catalog (observeSpans above) +
           -- runSchemaFlusherFiber replaces them.
-          forkNonEmpty allErrors \_ -> liftIO $ withResource ctx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ ProcessProjectErrorsJob pid allErrors now
+          forkNonEmpty allErrors \_ -> enqueueJobs ctx [ProcessProjectErrorsJob pid allErrors now]
           Ki.atomically $ Ki.awaitAll scope
 
         -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
@@ -2586,7 +2664,7 @@ rehydrateTree
   -> Maybe ExtractionWorker.ServiceDrainTree
   -> ATBackgroundCtx ()
 rehydrateTree shard key@(pid, svcName) now existing = do
-  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  (texts, maxSeen) <- LogPatterns.getLogPatternTexts pid "summary" (Just svcName)
   -- Change detection: skip rebuild if maxPatternSeenAt hasn't advanced.
   let unchanged = case (existing, maxSeen) of
         (Just sdt, Just ms) | sdt.maxPatternSeenAt == Just ms -> True
@@ -2607,7 +2685,7 @@ seedDrainTreeFromDB
   -> UTCTime
   -> Eff es Drain.DrainTree
 seedDrainTreeFromDB shard key@(pid, svcName) now = do
-  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  (texts, maxSeen) <- LogPatterns.getLogPatternTexts pid "summary" (Just svcName)
   seedFromPatterns shard key now texts maxSeen
 
 
@@ -2881,8 +2959,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
     when (not (V.null monitor.teams) && null teams)
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
-    let hostUrl = appCtx.env.hostUrl
-        monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
+    let monitorListUrl = projectUrl appCtx monitor.projectId <> "/monitors"
         thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
     now <- Time.currentTime
     let chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
@@ -2894,7 +2971,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
         else do
           issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
           Issues.insertIssue issue
-          let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/issues/" <> issue.id.toText
+          let issueUrl = projectUrl appCtx monitor.projectId <> "/issues/" <> issue.id.toText
           pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl, chartUrl = chartUrlM}, issueUrl)
     targetTeams <-
       if null teams
@@ -2911,17 +2988,13 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
 dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj renderedBody = do
   let emails = ProjectMembers.resolveTeamEmails team
-      enabled = ProjectMembers.isChannelEnabled
   -- notify_emails is the authoritative audience now (no implicit member fallback) —
   -- if it's empty the alert goes to zero email recipients, which is almost never intended.
   when (null emails && ProjectMembers.isChannelEnabled ProjectMembers.Email team)
     $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
     $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
-  when (enabled ProjectMembers.Email team) $ for_ emails \email -> sendRenderedEmail (CI.original email) subj renderedBody
-  ProjectMembers.whenChannelEnabled ProjectMembers.Slack team $ for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
-  ProjectMembers.whenChannelEnabled ProjectMembers.Discord team $ for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
-  ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert projectId projectTitle team.phone_numbers
-  ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
+  void
+    $ fanOutToTeam team Fanout{threads = Nothing, email = Just FanoutEmail{recipients = map CI.original emails, subject = subj, body = renderedBody}} alert projectId projectTitle monitorUrl
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -3019,7 +3092,7 @@ sendReportForProject pid rType = do
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                     )
-                    (Issues.selectIssues pid (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+                    (Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.timeRange = Just (startTime, currentTime), Issues.limit = 100})
                 )
             )
         )
@@ -3144,7 +3217,7 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Process each endpoint group, collecting info for newly created issues only
   newEndpointInfos <-
     catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
-      existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
+      existingIssueM <- Issues.selectIssueByHash pid endpointHash (Issues.OpenOfType Issues.ApiChange)
       -- All endpoint_* fields on an anomaly come from the same joined apis.endpoints
       -- row, so they always co-vary. Matching the create path (Issues.createAPIChangeIssue),
       -- we take anomaly[0]'s fields rather than searching for the first non-null per column.
@@ -3181,8 +3254,7 @@ processAPIChangeAnomalies pid targetHashes = do
             else do
               issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
               Issues.insertIssue issue
-              void $ liftIO $ withResource authCtx.jobsPool \conn ->
-                createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              enqueueJobs authCtx [BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
               when unresolved
                 $ Log.logAttention
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
@@ -3430,10 +3502,9 @@ processIssuesEnhancement scheduledTime = do
   let issuesByProject = V.groupBy (\a b -> snd a == snd b) $ V.modify (VA.sortBy (comparing snd)) issuesToEnhance
 
   -- Create enhancement jobs for each project
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ issuesByProject \projectIssues ->
-      whenJust (V.uncons projectIssues) \((_, pid), _) ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) projectIssues)
+  enqueueJobs ctx
+    $ mapMaybe (\pis -> (\((_, pid), _) -> BackgroundJobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) pis)) <$> V.uncons pis)
+    $ toList issuesByProject
 
 
 -- | Enhance issues with LLM-generated titles and descriptions
@@ -3445,7 +3516,7 @@ enhanceIssuesWithLLM pid issueIds = do
     else do
       Log.logInfo "Enhancing issues with LLM" (pid.toText, V.length issueIds)
       forM_ issueIds \issueId -> do
-        issueM <- Issues.selectIssueById issueId
+        issueM <- Issues.selectIssueById pid issueId
         case issueM of
           Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
           Just issue
@@ -3508,7 +3579,6 @@ embedAndMergeErrors pid ctx = do
       , fetchTexts = PatternMergeDB.fetchErrorTexts
       , canMerge = PatternMerge.errorCanMerge
       , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
-      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Nothing
       }
 
@@ -3523,7 +3593,7 @@ embedAndMergeLogPatterns pid ctx = do
       { label = "log"
       , items = unembedded
       , itemText = snd
-      , normalizeEmb = PatternMerge.normalizeForEmbedding
+      , normalizeEmb = Drain.normalizePlaceholders
       , toId = fst
       , updateEmbs = PatternMergeDB.updateLogEmbeddings
       , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
@@ -3531,13 +3601,12 @@ embedAndMergeLogPatterns pid ctx = do
       , fetchTexts = PatternMergeDB.fetchLogTexts
       , canMerge = PatternMerge.logCanMerge
       , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
-      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Just PatternMergeDB.fetchLogSamples
       }
 
 
 -- | Build a judge from a prompt builder. Calls LLM and parses the response.
-mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
+mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
 mkJudge buildPrompt pairs = do
   ctx <- ask @Config.AuthContext
   ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap PatternMerge.parseJudgeResponse
@@ -3554,8 +3623,7 @@ data MergeConfig k a = MergeConfig
   , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
   , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
   , canMerge :: Text -> Text -> Bool
-  , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
-  , onCanonicalPath :: k -> Text -> ATBackgroundCtx ()
+  , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
   , verifyMerge :: Maybe ([k] -> ATBackgroundCtx (Map k Text))
   }
 
@@ -3593,12 +3661,9 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
           judgeResult <- cfg.judgeFn pairs
           case judgeResult of
             Left err -> Log.logAttention ("LLM judge failed for " <> cfg.label <> " patterns") (pid, err)
-            Right decisions -> do
+            Right mergeIdxs -> do
               let ambiguousV = V.fromList validAmbiguous
-                  merges = mapMaybe (\(idx, shouldMerge, _) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
-              verified merges >>= void . cfg.assignCanonical
-              forM_ decisions \(idx, shouldMerge, mPath) ->
-                when shouldMerge $ for_ ((,) . snd <$> (ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
+              verified (mapMaybe (ambiguousV V.!?) mergeIdxs) >>= void . cfg.assignCanonical
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
@@ -3638,14 +3703,14 @@ endpointTemplateDiscovery pid = do
   learned <- map fst <$> Endpoints.learnedIdRulesFor pid
   unless (null endpoints) do
     let known = S.fromList $ V.toList existing
-        grouped = HM.toList $ HM.fromListWith (<>) [((m, host, classifyUrlPathWith learned path), [h]) | (h, m, host, path) <- endpoints]
+        grouped = HM.toList $ HM.fromListWith (<>) [(Endpoints.TemplateKey e.method e.host (classifyUrlPathWith learned e.urlPath), [e.hash]) | e <- endpoints]
         -- An existing template vouches for its group; a new one has to be
         -- witnessed twice and must actually be a template.
-        isEligible ((m, host, tp), hs) = S.member (m, host, tp) known || (length hs >= 2 && T.isInfixOf "{param}" tp)
+        isEligible (k, hs) = S.member k known || (length hs >= 2 && T.isInfixOf "{param}" k.canonicalPath)
         (eligible, leftovers) = partition isEligible grouped
         (!allUpdates, !allInserts) =
           foldMap
-            (\((method, host, tp), hs) -> let ch = toXXHash $ pid.toText <> host <> method <> tp in (map (,ch,tp) hs, [(pid, tp, method, host, ch)]))
+            (\(k, hs) -> let ch = toXXHash $ pid.toText <> k.host <> k.method <> k.canonicalPath in (map (,ch,k.canonicalPath) hs, [(pid, k.canonicalPath, k.method, k.host, ch)]))
             eligible
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
@@ -3658,7 +3723,7 @@ endpointTemplateDiscovery pid = do
     -- evidence floor on any one of them.
     let proposals =
           [ (method, T.intercalate "/" segs)
-          | (method, paths) <- HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" tp]) | ((m, _, tp), _) <- leftovers]
+          | (method, paths) <- HM.toList $ HM.fromListWith (<>) [(k.method, [T.splitOn "/" k.canonicalPath]) | (k, _) <- leftovers]
           , segs <- proposePathTemplates paths
           , "{param}" `elem` segs
           ]
@@ -3730,7 +3795,7 @@ reviewResidualEndpointGroups pid = do
   when (ctx.config.enableEndpointGroupReview && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointGroupReview" do
     endpoints <- Endpoints.getUnmergedEndpoints pid
     learned <- map fst <$> Endpoints.learnedIdRulesFor pid
-    let byMethod = HM.toList $ HM.fromListWith (<>) [(m, [T.splitOn "/" (classifyUrlPathWith learned path)]) | (_, m, _, path) <- endpoints]
+    let byMethod = HM.toList $ HM.fromListWith (<>) [(e.method, [T.splitOn "/" (classifyUrlPathWith learned e.urlPath)]) | e <- endpoints]
         groups =
           [ (method <> " " <> prefix <> " @" <> show pos, prefix, pos, sort kids)
           | (method, paths) <- byMethod
@@ -3755,7 +3820,7 @@ reviewResidualEndpointGroups pid = do
         Left err -> Log.logAttention "Endpoint group review: LLM call failed" (pid, err)
         Right txt -> do
           let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
-              rows = [(gkey, mhash, n, v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
+              rows = [(gkey, mhash, n, display v, sh) | (gkey, mhash, n, _, _, _) <- fresh, Just (v, sh) <- [HM.lookup gkey verdicts]]
           Endpoints.recordGroupReviews pid rows
           Log.logInfo
             "Endpoint group review complete"
@@ -3820,9 +3885,9 @@ applyConfirmedGroups pid confirmed = do
             -- shown.
             wildcardAt segs = take pos segs <> ["{param}"] <> drop (pos + 1) segs
             touched =
-              [ (h, m, host, T.intercalate "/" (wildcardAt segs))
-              | (h, m, host, path) <- endpoints
-              , let segs = T.splitOn "/" (classifyUrlPath path)
+              [ (e.hash, e.method, e.host, T.intercalate "/" (wildcardAt segs))
+              | e <- endpoints
+              , let segs = T.splitOn "/" (classifyUrlPath e.urlPath)
               , take pos segs == prefixSegs
               , maybe False (`S.member` kidSet) (segs !!? pos)
               ]
@@ -3949,7 +4014,7 @@ reportUnwrittenIdRules = do
   unless (null shapes)
     $ Log.logInfo
       "Id shapes with no deterministic rule"
-      ("shapes", [AE.object ["shape" AE..= sh, "groups" AE..= g, "endpoints" AE..= n] | (sh, g, n) <- shapes])
+      ("shapes", [AE.object ["shape" AE..= s.shape, "groups" AE..= s.groups, "endpoints" AE..= s.endpoints] | s <- shapes])
 
 
 -- | Challenge each merge still in quarantine, and undo the ones the model now
@@ -3969,12 +4034,12 @@ recheckQuarantinedMerges pid = do
   when (ctx.config.enableEndpointGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "endpointMergeRecheck" do
     pending <- Endpoints.getQuarantinedMerges pid
     unless (null pending) do
-      let asked = [(gkey, tmpl, ordNub (V.toList paths)) | (gkey, tmpl, paths) <- pending]
+      let asked = [(m.groupKey, m.canonicalPath, ordNub (V.toList m.urlPaths)) | m <- pending]
       reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildMergeChallengePrompt asked) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
         Right txt -> do
-          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= "param"]
+          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= PatternMerge.Param]
           forM_ refuted \gkey -> do
             hashes <- Endpoints.appliedCanonicalHashes pid gkey
             restored <- Endpoints.revertGroupApply pid gkey hashes
@@ -4866,7 +4931,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   -- Gate: whitelist known error/warn levels (case-insensitive). Nothing is
   -- rejected — unknown level is not a reliable incident signal, and projects
   -- that don't attach `log.level` were the largest source of Inbox noise.
-  -- Mirrors the shape of `isIssueWorthy` for the new-pattern path.
+  -- `isIssueWorthy` gates the new-pattern path on this same predicate.
   let classify lpRate =
         guard (isAlertableLogLevel lpRate.logLevel)
           *> case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
@@ -4915,8 +4980,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   let firedPatternIds = V.fromList [lp.patternId | (lp, _) <- firesAllowed]
   unless (V.null firedPatternIds) $ LogPatterns.clearPendingAnomalies firedPatternIds
 
-  unless (null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
+  unless (null issueIds) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.fromList issueIds)]
   Log.logTrace
     "Finished log pattern spike detection"
     ( ("checked" :: Text, length patternsWithRates)
@@ -4943,7 +5007,7 @@ processNewLogPatterns pid authCtx = do
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
         -- Filter out infrastructure noise; errors/exceptions/app logs still create issues
-        let issueWorthy = V.fromList $ filter isIssueWorthy newPatterns
+        let issueWorthy = V.fromList $ filter (\lp -> isIssueWorthy lp.logLevel lp.logPattern) newPatterns
         projectM <- Projects.projectById pid
         users <- Projects.usersByProjectId pid
         results <- V.forM issueWorthy \lp -> do
@@ -4957,17 +5021,16 @@ processNewLogPatterns pid authCtx = do
                 (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
             void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
-        unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid results
+        unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 
 
--- | Should a new log pattern create an issue? Whitelist-based: only error/warn logs
--- and patterns with error status codes. Everything else is acknowledged but no issue created.
-isIssueWorthy :: LogPatterns.LogPattern -> Bool
-isIssueWorthy lp =
-  lp.logLevel
-    `elem` [Just "ERROR", Just "WARN" :: Maybe Text]
-    || any (`T.isInfixOf` lp.logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
+-- | Should a new log pattern create an issue? An alertable level (the same gate the
+-- rate-change path applies, so the two can't drift again) or an error status code.
+-- Everything else is acknowledged but no issue created.
+isIssueWorthy :: Maybe Text -> Text -> Bool
+isIssueWorthy logLevel logPattern =
+  isAlertableLogLevel logLevel
+    || any (`T.isInfixOf` logPattern) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
@@ -5026,7 +5089,7 @@ detectErrorSpikes pid = do
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
-              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId (errRate.slackThreadTs, errRate.discordMessageId)
+              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId ThreadRefs{slackTs = errRate.slackThreadTs, discordMsgId = errRate.discordMessageId}
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           _ ->
             -- No spike (or drop): de-escalate if currently escalating
@@ -5046,24 +5109,19 @@ createAndNotifyErrorIssue
   -> ErrorPatterns.ATError
   -> (Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
   -> ErrorPatterns.ErrorPatternId
-  -> (Maybe Text, Maybe Text)
+  -> ThreadRefs
   -> ATBackgroundCtx ()
-createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId (existSlackTs, existDiscordId) = do
+createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId existingRefs = do
   authCtx <- ask @Config.AuthContext
   now <- Time.currentTime
   Issues.insertIssue issue
-  liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+  enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
   whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
     users <- Projects.usersByProjectId pid
-    let fromTime = addUTCTime (-(15 * 60)) now
-    chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
-    let firstSeenTextM = Just $ firstSeenLine now errorData.when
-        alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
-        errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
+    (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title runtimeAlertType errorData errorData.when Nothing Nothing
+    let errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
         (subj, html) = emailFn project.title (projectUrl authCtx pid) errorsUrl [errorData] chartUrlM Nothing Nothing
-    (finalSlackTs, finalDiscordMsgId, dispatched) <-
-      sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
+    (finalRefs, dispatched) <- sendAlertToChannels alert pid project users errorsUrl subj html existingRefs
     when dispatched
       $ void
-      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalRefs.slackTs finalRefs.discordMsgId now

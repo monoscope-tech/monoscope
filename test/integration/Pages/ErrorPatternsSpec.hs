@@ -1,11 +1,12 @@
 module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
+import Data.Default (def)
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
-import Data.Default (def)
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -24,9 +25,8 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
-import Data.Text.Lazy qualified as TL
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -35,9 +35,11 @@ pid = UUIDId UUID.nil
 
 countIssues :: TestResources -> Issues.IssueType -> IO Int
 countIssues tr issueType = withResource tr.trPool \conn -> do
-  [PGS.Only n] <- PGS.query conn
-    [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = ? AND issue_type = ? |]
-    (pid, issueType)
+  [PGS.Only n] <-
+    PGS.query
+      conn
+      [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = ? AND issue_type = ? |]
+      (pid, issueType)
   pure n
 
 
@@ -47,7 +49,6 @@ spec :: Spec
 -- isolation + parallelism (same as GitSyncSpec).
 spec = sequential $ aroundAll withTestResources do
   describe "Error Pattern Pipeline" do
-
     it "1. Ingest spans with exceptions → extract error patterns" \tr -> do
       apiKey <- createTestAPIKey tr pid "error-test-key"
       let nodeStack = "TypeError: Cannot read properties of undefined (reading 'id')\n    at UserController.getUser (/app/src/controllers/user.js:42:15)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)"
@@ -68,13 +69,15 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Verify hourly stats have correct event_count per pattern
       hourlyStats <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT e.error_type, h.event_count::INT
                 FROM apis.error_hourly_stats h
                 JOIN apis.error_patterns e ON e.id = h.error_id
                 WHERE h.project_id = ?
                 ORDER BY e.error_type |]
-          (PGS.Only pid) :: IO [(Text, Int)]
+          (PGS.Only pid)
+          :: IO [(Text, Int)]
       -- 2 TypeErrors and 1 ConnectionRefusedError → two rows with correct counts
       let statsMap = Map.fromList hourlyStats
       length hourlyStats `shouldBe` 2
@@ -98,14 +101,20 @@ spec = sequential $ aroundAll withTestResources do
       let beStack = "ReferenceError: user is not defined\n    at (/app.js:123:5)"
           feStack = "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"
       -- Backend-style log: OTel exception.* (nested via dot-notation flattening).
-      ingestErrorLog tr apiKey "user is not defined"
+      ingestErrorLog
+        tr
+        apiKey
+        "user is not defined"
         [ ("exception.type", "ReferenceError")
         , ("exception.message", "user is not defined")
         , ("exception.stacktrace", beStack)
         ]
         (addUTCTime (-5) frozenTime)
       -- Browser-style log: attributes.error.{name,type,message,stack}.
-      ingestErrorLog tr apiKey ""
+      ingestErrorLog
+        tr
+        apiKey
+        ""
         [ ("error.name", "TypeError")
         , ("error.type", "uncaught_exception")
         , ("error.message", "Cannot read properties of null")
@@ -130,7 +139,7 @@ spec = sequential $ aroundAll withTestResources do
       -- processOneMinuteErrors in test 1 already created issues synchronously
       issueCount <- countIssues tr Issues.RuntimeException
       issueCount `shouldSatisfy` (> 0)
-      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssuesByFilters pid Nothing Nothing (Just "runtime_exception") Nothing 10 0
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssue Issues.defIssueFilters{Issues.types = ["runtime_exception"], Issues.order = Just "-updated_at", Issues.limit = 10}
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
@@ -155,15 +164,16 @@ spec = sequential $ aroundAll withTestResources do
       case find (\p -> p.errorType == "TypeError" && p.state /= ESResolved) patterns of
         Nothing -> expectationFailure "expected a non-resolved TypeError pattern from test 1"
         Just pat -> do
-          let modified = (def :: ErrorPatterns.ATError)
-                { ErrorPatterns.when = frozenTime
-                , ErrorPatterns.errorType = pat.errorType
-                , ErrorPatterns.message = "MUTATED message — should not stick"
-                , ErrorPatterns.stackTrace = pat.stacktrace
-                , ErrorPatterns.hash = pat.hash
-                , ErrorPatterns.parentHash = Just "mutated-parent"
-                , ErrorPatterns.isFramework = not pat.isFramework
-                }
+          let modified =
+                (def :: ErrorPatterns.ATError)
+                  { ErrorPatterns.when = frozenTime
+                  , ErrorPatterns.errorType = pat.errorType
+                  , ErrorPatterns.message = "MUTATED message — should not stick"
+                  , ErrorPatterns.stackTrace = pat.stacktrace
+                  , ErrorPatterns.hash = pat.hash
+                  , ErrorPatterns.parentHash = Just "mutated-parent"
+                  , ErrorPatterns.isFramework = not pat.isFramework
+                  }
           void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton modified) frozenTime
           after <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.message) after `shouldBe` Just pat.message
@@ -199,18 +209,24 @@ spec = sequential $ aroundAll withTestResources do
     it "3a. Regressed error uses regressed notification template" \tr -> do
       -- Set up notification channels (may already exist from prior tests, ON CONFLICT handles that)
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
                 VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
                 ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
-          (PGS.Only pid)
-        void $ PGS.execute conn
-          [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}'
+            (PGS.Only pid)
+        void
+          $ PGS.execute
+            conn
+            [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}'
                 WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
-          (PGS.Only pid)
-        void $ PGS.execute conn
-          [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
-          (PGS.Only pid)
+            (PGS.Only pid)
+        void
+          $ PGS.execute
+            conn
+            [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
+            (PGS.Only pid)
       -- Find the regressed pattern from test 3 (issue was already created by processOneMinuteErrors)
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       let regressedM = find (\p -> p.state == ESRegressed) patterns
@@ -219,8 +235,9 @@ spec = sequential $ aroundAll withTestResources do
           -- Reset last_notified_at so this counts as a first alert
           withResource tr.trPool \conn ->
             void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
-          (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-            $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+          (notifs, _) <-
+            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
           -- Should produce at least one notification (Slack or email)
           notifs `shouldSatisfy` (not . null)
           -- Verify an issue was created with the correct type
@@ -235,9 +252,12 @@ spec = sequential $ aroundAll withTestResources do
         (pat : _) -> do
           -- Seed 50 hours of stats (exceeds 24h minimum) with variance so stddev > 0
           forM_ ([-50 .. -1] :: [Int]) \h ->
-            void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
-              (addUTCTime (fromIntegral h * 3600) frozenTime)
-              (V.singleton (pat.hash, 600 + (h `mod` 7) * 10, 10))
+            void
+              $ runTestBg frozenTime tr
+              $ ErrorPatterns.upsertErrorPatternHourlyStats
+                pid
+                (addUTCTime (fromIntegral h * 3600) frozenTime)
+                (V.singleton (pat.hash, 600 + (h `mod` 7) * 10, 10))
 
           runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
 
@@ -258,18 +278,26 @@ spec = sequential $ aroundAll withTestResources do
         (pat : _) -> do
           -- Clear existing hourly stats for this pattern to get clean test
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| DELETE FROM apis.error_hourly_stats WHERE error_id = (SELECT id FROM apis.error_patterns WHERE project_id = ? AND hash = ?) |]
-              (pid, pat.hash)
+            void
+              $ PGS.execute
+                conn
+                [sql| DELETE FROM apis.error_hourly_stats WHERE error_id = (SELECT id FROM apis.error_patterns WHERE project_id = ? AND hash = ?) |]
+                (pid, pat.hash)
           -- Seed 40 normal hours (100-200) plus 10 outlier hours (5000)
           forM_ ([-50 .. -11] :: [Int]) \h ->
-            void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
-              (addUTCTime (fromIntegral h * 3600) frozenTime)
-              (V.singleton (pat.hash, 100 + (h `mod` 10) * 10, 5))
+            void
+              $ runTestBg frozenTime tr
+              $ ErrorPatterns.upsertErrorPatternHourlyStats
+                pid
+                (addUTCTime (fromIntegral h * 3600) frozenTime)
+                (V.singleton (pat.hash, 100 + (h `mod` 10) * 10, 5))
           forM_ ([-10 .. -1] :: [Int]) \h ->
-            void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
-              (addUTCTime (fromIntegral h * 3600) frozenTime)
-              (V.singleton (pat.hash, 5000, 50))
+            void
+              $ runTestBg frozenTime tr
+              $ ErrorPatterns.upsertErrorPatternHourlyStats
+                pid
+                (addUTCTime (fromIntegral h * 3600) frozenTime)
+                (V.singleton (pat.hash, 5000, 50))
 
           runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
 
@@ -288,11 +316,13 @@ spec = sequential $ aroundAll withTestResources do
       -- Un-resolve established patterns (test 3 resolved them)
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
       forM_ errRates \r ->
-        when (r.baselineState == BSEstablished && r.state == ESResolved) $
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
+        when (r.baselineState == BSEstablished && r.state == ESResolved)
+          $ void
+          $ runTestBg frozenTime tr
+          $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
 
       -- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue
-      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
       forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
       -- Find an established pattern with stddev > 0
@@ -315,7 +345,6 @@ spec = sequential $ aroundAll withTestResources do
           -- Verify state is escalating
           spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) spikedPat `shouldBe` Just ESEscalating
-
         Nothing -> expectationFailure "No established pattern found for spike test"
 
     it "5a. Spike idempotence — repeated detection does not create duplicate issues" \tr -> do
@@ -352,12 +381,14 @@ spec = sequential $ aroundAll withTestResources do
         Just errRate -> do
           -- Set stddev to 0 (perfectly flat baseline)
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET baseline_error_rate_stddev = 0, baseline_error_rate_mean = 100 WHERE id = ? |]
-              (PGS.Only errRate.errorId)
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns SET baseline_error_rate_stddev = 0, baseline_error_rate_mean = 100 WHERE id = ? |]
+                (PGS.Only errRate.errorId)
           -- Acknowledge existing RuntimeException issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
           forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
           -- Insert a massive spike (200, well above mean=100 + minAbsoluteDelta=50)
@@ -398,7 +429,7 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
           forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
           issuesBefore <- countIssues tr Issues.RuntimeException
@@ -415,9 +446,12 @@ spec = sequential $ aroundAll withTestResources do
       allPatterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       forM_ allPatterns \pat -> do
         forM_ ([-50 .. -1] :: [Int]) \h ->
-          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
-            (addUTCTime (fromIntegral h * 3600) frozenTime)
-            (V.singleton (pat.hash, 500 + (h `mod` 5) * 10, 10))
+          void
+            $ runTestBg frozenTime tr
+            $ ErrorPatterns.upsertErrorPatternHourlyStats
+              pid
+              (addUTCTime (fromIntegral h * 3600) frozenTime)
+              (V.singleton (pat.hash, 500 + (h `mod` 5) * 10, 10))
         void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState pat.id ESOngoing frozenTime
       runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
       -- Now find at least 2 established patterns
@@ -429,7 +463,7 @@ spec = sequential $ aroundAll withTestResources do
           forM_ [r1, r2] \r -> void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
           forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
           -- Spike both patterns in the same hour bucket
           let concurrentTime = addUTCTime 14400 frozenTime
@@ -461,7 +495,7 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Test assign
           let sess = Servant.getResponse tr.trSessAndHeader
-          void $ testServant tr $ Pages.Anomalies.assignErrorPostH pid errUuid (Pages.Anomalies.AssignErrorForm (Just $ UUID.toText sess.user.id.getUserId))
+          void $ testServant tr $ Pages.Anomalies.assignErrorPostH pid errUuid (Pages.Anomalies.AssignErrorForm (Just $ sess.user.id.toText))
           assignedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.assigneeId) assignedPat `shouldBe` Just (Just sess.user.id)
 
@@ -469,7 +503,7 @@ spec = sequential $ aroundAll withTestResources do
           void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
-          issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash)
+          issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)
           (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
           let listHtml = TL.toStrict $ renderText $ toHtml issueList
           listHtml `shouldSatisfy` T.isInfixOf issue.title
@@ -501,10 +535,12 @@ spec = sequential $ aroundAll withTestResources do
         Just pat -> do
           -- Set quiet_minutes just below threshold (no production function for this test-specific state setup)
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes - 1, state = 'ongoing', occurrences_1m = 0
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes - 1, state = 'ongoing', occurrences_1m = 0
                     WHERE id = ? |]
-              (PGS.Only pat.id)
+                (PGS.Only pat.id)
 
           void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCountsBatch (V.singleton pid) frozenTime
 
@@ -518,26 +554,34 @@ spec = sequential $ aroundAll withTestResources do
     it "8. Notification threading stores and reuses thread IDs" \tr -> do
       -- Set up Slack + Discord integrations for the test project
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
                 VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
                 ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
-          (PGS.Only pid)
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.discord (project_id, guild_id)
+            (PGS.Only pid)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.discord (project_id, guild_id)
                 VALUES (?, 'G_TEST')
                 ON CONFLICT (project_id) DO UPDATE SET guild_id = 'G_TEST' |]
-          (PGS.Only pid)
-        void $ PGS.execute conn
-          [sql| UPDATE projects.teams
+            (PGS.Only pid)
+        void
+          $ PGS.execute
+            conn
+            [sql| UPDATE projects.teams
                 SET slack_channels = ARRAY['C_TEST']::text[],
                     discord_channels = ARRAY['DC_TEST']::text[],
                     disabled_channels = '{}'
                 WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
-          (PGS.Only pid)
-        void $ PGS.execute conn
-          [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
-          (PGS.Only pid)
+            (PGS.Only pid)
+        void
+          $ PGS.execute
+            conn
+            [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
+            (PGS.Only pid)
 
       -- Ingest a fresh error with a distinctive ASCII error type so this test is
       -- independent of patterns tests 1–7 may have resolved, merged, or
@@ -564,8 +608,9 @@ spec = sequential $ aroundAll withTestResources do
             void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
 
           -- First notification: should create thread IDs and produce Slack + Discord notifications
-          (notifs1, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-            $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+          (notifs1, _) <-
+            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
           -- Verify notification types and content
           let slackNotifs1 = [sd | SlackNotification sd <- notifs1]
               discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
@@ -591,13 +636,16 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Make notification due again by pushing last_notified_at into the past
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET last_notified_at = ?::timestamptz - INTERVAL '2 hours' WHERE id = ? |]
-              (frozenTime, pat.id)
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns SET last_notified_at = ?::timestamptz - INTERVAL '2 hours' WHERE id = ? |]
+                (frozenTime, pat.id)
 
           -- Second notification: should reuse same thread IDs (threading preserved)
-          (notifs2, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-            $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+          (notifs2, _) <-
+            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
           length [() | SlackNotification _ <- notifs2] `shouldSatisfy` (>= 1)
 
           pat2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
@@ -615,8 +663,11 @@ spec = sequential $ aroundAll withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- Both should have matched the same pattern (IP normalized to {ipv4})
-      patM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid
-        (EF.computeErrorFingerprint (UUID.toText UUID.nil) (Just "test-service") (Just "POST /api/data") "nodejs" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
+      patM <-
+        runTestBg frozenTime tr
+          $ ErrorPatterns.getErrorPatternByHash
+            pid
+            (EF.computeErrorFingerprint (UUID.toText UUID.nil) (Just "test-service") (Just "POST /api/data") "nodejs" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
       isJust patM `shouldBe` True
 
       -- Different error type → different fingerprint (separate pattern)
@@ -636,23 +687,25 @@ spec = sequential $ aroundAll withTestResources do
         (pat : _) -> do
           -- Set known counts: 1m=10, 5m=30, 1h=100, 24h=500
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns
                     SET occurrences_1m = 10, occurrences_5m = 30, occurrences_1h = 100, occurrences_24h = 500,
                         state = 'ongoing', quiet_minutes = 0
                     WHERE id = ? |]
-              (PGS.Only pat.id)
+                (PGS.Only pat.id)
 
           -- First decay tick: occurrences_1m=10 (>0), so quiet_minutes resets to 0
           void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCountsBatch (V.singleton pid) frozenTime
           p1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case p1 of
             Just p -> do
-              p.occurrences_1m `shouldBe` 0          -- reset
-              p.occurrences_5m `shouldBe` 20         -- 30 - 10
-              p.occurrences_1h `shouldBe` 70         -- 100 - 30
-              p.occurrences_24h `shouldBe` 400       -- 500 - 100
-              p.quietMinutes `shouldBe` 0            -- was active (old 1m=10>0), so reset
+              p.occurrences_1m `shouldBe` 0 -- reset
+              p.occurrences_5m `shouldBe` 20 -- 30 - 10
+              p.occurrences_1h `shouldBe` 70 -- 100 - 30
+              p.occurrences_24h `shouldBe` 400 -- 500 - 100
+              p.quietMinutes `shouldBe` 0 -- was active (old 1m=10>0), so reset
             Nothing -> expectationFailure "Pattern not found after first decay"
 
           -- Second decay tick (1m is now 0, so quiet_minutes increments to 1)
@@ -660,22 +713,24 @@ spec = sequential $ aroundAll withTestResources do
           p2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case p2 of
             Just p -> do
-              p.occurrences_1m `shouldBe` 0          -- still 0
-              p.occurrences_5m `shouldBe` 20         -- 20 - 0
-              p.occurrences_1h `shouldBe` 50         -- 70 - 20
-              p.occurrences_24h `shouldBe` 330       -- 400 - 70
-              p.quietMinutes `shouldBe` 1            -- was quiet (old 1m=0), so incremented
+              p.occurrences_1m `shouldBe` 0 -- still 0
+              p.occurrences_5m `shouldBe` 20 -- 20 - 0
+              p.occurrences_1h `shouldBe` 50 -- 70 - 20
+              p.occurrences_24h `shouldBe` 330 -- 400 - 70
+              p.quietMinutes `shouldBe` 1 -- was quiet (old 1m=0), so incremented
             Nothing -> expectationFailure "Pattern not found after second decay"
 
     it "10. Cross-project isolation: patterns don't leak between projects" \tr -> do
       -- Create a second project
       let pid2 = UUIDId $ fromMaybe UUID.nil $ UUID.fromText "11111111-1111-1111-1111-111111111111" :: Projects.ProjectId
       withResource tr.trPool \conn ->
-        void $ PGS.execute conn
-          [sql| INSERT INTO projects.projects (id, title, payment_plan, active)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO projects.projects (id, title, payment_plan, active)
                 VALUES (?, 'Isolation Test Project', 'Startup', true)
                 ON CONFLICT (id) DO NOTHING |]
-          (PGS.Only pid2)
+            (PGS.Only pid2)
 
       -- Record pid pattern count before
       patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
@@ -699,8 +754,10 @@ spec = sequential $ aroundAll withTestResources do
       -- Ensure at least one established pattern is non-resolved (prior tests may have resolved them)
       allPatterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
       forM_ allPatterns \p ->
-        when (p.baselineState == BSEstablished && p.state == ESResolved) $
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState p.id ESOngoing frozenTime
+        when (p.baselineState == BSEstablished && p.state == ESResolved)
+          $ void
+          $ runTestBg frozenTime tr
+          $ ErrorPatterns.updateErrorPatternState p.id ESOngoing frozenTime
       -- Find an established pattern and mark it as ignored
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
       let establishedM = find (\r -> r.baselineState == BSEstablished && isJust r.baselineMean) errRates
@@ -709,9 +766,11 @@ spec = sequential $ aroundAll withTestResources do
         Just errRate -> do
           -- Mark as ignored
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET is_ignored = true, state = 'ongoing' WHERE id = ? |]
-              (PGS.Only errRate.errorId)
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns SET is_ignored = true, state = 'ongoing' WHERE id = ? |]
+                (PGS.Only errRate.errorId)
 
           -- Insert a spike that would normally trigger detection
           let mean = fromMaybe 0 errRate.baselineMean
@@ -732,9 +791,11 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Restore: un-ignore for subsequent tests
           withResource tr.trPool \conn ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET is_ignored = false WHERE id = ? |]
-              (PGS.Only errRate.errorId)
+            void
+              $ PGS.execute
+                conn
+                [sql| UPDATE apis.error_patterns SET is_ignored = false WHERE id = ? |]
+                (PGS.Only errRate.errorId)
 
     it "11. HourlyJob schedules ErrorBaselineCalculation and ErrorSpikeDetection" \tr -> do
       -- Run hourly job which should schedule baseline + spike detection for active projects
@@ -773,52 +834,64 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Verify at least one issue got an enhanced title (golden file provides cached LLM response)
       enhancedCount <- withResource tr.trPool \conn -> do
-        [PGS.Only n] <- PGS.query conn
-          [sql| SELECT COUNT(*)::INT FROM apis.issues
+        [PGS.Only n] <-
+          PGS.query
+            conn
+            [sql| SELECT COUNT(*)::INT FROM apis.issues
                 WHERE project_id = ? AND issue_type = 'runtime_exception'
                 AND title != '' AND length(title) > 5 |]
-          (PGS.Only pid)
+            (PGS.Only pid)
         pure (n :: Int)
       enhancedCount `shouldSatisfy` (>= 1)
 
       -- Verify root_cause and error_category populated on at least one error pattern
       analysisCount <- withResource tr.trPool \conn -> do
-        [PGS.Only n] <- PGS.query conn
-          [sql| SELECT COUNT(*)::INT FROM apis.error_patterns
+        [PGS.Only n] <-
+          PGS.query
+            conn
+            [sql| SELECT COUNT(*)::INT FROM apis.error_patterns
                 WHERE project_id = ? AND root_cause IS NOT NULL AND error_category IS NOT NULL |]
-          (PGS.Only pid)
+            (PGS.Only pid)
         pure (n :: Int)
       analysisCount `shouldSatisfy` (>= 1)
 
       -- d) Test merge pipeline with pre-set embeddings
       -- Set similar embeddings on TypeErrors (high cosine similarity) and different on ConnectionRefusedError
       typeErrPatterns <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT id FROM apis.error_patterns
                 WHERE project_id = ? AND error_type = 'TypeError'
                 AND canonical_id IS NULL AND merge_override IS NOT TRUE
                 ORDER BY created_at |]
-          (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+          (PGS.Only pid)
+          :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
       connErrPatterns <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT id FROM apis.error_patterns
                 WHERE project_id = ? AND error_type = 'ConnectionRefusedError'
                 AND canonical_id IS NULL AND merge_override IS NOT TRUE
                 ORDER BY created_at LIMIT 1 |]
-          (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+          (PGS.Only pid)
+          :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
       length typeErrPatterns `shouldSatisfy` (>= 2)
 
       let typeEmb = [0.9, 0.3, 0.1] :: [Float]
           connEmb = [0.1, 0.8, 0.4] :: [Float]
       withResource tr.trPool \conn -> do
         forM_ typeErrPatterns \(PGS.Only eid) ->
-          void $ PGS.execute conn
-            [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
-            (PGArray typeEmb, eid)
+          void
+            $ PGS.execute
+              conn
+              [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
+              (PGArray typeEmb, eid)
         forM_ connErrPatterns \(PGS.Only eid) ->
-          void $ PGS.execute conn
-            [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
-            (PGArray connEmb, eid)
+          void
+            $ PGS.execute
+              conn
+              [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
+              (PGArray connEmb, eid)
 
       -- Merge: first TypeError becomes canonical, second gets assigned to it
       case typeErrPatterns of
@@ -829,26 +902,32 @@ spec = sequential $ aroundAll withTestResources do
           -- Earlier tests may have merged unrelated TypeErrors, so assert on
           -- the (childId, canonId) edge directly rather than a global count.
           childCanonId <- withResource tr.trPool \conn ->
-            PGS.query conn
+            PGS.query
+              conn
               [sql| SELECT canonical_id FROM apis.error_patterns WHERE id = ? |]
-              (PGS.Only childId) :: IO [PGS.Only (Maybe ErrorPatterns.ErrorPatternId)]
+              (PGS.Only childId)
+              :: IO [PGS.Only (Maybe ErrorPatterns.ErrorPatternId)]
           childCanonId `shouldBe` [PGS.Only (Just canonId)]
 
           -- Verify ConnectionRefusedError remains separate
           connPatternsAfter <- withResource tr.trPool \conn ->
-            PGS.query conn
+            PGS.query
+              conn
               [sql| SELECT id FROM apis.error_patterns
                     WHERE project_id = ? AND error_type = 'ConnectionRefusedError' AND canonical_id IS NULL |]
-              (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+              (PGS.Only pid)
+              :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
           length connPatternsAfter `shouldSatisfy` (>= 1)
         _ -> expectationFailure "need at least 2 TypeError patterns for merge test"
 
     it "13. Unmerge override restores pattern and prevents re-merging" \tr -> do
       -- Find a merged pattern (canonical_id IS NOT NULL) from test 12
       merged <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT id, canonical_id FROM apis.error_patterns WHERE project_id = ? AND canonical_id IS NOT NULL LIMIT 1 |]
-          (PGS.Only pid) :: IO [(ErrorPatterns.ErrorPatternId, ErrorPatterns.ErrorPatternId)]
+          (PGS.Only pid)
+          :: IO [(ErrorPatterns.ErrorPatternId, ErrorPatterns.ErrorPatternId)]
       case merged of
         ((mergedId, _canonId) : _) -> do
           patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
@@ -882,10 +961,12 @@ spec = sequential $ aroundAll withTestResources do
       (issuesAfter - issuesBefore) `shouldBe` 1
       -- Verify 4 error patterns exist but 3 are merged under canonical
       ioPatterns <- withResource tr.trPool \conn ->
-        PGS.query conn
+        PGS.query
+          conn
           [sql| SELECT id, canonical_id FROM apis.error_patterns
                 WHERE project_id = ? AND error_type = 'IOException' AND message = ? |]
-          (pid, ioMsg) :: IO [(ErrorPatterns.ErrorPatternId, Maybe ErrorPatterns.ErrorPatternId)]
+          (pid, ioMsg)
+          :: IO [(ErrorPatterns.ErrorPatternId, Maybe ErrorPatterns.ErrorPatternId)]
       length ioPatterns `shouldBe` 4
       let canonicals = filter (isNothing . snd) ioPatterns
           merged = filter (isJust . snd) ioPatterns
@@ -896,13 +977,14 @@ spec = sequential $ aroundAll withTestResources do
       -- Regression: errors extracted from trace-less logs carried traceId = Just "",
       -- which persisted as '' (passing every Maybe check) and made the issue-detail
       -- page fetch "trace ''" — a 40-60s scan over every trace-less row on TF.
-      let err = (def :: ErrorPatterns.ATError)
-            { ErrorPatterns.when = frozenTime
-            , ErrorPatterns.errorType = "EmptyTraceError"
-            , ErrorPatterns.message = "boom"
-            , ErrorPatterns.hash = "empty-trace-hash"
-            , ErrorPatterns.traceId = Just ""
-            }
+      let err =
+            (def :: ErrorPatterns.ATError)
+              { ErrorPatterns.when = frozenTime
+              , ErrorPatterns.errorType = "EmptyTraceError"
+              , ErrorPatterns.message = "boom"
+              , ErrorPatterns.hash = "empty-trace-hash"
+              , ErrorPatterns.traceId = Just ""
+              }
       void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton err) frozenTime
       patM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "empty-trace-hash"
       fmap (.recentTraceId) patM `shouldBe` Just Nothing

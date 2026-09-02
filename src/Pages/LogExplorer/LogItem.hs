@@ -33,7 +33,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, stackTrace_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), dateTime, detailTab_, emptyState_, httpTab_, stackTrace_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.StackTrace qualified as StackTrace
 import Relude
@@ -203,12 +203,15 @@ renderDetailPanel :: DetailTab -> Html ()
 renderDetailPanel tab = tabPanel_ tab.panelClass tab.panelId tab.content
 
 
-lazyPanel :: Text -> DetailTab -> Html ()
-lazyPanel url tab =
+-- | A hidden panel that fetches itself the first time its radio reveals it.
+-- @tabQuery@ names the tab server-side: a top-level tab is @tab=\<marker\>@, an
+-- HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
+lazyPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> DetailTab -> Html ()
+lazyPanel pid item tabQuery tab =
   div_
     [ class_ $ "hidden " <> tab.panelClass
     , id_ tab.panelId
-    , hxGet_ url
+    , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
     , hxTrigger_ "intersect once"
     , hxTarget_ "this"
     , hxSwap_ "outerHTML"
@@ -217,20 +220,6 @@ lazyPanel url tab =
     ]
     $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
     $ loadingIndicator_ LdSM LdDots
-
-
-lazyDetailPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> DetailTab -> Html ()
-lazyDetailPanel pid item tab =
-  lazyPanel
-    ("/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?tab=" <> tab.marker <> "&partial=true")
-    tab
-
-
-lazyHttpPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> DetailTab -> Html ()
-lazyHttpPanel pid item tab =
-  lazyPanel
-    ("/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?tab=tab-req&subtab=" <> tab.marker <> "&partial=true")
-    tab
 
 
 -- Unified view for both logs and spans
@@ -279,7 +268,7 @@ expandedItemView pid item aptSp selectedTabM = do
       -- The selected panel renders now; hidden placeholders fetch and replace
       -- themselves when their radio makes them visible for the first time.
       div_ [class_ "mt-2 py-1 text-textWeak"]
-        $ traverse_ (\tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyDetailPanel pid item tab) tabs
+        $ traverse_ (\tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=" <>) tab) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
@@ -292,9 +281,7 @@ expandedItemView pid item aptSp selectedTabM = do
     -- value would check no radio and leave every panel hidden.
     firstMarker = case tabs of [] -> "tab-raw"; t : _ -> t.marker
     activeMarker = maybe firstMarker (.marker) $ selectedTabM >>= \s -> find ((== s) . (.marker)) tabs
-    detailTabRadio_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
-      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker] <> [checked_ | t.marker == activeMarker]
-      t.label
+    detailTabRadio_ t = detailTab_ dgrp t.marker t.cls (t.marker == activeMarker) t.label
     tabs = detailTabs pid item aptSp
 
     -- Best-effort curl reconstruction from the span's HTTP attributes and any
@@ -444,7 +431,7 @@ detailTabs pid item aptSp =
     badge label cls count = toHtml @Text label >> div_ [class_ cls] (show count)
     attContent = case unAesonTextMaybe item.attributes of
       Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
-      _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
+      _ -> emptyState_ def{size = ESCompact} "No custom attributes on this entry" ""
 
 
 renderHttpDetails :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Html ()
@@ -453,7 +440,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyHttpPanel pid item tab
+  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item (\m -> "tab=tab-req&subtab=" <> m) tab
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])

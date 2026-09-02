@@ -57,13 +57,13 @@ export class SessionReplay extends LitElement {
   // Progressive loading: the recording is stored server-side as ordered, bounded
   // shards. We fetch a manifest, play shard 0 immediately, then lazy-load the rest
   // via addEvent — so we never download (or hold) the whole session up front.
-  private segments: { key: string; firstTs: number; gzipped: boolean }[] = [];
+  private segments: { key: string; firstTs: number }[] = [];
   private loadedSegments = 0;
   private manifestBase = '';
   private sessionStart = 0;
   private seenFirstMeta = false;
   private containerWidth = 1024;
-  private timeout: any = null;
+  private timeout: ReturnType<typeof setTimeout> | null = null;
 
   private containerHeight = 550;
   private iframeWidth = 1117;
@@ -456,7 +456,7 @@ export class SessionReplay extends LitElement {
         if (level === 'error') errs.push(offset);
         else if (level === 'warn') warns.push(offset);
       } else if (event.type === EventType.Meta) {
-        if (this.seenFirstMeta) navs.push({ offset: event.timestamp - this.sessionStart, href: (event.data as any).href ?? '' });
+        if (this.seenFirstMeta) navs.push({ offset: event.timestamp - this.sessionStart, href: event.data.href ?? '' });
         this.seenFirstMeta = true;
       }
     });
@@ -582,10 +582,10 @@ export class SessionReplay extends LitElement {
       if (!this.startPlaybackWith(initial)) return;
       this.isLoading = false;
       void this.prefetchRemaining(requestedId); // stream the rest without blocking first paint
-    } catch (e: any) {
+    } catch (e) {
       if (this.currentSessionId !== requestedId) return;
       console.error('Failed to load session replay manifest:', e);
-      this.loadError = e?.message || 'We couldn’t load this session. Check your connection and retry.';
+      this.loadError = (e instanceof Error && e.message) || 'We couldn’t load this session. Check your connection and retry.';
     } finally {
       if (this.currentSessionId === requestedId) this.isLoading = false;
     }
@@ -736,7 +736,7 @@ export class SessionReplay extends LitElement {
     }
   }
 
-  handleTimeSeek(e: any) {
+  handleTimeSeek(e: MouseEvent) {
     const x = e.clientX;
     const bounding = this.progressBar.getBoundingClientRect();
     const toWidth = x - bounding.x;
@@ -744,7 +744,7 @@ export class SessionReplay extends LitElement {
     this.goTo(toGo);
   }
 
-  handleTrickPlay(e: any) {
+  handleTrickPlay(e: MouseEvent) {
     // Clear any pending cleanup timer
     if (this.trickPlayerCleanupTimer) {
       clearTimeout(this.trickPlayerCleanupTimer);
@@ -826,8 +826,8 @@ export class SessionReplay extends LitElement {
             ${payload.payload.join('').substring(0, 100)}
           </span>
           <button
-            @click=${(e: any) => {
-              const container = e.currentTarget.closest('.event-container');
+            @click=${(e: MouseEvent) => {
+              const container = (e.currentTarget as HTMLElement).closest('.event-container');
               container?.classList.toggle('expanded');
             }}
             class="cursor-pointer h-full flex flex-col px-1 rounded-lg shrink-0 items-center justify-center hover:bg-fillWeak"
@@ -1280,7 +1280,7 @@ export class SessionReplay extends LitElement {
       <div class="shrink-0 h-full relative flex items-start border-l" id="replay-activity-bar" style="width:${this.activityWidth}px">
         <div
           class="w-1 h-full absolute z-10 cursor-col-resize left-0 top-0 hover:bg-fillBrand-strong"
-          @mousedown=${(e: any) => {
+          @mousedown=${(e: MouseEvent) => {
             document.body.style.userSelect = 'none';
             this.startX = e.clientX;
           }}
@@ -1458,7 +1458,7 @@ export class SessionReplay extends LitElement {
     let offsetX: number, offsetY: number;
 
     headers.forEach((h) =>
-      h.addEventListener('mousedown', (e: any) => {
+      h.addEventListener('mousedown', (e: MouseEvent) => {
         isDragging = true;
         offsetX = e.clientX - element.getBoundingClientRect().left;
         offsetY = e.clientY - element.getBoundingClientRect().top;
@@ -1470,7 +1470,7 @@ export class SessionReplay extends LitElement {
       })
     );
 
-    const onMouseMove = (e: any) => {
+    const onMouseMove = (e: MouseEvent) => {
       if (!isDragging) return;
       // Clamp drag so the user can always grab the header back: keep at least
       // 40px of the element on-screen horizontally, and never let the top edge

@@ -54,9 +54,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
-import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -198,7 +198,11 @@ alertUpsertPostH pid form = do
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
   let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
-      queryMonitor = maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
+      -- The form has no active/inactive control, and convertToQueryMonitor defaults
+      -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
+      -- monitor here would silently re-activate it.
+      withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
+      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
@@ -249,8 +253,8 @@ alertTeamDeleteH pid monitorId teamId = do
   addRespHeaders $ AlertNoContent ""
 
 
-monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Maybe Text -> Html ()
-monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType chartTargetIdM = do
+monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Html ()
+monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
       isByos = paymentPlan == "Bring your own storage"
@@ -266,9 +270,11 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
          in option_ attrs ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
       isThresholdType = maybe True (== "threshold_exceeded") conditionType
-      chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on change set chart to document.getElementById('${chartId}') if chart exists then call chart.updateRollup(my.value) end|]
-        Nothing -> [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
+      -- Both flows retune the bin through the query builder. The widget flow used to call
+      -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
+      -- tests the element rather than the method, it threw on every change instead of
+      -- degrading. Charts only carry the `applyThresholds` expando (web-components/src/widgets.ts).
+      chartUpdateAttr = [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex gap-2 py-2"] do
@@ -285,8 +291,8 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
 thresholdsSection_ :: Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
   let chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-        Nothing -> [__|on input set chart to #visualization-widget if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+        Nothing -> [__|on input set chart to #visualization-widget if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
       showVal = maybe "" show
   panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
     div_ [class_ "flex flex-row gap-2 py-2"] do
@@ -377,7 +383,7 @@ teamAlertsGetH pid teamId = do
   teamMap <- buildTeamMap pid
   let alerts' = V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts
 
-  addRespHeaders $ TableRows [] alerts' Nothing False Nothing Nothing Nothing
+  addRespHeaders $ TableRows [] alerts' False Nothing Nothing Nothing
 
 
 alertBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
@@ -440,9 +446,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                         { icon = "bell"
                         , title = "No monitors configured yet"
                         , description = "Get notified when your logs, spans, errors, or metrics match specific conditions"
-                        , actionText = "Create monitor"
-                        , destination =
-                            Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
+                        , action = ESLink ("/p/" <> pid.toText <> "/log_explorer#create-alert-toggle") "Create monitor"
                         }
                 }
           }
@@ -707,7 +711,7 @@ unifiedMonitorOverviewH pid monitorId = do
       let nameOf cs x = maybe x (.channelName) $ find ((== x) . (.channelId)) cs
           teams' = (\t -> t{slack_channels = nameOf channels <$> t.slack_channels, discord_channels = nameOf discordChannels <$> t.discord_channels}) <$> teams
       addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
-    Nothing -> addRespHeaders $ PageCtx baseBwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
+    Nothing -> addRespHeaders $ PageCtx baseBwconf $ emptyState_ def "Monitor not found" ""
 
 
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
@@ -750,14 +754,10 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     -- Which tab is open is DOM state (radio), so no script is needed and it survives a morph.
     div_ [role_ "tablist", class_ "w-full group/mt", id_ "monitor-tabs"] do
       div_ [class_ "w-full flex border-b border-strokeWeak"] do
-        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-exec-history", class_ "sr-only", checked_]
-          "Execution History"
-        label_ [class_ "cursor-pointer shrink-0 text-sm font-medium px-3 py-2.5 text-textWeak border-b-2 border-b-transparent has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-          input_ [type_ "radio", name_ "monitor-tabs", id_ "tab-notif-channels", class_ "sr-only"]
-          "Notification Channels"
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[#tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
+        detailTab_ "monitor-tabs" "tab-exec-history" "shrink-0 font-medium text-textWeak" True "Execution History"
+        detailTab_ "monitor-tabs" "tab-notif-channels" "shrink-0 font-medium text-textWeak" False "Notification Channels"
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
     displayName = bool (statusInfo alert.currentStatus).statusLabel "Inactive" (isJust alert.deactivatedAt)
 

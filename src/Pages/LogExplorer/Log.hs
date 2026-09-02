@@ -78,10 +78,9 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
@@ -94,7 +93,6 @@ import BackgroundJobs qualified
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Pool (withResource)
-import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -234,8 +232,8 @@ buildTraceTree colIdxMap queryResultCount rows
   | otherwise = (adjustedRows, sortWith (Down . (.startTime)) entries)
   where
     lookupIdx = flip HM.lookup colIdxMap
-    txt k row = mfilter (not . T.null) $ lookupVecTextByKey row colIdxMap k
-    int64 k row = (lookupIdx k >>= (row V.!?)) >>= \case AE.Number n -> toBoundedInteger n :: Maybe Int64; _ -> Nothing
+    txt k row = lookupVecNonEmptyText row colIdxMap k
+    int64 k row = lookupVecBy row colIdxMap k :: Maybe Int64
 
     mkSpanInfo :: Int -> V.Vector AE.Value -> SpanInfo
     mkSpanInfo idx row =
@@ -364,8 +362,8 @@ synthesizeOrphanHeaders colIdxMap rows
   where
     lookupIdx = flip HM.lookup colIdxMap
     colCount = maybe 0 V.length (rows V.!? 0)
-    textAt k r = mfilter (not . T.null) $ lookupVecTextByKey r colIdxMap k
-    numAt k r = lookupIdx k >>= (r V.!?) >>= \case AE.Number n -> Just (round n :: Integer); _ -> Nothing
+    textAt k r = lookupVecNonEmptyText r colIdxMap k
+    numAt k r = lookupVecBy r colIdxMap k :: Maybe Integer
     presentIds = S.fromList $ V.toList $ V.mapMaybe (textAt "latency_breakdown") rows
     -- Combined orphan-detect + key extraction: trace_id + parent_id where the
     -- parent_id is non-empty and not present as any row's span_id.
@@ -542,6 +540,13 @@ renderFacetGroup loaded facetGroup facetSummary =
     url = "/p/" <> facetSummary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
 
 
+-- | Facet values shown before the "+ More" fold. 'renderFacetFields' takes this
+-- many and 'renderFacetTail' drops exactly the same many — two different numbers
+-- here would make the tail repeat or skip values.
+facetHeadCount :: Int
+facetHeadCount = 5
+
+
 renderFacetFields :: FacetGroup -> FacetSummary -> Html ()
 renderFacetFields facetGroup facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
@@ -551,7 +556,7 @@ renderFacetFields facetGroup facetSummary = do
   iforM_ facets \idx facet -> do
     let values = HM.lookupDefault [] facet.path facetMap
         open = facetGroup == FGCommon && idx < 5 && not (null values)
-        (visibleValues, hiddenValues) = splitAt 5 values
+        (visibleValues, hiddenValues) = splitAt facetHeadCount values
         hiddenCount = length hiddenValues
     facetSection_
       open
@@ -613,13 +618,29 @@ renderFacetTail :: Text -> FacetSummary -> Html ()
 renderFacetTail field facetSummary =
   whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
     let (FacetData facetMap) = facetSummary.facetJson
-        values = drop 5 $ HM.lookupDefault [] field facetMap
+        values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
         count = prettyPrintCount $ length values
     details_ [class_ "facet-tail group", open_ ""] do
       summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
         span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
         span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
       div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
+
+
+-- | Descendants of a page of rows, for the trace tree: seed from each row's own
+-- span id (@latency_breakdown@, aliased from @context___span_id@), bound the scan
+-- to the first @traceCap@ distinct traces, and exclude the rows already in hand.
+-- Shared by 'buildLogResult' and 'apiLogExpandH' — the two pages that render a tree.
+childSpansFor
+  :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es)
+  => Bool -> Projects.ProjectId -> [Text] -> Int -> HM.HashMap Text Int -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector (V.Vector AE.Value) -> Eff es [V.Vector AE.Value]
+childSpansFor useTf pid addCols traceCap colIdxMap window rows =
+  LogQueries.selectChildSpansAndLogs useTf pid addCols traceIds seedSpanIds window alreadyLoadedIds
+  where
+    colOf k v = lookupVecTextByKey v colIdxMap k
+    alreadyLoadedIds = V.mapMaybe (colOf "id") rows
+    traceIds = V.fromList $ take traceCap $ ordNub $ V.toList $ V.mapMaybe (\v -> lookupVecNonEmptyText v colIdxMap "trace_id") rows
+    seedSpanIds = V.mapMaybe (colOf "latency_breakdown") rows
 
 
 -- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
@@ -633,16 +654,11 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
       colOf k v = lookupVecTextByKey v colIdxMap k
       reqLastCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? (V.length requestVecs - 1))
       reqFirstCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? 0)
-      alreadyLoadedIds = V.mapMaybe (colOf "id") requestVecs
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
   childSpansList <-
     if not withChildren || V.length requestVecs > 100
       then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
-      else do
-        let traceIds = V.fromList $ take 50 $ ordNub $ V.toList $ V.mapMaybe (mfilter (not . T.null) . colOf "trace_id") requestVecs
-            -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
-            seedSpanIds = V.mapMaybe (colOf "latency_breakdown") requestVecs
-        LogQueries.selectChildSpansAndLogs useTf pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
+      else childSpansFor useTf pid addCols 50 colIdxMap (fromDD, toDD) requestVecs
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
@@ -914,7 +930,9 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
   lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now sinceM addCols removeCols tableData
-  let lastFM = lr.cursor >>= (iso8601ParseM . toString) <&> toText . iso8601Show . addUTCTime (-0.001)
+  -- One microsecond, not one millisecond: the page bound is inclusive, so a larger
+  -- step skips every row in the gap. See LogQueries.cursorEpsilon.
+  let lastFM = LogQueries.nudgeCursorBy (negate LogQueries.cursorEpsilon) =<< lr.cursor
   addRespHeaders
     (lr :: LogResult)
       { error = errM
@@ -1844,12 +1862,8 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   let hasMore = V.length rows > limitN
       shown = V.take limitN rows
       colIdxMap = listToIndexHashMap cols
-      colOf k v = lookupVecTextByKey v colIdxMap k
-      alreadyLoadedIds = V.mapMaybe (colOf "id") shown
-      traceIds = V.fromList $ take 100 $ ordNub $ mapMaybe (mfilter (not . T.null) . colOf "trace_id") $ V.toList shown
-      seedSpanIds = V.mapMaybe (colOf "latency_breakdown") shown
   childSpansList <- case expandKind of
-    LogQueries.ExpandSession _ -> LogQueries.selectChildSpansAndLogs authCtx.env.enableTimefusionReads pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
+    LogQueries.ExpandSession _ -> childSpansFor authCtx.env.enableTimefusionReads pid [] 100 colIdxMap (fromD, toD) shown
     LogQueries.ExpandPattern _ -> pure []
   let rawLogsData = shown <> V.fromList childSpansList
       (logsData, traces) = buildTraceTree colIdxMap (V.length shown) rawLogsData
@@ -1971,7 +1985,7 @@ alertConfigurationForm_ project alertM teams = do
 
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
               conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
-          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType Nothing
+          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType
 
           AlertUI.thresholdsSection_ Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 

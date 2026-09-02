@@ -29,7 +29,7 @@ import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
+import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
@@ -266,8 +266,7 @@ hostsTable pid window filters grouping hosts allHosts =
                   { icon = "server"
                   , title = "No hosts reporting"
                   , description = "Enable the OpenTelemetry hostmetrics receiver or Kubernetes node telemetry to populate this inventory."
-                  , actionText = "Host monitoring guide"
-                  , destination = Right "https://monoscope.tech/docs/sdks/infrastructure/"
+                  , action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Host monitoring guide"
                   }
           }
     }
@@ -340,12 +339,11 @@ instance ToHtml HostDetailGet where
 
 
 hostDetailGet_ :: HostDetailGet -> Html ()
-hostDetailGet_ HostDetailMissing = div_ [class_ "flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center"] do
-  faSprite_ "server" "regular" "h-8 w-8 text-iconNeutral"
-  div_ [class_ "space-y-1"] do
-    h2_ [class_ "font-semibold text-textStrong"] "Host not found in this time range"
-    p_ [class_ "max-w-md text-sm text-textWeak"] "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range."
-  a_ [href_ "./hosts", class_ "btn btn-sm"] "Return to Hosts"
+hostDetailGet_ HostDetailMissing =
+  emptyState_
+    def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"}
+    "Host not found in this time range"
+    "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range."
 hostDetailGet_ (HostDetail pid host) = hostDetail_ pid host
 
 
@@ -408,15 +406,16 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         h3_ [class_ "font-semibold text-textStrong"] "Metrics"
         when (availableSignals > 0) $ a_ ([href_ metricsUrl, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics"
       if availableSignals == 0
-        then div_ [class_ "rounded-lg border border-strokeWarning-weak bg-fillWarning-weak p-5", role_ "status"] do
-          div_ [class_ "flex items-start gap-3"] do
-            div_ [class_ "flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-bgRaised text-iconWarning"] $ faSprite_ "chart-line" "regular" "h-4 w-4"
-            div_ [class_ "min-w-0 space-y-1"] do
-              h4_ [class_ "font-semibold text-textStrong"] "No host metrics in this time range"
-              p_ [class_ "max-w-xl text-sm text-textWeak"] "Monoscope found no CPU, memory, filesystem, or load samples for this host. Expand the time range or check the collector setup."
-          div_ [class_ "mt-4 flex flex-wrap gap-2"] do
-            a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm max-sm:h-11"] "Try last 1 hour"
-            a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
+        then div_ [role_ "status"] do
+          emptyState_
+            def
+              { icon = Just "chart-line"
+              , action = ESCustom $ div_ [class_ "flex flex-wrap justify-center gap-2"] do
+                  a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm max-sm:h-11"] "Try last 1 hour"
+                  a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
+              }
+            "No host metrics in this time range"
+            "Monoscope found no CPU, memory, filesystem, or load samples for this host. Expand the time range or check the collector setup."
         else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host) $ div_ [class_ "min-h-56"] . Widget.widget_
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
@@ -550,7 +549,7 @@ imagesTable pid window runtimeM registryM images allImages =
                   [ singleSelectFilter "Runtime" "runtime" runtimeM $ sortNub $ map Containers.runtimeLabel $ concatMap (.runtimes) $ V.toList allImages
                   , singleSelectFilter "Registry" "registry" registryM $ facetValues (Just . (.registry)) allImages
                   ]
-          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." "Container setup guide" (Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes")
+          , zeroState = Just $ ZeroState "layer-group" "No container images reporting" "Images appear when container telemetry includes container.image.name." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Container setup guide")
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length images) <> " of " <> show (V.length allImages) <> " images"
           , exportName = Just "container-images"
@@ -575,7 +574,7 @@ instance ToHtml ImageDetailGet where
 
 
 imageDetailGet_ :: ImageDetailGet -> Html ()
-imageDetailGet_ ImageDetailMissing = div_ [class_ "p-5 text-textWeak"] "This image is no longer present in the selected time range."
+imageDetailGet_ ImageDetailMissing = emptyState_ def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." ""
 imageDetailGet_ (ImageDetail pid image) = imageDetail_ pid image
 
 
@@ -604,7 +603,7 @@ imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         ]
     section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
       h3_ [class_ "font-semibold text-textStrong"] "Image tags"
-      if null image.tags then p_ [class_ "text-sm text-textWeak"] "No image tags were reported." else div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ image.tags $ \tag -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml tag
+      if null image.tags then emptyState_ def{size = ESCompact, icon = Just "hashtag"} "No image tags were reported." "" else div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ image.tags $ \tag -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml tag
     section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
       h3_ [class_ "font-semibold text-textStrong"] "Security coverage"
       p_ [class_ "flex items-start gap-2 rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] do
@@ -759,7 +758,7 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
                   , singleSelectFilter "Namespace" "namespace" namespaceM $ facetValues (.namespace) allRows
                   , singleSelectFilter "Status" "status" statusM $ facetValues (Just . kubeStatusLabel . (.status)) allRows
                   ]
-          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." "Kubernetes setup guide" (Right "https://monoscope.tech/docs/sdks/infrastructure/kubernetes")
+          , zeroState = Just $ ZeroState "cube" "No Kubernetes resources reporting" "Enable kubeletstats and k8s_cluster receivers to populate pods, workloads, and nodes." (ESLink "https://monoscope.tech/docs/sdks/infrastructure/kubernetes" "Kubernetes setup guide")
           }
     }
 
@@ -792,7 +791,7 @@ instance ToHtml KubernetesDetailGet where
 
 
 kubernetesDetailGet_ :: KubernetesDetailGet -> Html ()
-kubernetesDetailGet_ KubernetesDetailMissing = div_ [class_ "p-5 text-textWeak"] "This Kubernetes resource is no longer present in the selected time range."
+kubernetesDetailGet_ KubernetesDetailMissing = emptyState_ def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." ""
 kubernetesDetailGet_ (KubernetesDetail pid resource row) = kubernetesDetail_ pid resource row
 
 
@@ -922,11 +921,12 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
       legend "bg-fillError-strong" "Above 85%"
       legend "bg-fillNeutral-strong" "No data"
   if null page.groups
-    then div_ [class_ "m-auto flex max-w-md flex-col items-center gap-2 p-8 text-center"] do
-      div_ [class_ "mb-1 flex h-12 w-12 items-center justify-center rounded-lg bg-fillBrand-weak text-iconBrand"] $ faSprite_ "server" "regular" "h-5 w-5"
-      h2_ [class_ "font-semibold text-textStrong"] "No hosts reporting"
-      p_ [class_ "text-sm text-textWeak"] "Enable host metrics or Kubernetes node telemetry to populate the map."
-      a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary mt-2"] "Set up host monitoring"
+    then
+      div_ [class_ "m-auto"]
+        $ emptyState_
+          def{icon = Just "server", action = ESLink "https://monoscope.tech/docs/sdks/infrastructure/" "Set up host monitoring"}
+          "No hosts reporting"
+          "Enable host metrics or Kubernetes node telemetry to populate the map."
     else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) -> section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" (length hosts <= 12)] do
       h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium text-textStrong"] (toHtml $ show (length hosts) <> " hosts")
       div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" (length hosts <= 12)] $ forM_ (sortOn (.name) hosts) $ hostHex page.pid page.window page.fill (length hosts <= 12)

@@ -1,7 +1,6 @@
 module Pages.Dashboards (
   dashboardGetH,
   dashboardTabGetH,
-  dashboardTabContentGetH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
   DashboardGet (..),
@@ -94,7 +93,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, primaryButton_, tagInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -242,18 +241,21 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload:inherited" "mouseover"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabPath = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name
-              tabUrl = tabPath <> queryStr
-              tabContentUrl = tabPath <> "/content" <> queryStr
+          let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
+          -- Project tab/nav swap pattern (CLAUDE.md): fetch the *full page* and select the
+          -- content container out of it, morphing the tab strip out-of-band. Morphing carries
+          -- `tab-active` across for free, so no hyperscript manages the active class.
           a_
             [ role_ "tab"
             , href_ tabUrl
             , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-            , hxGet_ tabContentUrl
+            , hxGet_ tabUrl
             , hxTarget_ "#dashboard-tabs-content"
-            , hxSwap_ "innerHTML settle:0ms"
-            , hxPushUrl_ tabUrl
-            , [__|on click remove .tab-active from <.tab-active/> in #dashboard-tabs-container then add .tab-active to me then set my.preloadState to 'DONE'|]
+            , hxSelect_ "#dashboard-tabs-content"
+            , term "hx-select-oob" "#dashboard-tabs-container:morph"
+            , hxSwap_ "morph"
+            , hxPushUrl_ "true"
+            , [__|on click set my.preloadState to 'DONE'|]
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
@@ -709,9 +711,12 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       -- Nothing to choose from is a different answer than "search found nothing", and a
       -- search box over an empty list reads as a broken page. Say why instead.
       if optCount == 0
-        then div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"] do
-          div_ [class_ "text-sm text-textStrong"] $ toHtml $ "No " <> T.toLower varTitle <> " to choose from yet"
-          div_ [class_ "mt-1 text-xs text-textWeak"] "This dashboard reports on one at a time, so it has nothing to show until data arrives."
+        then
+          div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"]
+            $ emptyState_
+              def{size = ESCompact}
+              ("No " <> T.toLower varTitle <> " to choose from yet")
+              "This dashboard reports on one at a time, so it has nothing to show until data arrives."
         else div_ [class_ "var-picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
           div_ [class_ "px-3 border-b border-base-300"] do
             input_
@@ -776,7 +781,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
                   when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-            div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
+            div_ [class_ "var-picker-empty px-3 py-8 text-center", style_ "display:none"] $ emptyState_ def{size = ESCompact} "No matching results" ""
       -- Keyboard hints
       div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
         $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
@@ -917,7 +922,7 @@ fetchWidgetData pid timeRange allParams widget = do
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    (issues, _) <- Issues.selectIssues pid (Just False) (Just False) 2 0 Nothing Nothing "24h" [] []
+    (issues, _) <- Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.period = "24h", Issues.hideLowSeverity = True, Issues.limit = 2}
     pure
       $ widget
       & #html
@@ -1402,7 +1407,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
 
       Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
       -- Monitor Schedule section (shared component)
-      Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded") (Just chartTargetId)
+      Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded")
       -- Thresholds section (shared component)
       Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
       -- Widget-specific: Show threshold lines option
@@ -1735,7 +1740,7 @@ dashboardsGet_ dg = do
                   , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
                   , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
-                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
+                  , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", action = Table.ESCustom $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn text-sm w-max mx-auto btn-primary"] "Create Dashboard"}
                   }
             }
 
@@ -2207,7 +2212,7 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   addRespHeaders case queryM of
-    Nothing -> div_ [class_ "p-3 text-textWeak text-xs"] "No query provided"
+    Nothing -> emptyState_ def{size = ESCompact} "No query provided" ""
     Just query -> case parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query of
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
@@ -2417,52 +2422,6 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   -- Including constants allows HTMX tab switches to skip re-executing constant queries
   let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
-
-
--- | Handler for tab content partial (htmx): /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}/content
--- This returns only the tab content panel for htmx swapping
-dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
-dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
-  _ <- Projects.sessionAndProject pid
-  now <- Time.currentTime
-  (_, dash) <- getDashAndVM pid dashId fileM
-  let timeParams = (sinceStr, fromDStr, toDStr)
-      paramsWithVarDefaults = addVariableDefaults allParams dash.variables
-      -- Check if constants are already in params (passed from initial page load)
-      hasConstants = any (T.isPrefixOf "const-" . fst) allParams
-
-  tabs <- dash.tabs `whenNothing` throwError err404{errBody = "Dashboard has no tabs"}
-  (idx, tab) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
-
-  -- Skip constant processing if already provided via params (avoids redundant SQL queries)
-  allParamsWithConstants <-
-    if hasConstants
-      then pure paramsWithVarDefaults
-      else snd <$> processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
-
-  -- Process variables to check if tab requires one that's not set
-  dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dash
-
-  -- Render the tab's content, which is the picker itself while a required variable is
-  -- unanswered. Widget processing is skipped entirely in that case: every query would
-  -- interpolate the variable to '' and come back empty, at the cost of a real round
-  -- trip each, only to be covered by a prompt.
-  let orderForm = widgetOrderTriggerForm_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug) True
-  case findVarToPrompt (Just tab) (fold dash'.variables) of
-    Just v -> addRespHeaders do
-      breadcrumbSuffixOob_ tab.name
-      div_
-        [ class_ "tab-panel"
-        , data_ "tab-index" (show idx)
-        , id_ $ "tab-panel-" <> dashId.toText <> "-" <> show idx
-        ]
-        $ variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v False
-      orderForm
-    Nothing -> do
-      widgetsWithPngUrls <- processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
-      addRespHeaders do
-        tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True
-        orderForm
 
 
 -- | Render a single tab content panel.

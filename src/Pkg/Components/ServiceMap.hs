@@ -5,7 +5,7 @@
 -- The canvas is never the only representation: the same payload is rendered as a
 -- semantic dependency table underneath, which is what makes the map readable on a phone,
 -- keyboard-navigable, and functional in a shared link with no JS.
-module Pkg.Components.ServiceMap (serviceMapPanel_, serviceMapLegend_) where
+module Pkg.Components.ServiceMap (serviceMapPanel_) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -18,7 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
 import Relude
-import Utils (faSprite_, prettyPrintCount)
+import Utils (faSprite_, getDurationNSMS, prettyPrintCount)
 
 
 -- | Render the map shell for @graph@ into a container with id @elId@. The graph travels
@@ -254,34 +254,22 @@ dependencyTable_ graph = details_ [class_ "group border border-strokeStrong roun
       $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95 latency"]
       $ \h -> th_ [class_ "text-left font-medium px-3 py-1.5 whitespace-nowrap"] h
     tbody_ $ forM_ (sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)) \e -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
-      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay graph e.source
-      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay graph e.target
+      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay e.source
+      td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay e.target
       td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ prettyPrintCount $ fromIntegral e.stats.requests
       td_ [class_ $ "px-3 py-1.5 tabular-nums" <> bool "" " text-textError" (e.stats.errors > 0)]
         $ toHtml
         $ if e.stats.errors == 0 then "0" else show e.stats.errors <> " (" <> pct e.stats.errorRate <> ")"
-      td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ prettyDuration e.stats.p95Ns
-
-
--- | Edges reference node keys; show the human label the node carries.
-nodeDisplay :: ServiceGraph -> Text -> Text
-nodeDisplay graph k
-  | T.null k = "Entry point"
-  | otherwise = maybe k describe $ V.find (\n -> n.key == k) graph.nodes
+      td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ bool (getDurationNSMS (fromIntegral e.stats.p95Ns)) "—" (e.stats.p95Ns <= 0)
   where
-    describe n = n.label <> maybe "" (\c -> " (" <> show c <> " endpoints)") n.memberCount
+    -- Edges reference node keys; show the human label the node carries. Built once rather
+    -- than searched per row: a capped map is 150 nodes and the table is one row per edge.
+    labels = HM.fromList [(n.key, n.label <> maybe "" (\c -> " (" <> show c <> " endpoints)") n.memberCount) | n <- V.toList graph.nodes]
+    nodeDisplay k = if T.null k then "Entry point" else HM.lookupDefault k k labels
 
 
 pct :: Double -> Text
 pct r = T.take 4 (show (r * 100)) <> "%"
-
-
-prettyDuration :: Int64 -> Text
-prettyDuration ns
-  | ns <= 0 = "—"
-  | ns < 1_000_000 = show (ns `div` 1000) <> "µs"
-  | ns < 1_000_000_000 = show (ns `div` 1_000_000) <> "ms"
-  | otherwise = T.take 4 (show (fromIntegral ns / 1e9 :: Double)) <> "s"
 
 
 -- | The map's empty/error slot: the shared compact empty state inside the fixed-height

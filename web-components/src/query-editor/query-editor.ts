@@ -7,9 +7,7 @@ import {
   AGGREGATION_COMMANDS,
   DATA_SOURCES,
   LOGICAL_OPERATORS,
-  OPERATOR_DETAILS,
   STATS_FUNCTIONS,
-  SUGGESTION_OPERATORS,
   computeSuggestions,
   filterSuggestions,
   wordAtCursor,
@@ -20,6 +18,7 @@ import {
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml.js';
 import { groupBy, pick } from 'lodash';
+import { evictOldest } from '../log-list-utils';
 
 // Configure Monaco workers (we only use the base editor, no language services).
 // Without this, Monaco logs a warning and falls back to running worker code on the main thread.
@@ -132,23 +131,13 @@ const PIPE_OPERATOR = ['|'];
 // Combine all operators for easy access
 const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
 
-// Operator descriptions for suggestion dropdown
-
 // Common operators shown first, then advanced ones
 const COMMON_OPERATORS = ['==', '!=', '>', '<', 'contains', 'in'];
-const ADVANCED_OPERATORS = ['>=', '<=', '=~', '!in', 'has', '!has', 'has_any', 'has_all', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', ...LOGICAL_OPERATORS.filter((op) => op !== '!exists')];
-const operatorSortText = (op: string, i: number) => {
-  const group = COMMON_OPERATORS.includes(op) ? '0' : '1';
-  return `${group}_${String(i).padStart(3, '0')}_${op}`;
-};
 
-// Performance constants
-const IDLE_CALLBACK_TIMEOUT = 50;
 const MAX_CACHE_SIZE = 100;
 
-// Common filter fields get higher priority (lower sortText = shown first)
+// Common filter fields get higher priority (shown first)
 const PRIORITY_FIELDS = new Set(['status_code', 'level', 'method', 'name', 'duration', 'service', 'path', 'http_status', 'resource', 'attributes']);
-const fieldSortText = (name: string) => PRIORITY_FIELDS.has(name) ? `0_${name}` : `1_${name}`;
 
 // Sources and keywords
 const AGGREGATION_MODIFIERS = ['by', 'as', 'limit'];
@@ -162,25 +151,6 @@ const REGEX_PATTERNS = {
   dotMatchEnd: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/,
   dotMatchPartial: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.([a-zA-Z0-9_]*)$/,
 
-  // Operator patterns
-  operatorMatch:
-    /([\w\.]+)\s*(==|!=|>=|<=|>|<|=~|!in|in|has_any|has_all|!has|has|!contains|contains|!startswith|startswith|!endswith|endswith|matches)\s*$/,
-
-  // Value patterns
-  afterQuotedValue: /".*"\s*$/,
-  afterNumericValue: /\d+\s*$/,
-
-  // Field space patterns
-  fieldSpace: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/,
-
-  // Logical operators (precompiled from filtered list)
-  logicalOperator: new RegExp(`\\b(and|or|not)\\s+$`, 'i'),
-
-  // Stats/aggregation patterns
-  statsOrTimechart: /stats\s|timechart\s/i,
-  byKeyword: /\bby\s*$/i,
-  timechartKeyword: /timechart/i,
-
   // Visualization patterns
   hasSummarize: /summarize\s+/i,
   hasBinFunction: /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i,
@@ -188,7 +158,6 @@ const REGEX_PATTERNS = {
   summarizeByClause: /(\s*summarize\s+[^|]*?by\s+)([^|]*?)(?=\||$)/i,
 
   // Character tests (precompiled for hot path)
-  digitTest: /\d/,
   whitespaceTest: /\s/,
   wordBoundaryTest: /[^\w\d_=<>!&|+\-*/%^.:]/,
 };
@@ -280,10 +249,7 @@ class SchemaManager {
     return new Set(Object.keys(fields || {}).map((f) => f.split('.')[0]));
   };
   private setCacheWithLimit<K, V>(cache: Map<K, V>, key: K, value: V): void {
-    if (cache.size >= MAX_CACHE_SIZE) {
-      const firstKey = cache.keys().next().value;
-      if (firstKey !== undefined) cache.delete(firstKey);
-    }
+    evictOldest(cache, MAX_CACHE_SIZE);
     cache.set(key, value);
   }
 

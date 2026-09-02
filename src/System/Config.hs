@@ -38,6 +38,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Directory (getDirectoryContents)
 import System.Envy (DefConfig (..), FromEnv (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
+import Text.Show (showString, showsPrec)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -247,8 +248,19 @@ data EnvConfig = EnvConfig
   -- rows by this cutoff so pre-deploy rows stay invisible to the worker
   -- and the post-deploy rows get stamped via UPDATE-1.
   }
-  deriving stock (Generic, Show)
+  deriving stock (Generic)
   deriving anyclass (Default, FromEnv)
+
+
+-- | Deliberately NOT derived. A third of these fields are secrets (@auth0Secret@,
+-- @apiKeyEncryptionSecretKey@, @stripeSecretKey@, @smtpPassword@, @basicAuthPassword@,
+-- every bot token…), and 'EnvConfig' is embedded in types that DO derive 'Show'
+-- ('Pages.BodyWrapper.BWConfig'), so a single @show@ of a page config in a log line or an
+-- exception message would print the deployment's entire credential set. Deriving cannot
+-- express redaction, which is the one case that outranks the derive-everything rule; a
+-- field-by-field allowlist would silently leak the next secret someone adds.
+instance Show EnvConfig where
+  showsPrec _ _ = showString "EnvConfig{redacted}"
 
 
 instance DefConfig EnvConfig where
@@ -350,13 +362,13 @@ instance Var LogLevel where
 -- | Everything that changes the api_catalog stats result: project, tab, sort, window,
 -- period, page offset. A tuple rather than a joined string so a new dimension is a type
 -- error at every construction site instead of a silently colliding cache key.
-type HostStatsKey = (Projects.ProjectId, Text, Text, Text, Text, Int)
+type HostStatsKey = (Projects.ProjectId, Text, Text, Endpoints.Since, Endpoints.Period, Int)
 
 
 -- | Everything that changes the endpoints-list stats result: (project, direction tab,
 -- host, sort) and (search, page, per_page, period). Nested pairs because Hashable
 -- stops at 7-tuples. Same rationale as 'HostStatsKey'.
-type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Text))
+type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Endpoints.Period))
 
 
 -- | Identifies a source blob: @(owner, repo, ref, path)@. Deliberately NOT project-scoped —
