@@ -166,13 +166,11 @@ logQueryBox_ config = do
               div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
-                  -- 30px, not min-h-8: the bordered box around this is what has
-                  -- to line up with the controls next to it, and that box is
-                  -- min-h-8 with a 1px border on each side. An editor of the
-                  -- same 32px forces its own wrapper to 34 and the row stops
-                  -- matching — which is what `matches the query controls'
-                  -- height and centers its text` measures.
-                  ( [id_ "filterElement", class_ $ "w-full flex items-center min-h-[30px]" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                  -- No height of its own: the bordered box above owns it (min-h-8,
+                  -- border-box, so its borders leave 30 for content). Anything taller
+                  -- pinned here pushes that box past the h-8 controls beside it,
+                  -- which is what the `matches the query controls' height` spec measures.
+                  ( [id_ "filterElement", class_ $ "w-full flex items-center" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                       -- The editor validates against the server, which needs the same source the
                       -- query will run under: metrics live in another table, so without this the
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
@@ -362,7 +360,9 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
   div_ [class_ "relative overflow-x-hidden w-full flex-1"] do
-    div_ [class_ "w-full text-sm leading-5 py-1.5 truncate"]
+    -- Unpadded: #filterElement's items-center centres it, and padding would push
+    -- this past the 30 the bordered box has room for while Monaco is still loading.
+    div_ [class_ "w-full text-sm leading-5 truncate"]
       $ case query of
         Just q | not (T.null q) -> span_ [class_ "font-mono"] $ toHtml q
         -- Match the upgraded editor's placeholder so loading does not look like a query.
