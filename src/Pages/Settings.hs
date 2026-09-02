@@ -67,7 +67,6 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -852,7 +851,7 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
 data TestForm = TestForm
   { issueType :: Text
   , channel :: Text
-  , teamId :: Maybe UUID.UUID
+  , teamId :: Maybe ProjectMembers.TeamId
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)

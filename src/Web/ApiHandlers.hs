@@ -1029,7 +1029,7 @@ apiIssuesBulk pid ba = do
 toTeamSummary :: PM.Team -> TeamSummary
 toTeamSummary t =
   TeamSummary
-    { id = UUIDId t.id
+    { id = t.id
     , name = t.name
     , handle = t.handle
     , description = t.description
@@ -1070,7 +1070,7 @@ toTeamFull t = do
 
 -- | Fetch a single team by id (scoped to project). 404s if missing.
 fetchTeam :: Projects.ProjectId -> TeamId -> ATBaseCtx PM.Team
-fetchTeam pid tid = notFoundOr "Team not found" =<< PM.getTeamById pid tid.unwrap
+fetchTeam pid tid = notFoundOr "Team not found" =<< PM.getTeamById pid tid
 
 
 -- | 'fetchTeam' that also rejects the everyone team, which is not editable here.
@@ -1122,7 +1122,7 @@ apiTeamCreate pid inp = do
   when (T.null inp.name) $ throwError err400{errBody = "name is required"}
   assertHandleAllowed inp.handle
   createdM <- PM.createTeam pid Nothing (teamDetailsFromInput inp)
-  maybe (throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}) (apiTeamGet pid . UUIDId) createdM
+  maybe (throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}) (apiTeamGet pid) createdM
 
 
 apiTeamUpdate :: Projects.ProjectId -> TeamId -> TeamInput -> ATBaseCtx TeamFull
@@ -1130,7 +1130,7 @@ apiTeamUpdate pid tid inp = do
   _ <- fetchEditableTeam pid tid
   when (T.null inp.name) $ throwError err400{errBody = "name is required"}
   assertHandleAllowed inp.handle
-  _ <- PM.updateTeam pid tid.unwrap (teamDetailsFromInput inp)
+  _ <- PM.updateTeam pid tid (teamDetailsFromInput inp)
   apiTeamGet pid tid
 
 
@@ -1150,7 +1150,7 @@ apiTeamPatch pid tid p = do
           , PM.phoneNumbers = maybe t.phone_numbers V.fromList p.phoneNumbers
           , PM.pagerdutyServices = maybe t.pagerduty_services V.fromList p.pagerdutyServices
           }
-  _ <- PM.updateTeam pid tid.unwrap merged
+  _ <- PM.updateTeam pid tid merged
   apiTeamGet pid tid
 
 
@@ -1158,28 +1158,27 @@ apiTeamDelete :: Projects.ProjectId -> TeamId -> ATBaseCtx NoContent
 apiTeamDelete pid tid = do
   t <- fetchTeam pid tid
   when t.is_everyone $ throwError err400{errBody = "The everyone team cannot be deleted"}
-  NoContent <$ PM.deleteTeams pid (V.singleton tid.unwrap)
+  NoContent <$ PM.deleteTeams pid (V.singleton tid)
 
 
 apiTeamsBulk :: Projects.ProjectId -> BulkAction TeamId -> ATBaseCtx (BulkResult TeamId)
 apiTeamsBulk pid ba = bulkExec ba [("delete", del)]
   where
-    ids = (.unwrap) <$> ba.ids
     del = do
-      byId <- Map.fromList . fmap (\t -> (t.id, t)) <$> PM.getTeamsById pid (V.fromList ids)
-      let classify uid = case Map.lookup uid byId of
-            Nothing -> Left BulkFailure{id = UUIDId uid, error = "not found"}
-            Just t | t.is_everyone -> Left BulkFailure{id = UUIDId uid, error = "the everyone team cannot be deleted"}
-            Just _ -> Right (UUIDId uid)
-          (failed, succeeded) = partitionEithers (classify <$> ids)
-      PM.deleteTeams pid (V.fromList [tid.unwrap | tid <- succeeded])
+      byId <- Map.fromList . fmap (\t -> (t.id, t)) <$> PM.getTeamsById pid (V.fromList ba.ids)
+      let classify tid = case Map.lookup tid byId of
+            Nothing -> Left BulkFailure{id = tid, error = "not found"}
+            Just t | t.is_everyone -> Left BulkFailure{id = tid, error = "the everyone team cannot be deleted"}
+            Just _ -> Right tid
+          (failed, succeeded) = partitionEithers (classify <$> ba.ids)
+      PM.deleteTeams pid (V.fromList succeeded)
       pure $ BulkPartial succeeded failed
 
 
 toMemberSummary :: PM.ProjectMemberVM -> MemberSummary
 toMemberSummary m =
   MemberSummary
-    { id = m.id
+    { id = m.id.unwrap
     , userId = m.userId.unwrap
     , email = CI.original m.email
     , firstName = m.first_name

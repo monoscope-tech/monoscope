@@ -31,7 +31,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -157,10 +157,9 @@ gitSyncSettingsPostH pid form = do
         (True, Left _) -> pure "main"
       let apiBase = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
       syncM <- case existingM of
-        Nothing -> GitSync.insertGitHubSync encKey pid host apiBase form.owner form.repo branch form.accessToken form.webhookSecret (fromMaybe "" form.pathPrefix)
-        Just existing
-          | T.null form.accessToken -> GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo branch True
-          | otherwise -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
+        Nothing -> GitSync.insertGitHubSync encKey pid host apiBase form.owner form.repo branch (GitSync.PersonalToken form.accessToken) form.webhookSecret (fromMaybe "" form.pathPrefix)
+        -- An empty token box means "keep the stored one", not "clear it".
+        Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
       Log.logTrace (bool "Created git sync config" "Updated git sync config" (isJust existingM)) (pid, Git.hostSlug host, form.owner, form.repo)
       addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
@@ -323,17 +322,7 @@ connectedView sync actionUrl webhookUrl = do
     div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
       headerRow_ [] do
         sectionLabel_ "Webhook URL"
-        button_
-          [ type_ "button"
-          , class_ "btn btn-xs btn-ghost gap-1"
-          , term "data-url" webhookUrl
-          , [__| on click call navigator.clipboard.writeText(my @data-url)
-                   then put 'Copied!' into the first <span/> in me
-                   then wait 2s then put 'Copy' into the first <span/> in me |]
-          ]
-          do
-            faSprite_ "copy" "regular" "w-3 h-3"
-            span_ "Copy"
+        copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-url" [term "data-url" webhookUrl]
       div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
       unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
@@ -534,7 +523,7 @@ projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex 
         h3_ [class_ "text-lg font-semibold text-textStrong"] "GitHub App Installed!"
         p_ [class_ "text-sm text-textWeak"] "Select a project to connect"
     if null projects
-      then p_ [class_ "text-textWeak text-center py-4"] "No projects found. Create a project first."
+      then emptyState_ def{size = ESCompact, icon = Just "folder"} "No projects found" "Create a project first, then come back to connect it."
       else div_ [class_ "space-y-2"] $ forM_ projects \proj ->
         a_ [href_ ("/p/" <> proj.id.toText <> "/settings/git-sync/repos?installationId=" <> show instId), class_ "flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer block"] do
           iconBadge_ NeutralBadge "folder"
@@ -558,10 +547,9 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
         tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
         conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing tok.token
         ExceptT $ first ("Failed to list repos: " <>) <$> Git.listRepos conn
-  pure $ div_ [class_ "w-full h-full overflow-y-auto"] $ section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-    div_ [class_ "mb-2"] do
-      h2_ [class_ "text-textStrong text-xl font-semibold"] "GitHub Sync"
-      p_ [class_ "text-textWeak text-sm mt-1"] "Select a repository to sync dashboards with."
+  pure $ settingsSection_ do
+    settingsH2_ "GitHub Sync"
+    p_ [class_ "text-textWeak text-sm -mt-4"] "Select a repository to sync dashboards with."
     div_ [id_ "git-sync-content", class_ "surface-raised rounded-2xl p-4"] content
 
 
@@ -627,12 +615,13 @@ repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-
 githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (RespHeaders (Html ()))
 githubAppSelectRepoH pid form = do
   ctx <- ask @Config.AuthContext
-  let (ownerVal, repoVal) = Git.splitFullName form.repoFullName
-      prefix = fromMaybe "" form.pathPrefix
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+      (ownerVal, repoVal) = Git.splitFullName form.repoFullName
+      creds = GitSync.AppInstallation form.installationId
   result <-
     GitSync.getGitHubSync pid >>= \case
-      Nothing -> GitSync.insertGitHubAppSync pid form.installationId ownerVal repoVal form.branch prefix
-      Just existing -> GitSync.updateGitHubSyncRepo existing.id ownerVal repoVal form.branch prefix
+      Nothing -> GitSync.insertGitHubSync encKey pid Git.GitHub Nothing ownerVal repoVal form.branch creds Nothing (fromMaybe "" form.pathPrefix)
+      Just existing -> GitSync.updateGitHubSync encKey existing.id ownerVal repoVal form.branch Nothing form.pathPrefix
   recordInstallation pid form.installationId
   Log.logInfo "GitHub App repo selected" (pid, form.repoFullName)
   liftIO $ withResource ctx.jobsPool \conn ->

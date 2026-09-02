@@ -3,6 +3,7 @@ module Pages.ReportsSpec (spec) where
 import BackgroundJobs qualified
 import Data.Effectful.Notify (Notification (..))
 import Data.Pool (withResource)
+import Data.Time (UTCTime (..), fromGregorian)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -63,6 +64,17 @@ spec = around withTestResources do
           dateLabel `shouldNotBe` ""
           emailHtml `shouldNotBe` ""
         _ -> fail "the report detail did not load"
+
+      -- Weekly emails used to be rendered by the job in the SERVER's timezone, so a
+      -- customer in UTC+13 saw the wrong week. renderWeeklyEmail is the one renderer now,
+      -- and it dates the report in the project's IANA timezone.
+      project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
+      let elevenAmUTC = UTCTime (fromGregorian 2025 1 1) (11 * 3600)
+      (tzDateLabel, tzSubject, _) <-
+        runTestBg frozenTime tr
+          $ Reports.renderWeeklyEmail "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC 0 0 0 0 V.empty V.empty V.empty V.empty False
+      tzDateLabel `shouldBe` "2025-01-02"
+      tzSubject `shouldNotBe` ""
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
       (_, otherProjectPage) <- testServant tr $ Reports.singleReportGetH otherPid reportId Nothing

@@ -337,7 +337,7 @@ trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 cleanupExpiredCache :: (DB es, Time :> es) => Eff es Int
 cleanupExpiredCache = do
   now <- Time.currentTime
-  maybe 0 identity
+  fromMaybe 0
     . viaNonEmpty head
     <$> Hasql.interp
       [HI.sql|

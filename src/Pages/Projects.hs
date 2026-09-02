@@ -446,7 +446,7 @@ data IntegrationsConfig = IntegrationsConfig
   , slackChannels :: [BotUtils.Channel]
   , extraSlackChannels :: [BotUtils.Channel]
   , existingSlackChannels :: V.Vector Text
-  , everyoneTeamId :: Maybe UUID.UUID
+  , everyoneTeamId :: Maybe ProjectMembers.TeamId
   , -- \| Slack's error code when the channel list couldn't be fetched. Present ⇒
     -- the install can't reach Slack's API, so chat.postMessage delivery is dead too.
     slackChannelsError :: Maybe Text
@@ -530,18 +530,18 @@ integrationsSwapAttrs_ :: [Attribute]
 integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"]
 
 
-renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
+renderInlineTestButton :: Text -> Text -> Maybe ProjectMembers.TeamId -> Html ()
 renderInlineTestButton pid channel teamIdM =
   form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ channel]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
-    whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
+    whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
     button_ [type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
 
-renderNotificationOption :: Text -> Maybe UUID.UUID -> Text -> Text -> Bool -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption :: Text -> Maybe ProjectMembers.TeamId -> Text -> Text -> Bool -> Bool -> Html () -> Html () -> Html ()
 renderNotificationOption pid teamIdM title value isChecked isConfigured icon extraContent = do
   let isActive = isChecked && isConfigured
   div_ [] do
@@ -725,7 +725,7 @@ data TeamForm = TeamForm
   , discordChannels :: V.Vector Text
   , phoneNumbers :: V.Vector Text
   , pagerdutyServices :: V.Vector Text
-  , teamId :: Maybe UUID.UUID
+  , teamId :: Maybe ProjectMembers.TeamId
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
@@ -792,10 +792,10 @@ manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
   (sess, _) <- Projects.sessionAndProject pid
   case action of
     "delete" -> do
-      teamVm <- ProjectMembers.getTeamsById pid $ V.fromList itemId
+      teamVm <- ProjectMembers.getTeamsById pid $ V.fromList $ coerce itemId
       if all (\team -> Just sess.user.id == team.created_by) teamVm
         then do
-          _ <- ProjectMembers.deleteTeams pid $ V.fromList itemId
+          _ <- ProjectMembers.deleteTeams pid $ V.fromList $ coerce itemId
           when (isNothing listViewM)
             $ redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
@@ -1000,15 +1000,15 @@ teamPage pid team projMembers slackChannels discordChannels = do
                       div_ [class_ "text-textWeak mt-0.5"] "Sends a test incident to all configured channels"
                   form_ [hxPost_ ("/p/" <> pid.toText <> "/settings/integrations/test"), hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
-                    input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText team.id]
+                    input_ [type_ "hidden", name_ "teamId", value_ team.id.toText]
                     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
                     button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", testSentAttr_] <> [disabled_ "" | not hasAnyChannel]) do
                       faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
                       " Send Test"
-              div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
+              div_ [id_ $ "team-test-history-" <> team.id.toText, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
-        lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
-        lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
+        lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> team.id.toText)
+        lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> team.id.toText)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
     unless isEveryone $ teamModal pid (Just team) whiteList emailWhiteList channelWhiteList discordWhiteList True mempty
 
@@ -1106,7 +1106,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
 memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
 memberRowWithStatus pid idx prM = do
   let email = CI.original prM.email
-      memberId = RealUUID.toText prM.id
+      memberId = prM.id.toText
       isOwner = idx == 0
       isDisabled = not prM.active && not isOwner
   div_ [class_ $ "px-4 py-3 flex items-center gap-3" <> if isDisabled then " opacity-60" else "", id_ $ "member-" <> memberId] do
@@ -1122,7 +1122,7 @@ memberRowWithStatus pid idx prM = do
       unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
-deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (RespHeaders (Html ()))
 deleteMemberH pid memberId = do
   (sess, _) <- Projects.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
@@ -1563,7 +1563,7 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
       prefix = maybe "n" (.handle) team
       modalId = prefix <> "-new-team-modal"
       mkId suffix = prefix <> "-" <> suffix
-      membersTags = encodeField \t -> UUID.toText . (.memberId) <$> t.members
+      membersTags = encodeField \t -> (.toText) . (.memberId) <$> t.members
       notifEmails = encodeField (.notify_emails)
       slackChannels = encodeField (.slack_channels)
       discordChannels = encodeField (.discord_channels)
@@ -1572,7 +1572,7 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
 
   modalWith_ modalId def{boxClass = "p-6 max-w-lg w-full"} (Just trigger) do
     form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
-      whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
+      whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
       h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml (if isJust team then "Edit Team" else "Create Team" :: Text)
 
       div_ [class_ "flex-1 overflow-y-auto max-h-[60vh] mt-4 divide-y divide-strokeWeak"] do
