@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlert, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
@@ -113,9 +111,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   -- When no explicit channel is supplied, fall back to the first entry of
   -- @everyone.discord_channels (insertion order; see addDiscordChannelToEveryoneTeam).
-  channelIdM <- case channelIdM' of
-    Just c -> pure (Just c)
-    Nothing -> (>>= viaNonEmpty head . V.toList . (.discord_channels)) <$> ProjectMembers.getEveryoneTeam pid
+  channelIdM <- maybe ((>>= (V.!? 0) . (.discord_channels)) <$> ProjectMembers.getEveryoneTeam pid) (pure . Just) channelIdM'
   case channelIdM of
     Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
@@ -162,7 +158,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
-            MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]]
+            MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [slackSection ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
             LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle cid isError
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid isError
             ShapeAlert -> Nothing
@@ -239,32 +235,24 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
   slackAttachment
     channelId
     "#64748b"
-    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> url <> "|📊 *" <> T.toTitle reportType <> " report* · " <> project <> ">")]]
-    , AE.object
-        [ "type" AE..= "context"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors)]]
-        ]
-    , AE.object ["type" AE..= "image", "image_url" AE..= allUrl, "alt_text" AE..= "Events", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Events: " <> show totalEvents :: Text)]]
-    , AE.object ["type" AE..= "image", "image_url" AE..= errUrl, "alt_text" AE..= "Errors", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Errors: " <> show totalErrors :: Text)]]
-    , AE.object ["type" AE..= "context", "elements" AE..= AE.Array sumr]
-    , AE.object
-        [ "type" AE..= "actions"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Open report", "emoji" AE..= True], "url" AE..= url, "style" AE..= "primary"]]
-        ]
+    [ slackSection ("<" <> url <> "|📊 *" <> T.toTitle reportType <> " report* · " <> project <> ">")
+    , slackContext ["*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors]
+    , slackImage "Events" (Just $ "Events: " <> show totalEvents) allUrl
+    , slackImage "Errors" (Just $ "Errors: " <> show totalErrors) errUrl
+    , slackContext sumr
+    , slackActions [slackButton "Open report" (Just "primary") url]
     ]
   where
-    sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* " <> show evCount <> " events · " <> show errCount <> " errors")]) breakDown
+    sumr = take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "*" <> name <> ":* " <> show evCount <> " events · " <> show errCount <> " errors"
 
 
 slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
 slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   slackAttachment channelId msgs.color
-    $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
-      , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= body]]
-      ]
-    <> [AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList meta)] | not (null meta)]
-    <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Error trend"])
-    <> [AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList buttons)]]
+    $ [slackSection title, slackSection body]
+    <> [slackContext meta | not (null meta)]
+    <> maybeToList (slackImage "Error trend" Nothing <$> chartUrlM)
+    <> [slackActions buttons]
   where
     targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
     msgs = runtimeAlertMessages alertType
@@ -276,34 +264,14 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
       Nothing -> (msgs.slackEmoji, msgs.alertLabel)
     title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> err.errorType <> " in " <> project <> ">"
     body = "```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```"
-    field lbl v = guard (not (T.null v)) $> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> lbl <> ":* " <> v)]
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
+    tidM = err.traceId >>= guarded (not . T.null)
     meta =
-      catMaybes
-        [ field "Service" (fromMaybe "" err.serviceName)
-        , field "Environment" (fromMaybe "" err.environment)
-        , field "Route" (errRoute err)
-        , occTextM >>= field "Rate"
-        , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]
-        , field "Runtime" (fromMaybe "" err.runtime)
-        , field "Trace" (T.take 16 $ fromMaybe "" err.traceId)
-        ]
-    -- Slack's button `style` is an enum of exactly "primary" and "danger". A
-    -- "default" style is not "no style" — it makes chat.postMessage reject the
-    -- ENTIRE message with invalid_attachments, so every error alert carrying a
-    -- trace id silently failed to any channel reached over the chat API (the
-    -- webhook transport renders buttons as mrkdwn links, which is why the
-    -- install's default channel kept working and only extra channels went dark).
-    -- Omit the key instead: `styleM = Nothing` is the unstyled button.
-    btn label styleM url =
-      AE.object
-        $ ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (label :: Text), "emoji" AE..= True], "url" AE..= url]
-        <> maybeToList (("style" AE..=) <$> (styleM :: Maybe Text))
-    traceBtn =
-      err.traceId >>= \tid ->
-        guard (not (T.null tid))
-          $> btn "View trace" Nothing (traceExplorerUrl projectUrl tid err.when)
-    buttons = btn "🔍 Investigate" (Just "primary") targetUrl : maybeToList traceBtn
+      (errMetaPairs "First seen" err occTextM firstSeen <> maybeToList (("Trace",) . T.take 16 <$> tidM))
+        <&> \(lbl, v) -> "*" <> lbl <> ":* " <> v
+    buttons =
+      slackButton "🔍 Investigate" (Just "primary") targetUrl
+        : maybeToList (tidM <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
 
 
 -- | First non-empty line of a stack trace that isn't a repeat of the error-type header
@@ -315,10 +283,9 @@ topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.
 
 -- | "`METHOD /path`" for alert metadata; drops whichever half is missing, empty when both are.
 errRoute :: ErrorPatterns.ATError -> Text
-errRoute err = case (fromMaybe "" err.requestMethod, fromMaybe "" err.requestPath) of
-  ("", "") -> ""
-  ("", p) -> "`" <> p <> "`"
-  (m, p) -> "`" <> m <> " " <> p <> "`"
+errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.requestPath]) of
+  [] -> ""
+  parts -> "`" <> T.unwords parts <> "`"
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
@@ -328,22 +295,14 @@ errFirstSeen err = toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" e
 slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
 slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
   slackAttachment channelId "#ef4444"
-    $ [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]]
-    <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Monitor trend"])
-    <> [AE.object ["type" AE..= "actions", "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 View monitor", "emoji" AE..= True], "url" AE..= monitorUrl, "style" AE..= "primary"]]]]
+    $ [slackSection ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
+    <> maybeToList (slackImage "Monitor trend" Nothing <$> chartUrlM)
+    <> [slackActions [slackButton "🔍 View monitor" (Just "primary") monitorUrl]]
 
 
 -- | Markdown bullet list shared by Slack + Discord new-endpoint renderers.
 bulletList :: [Text] -> Text
 bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> x <> "`")
-
-
--- | Markdown group header: bold globe-prefixed host with optional dimmed
--- "service · env" caption, each on its own line. Empty when neither is set.
-groupHeaderMd :: Maybe Text -> Maybe Text -> Text
-groupHeaderMd hostM ctxM =
-  foldMap (\h -> "🌐 **" <> h <> "**\n") hostM
-    <> foldMap (\c -> "_" <> c <> "_\n") ctxM
 
 
 slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Text -> AE.Value
@@ -354,10 +313,8 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     headline = if n == 1 then "1 new endpoint" else show n <> " new endpoints"
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
-    headlineBlock = AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")]]
-    actionsBlock = AE.object ["type" AE..= "actions", "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= True], "style" AE..= "primary", "url" AE..= explorerUrl]]]
-    section t = AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]
-    context t = AE.object ["type" AE..= "context", "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]]
+    headlineBlock = slackSection ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")
+    actionsBlock = slackActions [slackButton "View in Explorer" (Just "primary") explorerUrl]
     -- Option A layout: host is the primary group header (bold, with globe), service · env
     -- drops to a dimmed context caption on the same line. Bullets below.
     groupHeader hostM ctxM = case hostM of
@@ -367,9 +324,9 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     -- Multiple groups → one section per group with inline header + bullets.
     bodyBlocks = case groupedByContext endpoints of
       [((hostM, ctxM), labels)]
-        | Just h <- groupHeader hostM ctxM -> [context h, section (bulletList labels)]
-        | otherwise -> [section (bulletList labels)]
-      groups -> groups <&> \((hostM, ctxM), labels) -> section (maybe "" (<> "\n") (groupHeader hostM ctxM) <> bulletList labels)
+        | Just h <- groupHeader hostM ctxM -> [slackContext [h], slackSection (bulletList labels)]
+        | otherwise -> [slackSection (bulletList labels)]
+      groups -> groups <&> \((hostM, ctxM), labels) -> slackSection (maybe "" (<> "\n") (groupHeader hostM ctxM) <> bulletList labels)
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
@@ -402,7 +359,7 @@ newEndpointsExplorerUrl projectUrl endpoints =
 logPatternSeverity :: Bool -> Maybe Text -> (Text, Text, Int, Text)
 logPatternSeverity isError logLevel
   | isError = ("🚨", "New error log pattern", 15278902, "#ef4444")
-  | maybe False (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel =
+  | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel =
       ("⚠️", "New warning log pattern", 15909152, "#eab308")
   | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
 
@@ -418,29 +375,19 @@ rateChangeSeverity isError direction
 
 mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Text -> Bool -> AE.Value
 mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project channelId isError =
-  slackAttachment
-    channelId
-    color
-    ( [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> emoji <> " *" <> label <> "* · " <> project <> ">")]]
-      , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
+  slackAttachment channelId color
+    $ [ slackSection ("<" <> issueUrl <> "|" <> emoji <> " *" <> label <> "* · " <> project <> ">")
+      , slackSection (snippet 200 patternText)
       ]
-        <> maybeToList (sampleMessage <&> \msg -> AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Sample:*\n```" <> T.take 200 (stripSummaryBadges msg) <> "```")]])
-        <> [ AE.object
-               [ "type" AE..= "context"
-               , "elements"
-                   AE..= AE.Array
-                     [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
-                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Matched:* " <> show occurrenceCount)]
-                     ]
-               ]
-           , AE.object
-               [ "type" AE..= "actions"
-               , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-               ]
+    <> maybeToList (sampleMessage <&> \msg -> slackSection ("*Sample:*\n" <> snippet 200 msg))
+    <> [ slackContext
+           [ "*Level:* " <> fromMaybe "—" logLevel
+           , "*Service:* " <> fromMaybe "—" serviceName
+           , "*Source:* " <> sourceField
+           , "*Matched:* " <> show occurrenceCount
            ]
-    )
+       , slackActions [slackButton "🔍 Investigate" (Just "primary") issueUrl]
+       ]
   where
     (emoji, label, _, color) = logPatternSeverity isError logLevel
 
@@ -450,23 +397,16 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
   slackAttachment
     channelId
     color
-    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " *" <> errPrefix <> "Log volume " <> display direction <> "* · " <> project <> ">")]]
-    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
-    , AE.object
-        [ "type" AE..= "context"
-        , "elements"
-            AE..= AE.Array
-              [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Now:* " <> show (round currentRate :: Int) <> "/hr")]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Baseline:* " <> show (round baselineMean :: Int) <> "/hr")]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Change:* " <> sign <> show (round changePercent :: Int) <> "%")]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-              ]
+    [ slackSection ("<" <> issueUrl <> "|" <> icon <> " *" <> errPrefix <> "Log volume " <> display direction <> "* · " <> project <> ">")
+    , slackSection (snippet 200 patternText)
+    , slackContext
+        [ "*Now:* " <> show (round currentRate :: Int) <> "/hr"
+        , "*Baseline:* " <> show (round baselineMean :: Int) <> "/hr"
+        , "*Change:* " <> sign <> show (round changePercent :: Int) <> "%"
+        , "*Level:* " <> fromMaybe "—" logLevel
+        , "*Service:* " <> fromMaybe "—" serviceName
         ]
-    , AE.object
-        [ "type" AE..= "actions"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-        ]
+    , slackActions [slackButton "🔍 Investigate" (Just "primary") issueUrl]
     ]
   where
     (icon, _, color, _) = rateChangeSeverity isError direction
@@ -479,166 +419,120 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
   AE.object
     [ "flags" AE..= 32768
     , "components"
-        AE..= AE.Array
-          [ AE.object ["type" AE..= 10, "content" AE..= ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)]
-          , AE.object ["type" AE..= 10, "content" AE..= ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)]
-          , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")]
+        AE..= arr
+          [ text ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)
+          , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
+          , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
           , AE.object
               [ "type" AE..= 12
               , "items"
-                  AE..= AE.Array
+                  AE..= arr
                     [ AE.object ["media" AE..= AE.object ["url" AE..= allUrl, "description" AE..= "Total events"]]
                     , AE.object ["media" AE..= AE.object ["url" AE..= errUrl, "description" AE..= "Total errors"]]
                     ]
               ]
-          , AE.object ["type" AE..= 10, "content" AE..= servicesStat]
-          , AE.object
-              [ "type" AE..= 1
-              , "components" AE..= AE.Array [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]
-              ]
+          , text servicesStat
+          , AE.object ["type" AE..= 1, "components" AE..= arr [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]]
           ]
     ]
   where
+    text t = AE.object ["type" AE..= 10, "content" AE..= (t :: Text)]
     servicesStat =
-      T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
+      T.intercalate "\n" $ take 10 $ V.toList breakDown <&> \(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount
 
 
 discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
 discordErrorAlert alertType err project projectUrl chartUrlM occTextM firstSeenM ongoingForM =
-  AE.object
-    [ "embeds"
-        AE..= AE.Array
-          [ AE.object
-              ( [ "title" AE..= (err.errorType <> " · " <> project)
-                , "description" AE..= ("```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```")
-                , "color" AE..= msgs.discordColor
-                , "fields" AE..= AE.Array (V.fromList fields)
-                , "url" AE..= url
-                ]
-                  <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
-              )
-          ]
-    , "content" AE..= maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM
-    ]
+  discordEmbedMsg (maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM)
+    $ AE.object
+    $ [ "title" AE..= (err.errorType <> " · " <> project)
+      , "description" AE..= ("```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```")
+      , "color" AE..= msgs.discordColor
+      , "fields" AE..= arr (uncurry (discordField True) <$> fields)
+      , "url" AE..= url
+      ]
+    <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
   where
     msgs = runtimeAlertMessages alertType
     url = projectUrl <> "/issues/by_hash/" <> err.hash
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
-    field n v = guard (not (T.null v)) $> AE.object ["name" AE..= (n :: Text), "value" AE..= v, "inline" AE..= True]
+    -- Trace is a masked link (renders in embed *field values*): same Log Explorer jump
+    -- as Slack's "View trace" button, since Discord embeds have no button affordance.
     fields =
-      catMaybes
-        [ field "Service" (fromMaybe "" err.serviceName)
-        , field "Environment" (fromMaybe "" err.environment)
-        , field "Route" (errRoute err)
-        , occTextM >>= field "Rate"
-        , Just $ AE.object ["name" AE..= ("First Seen" :: Text), "value" AE..= firstSeen, "inline" AE..= True]
-        , field "Runtime" (fromMaybe "" err.runtime)
-        , -- Masked link (renders in embed *field values*): same Log Explorer jump as Slack's
-          -- "View trace" button, since Discord embeds have no button affordance.
-          err.traceId >>= guarded (not . T.null) >>= \tid ->
-            field "Trace" ("[" <> T.take 16 tid <> "](" <> traceExplorerUrl projectUrl tid err.when <> ")")
-        ]
+      errMetaPairs "First Seen" err occTextM firstSeen
+        <> maybeToList ((err.traceId >>= guarded (not . T.null)) <&> \tid -> ("Trace", "[" <> T.take 16 tid <> "](" <> traceExplorerUrl projectUrl tid err.when <> ")"))
 
 
 discordMonitorAlert :: Text -> Text -> Maybe Text -> AE.Value
 discordMonitorAlert monitorTitle monitorUrl chartUrlM =
-  AE.object
-    [ "embeds"
-        AE..= AE.Array
-          [ AE.object
-              ( [ "title" AE..= ("🚨 Monitor alerting: " <> monitorTitle)
-                , "color" AE..= (15684432 :: Int)
-                , "url" AE..= monitorUrl
-                ]
-                  <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
-              )
-          ]
-    , "content" AE..= ("🚨 **Monitor alerting:** " <> monitorTitle)
-    ]
+  discordEmbedMsg ("🚨 **Monitor alerting:** " <> monitorTitle)
+    $ AE.object
+    $ ["title" AE..= ("🚨 Monitor alerting: " <> monitorTitle), "color" AE..= (15684432 :: Int), "url" AE..= monitorUrl]
+    <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
 
 
 discordNewEndpointAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> AE.Value
 discordNewEndpointAlert projectName endpoints hash projectUrl =
-  [aesonQQ|
-  {
-  "embeds": [
-    {
-      "type": "rich",
-      "title": #{title},
-      "description": #{description},
-      "color": 3901174,
-      "fields": [
-        {"name": "\u200b", "value": #{explorerLink}, "inline": false}
-      ],
-      "url": #{url}
-    }
-  ],
-  "content" : #{content}
-}
-  |]
+  discordEmbedMsg content
+    $ AE.object
+      [ "title" AE..= title
+      , "description" AE..= description
+      , "color" AE..= (3901174 :: Int)
+      , "fields" AE..= arr [discordField False "\x200b" explorerLink]
+      , "url" AE..= url
+      ]
   where
     n = V.length endpoints
     title = (if n == 1 then "🔵 1 new endpoint" else "🔵 " <> show n <> " new endpoints") <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
     url = projectUrl <> "/issues/by_hash/" <> hash
     explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
+    -- Group header: bold globe-prefixed host then dimmed "service · env" caption, each
+    -- on its own line, then the bullets.
     description =
       T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
-        groupHeaderMd hostM ctxM <> bulletList labels
+        foldMap (\h -> "🌐 **" <> h <> "**\n") hostM <> foldMap (\c -> "_" <> c <> "_\n") ctxM <> bulletList labels
 
 
 mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Bool -> AE.Value
 mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project isError =
-  AE.object
-    [ "embeds"
-        AE..= AE.Array
-          [ AE.object
-              [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
-              , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
-              , "color" AE..= color
-              , "fields"
-                  AE..= AE.Array
-                    ( fromList
-                        $ [ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
-                          , AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
-                          , AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
-                          , AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
-                          ]
-                        <> maybeToList (sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 (stripSummaryBadges msg) <> "```"), "inline" AE..= False])
-                    )
-              , "url" AE..= issueUrl
+  discordEmbedMsg (emoji <> " **" <> label <> "**")
+    $ AE.object
+      [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
+      , "description" AE..= snippet 200 patternText
+      , "color" AE..= color
+      , "fields"
+          AE..= arr
+            ( [ discordField True "Level" (fromMaybe "—" logLevel)
+              , discordField True "Service" (fromMaybe "—" serviceName)
+              , discordField True "Source" sourceField
+              , discordField True "Occurrences" (show occurrenceCount)
               ]
-          ]
-    , "content" AE..= (emoji <> " **" <> label <> "**")
-    ]
+                <> maybeToList (sampleMessage <&> discordField False "Sample" . snippet 150)
+            )
+      , "url" AE..= issueUrl
+      ]
   where
     (emoji, label, color, _) = logPatternSeverity isError logLevel
 
 
 mkDiscordLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> RateChangeDirection -> Double -> Double -> Double -> Text -> Bool -> AE.Value
 mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project isError =
-  AE.object
-    [ "embeds"
-        AE..= AE.Array
-          [ AE.object
-              [ "title" AE..= (icon <> " " <> errPrefix <> "Log volume " <> display direction <> " · " <> project)
-              , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
-              , "color" AE..= color
-              , "fields"
-                  AE..= AE.Array
-                    ( fromList
-                        [ AE.object ["name" AE..= "Now", "value" AE..= (show (round currentRate :: Int) <> "/hr"), "inline" AE..= True]
-                        , AE.object ["name" AE..= "Baseline", "value" AE..= (show (round baselineMean :: Int) <> "/hr"), "inline" AE..= True]
-                        , AE.object ["name" AE..= "Change", "value" AE..= (sign <> show (round changePercent :: Int) <> "%"), "inline" AE..= True]
-                        , AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
-                        , AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
-                        ]
-                    )
-              , "url" AE..= issueUrl
-              ]
-          ]
-    , "content" AE..= (icon <> " **" <> errPrefix <> "Log volume " <> display direction <> "**")
-    ]
+  discordEmbedMsg (icon <> " **" <> errPrefix <> "Log volume " <> display direction <> "**")
+    $ AE.object
+      [ "title" AE..= (icon <> " " <> errPrefix <> "Log volume " <> display direction <> " · " <> project)
+      , "description" AE..= snippet 200 patternText
+      , "color" AE..= color
+      , "fields"
+          AE..= arr
+            [ discordField True "Now" (show (round currentRate :: Int) <> "/hr")
+            , discordField True "Baseline" (show (round baselineMean :: Int) <> "/hr")
+            , discordField True "Change" (sign <> show (round changePercent :: Int) <> "%")
+            , discordField True "Level" (fromMaybe "—" logLevel)
+            , discordField True "Service" (fromMaybe "—" serviceName)
+            ]
+      , "url" AE..= issueUrl
+      ]
   where
     (_, icon, _, color) = rateChangeSeverity isError direction
     errPrefix = if isError then "Error " else "" :: Text
@@ -747,20 +641,75 @@ slackAttachment :: Text -> Text -> [AE.Value] -> AE.Value
 slackAttachment channelId color blocks =
   AE.object
     [ "channel" AE..= channelId
-    , "attachments"
-        AE..= AE.Array
-          ( V.singleton
-              $ AE.object
-                [ "color" AE..= color
-                , "fallback" AE..= ("Monoscope alert" :: Text)
-                , "blocks" AE..= AE.Array (V.fromList blocks)
-                ]
-          )
+    , "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= ("Monoscope alert" :: Text), "blocks" AE..= arr blocks]]
     ]
 
 
-addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
-addConvertKitUser apiKey email firstName lastName _orgId _orgName _plan =
+arr :: [AE.Value] -> AE.Value
+arr = AE.Array . V.fromList
+
+
+-- | Fenced code snippet, badge-stripped and length-capped, as used in every alert body.
+snippet :: Int -> Text -> Text
+snippet n t = "```" <> T.take n (stripSummaryBadges t) <> "```"
+
+
+mrkdwn :: Text -> AE.Value
+mrkdwn t = AE.object ["type" AE..= "mrkdwn", "text" AE..= t]
+
+
+slackSection :: Text -> AE.Value
+slackSection t = AE.object ["type" AE..= "section", "text" AE..= mrkdwn t]
+
+
+slackContext :: [Text] -> AE.Value
+slackContext ts = AE.object ["type" AE..= "context", "elements" AE..= arr (mrkdwn <$> ts)]
+
+
+slackImage :: Text -> Maybe Text -> Text -> AE.Value
+slackImage alt titleM url =
+  AE.object
+    $ ["type" AE..= "image", "image_url" AE..= url, "alt_text" AE..= alt]
+    <> maybeToList (titleM <&> \t -> "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= t])
+
+
+slackActions :: [AE.Value] -> AE.Value
+slackActions bs = AE.object ["type" AE..= "actions", "elements" AE..= arr bs]
+
+
+-- | Slack's button @style@ is an enum of exactly "primary" and "danger". A
+-- "default" style is not "no style" — it makes chat.postMessage reject the
+-- ENTIRE message with invalid_attachments, so every error alert carrying a
+-- trace id silently failed to any channel reached over the chat API (the
+-- webhook transport renders buttons as mrkdwn links, which is why the
+-- install's default channel kept working and only extra channels went dark).
+-- Omit the key instead: @styleM = Nothing@ is the unstyled button.
+slackButton :: Text -> Maybe Text -> Text -> AE.Value
+slackButton label styleM url =
+  AE.object
+    $ ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= label, "emoji" AE..= True], "url" AE..= url]
+    <> maybeToList (("style" AE..=) <$> styleM)
+
+
+discordField :: Bool -> Text -> Text -> AE.Value
+discordField inline n v = AE.object ["name" AE..= n, "value" AE..= v, "inline" AE..= inline]
+
+
+discordEmbedMsg :: Text -> AE.Value -> AE.Value
+discordEmbedMsg content embed = AE.object ["embeds" AE..= arr [embed], "content" AE..= content]
+
+
+-- | Metadata rows shared by the Slack + Discord runtime-error renderers, in display
+-- order, with empty values dropped. @firstSeenLabel@ differs per transport.
+errMetaPairs :: Text -> ErrorPatterns.ATError -> Maybe Text -> Text -> [(Text, Text)]
+errMetaPairs firstSeenLabel err occTextM firstSeen =
+  filter (not . T.null . snd) ([("Service", fromMaybe "" err.serviceName), ("Environment", fromMaybe "" err.environment), ("Route", errRoute err)] <> maybeToList (("Rate",) <$> occTextM))
+    <> [(firstSeenLabel, firstSeen)]
+    <> maybeToList (("Runtime",) <$> (err.runtime >>= guarded (not . T.null)))
+
+
+addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es ()
+addConvertKitUser apiKey email firstName lastName =
   void
     $ postWith
       (defaults & header "Content-Type" .~ ["application/json"])

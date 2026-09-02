@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -717,6 +717,11 @@ formField_ size cfg lbl name required customM =
     (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
       FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
       FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
+
+
+-- | @\<option\>@ list from (value, label) pairs, marking the given value selected.
+options_ :: Monad m => Maybe Text -> [(Text, Text)] -> HtmlT m ()
+options_ sel = mapM_ \(v, label) -> option_ (value_ v : [selected_ "" | sel == Just v]) $ toHtml label
 
 
 formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()

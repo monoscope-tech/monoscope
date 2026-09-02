@@ -504,7 +504,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
-    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders Settings.BillingGet)
+    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
   , replaySessionManifestGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "manifest" :> Get '[JSON] (RespHeaders Replay.ReplayManifest)
   , replaySessionShardGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "shard" :> QueryParam "key" Text :> Get '[JSON] (RespHeaders Replay.RawJson)

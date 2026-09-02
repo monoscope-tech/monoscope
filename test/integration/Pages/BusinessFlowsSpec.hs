@@ -109,7 +109,7 @@ onboardingTests =
           _ -> fail "Expected InfoStep"
 
       let surveyForm =
-            Onboarding.OnboardingConForm
+            Onboarding.OnboardingConfForm
               { location = "usa"
               , functionality = ["logs", "analytics"]
               }
@@ -219,7 +219,7 @@ settingsTests = do
       _ -> fail "Expected ManageMembersGet response"
 
   it "should load billing page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
+    result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
     case result of
       (_, LemonSqueezy.BillingGet (PageCtx _ _)) -> pass
 

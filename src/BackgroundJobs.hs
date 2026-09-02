@@ -1841,7 +1841,9 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
             let alertTypeForState = \case
                   ErrorPatterns.ESEscalating -> EscalatingErrors
                   ErrorPatterns.ESRegressed -> RegressedErrors
-                  _ -> NewRuntimeError
+                  ErrorPatterns.ESNew -> NewRuntimeError
+                  ErrorPatterns.ESOngoing -> NewRuntimeError
+                  ErrorPatterns.ESResolved -> NewRuntimeError
             results <- forConcurrently dueErrors \sub -> do
               let alertType = alertTypeForState sub.errorState
                   errorsUrl = projectUrl ctx pid <> "/issues/" <> sub.issueId.toText

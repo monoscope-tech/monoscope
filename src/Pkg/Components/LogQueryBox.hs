@@ -1,4 +1,4 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryContent_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
+module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default
@@ -15,7 +15,7 @@ import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (modal_)
+import Pages.Components (modal_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
@@ -48,7 +48,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  let noActiveQuery = all T.null config.query
+  let noActiveQuery = maybe True T.null config.query
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
@@ -190,8 +190,7 @@ logQueryBox_ config = do
                   , Aria.label_ "Target span type"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                   ]
-                  $ forM_ ([("all-spans", "All spans"), ("root-spans", "Trace Root Spans"), ("service-entry-spans", "Service Entry Spans")] :: [(Text, Text)]) \(v, label) ->
-                    option_ (value_ v : [selected_ "true" | fromMaybe "all-spans" config.targetSpan == v]) $ toHtml label
+                  $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Trace Root Spans"), ("service-entry-spans", "Service Entry Spans")]
 
               div_ [class_ "inline-block max-md:hidden"] do
                 button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeWeak hover:border-strokeStrong h-8 cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
@@ -206,7 +205,7 @@ logQueryBox_ config = do
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
 
-      div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
+      div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
@@ -217,8 +216,7 @@ logQueryBox_ config = do
               , Aria.label_ "Sort sessions by"
               , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
               ]
-              $ forM_ ([("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")] :: [(Text, Text)]) \(v, label) ->
-                option_ [value_ v] $ toHtml label
+              $ options_ Nothing [("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")]
             script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
             let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
@@ -234,10 +232,7 @@ logQueryBox_ config = do
                       call window.setQueryParamAndReload('pattern_target', my value)
                     end|]
               ]
-              do
-                forM_ knownPatternFields \(v, label) ->
-                  option_ (value_ v : [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
-                option_ (value_ "__custom__" : [selected_ "" | isCustom]) "Other field..."
+              $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "__custom__" isCustom) (knownPatternFields <> [("__custom__", "Other field...")])
             input_
               [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
               , id_ "pattern-target-input"
@@ -256,9 +251,7 @@ logQueryBox_ config = do
                       set #pattern-target-select.value to 'summary'
                     end|]
               ]
-            datalist_ [id_ "pattern-field-list"]
-              $ forM_ (Map.keys Schema.telemetrySchema.fields) \f ->
-                option_ [value_ f] ""
+            datalist_ [id_ "pattern-field-list"] $ options_ Nothing $ map (,"") $ Map.keys Schema.telemetrySchema.fields
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden", Aria.hidden_ "true"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
           whenNothing_ config.targetWidgetPreview
@@ -317,7 +310,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
         -- what the reader wants, so they lead the strip and Logs moves to the end. The log
         -- explorer keeps Logs first, where it is the view the page is named after.
         visible =
-          bool Relude.id (sortOn ((== "logs") . vizId)) inWidgetEditor
+          bool id (sortOn ((== "logs") . vizId)) inWidgetEditor
             $ filter ((`notElem` hidden) . vizId) visTypes
     forM_ visible \(_icon, label, vizType, emoji) ->
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do

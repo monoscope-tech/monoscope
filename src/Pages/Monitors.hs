@@ -56,7 +56,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, panel_, tagInput_, untilLabel)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -345,9 +345,8 @@ thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessT
     div_ [class_ "flex flex-row gap-2 py-2"] do
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
-      formSelectField_ FieldSm "Trigger condition" "direction" False do
-        option_ (value_ "above" : [selected_ "" | not triggerLessThan]) "Above threshold"
-        option_ (value_ "below" : [selected_ "" | triggerLessThan]) "Below threshold"
+      formSelectField_ FieldSm "Trigger condition" "direction" False
+        $ options_ (Just $ bool "above" "below" triggerLessThan) [("above", "Above threshold"), ("below", "Below threshold")]
     div_ [class_ "mt-3 pt-3 border-t border-strokeWeak space-y-2"] do
       div_ [class_ "space-y-1 text-xs text-textWeak"] do
         div_ (span_ [class_ "font-medium text-textStrong"] "Recovery thresholds " >> span_ "(optional)")
@@ -381,7 +380,7 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       div_ [class_ "space-y-3"] do
         div_ [class_ "flex items-center"] do
           formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" $ value_ "true" : [checked_ | renotifyEnabled]
-          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == renotifyVal]) $ toHtml t
+          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ options_ (Just renotifyVal) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")]
         div_ [class_ "group/stopafter flex items-center"] do
           formCheckbox_ FieldSm "Stop after" "stopAfterCheck" $ value_ "true" : id_ "stopAfterCheck" : [checked_ | stopEnabled]
           div_ [class_ "items-center gap-1.5 ml-2 hidden group-has-[#stopAfterCheck:checked]/stopafter:flex", id_ "stopAfterInput"] do

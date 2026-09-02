@@ -66,6 +66,7 @@ module Models.Projects.Projects (
   addSubscription,
   getTotalUsage,
   getDailyUsageBreakdown,
+  DailyUsage (..),
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
   ChunkQuantity,
@@ -789,10 +790,20 @@ getTotalUsage pid start =
   |]
 
 
+data DailyUsage = DailyUsage
+  { day :: Day
+  , requests :: Int64
+  , metrics :: Int64
+  , eventBytes :: Int64
+  , metricBytes :: Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
 -- | Per-day usage breakdown since `start`, grouped by the day the events
--- occurred (window_start), newest first. Returns
--- (day, events, metrics, eventBytes, metricBytes).
-getDailyUsageBreakdown :: DB es => ProjectId -> UTCTime -> Eff es [(Day, Int64, Int64, Int64, Int64)]
+-- occurred (window_start), newest first.
+getDailyUsageBreakdown :: DB es => ProjectId -> UTCTime -> Eff es [DailyUsage]
 getDailyUsageBreakdown pid start =
   EHasql.interp
     [HI.sql|

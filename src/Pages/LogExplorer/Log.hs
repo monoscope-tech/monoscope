@@ -34,7 +34,6 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -340,13 +339,6 @@ buildTraceTree colIdxMap queryResultCount rows
        in (TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren, adjustments')
 
 
--- $setup
--- >>> import Relude
--- >>> import Data.Vector qualified as Vector
--- >>> import Data.Aeson.QQ (aesonQQ)
--- >>> import Data.Aeson
-
-
 -- | Whether every column index addresses a real slot in the result rows.
 -- False for anything that isn't the log-table shape — an aggregate projection,
 -- most obviously — and the trace-tree machinery must then keep its hands off.
@@ -532,7 +524,7 @@ renderFacets facetSummary =
 -- its shell with the server-rendered Lucid fragment on first open.
 renderFacetGroup :: Bool -> FacetGroup -> FacetSummary -> Html ()
 renderFacetGroup loaded facetGroup facetSummary =
-  facetSection_ loaded "facet-section-group" attrs (facetGroupTitle_ facetGroup) body
+  facetSection_ loaded "facet-section-group" attrs (span_ [class_ "font-medium text-sm"] $ toHtml $ facetGroupLabel facetGroup) body
   where
     attrs =
       if loaded
@@ -548,10 +540,6 @@ renderFacetGroup loaded facetGroup facetSummary =
       | loaded = div_ [class_ "facets-container"] $ renderFacetFields facetGroup facetSummary
       | otherwise = div_ [class_ "facet-group-loader htmx-indicator flex h-8 items-center justify-center"] $ loadingIndicator_ LdXS LdSpinner
     url = "/p/" <> facetSummary.projectId <> "/log_explorer/facets?group=" <> facetGroupParam facetGroup
-
-
-facetGroupTitle_ :: FacetGroup -> Html ()
-facetGroupTitle_ = span_ [class_ "font-medium text-sm"] . toHtml . facetGroupLabel
 
 
 renderFacetFields :: FacetGroup -> FacetSummary -> Html ()
@@ -623,7 +611,7 @@ renderFacetValue f (FacetValue val count) =
 
 renderFacetTail :: Text -> FacetSummary -> Html ()
 renderFacetTail field facetSummary =
-  whenJust (L.find ((== field) . (.path)) facetDefs) \facet -> do
+  whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
     let (FacetData facetMap) = facetSummary.facetJson
         values = drop 5 $ HM.lookupDefault [] field facetMap
         count = prettyPrintCount $ length values
@@ -651,14 +639,14 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
     if not withChildren || V.length requestVecs > 100
       then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
       else do
-        let traceIds = V.fromList $ take 50 $ nubOrd $ V.toList $ V.mapMaybe (mfilter (not . T.null) . colOf "trace_id") requestVecs
+        let traceIds = V.fromList $ take 50 $ ordNub $ V.toList $ V.mapMaybe (mfilter (not . T.null) . colOf "trace_id") requestVecs
             -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
             seedSpanIds = V.mapMaybe (colOf "latency_breakdown") requestVecs
         LogQueries.selectChildSpansAndLogs useTf pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
-      cols = nubOrd $ curateCols addCols removeCols colNames
+      cols = ordNub $ curateCols addCols removeCols colNames
       -- Keyed on the service, which is what the name has always claimed. Keying on
       -- `span_name` made this a per-*operation* palette: two spans in one service got two
       -- colours and the same operation in two services got one, so the latency column's
@@ -750,10 +738,9 @@ kqlError400 code msg fieldM suggestionM detailsM =
   where
     errBody =
       AE.object
-        $ catMaybes
-          [ Just ("code" AE..= code)
-          , Just ("message" AE..= msg)
-          , ("field" AE..=) <$> fieldM
+        $ ["code" AE..= code, "message" AE..= msg]
+        <> catMaybes
+          [ ("field" AE..=) <$> fieldM
           , ("suggestion" AE..=) <$> suggestionM
           , ("details" AE..=) <$> detailsM
           ]
@@ -812,7 +799,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   -- client-side round trip.
   when (isNothing bw.facetSummaryM) $ enqueueFacetsJob authCtx pid now
 
-  whenLeft_ (void freeTierStatusE) (Log.logAttention "Log explorer freeTierStatus failed" . show @Text)
+  whenLeft_ freeTierStatusE (Log.logAttention "Log explorer freeTierStatus failed" . show @Text)
 
   let freeTierStatus = fromRight def freeTierStatusE
 
@@ -1141,6 +1128,8 @@ kpiCard_ (label, value, subM) = div_ [class_ "surface-raised rounded-2xl px-3 py
 
 
 -- | Percent-of-tallest-bar normalizer for the over-time charts (0 when empty).
+-- Deliberately returns a lambda: eta-reducing it moves @maxBar@ under the third
+-- argument, recomputing the fold once per bar.
 barNorm :: [Int] -> [Int] -> Int -> Double
 barNorm clean err = \n -> if maxBar <= 0 then 0 else fromIntegral n / fromIntegral maxBar * 100
   where
@@ -1191,15 +1180,14 @@ summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec axisM barEls =
 patternsHeader_ :: V.Vector LogQueries.PatternRow -> Int -> Int -> Html ()
 patternsHeader_ rowsV totalPatterns baseHourEpoch = do
   let rows = V.toList rowsV
-      inRange p = sum p.volume
       shown = length rows
-      totalEvents = sum (map inRange rows) :: Int
+      totalEvents = sum (map (sum . (.volume)) rows) :: Int
       errRows = filter (.isError) rows
       errPatterns = length errRows
       errShare = if shown == 0 then 0 else 100 * (fromIntegral errPatterns :: Double) / fromIntegral shown
       services = length $ ordNub $ mapMaybe (.service) rows
       topShare = case rows of
-        (p : _) | totalEvents > 0 -> 100 * (fromIntegral (inRange p) :: Double) / fromIntegral totalEvents
+        (p : _) | totalEvents > 0 -> 100 * (fromIntegral (sum p.volume) :: Double) / fromIntegral totalEvents
         _ -> 0
       nBuckets = foldl' max 0 (map (length . (.volume)) rows)
       pad xs = take nBuckets (xs <> repeat 0)
@@ -1507,8 +1495,8 @@ traceLoadingSkeleton_ =
         div_ [class_ "flex h-8 border-b border-strokeWeak items-end text-xs"] do
           div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:35%"] "Service / Span"
           div_ [class_ "grow flex justify-between px-2 pb-1"]
-            $ forM_ ([1 .. 7] :: [Int])
-            $ \_ -> div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
+            $ replicateM_ 7
+            $ div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
         div_ [class_ "py-1"]
           $ forM_
             ( [ ("w-28", "ml-0 w-full")
@@ -1561,7 +1549,7 @@ apiLogsPage page = do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do
-      termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+      termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" pidTxt, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     queryControlsSection
     facetsAndLogListSection
   where
@@ -1715,7 +1703,7 @@ apiLogsPage page = do
                 , "title" AE..= ("Visualization" :: Text)
                 , "standalone" AE..= True
                 , "allow_zoom" AE..= True
-                , "_project_id" AE..= page.pid.toText
+                , "_project_id" AE..= pidTxt
                 , "_center_title" AE..= True
                 , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
                 ]
@@ -1723,7 +1711,7 @@ apiLogsPage page = do
         [ id_ "visualization-widget-container"
         , class_ " w-full"
         , style_ "aspect-ratio: 4 / 2;"
-        , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+        , hxPost_ ("/p/" <> pidTxt <> "/widget")
         , hxTrigger_ "intersect once, update-widget"
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
@@ -1766,13 +1754,13 @@ apiLogsPage page = do
         do
           traceLoadingSkeleton_
           whenJust page.showTrace \trIdAndTimestamp -> do
-            let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+            let url = "/p/" <> pidTxt <> "/traces/" <> trIdAndTimestamp
             div_ [term "data-trace-url" url, [__|init send loadTrace(url: my @data-trace-url) to #trace_expanded_view|]] pass
 
     -- Lazily loaded (HTMX) the first time this container is revealed, so the
     -- shell never renders it or forks a teams query per load.
     alertPanel = div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
-      let aurl = "/p/" <> page.pid.toText <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
+      let aurl = "/p/" <> pidTxt <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
       -- Container is display:none until checked, so IntersectionObserver can't drive
       -- the load — fire off the toggle's change instead (and at init if deep-linked open).
       lazyLoad_
@@ -1829,7 +1817,7 @@ apiLogsPage page = do
         do
           htmxOverlayIndicator_ "details_indicator"
           whenJust page.targetEvent \te -> do
-            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+            let url = "/p/" <> pidTxt <> "/log_explorer/" <> te
             lazyLoad_ "log_details_container" url "intersect once" [hxIndicator_ "#details_indicator"]
 
 
@@ -1858,7 +1846,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
       colIdxMap = listToIndexHashMap cols
       colOf k v = lookupVecTextByKey v colIdxMap k
       alreadyLoadedIds = V.mapMaybe (colOf "id") shown
-      traceIds = V.fromList $ take 100 $ nubOrd $ mapMaybe (mfilter (not . T.null) . colOf "trace_id") $ V.toList shown
+      traceIds = V.fromList $ take 100 $ ordNub $ mapMaybe (mfilter (not . T.null) . colOf "trace_id") $ V.toList shown
       seedSpanIds = V.mapMaybe (colOf "latency_breakdown") shown
   childSpansList <- case expandKind of
     LogQueries.ExpandSession _ -> LogQueries.selectChildSpansAndLogs authCtx.env.enableTimefusionReads pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
@@ -1978,7 +1966,7 @@ alertConfigurationForm_ project alertM teams = do
         , [__|on htmx:after:request[detail.ctx.response.status < 400] set my value to '' then call me.reset()|]
         ]
         do
-          input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
+          input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
           formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM

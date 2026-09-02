@@ -479,7 +479,7 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Just user -> pure user.id
   persistentSessId <- Projects.newPersistentSessionId
   Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
-  _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
+  _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName
   pure persistentSessId
 
 

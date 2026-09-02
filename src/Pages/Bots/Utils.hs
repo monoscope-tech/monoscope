@@ -109,6 +109,12 @@ contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType
 
 
 -- Slack Block Kit / Discord component builders
+
+-- | JSON array literal; pins the element type, which OverloadedLists would otherwise leave ambiguous.
+arr :: [AE.Value] -> AE.Value
+arr = AE.toJSON
+
+
 mrkdwn, plainTxt :: Text -> AE.Value
 mrkdwn t = AE.object ["type" AE..= ("mrkdwn" :: Text), "text" AE..= t]
 plainTxt t = AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= t, "emoji" AE..= True]
@@ -119,7 +125,7 @@ textBlock ty t = AE.object ["type" AE..= ty, "text" AE..= t]
 
 
 elemsBlock :: Text -> [AE.Value] -> AE.Value
-elemsBlock ty es = AE.object ["type" AE..= ty, "elements" AE..= AE.Array (V.fromList es)]
+elemsBlock ty es = AE.object ["type" AE..= ty, "elements" AE..= es]
 
 
 linkButton :: Text -> Text -> Text -> AE.Value
@@ -132,7 +138,7 @@ imageBlock url alt = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..
 
 -- | Slack in-channel response replacing the ephemeral loading message.
 slackResponse :: [AE.Value] -> AE.Value
-slackResponse blocks = AE.object ["blocks" AE..= AE.Array (V.fromList blocks), "response_type" AE..= ("in_channel" :: Text), "replace_original" AE..= True, "delete_original" AE..= True]
+slackResponse blocks = AE.object ["blocks" AE..= blocks, "response_type" AE..= ("in_channel" :: Text), "replace_original" AE..= True, "delete_original" AE..= True]
 
 
 handleTableResponse :: BotType -> Either Text (V.Vector (V.Vector AE.Value), [Text], Int) -> EnvConfig -> Projects.ProjectId -> Text -> AE.Value
@@ -168,7 +174,7 @@ recsVecToTableData :: V.Vector (V.Vector AE.Value) -> HashMap Text Int -> (Text,
 recsVecToTableData recsVec colIdxMap = ("```\n" <> unlines (hd : map row rows) <> "```", length rows)
   where
     rows = V.toList (V.take 15 recsVec)
-    pad n s = T.take n (s <> T.replicate n " ")
+    pad n = T.take n . T.justifyLeft n ' '
     txt n v k = pad n $ fromMaybe "" $ lookupVecTextByKey v colIdxMap k
     hd = unwords [pad 20 "TIME", pad 15 "SERVICE", pad 20 "SPAN NAME", pad 8 "DURATION", "STATUS"]
     row v =
@@ -206,9 +212,9 @@ discordError = do
 installedSuccess :: Text -> Maybe Projects.ProjectId -> Html ()
 installedSuccess botPlatform pidM = do
   navBar
-  section_ [class_ "min-h-screen  flex flex-col justify-center"] do
+  section_ [class_ "min-h-screen flex flex-col justify-center"] do
     div_ [class_ "max-w-4xl mx-auto max-md:px-2 px-4"] do
-      div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border border-fillWeak overflow-hidden"] do
+      div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border-fillWeak overflow-hidden"] do
         div_ [class_ "bg-gradient-to-r from-fillSuccess-weak to-fillBrand-weak px-8 py-10 text-center"] do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do
             faSprite_ "check" "regular" "h-8 w-8 text-iconSuccess"
@@ -217,7 +223,7 @@ installedSuccess botPlatform pidM = do
         div_ [class_ "px-8 py-12"] do
           div_ [class_ "text-center mb-12"] do
             h2_ [class_ "font-semibold text-textStrong mb-4"] "You're All Set! 🚀"
-            p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
+            p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl"] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
             whenJust pidM \pid ->
               div_ [class_ "mt-6"] do
                 a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/settings/integrations"] "Go back to Integrations"
@@ -312,11 +318,10 @@ data QueryIntent = ReportIntent ReportType | GeneralQueryIntent deriving (Eq, Sh
 detectReportIntent :: Text -> QueryIntent
 detectReportIntent query =
   let q = T.toLower $ T.strip query
-      hasActionVerb = any (`T.isInfixOf` q) ["send", "get", "show", "give", "fetch", "retrieve"]
-      hasReportWord = any (`T.isInfixOf` q) ["report", "summary"]
-      isWeekly = any (`T.isInfixOf` q) ["weekly", "week"]
-   in if hasActionVerb && hasReportWord
-        then ReportIntent (if isWeekly then WeeklyReport else DailyReport)
+      has :: [Text] -> Bool
+      has = any (`T.isInfixOf` q)
+   in if has ["send", "get", "show", "give", "fetch", "retrieve"] && has ["report", "summary"]
+        then ReportIntent $ bool DailyReport WeeklyReport ("week" `T.isInfixOf` q)
         else GeneralQueryIntent
 
 
@@ -364,23 +369,20 @@ formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
    in AE.object
         [ "flags" AE..= (32768 :: Int)
         , "components"
-            AE..= AE.Array
-              ( V.singleton
-                  $ AE.object
-                    [ "type" AE..= (17 :: Int)
-                    , "accent_color" AE..= (26879 :: Int)
-                    , "components"
-                        AE..= AE.Array
-                          ( V.fromList
-                              [ txtComp $ botEmoji "chart" <> " **" <> T.toTitle report.reportType <> " Report**"
-                              , txtComp $ "**Period:** " <> startTxt <> " → " <> endTxt
-                              , txtComp $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
-                              , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.fromList [media eventsUrl $ "Events chart for " <> report.reportType <> " report: " <> show totalEvents <> " total events", media errorsUrl $ "Errors chart for " <> report.reportType <> " report: " <> show totalErrors <> " total errors"])]
-                              , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.singleton $ AE.object ["type" AE..= (2 :: Int), "label" AE..= (botEmoji "search" <> " View Full Report"), "url" AE..= reportUrl, "style" AE..= (5 :: Int)])]
-                              ]
-                          )
-                    ]
-              )
+            AE..= arr
+              [ AE.object
+                  [ "type" AE..= (17 :: Int)
+                  , "accent_color" AE..= (26879 :: Int)
+                  , "components"
+                      AE..= arr
+                        [ txtComp $ botEmoji "chart" <> " **" <> T.toTitle report.reportType <> " Report**"
+                        , txtComp $ "**Period:** " <> startTxt <> " → " <> endTxt
+                        , txtComp $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
+                        , AE.object ["type" AE..= (12 :: Int), "items" AE..= arr [media eventsUrl $ "Events chart for " <> report.reportType <> " report: " <> show totalEvents <> " total events", media errorsUrl $ "Errors chart for " <> report.reportType <> " report: " <> show totalErrors <> " total errors"]]
+                        , AE.object ["type" AE..= (1 :: Int), "components" AE..= arr [AE.object ["type" AE..= (2 :: Int), "label" AE..= (botEmoji "search" <> " View Full Report"), "url" AE..= reportUrl, "style" AE..= (5 :: Int)]]]
+                        ]
+                  ]
+              ]
         ]
   where
     txtComp c = AE.object ["type" AE..= (10 :: Int), "content" AE..= (c :: Text)]
@@ -407,7 +409,7 @@ formatTextResponse Discord txt = AE.object ["content" AE..= txt]
 formatTextResponse WhatsApp txt = AE.object ["body" AE..= txt]
 formatTextResponse Slack txt =
   AE.object
-    [ "blocks" AE..= AE.Array (V.singleton $ textBlock "section" (mrkdwn txt))
+    [ "blocks" AE..= arr [textBlock "section" (mrkdwn txt)]
     , "response_type" AE..= "in_channel"
     , "replace_original" AE..= True
     ]
@@ -432,8 +434,10 @@ dispatchAIResponse
 dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartContent = do
   now <- Time.currentTime
   let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-      query = fromMaybe "" resp.query
-      handleWidget = case resp.visualization of
+  case resp.query of
+    Nothing -> sendResponse $ formatTextResponse botType $ fromMaybe "No response available" resp.explanation
+    Just query -> do
+      case resp.visualization of
         Just vizType -> do
           let wType = Widget.mapChartTypeToWidgetType vizType
               queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> Widget.mapWidgetTypeToChartType wType <> "&query=" <> toUriStr query
@@ -444,6 +448,4 @@ dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartC
           Right query' -> do
             tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
             sendResponse $ handleTableResponse botType tableAsVecE envCfg pid query
-  case resp.query of
-    Just _ -> handleWidget >> whenJust resp.explanation (sendResponse . formatTextResponse botType)
-    Nothing -> sendResponse $ formatTextResponse botType $ fromMaybe "No response available" resp.explanation
+      whenJust resp.explanation (sendResponse . formatTextResponse botType)

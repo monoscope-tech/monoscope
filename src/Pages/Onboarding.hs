@@ -3,12 +3,10 @@ module Pages.Onboarding (
   onboardingInfoPostH,
   onboardingConfPostH,
   phoneEmailPostH,
-  pricingPage,
   checkIntegrationGet,
   onboardingStepSkipped,
   dismissChecklistH,
   proxyLandingH,
-  DiscordForm (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
   OnboardingConfForm (..),
@@ -22,6 +20,7 @@ module Pages.Onboarding (
 import Control.Lens qualified as L
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens (key, _Array, _String)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -62,12 +61,7 @@ onboardingGetH pid onboardingStepM = do
       onboardingStep = fromMaybe "Info" onboardingStepM
   stepData <- case onboardingStep of
     "Complete" -> pure $ CompleteStep pid
-    "Survey" -> do
-      let host = fromMaybe "" $ lookupValueText questions "location"
-          func = case questions of
-            AE.Object q | Just (AE.Array f) <- KM.lookup "functionality" q -> (\case AE.String s -> s; _ -> "") <$> V.toList f
-            _ -> []
-      pure $ SurveyStep pid host func
+    "Survey" -> pure $ SurveyStep pid (fromMaybe "" $ lookupValueText questions "location") (questions L.^.. key "functionality" . _Array . traverse . _String)
     "NotifChannel" -> do
       hasSlack <- isJust <$> getProjectSlackData pid
       hasDiscord <- isJust <$> getDiscordDataByProjectId pid
@@ -77,12 +71,12 @@ onboardingGetH pid onboardingStepM = do
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
     "Integration" -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
-    "Pricing" -> do
+    "Pricing" ->
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText
-      pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
-    _ -> do
-      let q k = fromMaybe "" $ lookupValueText questions k
-      pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
+       in pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
+    _ ->
+      let q = fromMaybe "" . lookupValueText questions
+       in pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
   addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing} stepData
 
 
@@ -97,15 +91,10 @@ data OnboardingInfoForm = OnboardingInfoForm
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
-data OnboardingConfForm = OnboardingConForm
+data OnboardingConfForm = OnboardingConfForm
   { location :: Text
   , functionality :: [Text]
   }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromForm)
-
-
-newtype DiscordForm = DiscordForm {url :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -264,11 +253,9 @@ onboardingInfoPostH pid form = do
           , ("companySize", AE.toJSON form.companySize)
           , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
           ]
-      newCompleted = insertIfNotExist "Info" project.onboardingStepsCompleted
-      OnboardingInfoForm{firstName, lastName, companyName} = form
       userId = sess.user.id
-  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{companyName},questions=#{jsonBytes},onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
-  Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{firstName}, last_name=#{lastName} where id=#{userId} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes},onboarding_steps_completed=#{insertIfNotExist "Info" project.onboardingStepsCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
@@ -282,8 +269,7 @@ onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (Re
 onboardingConfPostH pid form = do
   (_, project) <- Projects.sessionAndProject pid
   let jsonBytes = mergeQuestions project.questions [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
-      newCompleted = insertIfNotExist "Survey" project.onboardingStepsCompleted
-  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{insertIfNotExist "Survey" project.onboardingStepsCompleted} where id=#{pid} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 
@@ -457,7 +443,7 @@ integrationsPage pid apikey =
             button_
               [ class_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
               , type_ "button"
-              , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = 'Copied!';"
+              , [__|on pointerdown call navigator.clipboard.writeText(#api-key-display's innerText) then put 'Copied!' into me|]
               ]
               do
                 span_ "Copy"
@@ -522,7 +508,7 @@ integrationsPage pid apikey =
                     "Watch more tutorials →"
 
           forM_ integrationGroups \(_, integrations) -> do
-            forM_ integrations \(lang, langName, frameworks) ->
+            forM_ integrations \(lang, _, frameworks) ->
               div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
                 div_ [class_ "px-2 md:px-8 sticky top-0 z-10 bg-bgBase py-2"]
                   $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
@@ -586,7 +572,7 @@ integrationsPage pid apikey =
             button_
               [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
               , type_ "button"
-              , onclick_ "navigator.clipboard.writeText(document.getElementById('telemetrygen-cmd').textContent); this.innerHTML = 'Copied!';"
+              , [__|on click call navigator.clipboard.writeText(#telemetrygen-cmd's innerText) then put 'Copied!' into me|]
               ]
               do
                 span_ "Copy"
@@ -620,18 +606,8 @@ integrationsPage pid apikey =
         ]
 
     link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/javascript.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/python.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/go.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/java.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/csharp.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/php.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/elixir.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/bash.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/shell.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/yaml.min.js")] ("" :: Text)
-    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/json.min.js")] ("" :: Text)
+    forM_ ["highlight", "javascript", "python", "go", "java", "csharp", "php", "elixir", "bash", "shell", "yaml", "json"] \f ->
+      script_ [src_ (assetUrl $ "/public/assets/deps/highlightjs/" <> f <> ".min.js")] ("" :: Text)
 
     script_
       [text|
@@ -698,7 +674,7 @@ integrationCta_ pid wrapCls btnCls skipCls = div_ [class_ wrapCls] do
 
 
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
-languageItem pid lang ext = do
+languageItem pid langName lang = do
   label_
     [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"
     ]
@@ -706,20 +682,20 @@ languageItem pid lang ext = do
       input_
         [ type_ "checkbox"
         , class_ "checkbox shrink-0"
-        , id_ $ "check-" <> ext
-        , value_ ext
-        , onchange_ $ "if(this.checked){var dp=document.getElementById('docs-panel');if(window.innerWidth<768){dp.classList.add('open');requestAnimationFrame(function(){dp.scrollTop=0});}else{requestAnimationFrame(function(){document.getElementById('" <> ext <> "_main').scrollIntoView({behavior:'smooth'})});}}"
+        , id_ $ "check-" <> lang
+        , value_ lang
+        , onchange_ $ "if(this.checked){var dp=document.getElementById('docs-panel');if(window.innerWidth<768){dp.classList.add('open');requestAnimationFrame(function(){dp.scrollTop=0});}else{requestAnimationFrame(function(){document.getElementById('" <> lang <> "_main').scrollIntoView({behavior:'smooth'})});}}"
         ]
       div_ [class_ "flex w-full items-center justify-between overflow-hidden"] do
         div_ [class_ "flex items-center gap-2 text-sm min-w-0"] do
-          img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
-          span_ $ toHtml lang
-        div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
+          img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> lang <> ".svg"]
+          span_ $ toHtml langName
+        div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" langName] do
           div_
             [ class_ "flex items-center gap-1 shrink-0"
-            , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> T.replace "#" "sharp" lang
+            , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> T.replace "#" "sharp" langName
             , hxSwap_ "innerHTML"
-            , hxTarget_ $ "#integration-check-" <> ext
+            , hxTarget_ $ "#integration-check-" <> lang
             , hxTrigger_ "load delay:5s"
             ]
             do
@@ -797,9 +773,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
       div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
         forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
           formField_ FieldMd def{value = val} label name True Nothing
-        let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
-              option_ [value_ ""] ""
-              forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
+        let createSelectField selected label name opts = formSelectField_ FieldMd label name True $ options_ (Just selected) (("", "") : opts)
         createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
         createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
       div_ [class_ "items-center gap-1 flex"] $ do
