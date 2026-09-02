@@ -1908,6 +1908,14 @@ otelColumns =
       , attrText "attributes___user_agent___original" "user_agent.original"
       , attrText "attributes___http___request___method" "http.request.method"
       , attrText "attributes___http___request___method_original" "http.request.method_original"
+      , -- The route the framework's router matched. Promoted for the same reason
+        -- url.path is: it is what endpoints are grouped on, so every query
+        -- touching it was paying a JSON extraction out of `attributes`.
+        -- otel_metrics has carried this column all along; the spans table was the
+        -- outlier. Storage was widened first (timefusion `migrate-columns`,
+        -- 2026-09-02) — writing a column TF's schema lacks fails the INSERT, and
+        -- migration 0141 is the Postgres half, since one statement serves both legs.
+        attrText "attributes___http___route" "http.route"
       , attrInt "attributes___http___response___status_code" "http.response.status_code"
       , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
       , attrBigInt "attributes___http___request___body___size" "http.request.body.size"

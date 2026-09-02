@@ -1,0 +1,11 @@
+-- Promote http.route out of the attributes blob, matching the TimeFusion side.
+--
+-- `otelColumns` builds ONE insert statement for both dual-write legs, so a
+-- column TimeFusion has and Postgres does not is a failed PG insert on every
+-- batch — the same shape of outage as declaring a TF column before migrating
+-- its storage. TimeFusion's table was widened on 2026-09-02; this is the
+-- matching half.
+--
+-- Nullable, so no rewrite and no backfill: rows written before this read NULL,
+-- which is exactly what "we did not capture the route" means.
+ALTER TABLE otel_logs_and_spans ADD COLUMN IF NOT EXISTS attributes___http___route TEXT;

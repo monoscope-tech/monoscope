@@ -169,6 +169,22 @@ spec = around withTestResources do
       let expected = toXXHash $ pid.toText <> "172.31.29.11" <> "GET" <> "/"
       V.map fromOnly hashes `shouldBe` V.singleton expected
 
+    -- http.route is promoted out of the `attributes` blob into its own column,
+    -- on both dual-write legs. One insert statement serves both, so a column
+    -- present on one store and absent on the other fails every batch — this
+    -- asserts the Postgres half exists and is populated (migration 0141).
+    it "httpRoute_isWrittenToItsPromotedColumn_notOnlyTheAttributesBlob" $ \tr -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+          reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HashMap.empty
+      whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
+      routes <-
+        withPool tr.trPool
+          $ DBT.query [sql| SELECT attributes___http___route FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)
+          :: IO (V.Vector (Only (Maybe Text)))
+      V.mapMaybe fromOnly routes `shouldBe` V.singleton "/"
+
     it "We should expect 2 endpoints, albeit unacknowleged." $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
