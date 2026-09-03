@@ -222,16 +222,27 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           "Issue not found"
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
-      -- `defaultSinceRange` picks a window ~2x the issue's age, which is right for a
-      -- recurring pattern but wrong for a threshold crossing: a day-old alert got a
-      -- 3-day window in which the breach was a sliver at the right edge, on a y-axis
-      -- scaled to the healthy traffic. A query alert's subject is the moment it
-      -- fired, so bracket that instead — unless the reader has chosen a range.
-      let tp = case (sinceM, Issues.issuePayload issue) of
-            (Nothing, Just (Issues.QueryAlertP d)) ->
-              let isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
-               in TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) d.triggeredAt) (Just $ isoT $ addUTCTime 7200 d.triggeredAt)
-            _ -> TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
+      -- The default window is anchored on the issue's own last activity, not on
+      -- @now@, and never spans more than a day. Both halves are load-bearing:
+      --
+      --   * The charts filter with @hashes[*]==@, a TimeFusion array scan whose cost
+      --     tracks the window — ~3s over 24H, and a 60s timeout over 3 days, which is
+      --     what `defaultSinceRange` handed a day-old issue. Every runtime exception
+      --     past its first day rendered "Query timed out" instead of a chart.
+      --   * Capping alone is not enough: this issue last fired 38h ago, so a
+      --     now-anchored 24H window answers quickly and finds nothing. The reader got
+      --     a timeout or an empty chart, never the data.
+      --
+      -- A query alert is a point event rather than a recurring one, so it brackets
+      -- the moment it fired. A reader's own range choice always wins.
+      let isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
+          bracketAround t w = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-w) t) (Just $ isoT $ addUTCTime w t)
+          lastActive = zonedTimeToUTC issue.updatedAt
+          tp = case (sinceM, Issues.issuePayload issue) of
+            (Just s, _) -> TimePicker.TimePicker (Just s) Nothing Nothing
+            (_, Just (Issues.QueryAlertP d)) -> bracketAround d.triggeredAt 7200
+            _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive 43200
+            _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
           (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
@@ -358,17 +369,21 @@ summaryToken_ wrap token = case T.breakOn "⇒" token of
           (toHtml $ unescSummary $ T.drop 1 rest)
 
 
--- | Smart default time range based on anomaly age.
--- Picks a range ~2x the anomaly age so the data fills the chart.
+-- | Smart default time range based on anomaly age: ~2x the age so the data fills
+-- the chart, capped at a day.
+--
+-- The cap is not cosmetic. Issue charts filter with @hashes[*]==@, which is an
+-- array scan on TimeFusion whose cost tracks the window; it answers 24H in ~3s and
+-- times out at 60s over 3 days. The old 3D/7D/14D arms therefore guaranteed a
+-- "Query timed out" chart on any issue more than a day old. Callers that need to
+-- reach further back anchor an explicit window on the issue's last activity
+-- instead of widening this one.
 defaultSinceRange :: ZonedTime -> UTCTime -> Text
 defaultSinceRange createdAt now
   | ageH < 1 = "1H"
   | ageH < 3 = "3H"
   | ageH < 6 = "6H"
-  | ageH < 24 = "24H"
-  | ageH < 72 = "3D"
-  | ageH < 168 = "7D"
-  | otherwise = "14D"
+  | otherwise = "24H"
   where
     ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
@@ -659,7 +674,15 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       -- context beside a stack trace.
       let chartCard_ chartTitle heightCls thresholdM chartQuery = do
             let refreshId = "anomaly-chart-refresh"
+                chartId = issueId <> "-pattern-volume"
+                -- "How many, over the range I am looking at" — the number Sentry and
+                -- Datadog both make the largest thing on an issue page, and the one
+                -- this page had nowhere. The chart already computes it; this is the
+                -- widget's own value slot, hoisted into the header this card owns
+                -- because `naked` suppresses the widget's. Same number as the chart
+                -- by construction — there is no second query to disagree with it.
                 picker = div_ [class_ "flex items-center gap-2"] do
+                  Widget.widgetValueSlot_ "" chartId Nothing
                   TimePicker.timepicker_ (Just refreshId) currentRange Nothing
                   TimePicker.refreshButton_
             div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
@@ -669,7 +692,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 (def :: Widget.Widget)
                   { Widget.standalone = Just True
                   , Widget.naked = Just True
-                  , Widget.id = Just $ issueId <> "-pattern-volume"
+                  , Widget.id = Just chartId
                   , Widget.wType = Widget.WTTimeseries
                   , Widget.showTooltip = Just True
                   , Widget.query = Just chartQuery

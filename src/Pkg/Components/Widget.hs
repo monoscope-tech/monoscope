@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -604,6 +604,24 @@ displayUnit = \case
   u -> " " <> u
 
 
+-- | The badge holding a widget's representative scalar for the current range —
+-- the sum for additive counts, a mean/rate/min/max per @summarizeBy@ (see
+-- @statScalar@ in widgets.ts).
+--
+-- It starts hidden and is filled by @setStatValue@ on every chart-data fetch,
+-- which keys off the @\<widget id\>Value@ id alone. @renderWidgetHeader@ draws it
+-- for widgets that own their header; it is exported so a caller supplying its own
+-- header around a @naked@ chart shows the same number the widget would have,
+-- rather than computing a second total that could disagree with the chart.
+widgetValueSlot_ :: Text -> Text -> Maybe Text -> Html ()
+widgetValueSlot_ extraCls wid valueM =
+  span_
+    [ class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak whitespace-nowrap " <> extraCls <> bool " hidden" "" (isJust valueM)
+    , id_ $ wid <> "Value"
+    ]
+    $ whenJust valueM toHtml
+
+
 renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
 renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "min-h-8 px-1 leading-none flex justify-between items-center " <> bool "grid-stack-handle" "" (isTrue widget.standalone), id_ $ wId <> "_header"] do
   when (isTrue widget._centerTitle) $ div_ ""
@@ -613,8 +631,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> bool "hidden" "" (isJust valueM && not (isTrue widget.hideValue)), id_ $ wId <> "Value"]
-      $ whenJust valueM toHtml
+    widgetValueSlot_ "max-md:hidden " wId (bool valueM Nothing (isTrue widget.hideValue))
     span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
