@@ -44,34 +44,33 @@ describe('scopeTo', () => {
 });
 
 describe('edgePath', () => {
-  it('runs down, across at the mid-level, then down again', () => {
-    // Datadog's edges are plumbing, not curves: shared horizontal lanes are what let a
-    // reader tell which box an edge belongs to in a dense row.
+  it('runs right, down a shared mid-lane, then right again', () => {
+    // Orthogonal plumbing preserves a caller-to-callee route through a dense column.
     const d = edgePath(100, 60, 300, 200);
     expect(d.startsWith('M 100,60')).toBe(true);
     expect(d.endsWith('L 300,200')).toBe(true);
-    // The horizontal run sits at the midpoint between the two cards.
-    expect(d).toContain('130');
-    expect(d).toMatch(/Q 100,130|Q 300,130/);
+    // The vertical run sits at the midpoint between the cards.
+    expect(d).toContain('200');
+    expect(d).toMatch(/Q 200,60|Q 200,200/);
   });
 
-  it('collapses to a straight line when the cards are vertically aligned', () => {
-    expect(edgePath(200, 50, 200, 150)).toBe('M 200,50 L 200,150');
+  it('collapses to a straight line when the cards are horizontally aligned', () => {
+    expect(edgePath(200, 50, 300, 50)).toBe('M 200,50 L 300,50');
   });
 
   it('shrinks its corner radius rather than overshooting a short hop', () => {
-    // A 10px corner on a 6px drop would double back on itself.
-    const d = edgePath(0, 100, 4, 106);
+    // A 10px corner on a 6px run would double back on itself.
+    const d = edgePath(100, 0, 106, 4);
     const nums = [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map(m => Number(m[0]));
     expect(Math.max(...nums)).toBeLessThanOrEqual(106);
     expect(Math.min(...nums)).toBeGreaterThanOrEqual(0);
   });
 
-  it('turns the correct way for a callee to the left', () => {
-    const right = edgePath(0, 0, 200, 100);
-    const left = edgePath(200, 0, 0, 100);
-    expect(right).toContain('Q 0,50 10,50');
-    expect(left).toContain('Q 200,50 190,50');
+  it('turns the correct way for a callee above its caller', () => {
+    const below = edgePath(0, 0, 200, 100);
+    const above = edgePath(0, 100, 200, 0);
+    expect(below).toContain('Q 100,0 100,10');
+    expect(above).toContain('Q 100,100 100,90');
   });
 });
 
@@ -140,18 +139,22 @@ describe('breakCycles', () => {
 });
 
 describe('layoutGraph', () => {
+  it('uses the compact Datadog card footprint for every layout and connector', () => {
+    expect([CARD_W, CARD_H]).toEqual([150, 62]);
+  });
+
   it('places a lone node and reports no back-edges', async () => {
     const { coords, back } = await layoutGraph(['solo'], []);
     expect(coords.get('solo')).toBeDefined();
     expect(back.size).toBe(0);
   });
 
-  it('puts every callee on a later row than its caller', async () => {
+  it('puts every callee to the right of its caller', async () => {
     const { coords } = await layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    expect(coords.get('b')!.y).toBeGreaterThan(coords.get('a')!.y);
-    expect(coords.get('y')!.y).toBeGreaterThan(coords.get('x')!.y);
-    // Disconnected roots share the first row rather than stacking.
-    expect(coords.get('a')!.y).toBe(coords.get('x')!.y);
+    expect(coords.get('b')!.x).toBeGreaterThan(coords.get('a')!.x);
+    expect(coords.get('y')!.x).toBeGreaterThan(coords.get('x')!.x);
+    // Disconnected roots share the leftmost column rather than stacking.
+    expect(coords.get('a')!.x).toBe(coords.get('x')!.x);
   });
 
   it('never overlaps two cards, however wide the fan-out', async () => {

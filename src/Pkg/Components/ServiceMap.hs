@@ -48,13 +48,16 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
           -- our own tokens, carry sprite icons, and are focusable — none of which a canvas
           -- node can be.
           div_
-            [ class_ "border border-strokeStrong rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
+            [ class_ "border border-strokeStrong bg-bgSunken rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.
               term "data-map-base" ("/p/" <> pid.toText)
             ]
             do
+              div_ [class_ "absolute top-3 left-3 z-20 hidden md:flex items-center gap-2 rounded-md border border-strokeWeak bg-bgRaised px-2.5 py-1.5 text-xs text-textWeak pointer-events-none"] do
+                faSprite_ "arrow-right" "regular" "w-3.5 h-3.5 text-iconNeutral"
+                span_ [class_ "font-medium text-textStrong"] "Requests flow left to right"
               div_ [class_ "absolute inset-0 origin-top-left", term "data-map-pane" ""] do
                 svg_ [class_ "absolute overflow-visible pointer-events-none", term "data-map-edges" "", term "width" "1", term "height" "1"]
                   -- Lucid has no SVG element vocabulary; `term` names them directly. One shared
@@ -73,6 +76,7 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
                   $ term "path" [term "d" "M 0 1 L 9 5 L 0 9 z", term "fill" "context-stroke"] (mempty :: Html ())
                 div_ [class_ "absolute inset-0", term "data-map-nodes" ""] pass
               zoomControls_
+              mapOverview_
               nodeCardTemplate_
           -- Outside the scrolling viewport: an absolutely positioned menu inside a scroll
           -- container is clipped by it the moment the node is near an edge.
@@ -142,6 +146,14 @@ zoomControls_ =
         $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
 
 
+-- | A compact orientation view for a large map. The renderer uses the exact laid-out nodes
+-- and viewport transform, so the overview cannot drift into a second, approximate map.
+mapOverview_ :: Html ()
+mapOverview_ =
+  div_ [class_ "absolute bottom-3 left-3 z-20 hidden lg:block rounded-lg border border-strokeWeak bg-bgRaised p-1.5 shadow-sm", term "data-map-overview-shell" "", term "aria-hidden" "true"]
+    $ svg_ [class_ "block h-20 w-40", term "data-map-overview" "", term "viewBox" "0 0 160 80", term "preserveAspectRatio" "none"] pass
+
+
 -- | The node card, authored once here and cloned per drawn node by the renderer. A template
 -- rather than a card per node in the payload: a project at the cap carries 150 drawn nodes and
 -- up to 1200 collapsed members, and rendering all of them to hide most would be ten thousand
@@ -150,19 +162,21 @@ nodeCardTemplate_ :: Html ()
 nodeCardTemplate_ =
   template_ [term "data-node-card" ""] $ do
     div_
-      [ class_ "absolute flex w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-xs leading-4 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong"
+      [ class_ "absolute flex h-[62px] w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-2xs leading-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong transition-[opacity,border-color,background-color] duration-150 hover:bg-fillWeak"
       , term "data-node" ""
       , tabindex_ "0"
       ]
       do
-        div_ [class_ "min-w-0 flex-1 px-2 py-1.5"] do
+        div_ [class_ "min-w-0 flex-1 px-1.5 py-1"] do
           div_ [class_ "flex items-center gap-1"] do
             span_ [class_ "shrink-0 text-iconNeutral", term "data-node-icon" ""] pass
-            span_ [class_ "truncate font-semibold text-textStrong", term "data-node-name" ""] pass
+            span_ [class_ "truncate font-medium text-textStrong", term "data-node-name" ""] pass
             span_ [class_ "shrink-0 tabular-nums text-textWeak hidden", term "data-node-count" ""] pass
           div_ [class_ "text-textWeak", term "data-node-errors" ""] pass
           div_ [class_ "text-textWeak", term "data-node-latency" ""] pass
-          span_ [class_ "mt-0.5 inline-block rounded-[2px] bg-fillWeak px-1 py-px tabular-nums text-textStrong", term "data-node-rps" ""] pass
+          span_ [class_ "relative mt-0.5 flex h-3.5 overflow-hidden rounded-[2px] bg-fillWeak tabular-nums"] do
+            span_ [class_ "absolute inset-y-0 left-0 bg-fillBrand-strong/30", term "data-node-rps-bar" ""] pass
+            span_ [class_ "relative px-1 text-textStrong", term "data-node-rps" ""] pass
         -- The health bar runs the full height of the card at its right edge, which is where
         -- Datadog puts it and why it reads without being looked at.
         span_ [class_ "w-[4px] shrink-0", term "data-node-health" ""] pass
@@ -208,10 +222,9 @@ menuItems =
   ]
 
 
--- | The card says what a node /is/ (its DB\/EXT\/QUEUE tag) and how it is doing (its
--- numbers). What a card cannot say for itself is the two encodings carried by its border,
--- so those are what the legend teaches — plus the health scale, because a threshold is a
--- promise about what red means and a reader is entitled to know where it sits.
+-- | The card's icon says what a node /is/ (service, DB, queue or external dependency), and
+-- its right-edge bar says how it is doing. The legend makes those two encodings explicit and
+-- states the health thresholds, because a reader is entitled to know where red begins.
 serviceMapLegend_ :: ServiceGraph -> HM.HashMap Text Text -> Html ()
 serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
   -- Written out rather than folded over a list of class strings: Tailwind's scanner has to
@@ -222,7 +235,7 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
       div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-strokeStrong"] pass
       span_ [] "Instrumented service"
     div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-dashed border-strokeStrong"] pass
+      faSprite_ "cloud" "regular" "w-3.5 h-3.5 text-iconNeutral"
       span_ [] "Uninstrumented dependency"
     div_ [class_ "flex items-center gap-1.5"] do
       div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillWarning-strong"] pass

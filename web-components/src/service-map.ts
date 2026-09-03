@@ -42,12 +42,13 @@ export type Point = { x: number; y: number };
 // file as binary, which silently costs every diff and review on it.
 export const edgeKey = (source: string, target: string): string => `${source}\u0000${target}`;
 
-// Card geometry, matched to Datadog's: a compact box whose height is set by four lines of
-// 11px text plus padding, with a full-height health bar down its right edge.
+// Card geometry, matched to the Lucid template: Datadog’s 150 × 62 px compact flow card
+// carries four 10 px statistic lines and a 4 px full-height health bar. The layout, edge
+// anchors, and overview share this footprint so no connector appears to enter a card early.
 export const CARD_W = 150;
 export const CARD_H = 62;
-// Vertical room between one hop and the next, and horizontal room between siblings.
-export const LAYER_GAP = 78;
+// Horizontal room between one hop and the next, and vertical room between siblings.
+export const LAYER_GAP = 96;
 export const NODE_GAP = 26;
 
 /**
@@ -137,9 +138,9 @@ export function breakCycles(keys: string[], edges: Edge[]): { acyclic: Edge[]; b
 }
 
 export type LayoutOpts = {
-  /** Distance between one hop and the next, down the page. */
+  /** Distance between one hop and the next, to the right. */
   layerGap?: number;
-  /** Distance between siblings across a row. */
+  /** Distance between siblings down a column. */
   nodeGap?: number;
   /** Card footprint ELK reserves per node. */
   cardW?: number;
@@ -175,7 +176,7 @@ export async function layoutGraph(
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
-      'elk.direction': 'DOWN',
+      'elk.direction': 'RIGHT',
       'elk.layered.spacing.nodeNodeBetweenLayers': String(opts.layerGap ?? LAYER_GAP),
       'elk.spacing.nodeNode': String(opts.nodeGap ?? NODE_GAP),
       // Routing channels are what make a layered graph sprawl: every edge crossing a layer
@@ -185,8 +186,9 @@ export async function layoutGraph(
       'elk.spacing.edgeNode': '2',
       'elk.spacing.edgeEdge': '2',
       // No wrapping. ELK can fold a wide graph into bands, but a folded band puts a later
-      // hop *above* an earlier one, which is exactly the reading order top-down flow exists
-      // to give. A wide map scrolls sideways instead — the same trade Datadog's makes.
+      // hop *left* of an earlier one, which is exactly the reading order left-to-right flow
+      // exists to give. A tall map scrolls vertically instead — the same trade the Datadog
+      // and New Relic maps make.
       // ELK is deterministic for identical input on its own; model order is not needed for
       // that, and forcing it produces longer edges, which cost a routing lane each.
       'elk.layered.cycleBreaking.strategy': 'DEPTH_FIRST',
@@ -270,29 +272,30 @@ const KIND_ICON: Record<NodeKind, string> = {
 };
 
 /**
- * The edge Datadog draws: down out of the caller, across at a shared mid-level, then down
- * into the callee — orthogonal segments with rounded corners, not a curve.
+ * The edge Datadog and New Relic draw: out of the caller's right edge, down a shared
+ * vertical lane, then into the callee's left edge — orthogonal segments with rounded corners,
+ * preserving the same left-to-right reading direction as the cards.
  *
- * The difference is not decorative. A bezier between two distant cards bows sideways through
- * whatever sits between them, so the eye cannot tell which box an edge belongs to in a dense
- * row. Orthogonal runs share a lane, meet cards square-on, and read as plumbing.
+ * The difference is not decorative. A bezier between two distant cards bows through whatever
+ * sits between them, so the eye cannot tell which box an edge belongs to in a dense column.
+ * Orthogonal runs share a lane, meet cards square-on, and read as plumbing.
  *
- * Corners are quarter-circles whose radius collapses as the run shortens, so a near-vertical
+ * Corners are quarter-circles whose radius collapses as the run shortens, so a near-horizontal
  * hop degrades to a straight line instead of overshooting its own corner.
  */
 export function edgePath(sx: number, sy: number, tx: number, ty: number, radius = 10): string {
   const dx = tx - sx;
   const dy = ty - sy;
-  if (Math.abs(dx) < 1) return `M ${sx},${sy} L ${tx},${ty}`;
-  const midY = sy + dy / 2;
+  if (Math.abs(dy) < 1) return `M ${sx},${sy} L ${tx},${ty}`;
+  const midX = sx + dx / 2;
   const r = Math.max(0, Math.min(radius, Math.abs(dx) / 2, Math.abs(dy) / 2));
-  const dir = dx > 0 ? 1 : -1;
+  const dir = dy > 0 ? 1 : -1;
   return [
     `M ${sx},${sy}`,
-    `L ${sx},${midY - r}`,
-    `Q ${sx},${midY} ${sx + dir * r},${midY}`,
-    `L ${tx - dir * r},${midY}`,
-    `Q ${tx},${midY} ${tx},${midY + r}`,
+    `L ${midX - r},${sy}`,
+    `Q ${midX},${sy} ${midX},${sy + dir * r}`,
+    `L ${midX},${ty - dir * r}`,
+    `Q ${midX},${ty} ${midX + r},${ty}`,
     `L ${tx},${ty}`,
   ].join(' ');
 }
@@ -385,6 +388,7 @@ async function render(
   const svg = el.querySelector<SVGSVGElement>('[data-map-edges]');
   const layer = el.querySelector<HTMLElement>('[data-map-nodes]');
   const tpl = el.querySelector<HTMLTemplateElement>('[data-node-card]');
+  const overview = el.querySelector<SVGSVGElement>('[data-map-overview]');
   const panel = el.parentElement ?? el;
   if (!pane || !svg || !layer || !tpl) return;
 
@@ -410,7 +414,11 @@ async function render(
 
   // --- viewport: one transform, the way React Flow does it ---------------------
   let tx = 0, ty = 0, k = 1;
-  const applyTransform = () => { pane.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`; };
+  let drawOverview = () => {};
+  const applyTransform = () => {
+    pane.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+    drawOverview();
+  };
 
   const fit = () => {
     if (!drawn.nodes.length) return;
@@ -419,7 +427,9 @@ async function render(
     const w = Math.max(...xs) - Math.min(...xs) + CARD_W;
     const h = Math.max(...ys) - Math.min(...ys) + CARD_H;
     const box = el.getBoundingClientRect();
-    k = Math.min(1, (box.width - 48) / w, (box.height - 48) / h);
+    // A three-service topology should not feel like an empty stadium. A modest cap keeps
+    // sparse maps legible while a dense architecture still scales down to fit.
+    k = Math.min(1.25, (box.width - 48) / w, (box.height - 48) / h);
     tx = (box.width - w * k) / 2 - Math.min(...xs) * k;
     ty = (box.height - h * k) / 2 - Math.min(...ys) * k;
     applyTransform();
@@ -468,6 +478,51 @@ async function render(
   // --- painting ----------------------------------------------------------------
   const pos = new Map<string, Point>();
 
+  drawOverview = () => {
+    if (!overview || !drawn.nodes.length) return;
+    const s = getChartStyles();
+    const points = drawn.nodes.map(n => pos.get(n.key)).filter((p): p is Point => !!p);
+    if (!points.length) return;
+    const minX = Math.min(...points.map(p => p.x));
+    const minY = Math.min(...points.map(p => p.y));
+    const maxX = Math.max(...points.map(p => p.x)) + CARD_W;
+    const maxY = Math.max(...points.map(p => p.y)) + CARD_H;
+    const pad = 6, width = 160, height = 80;
+    const scale = Math.min((width - 2 * pad) / (maxX - minX), (height - 2 * pad) / (maxY - minY));
+    const ox = (width - (maxX - minX) * scale) / 2;
+    const oy = (height - (maxY - minY) * scale) / 2;
+    const point = (x: number, y: number) => ({ x: ox + (x - minX) * scale, y: oy + (y - minY) * scale });
+    const add = (tag: string, attrs: Record<string, string>) => {
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [name, value] of Object.entries(attrs)) shape.setAttribute(name, value);
+      overview.appendChild(shape);
+    };
+
+    overview.replaceChildren();
+    for (const edge of drawn.edges) {
+      const source = pos.get(edge.source), target = pos.get(edge.target);
+      if (!source || !target) continue;
+      const a = point(source.x + CARD_W, source.y + CARD_H / 2);
+      const b = point(target.x, target.y + CARD_H / 2);
+      add('line', { x1: String(a.x), y1: String(a.y), x2: String(b.x), y2: String(b.y), stroke: s.strokeStrong, 'stroke-width': '0.75', opacity: '0.55' });
+    }
+    for (const node of drawn.nodes) {
+      const p = pos.get(node.key);
+      if (!p) continue;
+      const at = point(p.x, p.y);
+      add('rect', {
+        x: String(at.x), y: String(at.y), width: String(CARD_W * scale), height: String(CARD_H * scale),
+        rx: '1.5', fill: healthColor(node.stats.error_rate, s, s.successColor), opacity: '0.8',
+      });
+    }
+    const box = el.getBoundingClientRect();
+    const topLeft = point(-tx / k, -ty / k);
+    add('rect', {
+      x: String(topLeft.x), y: String(topLeft.y), width: String(box.width / k * scale), height: String(box.height / k * scale),
+      fill: 'none', stroke: s.brandColor, 'stroke-width': '1.25', rx: '1.5',
+    });
+  };
+
   // Decoration hooks are optional by construction. `querySelector(...)!` erases at runtime,
   // so one hook missing from the template — a drifted template, or a cached bundle served
   // against a newer one — threw mid-buildCards and left the whole map blank. A missing hook
@@ -486,8 +541,8 @@ async function render(
     // strokeWeak edge all but disappears, and the card has to read as an object before
     // its border colour can say anything about health.
     card.style.borderColor = onPath ? s.brandColor : failing ? s.errorColor : elevated ? s.warningColor : s.strokeStrong;
-    card.style.borderWidth = onPath || elevated ? '2.5px' : '1.5px';
-    card.style.borderStyle = n.inferred ? 'dashed' : 'solid';
+    card.style.borderWidth = onPath || elevated ? '2px' : '1px';
+    card.style.borderStyle = 'solid';
     // The right-edge bar is health and only health — green/amber/red, the way Datadog grades
     // a service. Service identity moved to the icon, which is where it does not compete.
     withHook(card, '[data-node-health]', h => (h.style.background = failing ? s.errorColor : elevated ? s.warningColor : s.successColor));
@@ -500,6 +555,7 @@ async function render(
     cards = new Map();
     const proto = tpl.content.firstElementChild;
     if (!proto) return;
+    const maxRps = Math.max(0, ...drawn.nodes.map(n => n.stats.throughput_per_sec));
     for (const n of drawn.nodes) {
       const card = proto.cloneNode(true) as HTMLElement;
       card.dataset.key = n.key;
@@ -511,6 +567,7 @@ async function render(
       withHook(card, '[data-node-latency]', e => (e.textContent =
         n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${formatDuration(n.stats.p95_ns)} latency`));
       withHook(card, '[data-node-rps]', e => (e.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`));
+      withHook(card, '[data-node-rps-bar]', bar => (bar.style.width = `${maxRps > 0 ? n.stats.throughput_per_sec / maxRps * 100 : 0}%`));
       // A collapsed head's stats are the *sum* of its members, so one endpoint failing
       // outright inside forty healthy ones is a ~2% aggregate — invisible, and exactly the
       // failure this map exists to catch. The head says how many of its members are unwell.
@@ -539,7 +596,9 @@ async function render(
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('data-edge', '');
       path.setAttribute('fill', 'none');
-      path.setAttribute('d', edgePath(a.x + CARD_W / 2, a.y + CARD_H, b.x + CARD_W / 2, b.y));
+      // Keep the arrow tip just clear of the card. The SVG layer sits underneath DOM cards,
+      // so ending inside the callee would hide the only directional cue under its surface.
+      path.setAttribute('d', edgePath(a.x + CARD_W, a.y + CARD_H / 2, b.x - 7, b.y + CARD_H / 2));
       svg.appendChild(path);
       paths.set(edgeKey(e.source, e.target), path);
     }
@@ -565,7 +624,7 @@ async function render(
       const failing = e.stats.error_rate >= ERR_FAILING;
       path.setAttribute('stroke', hot ? s.brandColor : failing ? s.errorColor : e.stats.error_rate >= ERR_ELEVATED ? s.warningColor : s.strokeStrong);
       path.setAttribute('stroke-width', hot ? '2' : '1.25');
-      path.setAttribute('stroke-dasharray', byKey.get(e.target)?.inferred ? '4 3' : '');
+      path.setAttribute('stroke-dasharray', '');
       path.setAttribute('opacity', String(hot ? 1 : lit.litEdges.has(key) ? 0.45 : 0.08));
       path.setAttribute('marker-end', `url(#${containerId}-arrow)`);
     }
@@ -588,6 +647,7 @@ async function render(
     buildCards();
     place();
     buildEdges();
+    drawOverview();
     paint();
   };
 
@@ -674,7 +734,7 @@ async function render(
   el.addEventListener('click', e => { if (!(e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) resetView(); }, { signal });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && (isolated || expanded.size)) resetView(); }, { signal });
 
-  const unsubscribeTheme = subscribeChartTheme(() => paint());
+  const unsubscribeTheme = subscribeChartTheme(() => { paint(); drawOverview(); });
   ['resize', 'toggle-sidebar', 'loglist-resize'].forEach(ev => window.addEventListener(ev, fit, { signal }));
   // Its own observer, not the shared chart one: that batcher resolves each element through
   // `window.echarts`, which this page no longer loads at all.
