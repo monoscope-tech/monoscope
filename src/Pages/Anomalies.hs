@@ -222,26 +222,34 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           "Issue not found"
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
-      -- The default window is anchored on the issue's own last activity, not on
-      -- @now@, and never spans more than a day. Both halves are load-bearing:
+      -- The default window is anchored on the issue's own last activity rather than
+      -- on @now@, and is kept narrow. Both halves are load-bearing, and the width is
+      -- measured rather than guessed.
       --
-      --   * The charts filter with @hashes[*]==@, a TimeFusion array scan whose cost
-      --     tracks the window — ~3s over 24H, and a 60s timeout over 3 days, which is
-      --     what `defaultSinceRange` handed a day-old issue. Every runtime exception
-      --     past its first day rendered "Query timed out" instead of a chart.
-      --   * Capping alone is not enough: this issue last fired 38h ago, so a
-      --     now-anchored 24H window answers quickly and finds nothing. The reader got
-      --     a timeout or an empty chart, never the data.
+      -- The charts filter with @hashes[*]==@, a TimeFusion array scan with no index
+      -- behind it, so cost tracks the rows in the window. Counting one error hash:
       --
-      -- A query alert is a point event rather than a recurring one, so it brackets
-      -- the moment it fired. A reader's own range choice always wins.
+      --     4h   3.2s        8h  10.3s        24h  47.8s        3d  60s (timeout)
+      --
+      -- `defaultSinceRange` used to hand a day-old issue 3D, so every runtime
+      -- exception past its first day rendered "Query timed out" instead of a chart.
+      -- Widening is one click on the picker; a chart nobody waits for is not.
+      --
+      -- Anchoring matters independently of width: this issue last fired 38h ago, so
+      -- a now-anchored window of any size answers quickly and finds nothing. Between
+      -- them the reader got a timeout or an empty chart, never the data.
+      --
+      -- The relative branch stays because a *live* issue's last activity is ~now, and
+      -- a trailing 24H window over recent (sparse, hot) partitions measures ~3.4s —
+      -- the same budget the 4h bracket buys over the dense older ones.
       let isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
-          bracketAround t w = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-w) t) (Just $ isoT $ addUTCTime w t)
+          -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
+          bracketAround t = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) t) (Just $ isoT $ addUTCTime 7200 t)
           lastActive = zonedTimeToUTC issue.updatedAt
           tp = case (sinceM, Issues.issuePayload issue) of
             (Just s, _) -> TimePicker.TimePicker (Just s) Nothing Nothing
-            (_, Just (Issues.QueryAlertP d)) -> bracketAround d.triggeredAt 7200
-            _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive 43200
+            (_, Just (Issues.QueryAlertP d)) -> bracketAround d.triggeredAt
+            _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
             _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
           (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
@@ -922,7 +930,12 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                   Nothing -> div_ [class_ "flex items-center justify-center h-48"] $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
                   Just (tId, tTs) ->
                     div_
-                      [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True Nothing
+                      -- Open the waterfall on the span that actually failed. A stackless
+                      -- exception sends the reader here for the call path (see the empty
+                      -- state above), and this trace is 40+ spans across seven services —
+                      -- landing on the root and asking them to find `PlaceOrder` themselves
+                      -- is the same work the stack trace was supposed to save.
+                      [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True Nothing (errM >>= (.base.errorData.spanId))
                       , hxTrigger_ "load"
                       , hxSwap_ "outerHTML"
                       , class_ "h-48 flex items-center justify-center"

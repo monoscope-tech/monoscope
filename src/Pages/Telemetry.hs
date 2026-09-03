@@ -556,9 +556,13 @@ metricBreakdownGetH pid metricName labelM = do
 -- state's Retry are the same request by construction. @timestamp@ is not
 -- optional in practice: without it the fetch widens from a +/-5min window to a
 -- 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21.
-traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Maybe Int -> Text
-traceFragmentUrl pid trId tsM embedded spansM =
-  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded] <> foldMap (\n -> ["spans=" <> show n]) spansM)
+-- | @spanIdM@ opens the fragment focused on one span. 'traceH' already resolves a
+-- span by id for nav — it looks past the render page to find it — so an issue whose
+-- error is buried deep in a large trace can point straight at the failing span
+-- instead of dropping the reader at the root to hunt for it.
+traceFragmentUrl :: Projects.ProjectId -> Text -> Maybe UTCTime -> Bool -> Maybe Int -> Maybe Text -> Text
+traceFragmentUrl pid trId tsM embedded spansM spanIdM =
+  "/p/" <> pid.toText <> "/traces/" <> trId <> "/?" <> T.intercalate "&" (foldMap (\ts -> ["timestamp=" <> formatUTC ts]) tsM <> ["embed=true" | embedded] <> foldMap (\n -> ["spans=" <> show n]) spansM <> foldMap (\sid -> ["span_id=" <> toUriStr sid]) spanIdM)
 
 
 -- Trace handler
@@ -573,7 +577,7 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
       -- whenever the clicked span sits past it. Take the clamp maximum instead —
       -- still bounded, and the trace is warm by the time anyone navigates it.
       lookupLimit = Just 5000
-      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded spansM) embedded
+      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded spansM spanIdM) embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
@@ -607,7 +611,7 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
               -- Auto-open only on the first load: a Load more swap brings the whole
               -- fragment with it, so re-emitting the marker would drag the detail
               -- panel back to the first span on every pull.
-              pure $ TraceDetails pid traceItem spans (embedded && isNothing spansM) (guard hasMore $> traceFragmentUrl pid trId timestamp embedded (Just $ loaded * 2))
+              pure $ TraceDetails pid traceItem spans (embedded && isNothing spansM) (guard hasMore $> traceFragmentUrl pid trId timestamp embedded (Just $ loaded * 2) spanIdM)
 
 
 -- Metrics UI components
