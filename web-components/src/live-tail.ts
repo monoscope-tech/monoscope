@@ -71,7 +71,7 @@ const formatValue = (value: FieldValue): string => {
 
 const findJson = (body: string): { value: JsonValue | null; prefix: string } => {
   const trimmed = body.trim();
-  const starts = [...new Set([0, trimmed.indexOf('{'), trimmed.indexOf('[')])].filter(start => start >= 0).sort((a, b) => a - b);
+  const starts = [...new Set([0, trimmed.indexOf('{'), trimmed.indexOf('[')])].filter((start) => start >= 0).sort((a, b) => a - b);
   for (const start of starts) {
     try {
       return { value: JSON.parse(trimmed.slice(start)) as JsonValue, prefix: trimmed.slice(0, start).trim() };
@@ -82,12 +82,7 @@ const findJson = (body: string): { value: JsonValue | null; prefix: string } => 
   return { value: null, prefix: '' };
 };
 
-const flattenJson = (
-  value: JsonValue,
-  prefix: string,
-  out: Record<string, FieldValue>,
-  depth = 0
-): Record<string, FieldValue> => {
+const flattenJson = (value: JsonValue, prefix: string, out: Record<string, FieldValue>, depth = 0): Record<string, FieldValue> => {
   if (Object.keys(out).length >= 100) return out;
   if (value !== null && !Array.isArray(value) && typeof value === 'object' && depth < 5) {
     for (const [key, child] of Object.entries(value)) flattenJson(child, prefix ? `${prefix}.${key}` : key, out, depth + 1);
@@ -179,15 +174,13 @@ const logBodyTemplate = (row: PreparedRow): TemplateResult => {
   const truncated = row.truncated ? html`<span class="text-textWeak">…truncated</span>` : nothing;
   if (row.parsedBody !== null && !Array.isArray(row.parsedBody) && typeof row.parsedBody === 'object') {
     return html`${row.bodyPrefix ? html`<span class="text-textWeak">${row.bodyPrefix}</span>` : nothing}${row.bodyFields.map(
-      ([field, value]) => html`<span class="min-w-0 break-words"
-        ><span class="text-textWeak">${field}=</span>${scalarTemplate(value)}</span
-      >`
+      ([field, value]) =>
+        html`<span class="min-w-0 break-words"><span class="text-textWeak">${field}=</span>${scalarTemplate(value)}</span>`
     )}${truncated}`;
   }
   if (row.parsedBody !== null) {
-    return html`<span class="min-w-0 whitespace-pre-wrap break-words text-textStrong"
-      >${jsonTemplate(JSON.stringify(row.parsedBody))}</span
-    >${truncated}`;
+    return html`<span class="min-w-0 whitespace-pre-wrap break-words text-textStrong">${jsonTemplate(JSON.stringify(row.parsedBody))}</span
+      >${truncated}`;
   }
   const token = /([\w.@/-]+)=("(?:\\.|[^"\\])*"|[^\s]+)/g;
   const parts: TemplateResult[] = [];
@@ -299,8 +292,8 @@ export class LiveTail extends LitElement {
   private fieldsForKind(): string[] {
     try {
       const saved = JSON.parse(localStorage.getItem(this.fieldStorageKey) ?? 'null');
-      if (Array.isArray(saved) && saved.every(field => typeof field === 'string')) {
-        return saved.filter(field => !PINNED_FIELDS.includes(field));
+      if (Array.isArray(saved) && saved.every((field) => typeof field === 'string')) {
+        return saved.filter((field) => !PINNED_FIELDS.includes(field));
       }
     } catch {
       // Preferences are optional; private browsing can make storage unavailable.
@@ -314,7 +307,7 @@ export class LiveTail extends LitElement {
 
   private get availableFields(): string[] {
     return [...new Set([...BASE_FIELDS, ...this.selectedFields, ...this.schemaFields, ...this.fieldCounts.keys()])]
-      .filter(field => !PINNED_FIELDS.includes(field))
+      .filter((field) => !PINNED_FIELDS.includes(field))
       .sort((a, b) => {
         const ai = this.selectedFields.indexOf(a);
         const bi = this.selectedFields.indexOf(b);
@@ -343,7 +336,7 @@ export class LiveTail extends LitElement {
   }
 
   private projectedFields(): string[] {
-    return this.selectedFields.filter(field => !BASE_FIELDS.includes(field) && !field.startsWith('body.'));
+    return this.selectedFields.filter((field) => !BASE_FIELDS.includes(field) && !field.startsWith('body.'));
   }
 
   private restart = (clearRows = true) => {
@@ -375,8 +368,8 @@ export class LiveTail extends LitElement {
         query: this.query || null,
         columns: this.projectedFields(),
       }),
-      onRows: rows => this.appendRows(rows.map(row => (row as any).log as LiveRow).filter(Boolean)),
-      onDropped: total => (this.droppedServer = total),
+      onRows: (rows) => this.appendRows(rows.map((row) => (row as any).log as LiveRow).filter(Boolean)),
+      onDropped: (total) => (this.droppedServer = total),
       onState: (state, detail) => {
         this.streamState = state;
         this.statusMessage = detail ?? '';
@@ -397,15 +390,15 @@ export class LiveTail extends LitElement {
   private appendRows(batch: LiveRow[]) {
     if (!batch.length) return;
     const prepared = batch.map(prepareRow);
-    prepared.forEach(row =>
-      Object.keys(row.displayFields).forEach(field => this.fieldCounts.set(field, (this.fieldCounts.get(field) ?? 0) + 1))
+    prepared.forEach((row) =>
+      Object.keys(row.displayFields).forEach((field) => this.fieldCounts.set(field, (this.fieldCounts.get(field) ?? 0) + 1))
     );
     this.buffer.push(...prepared);
     if (this.buffer.length > MAX_ROWS) {
       const evicted = this.buffer.splice(0, this.buffer.length - MAX_ROWS);
       this.droppedClient += evicted.length;
-      evicted.forEach(row =>
-        Object.keys(row.displayFields).forEach(field => {
+      evicted.forEach((row) =>
+        Object.keys(row.displayFields).forEach((field) => {
           const count = (this.fieldCounts.get(field) ?? 1) - 1;
           if (count) this.fieldCounts.set(field, count);
           else this.fieldCounts.delete(field);
@@ -479,8 +472,8 @@ export class LiveTail extends LitElement {
   private toggleField(field: string, shown: boolean) {
     if (PINNED_FIELDS.includes(field)) return;
     this.selectedFields = shown
-      ? [...this.selectedFields.filter(selected => selected !== field), field]
-      : this.selectedFields.filter(selected => selected !== field);
+      ? [...this.selectedFields.filter((selected) => selected !== field), field]
+      : this.selectedFields.filter((selected) => selected !== field);
     try {
       localStorage.setItem(this.fieldStorageKey, JSON.stringify(this.selectedFields));
     } catch {
@@ -504,7 +497,7 @@ export class LiveTail extends LitElement {
       return;
     }
     for (const delay of [0, 400]) {
-      if (delay) await new Promise(resolve => window.setTimeout(resolve, delay));
+      if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
       if (seq !== this.detailRequestSeq) return;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 4000);
@@ -552,7 +545,7 @@ export class LiveTail extends LitElement {
       const frame = this.followFrame;
       const list = this.querySelector<HTMLElement & { layoutComplete?: Promise<void> }>('[data-rows]');
       if (list?.layoutComplete) {
-        await Promise.race([list.layoutComplete, new Promise<void>(resolve => requestAnimationFrame(() => resolve()))]);
+        await Promise.race([list.layoutComplete, new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))]);
       }
       if (this.followFrame !== frame) return;
       if (this.followPinned && list?.isConnected) list.scrollTop = list.scrollHeight;
@@ -614,9 +607,7 @@ export class LiveTail extends LitElement {
             ${STATE_LABEL[this.streamState]}${this.paused && this.streamState === 'live' ? ' — display paused' : ''}
           </span>
           <span class="text-textWeak tabular-nums">${this.rows.length.toLocaleString()} shown</span>
-          ${dropped > 0
-            ? html`<span class="text-textWarning">${dropped.toLocaleString()} dropped — narrow your filter</span>`
-            : nothing}
+          ${dropped > 0 ? html`<span class="text-textWarning">${dropped.toLocaleString()} dropped — narrow your filter</span>` : nothing}
           ${this.statusMessage ? html`<span class="text-textError">${this.statusMessage}</span>` : nothing}
           ${!this.stickToBottom
             ? html`<button
@@ -639,11 +630,7 @@ export class LiveTail extends LitElement {
               .scroller=${true}
               @scroll=${this.trackScrollPosition}
             ></lit-virtualizer>`
-          : html`<div
-              class="flex-1 min-h-0 overflow-y-auto c-scroll font-mono text-xs"
-              data-rows
-              @scroll=${this.trackScrollPosition}
-            >
+          : html`<div class="flex-1 min-h-0 overflow-y-auto c-scroll font-mono text-xs" data-rows @scroll=${this.trackScrollPosition}>
               ${this.rows.length
                 ? this.rows.map((row, index) => this.rowTemplate(row, index))
                 : html`<div class="min-h-48 flex flex-col items-center justify-center gap-1 px-6 text-center font-sans">
@@ -664,9 +651,9 @@ export class LiveTail extends LitElement {
 
   private toolbarTemplate(): TemplateResult {
     const query = this.fieldSearch.trim().toLowerCase();
-    const fields = this.availableFields.filter(field => displayFieldName(field).toLowerCase().includes(query));
+    const fields = this.availableFields.filter((field) => displayFieldName(field).toLowerCase().includes(query));
     return html`
-      <div class="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-strokeWeak bg-bgRaised">
+      <div class="flex flex-wrap items-center gap-2 px-4 py-1 border-b border-strokeWeak bg-bgRaised">
         <select
           class="select select-sm w-48 max-md:flex-1 cursor-pointer"
           aria-label="Service"
@@ -676,7 +663,7 @@ export class LiveTail extends LitElement {
           }}
         >
           <option value="" ?selected=${!this.service}>All services</option>
-          ${this.services.map(service => html`<option value=${service} ?selected=${service === this.service}>${service}</option>`)}
+          ${this.services.map((service) => html`<option value=${service} ?selected=${service === this.service}>${service}</option>`)}
         </select>
         <select
           class="select select-sm w-40 max-md:flex-1 cursor-pointer"
@@ -687,7 +674,9 @@ export class LiveTail extends LitElement {
           }}
         >
           <option value="" ?selected=${!this.environment}>All environments</option>
-          ${this.environments.map(environment => html`<option value=${environment} ?selected=${environment === this.environment}>${environment}</option>`) }
+          ${this.environments.map(
+            (environment) => html`<option value=${environment} ?selected=${environment === this.environment}>${environment}</option>`
+          )}
         </select>
         <select
           class="select select-sm w-36 max-md:flex-1 cursor-pointer"
@@ -714,49 +703,53 @@ export class LiveTail extends LitElement {
               this.restart();
             }}
           >
-            <div class="w-full h-8 flex items-center justify-between gap-3 px-2.5 rounded-field border border-strokeWeak bg-bgBase text-xs text-textWeak">
+            <div
+              class="w-full h-8 flex items-center justify-between gap-3 px-2.5 rounded-field border border-strokeWeak bg-bgBase text-xs text-textWeak"
+            >
               <span>${this.query || 'Filter the live stream with KQL'}</span><kbd class="font-sans text-2xs">/</kbd>
             </div>
           </query-editor>
           ${this.aiSearchOpen
-            ? html`<div class="flex min-h-[38px] items-center gap-2 rounded-lg border-2 border-strokeBrand-strong bg-fillWeaker px-2 shadow-xs">
-                <span class="shrink-0 rounded bg-fillBrand-weak px-1.5 py-0.5 text-2xs font-semibold text-textBrand">AI</span>
-                <input
-                  class="min-w-0 flex-1 border-0 bg-transparent p-1 text-sm no-focus-ring"
-                  aria-label="AI search prompt"
-                  autocomplete="new-password"
-                  placeholder="Ask in plain English — e.g. errors in payment service"
-                  .value=${this.aiPrompt}
-                  @input=${(event: Event) => (this.aiPrompt = (event.target as HTMLInputElement).value)}
-                  @keydown=${(event: KeyboardEvent) => {
-                    if (event.key === 'Escape') this.closeAiSearch();
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void this.submitAiSearch();
-                    }
-                  }}
-                />
-                ${this.aiLoading ? html`<span role="status">${faSprite_('spinner', 'regular', 'h-4 w-4 animate-spin')}</span>` : nothing}
-                <button
-                  type="button"
-                  aria-label="Submit AI search"
-                  class="inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-sm border border-strokeBrand-strong px-2 text-xs font-medium text-textBrand hover:bg-fillBrand-weak disabled:cursor-not-allowed disabled:opacity-50"
-                  ?disabled=${!this.aiPrompt.trim() || this.aiLoading}
-                  @click=${this.submitAiSearch}
+            ? html`<div
+                  class="flex min-h-[38px] items-center gap-2 rounded-lg border-2 border-strokeBrand-strong bg-fillWeaker px-2 shadow-xs"
                 >
-                  ${faSprite_('arrow-right', 'regular', 'h-3.5 w-3.5')} Submit
-                </button>
-                <button
-                  type="button"
-                  aria-label="Close AI search"
-                  class="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-sm text-textWeak hover:bg-fillWeaker hover:text-textStrong disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong"
-                  ?disabled=${this.aiLoading}
-                  @click=${this.closeAiSearch}
-                >
-                  ${faSprite_('xmark', 'solid', 'h-3.5 w-3.5')}
-                </button>
-              </div>
-              ${this.aiError ? html`<p class="mt-1 text-xs text-textError" role="alert">${this.aiError}</p>` : nothing}`
+                  <span class="shrink-0 rounded bg-fillBrand-weak px-1.5 py-0.5 text-2xs font-semibold text-textBrand">AI</span>
+                  <input
+                    class="min-w-0 flex-1 border-0 bg-transparent p-1 text-sm no-focus-ring"
+                    aria-label="AI search prompt"
+                    autocomplete="new-password"
+                    placeholder="Ask in plain English — e.g. errors in payment service"
+                    .value=${this.aiPrompt}
+                    @input=${(event: Event) => (this.aiPrompt = (event.target as HTMLInputElement).value)}
+                    @keydown=${(event: KeyboardEvent) => {
+                      if (event.key === 'Escape') this.closeAiSearch();
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void this.submitAiSearch();
+                      }
+                    }}
+                  />
+                  ${this.aiLoading ? html`<span role="status">${faSprite_('spinner', 'regular', 'h-4 w-4 animate-spin')}</span>` : nothing}
+                  <button
+                    type="button"
+                    aria-label="Submit AI search"
+                    class="inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-sm border border-strokeBrand-strong px-2 text-xs font-medium text-textBrand hover:bg-fillBrand-weak disabled:cursor-not-allowed disabled:opacity-50"
+                    ?disabled=${!this.aiPrompt.trim() || this.aiLoading}
+                    @click=${this.submitAiSearch}
+                  >
+                    ${faSprite_('arrow-right', 'regular', 'h-3.5 w-3.5')} Submit
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Close AI search"
+                    class="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-sm text-textWeak hover:bg-fillWeaker hover:text-textStrong disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong"
+                    ?disabled=${this.aiLoading}
+                    @click=${this.closeAiSearch}
+                  >
+                    ${faSprite_('xmark', 'solid', 'h-3.5 w-3.5')}
+                  </button>
+                </div>
+                ${this.aiError ? html`<p class="mt-1 text-xs text-textError" role="alert">${this.aiError}</p>` : nothing}`
             : nothing}
         </div>
 
@@ -783,7 +776,7 @@ export class LiveTail extends LitElement {
             </div>
             <div class="overflow-y-auto c-scroll p-1" aria-label="Visible live-tail fields">
               ${fields.length
-                ? fields.map(field => this.fieldToggleTemplate(field))
+                ? fields.map((field) => this.fieldToggleTemplate(field))
                 : html`<p class="px-2 py-4 text-center text-xs text-textWeak">No fields match “${this.fieldSearch}”.</p>`}
             </div>
           </div>
@@ -796,8 +789,7 @@ export class LiveTail extends LitElement {
           aria-pressed=${this.paused}
           @click=${this.togglePause}
         >
-          ${faSprite_(this.paused ? 'play' : 'pause', 'solid', 'w-3 h-3')}
-          ${this.paused ? 'Resume' : 'Pause'}
+          ${faSprite_(this.paused ? 'play' : 'pause', 'solid', 'w-3 h-3')} ${this.paused ? 'Resume' : 'Pause'}
         </button>
         <button
           type="button"
@@ -839,7 +831,9 @@ export class LiveTail extends LitElement {
       data-row
       aria-label=${`Inspect record from ${row.service ?? 'unknown service'} at ${row.timestamp}`}
       aria-haspopup="dialog"
-      class="group/row flex w-full cursor-pointer items-start gap-1.5 min-h-8 px-2 py-1.5 text-left border-b border-strokeWeak/50 ${index % 2 === 0
+      class="group/row flex w-full cursor-pointer items-start gap-1.5 min-h-8 px-2 py-1.5 text-left border-b border-strokeWeak/50 ${index %
+        2 ===
+      0
         ? 'bg-bgBase'
         : 'bg-bgAlternate/50'} hover:bg-fillWeaker focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-strokeBrand-strong"
       @click=${() => this.openDetails(row)}
@@ -864,7 +858,7 @@ export class LiveTail extends LitElement {
         >
         <div data-message class="col-span-2 md:col-span-1 min-w-0 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
           ${this.selectedFields.length
-            ? this.selectedFields.map(field => this.rowFieldTemplate(row, field))
+            ? this.selectedFields.map((field) => this.rowFieldTemplate(row, field))
             : html`<span class="font-sans text-textWeak">No message fields selected. Use Fields to add one.</span>`}
         </div>
       </div>
@@ -882,7 +876,7 @@ export class LiveTail extends LitElement {
     if (field === 'body') return logBodyTemplate(row);
     if (field === 'summary' && Array.isArray(value)) {
       return html`<span class="basis-full min-w-0 inline-flex flex-wrap items-center gap-1">
-        ${value.map(element => {
+        ${value.map((element) => {
           const parsed = parseSummaryElement(typeof element === 'string' ? element : JSON.stringify(element));
           if (parsed.type === 'plain') {
             return html`<span class="min-w-0 text-textStrong" title=${parsed.content}>${parsed.content}</span>`;
@@ -931,9 +925,12 @@ export class LiveTail extends LitElement {
               <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-2 mb-1">
                   ${row.level
-                    ? html`<span class="inline-flex items-center h-5 px-1.5 rounded-sm border text-2xs font-semibold uppercase ${levelClasses(
-                        row.level
-                      )}">${row.level}</span>`
+                    ? html`<span
+                        class="inline-flex items-center h-5 px-1.5 rounded-sm border text-2xs font-semibold uppercase ${levelClasses(
+                          row.level
+                        )}"
+                        >${row.level}</span
+                      >`
                     : nothing}
                   <time class="font-mono text-xs tabular-nums text-textWeak" datetime=${row.timestamp}>${row.timestamp}</time>
                 </div>
@@ -981,13 +978,17 @@ export class LiveTail extends LitElement {
                   ${fields.map(([field, value]) => {
                     const pinned = PINNED_FIELDS.includes(field);
                     const shown = pinned || this.selectedFields.includes(field);
-                    return html`<label class="grid grid-cols-12 items-center gap-3 min-h-11 px-2 py-2 ${
-                      pinned ? '' : 'hover:bg-fillWeaker cursor-pointer'
-                    }">
+                    return html`<label
+                      class="grid grid-cols-12 items-center gap-3 min-h-11 px-2 py-2 ${pinned ? '' : 'hover:bg-fillWeaker cursor-pointer'}"
+                    >
                       <span class="col-span-4 max-sm:col-span-11 font-mono text-xs font-medium break-all">${displayFieldName(field)}</span>
-                      <span class="col-span-7 max-sm:col-span-11 max-sm:col-start-1 max-sm:row-start-2 font-mono text-xs break-all ${value === undefined ? 'text-textWeak' : 'text-textStrong'}">${formatValue(
-                        value
-                      )}</span>
+                      <span
+                        class="col-span-7 max-sm:col-span-11 max-sm:col-start-1 max-sm:row-start-2 font-mono text-xs break-all ${value ===
+                        undefined
+                          ? 'text-textWeak'
+                          : 'text-textStrong'}"
+                        >${formatValue(value)}</span
+                      >
                       ${pinned
                         ? html`<span class="col-span-1 justify-self-end text-2xs text-textWeak">Pinned</span>`
                         : html`<input
