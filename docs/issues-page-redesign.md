@@ -378,21 +378,47 @@ because "the issue says 14, the chart says none" costs the reader trust in both.
   one listener, and it is ours.
   **Keep gating screenshots on `curl <url> | grep <string-unique-to-your-change>`**
   — that is what caught this, and it is cheaper than diagnosing the topology.
-- **The integration target does not compile**, because
+- **The integration target does not compile in the working tree**, because
   `test/integration/EndpointDiscoverySpec.hs:436` (another session's
-  uncommitted work) references an out-of-scope `env` field. This blocks
-  `make test-doctests` *and* the two specs added here, so they are written but
-  never type-checked. When the tree heals:
-  `TEST_MATCH=/AnomaliesSpec/ make live-test-dev` (no spaces in TEST_MATCH).
+  *uncommitted* work) references an out-of-scope `env` field. Because it is
+  uncommitted, **a detached worktree at HEAD compiles and runs fine** — that is
+  the way around it, and it is how everything below was finally verified:
 
-What each change actually rests on:
+  ```bash
+  git worktree add --detach <dir> HEAD
+  cp -Rc dist-newstyle/src <dir>/dist-newstyle/src        # warm the build cache
+  cp -R static/public/assets/web-components/dist <dir>/…  # BodyWrapper TH-splices its manifest
+  cp .env cabal.project.local <dir>/
+  cd <dir> && LOG_LEVEL=attention USE_EXTERNAL_DB=true \
+    cabal test integration-tests --ghc-options=-O0 --test-show-details=direct \
+    --test-options='--match=Anomaly'     # NB: the match value must contain no spaces
+  ```
+
+  Doing this immediately caught a real defect: the stackless example had been
+  inserted into the *middle* of the slow-trace example, orphaning its last ten
+  assertions onto the new one where `traceIdText` is out of scope. Fixed in
+  `b3caa1cbd`. Nothing else would have caught it before CI.
+
+What each change actually rests on — all verified before pushing:
 
 | commit | compile | runtime | spec |
 |---|---|---|---|
-| `ff8d94ee2` query-alert page | ✓ | ✓ curl + screenshot | written, not run |
-| `dcfa1b58d` chart window | ✓ | ✓ screenshot (y-axis 3000→250) | written, not run |
-| `52f86472a` stack-trace copy | ✓ | ✓ browser (once `:8080` was fixed) | written, not run |
-| `143879427` count + F8 window | ✓ | ✓ browser: chart renders, count badge shows | not yet written |
+| `ff8d94ee2` query-alert page | ✓ | ✓ curl + screenshot | ✓ passes |
+| `dcfa1b58d` chart window | ✓ | ✓ screenshot (y-axis 3000→250) | ✓ passes |
+| `52f86472a` stack-trace copy | ✓ | ✓ browser (once `:8080` was fixed) | ✓ passes |
+| `143879427` count + F8 window | ✓ | ✓ browser: chart renders, count badge shows | ✓ covered |
+
+Final gate before the push: **26 examples, 0 failures** in `Pages.AnomaliesSpec`,
+and **doctests 1456 tried, 0 failures**.
+
+### Master was already red, and the deploy is gated on tests
+
+The two cross-tenant examples added upstream in `f49798eaa` / `0b42a201e` fail on
+a clean `origin/master` — baselined there before blaming the merge. Their
+fixtures miss two schema constraints: `error_patterns.stacktrace` is NOT NULL and
+neither INSERT supplied it, and `canonical_id` is a self-referencing FK pointing
+at a UUID with no row. Fixed in `6320d2444` without changing what either test
+asserts, because the deploy could not ship past them.
 
 ## 8. Remaining plan
 
