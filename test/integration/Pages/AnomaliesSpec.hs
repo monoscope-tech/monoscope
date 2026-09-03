@@ -697,16 +697,30 @@ spec = sequential $ aroundAll withTestResources do
       canonicalId <- UUID.nextRandom
       memberId <- UUID.nextRandom
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
                 VALUES (?, 'group-read-authz-victim', 'Free', true, NULL, false, false)
                 ON CONFLICT (id) DO NOTHING |]
-          (PGS.Only otherPid.unwrap)
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, canonical_id, merge_override)
-                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', ?, FALSE)
+            (PGS.Only otherPid.unwrap)
+        -- canonical_id is a self-referencing FK, so the parent has to exist before a
+        -- member can point at it. Its own columns are deliberately bland: the assertions
+        -- below look for the *member's* strings leaking, not the group's.
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace)
+                VALUES (?, ?, 'group-read-authz-canonical', 'CanonicalType', 'canonical', '')
                 ON CONFLICT (id) DO NOTHING |]
-          (memberId, otherPid.unwrap, canonicalId)
+            (canonicalId, otherPid.unwrap)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, canonical_id, merge_override)
+                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', '', ?, FALSE)
+                ON CONFLICT (id) DO NOTHING |]
+            (memberId, otherPid.unwrap, canonicalId)
 
       -- Acting as testPid, ask for the other project's group members.
       (_, html) <- testServant tr $ AnomalyList.errorGroupMembersGetH testPid canonicalId
@@ -724,17 +738,29 @@ spec = sequential $ aroundAll withTestResources do
       otherErrId <- UUID.nextRandom
       canonicalId <- UUID.nextRandom
       withResource tr.trPool \conn -> do
-        void $ PGS.execute conn
-          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
                 VALUES (?, 'unmerge-authz-victim', 'Free', true, NULL, false, false)
                 ON CONFLICT (id) DO NOTHING |]
-          (PGS.Only otherPid.unwrap)
-        -- A pattern in the victim project, merged under a canonical parent.
-        void $ PGS.execute conn
-          [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, canonical_id, merge_override)
-                VALUES (?, ?, 'unmerge-authz-hash', 'TypeError', 'victim', ?, FALSE)
+            (PGS.Only otherPid.unwrap)
+        -- A pattern in the victim project, merged under a canonical parent. The parent
+        -- is inserted first: canonical_id is a self-referencing FK.
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace)
+                VALUES (?, ?, 'unmerge-authz-canonical', 'TypeError', 'canonical', '')
                 ON CONFLICT (id) DO NOTHING |]
-          (otherErrId, otherPid.unwrap, canonicalId)
+            (canonicalId, otherPid.unwrap)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, canonical_id, merge_override)
+                VALUES (?, ?, 'unmerge-authz-hash', 'TypeError', 'victim', '', ?, FALSE)
+                ON CONFLICT (id) DO NOTHING |]
+            (otherErrId, otherPid.unwrap, canonicalId)
 
       -- Acting as testPid, aim the unmerge at the other project's pattern.
       _ <- testServant tr $ AnomalyList.errorUnmergePostH testPid otherErrId
