@@ -215,7 +215,7 @@ alertUpsertPostH pid form = do
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
   _ <- Projects.sessionAndProject pid
-  void $ Monitors.monitorToggleActiveById monitorId
+  void $ Monitors.monitorToggleActiveById pid monitorId
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders $ AlertNoContent ""
 

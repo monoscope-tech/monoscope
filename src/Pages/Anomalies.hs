@@ -2067,7 +2067,7 @@ errorGroupMembersGetH pid errorId = do
 errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorUnmergePostH pid errorId = do
   _ <- Projects.sessionAndProject pid
-  void $ PatternMerge.unmergeErrorPattern (ErrorPatternId errorId)
+  void $ PatternMerge.unmergeErrorPattern pid (ErrorPatternId errorId)
   addSuccessToast "Pattern unmerged" Nothing
   addRespHeaders $ div_ [class_ "p-3 bg-fillSuccess-weak rounded-lg text-sm text-fillSuccess-strong"] "Pattern unmerged successfully"
 

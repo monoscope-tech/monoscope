@@ -171,8 +171,14 @@ queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById mid = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE id = #{mid} |])
 
 
-monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64
-monitorToggleActiveById mid = do
+-- | Flip a monitor between active and deactivated.
+--
+-- Takes the project explicitly and filters on it: keyed on @id@ alone, a caller
+-- authorised on one project could toggle another project's monitor — i.e. silence
+-- someone else's alerting. The web route did exactly that. Scoping here rather than
+-- at the caller makes the mistake unrepresentable for every caller.
+monitorToggleActiveById :: (DB es, Time :> es) => Projects.ProjectId -> QueryMonitorId -> Eff es Int64
+monitorToggleActiveById pid mid = do
   now <- Time.currentTime
   Hasql.interpExecute
     [HI.sql|
@@ -180,7 +186,7 @@ monitorToggleActiveById mid = do
             WHEN deactivated_at IS NOT NULL THEN NULL
             ELSE #{now}::timestamptz
         END
-        where id=#{mid}|]
+        where id=#{mid} AND project_id=#{pid}|]
 
 
 monitorDeactivateByIds :: (DB es, Time :> es) => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64

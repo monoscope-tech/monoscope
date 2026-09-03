@@ -385,7 +385,7 @@ withRefetchNoContent fetch mutate = fetch *> mutate $> NoContent
 
 
 apiMonitorToggleActive :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorToggleActive pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorToggleActiveById mid)
+apiMonitorToggleActive pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorToggleActiveById pid mid)
 
 
 apiMonitorMute :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATBaseCtx Monitors.QueryMonitor
