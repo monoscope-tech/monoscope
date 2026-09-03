@@ -537,7 +537,7 @@ spec = sequential $ aroundAll withTestResources do
         PGS.query conn [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only a2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
       (PGS.fromOnly =<< listToMaybe canonA2) `shouldBe` Just a1.id
       -- Verify group membership
-      members <- runTestBg frozenTime tr $ PatternMerge.getLogPatternGroupMembers a1.id
+      members <- runTestBg frozenTime tr $ PatternMerge.getLogPatternGroupMembers pid a1.id
       map (.id) members `shouldSatisfy` elem a2.id
 
       -- Group C should remain separate — logCanMerge blocks this pair before similarity check

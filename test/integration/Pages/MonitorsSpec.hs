@@ -132,6 +132,36 @@ spec = sequential $ aroundAll withTestResources do
       victims <- runQueryEffect tr $ queryMonitorsAll otherPid
       map (.id) victims `shouldBe` [QueryMonitorId otherMonId]
 
+    -- Sibling of bulkAction_doesNotTouchAnotherProjectsMonitors, for the single-monitor
+    -- route. `alertSingleToggleActiveH` checks the caller may access `pid`, but
+    -- `monitorToggleActiveById` was keyed on the monitor id alone — so a user authorised
+    -- on one project could flip another project's monitor active/inactive, i.e. silence
+    -- someone else's alerting. The API path was already safe (apiMonitorGet -> ownedOr);
+    -- only the web route was not.
+    it "singleToggleActive_doesNotTouchAnotherProjectsMonitor" \tr -> do
+      let otherPid = UUIDId $ Unsafe.fromJust $ UUID.fromString "0000ffff-0000-0000-0000-0000000feed1"
+          otherMonId = Unsafe.fromJust $ UUID.fromString "0000ffff-0000-0000-0000-0000000feed2"
+      withPool tr.trPool do
+        void
+          $ DBT.execute
+            [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                  VALUES (?, 'toggle-authz-victim', 'Free', true, NULL, false, false)
+                  ON CONFLICT (id) DO NOTHING |]
+            (Only otherPid.unwrap)
+        void
+          $ DBT.execute
+            [sql| INSERT INTO monitors.query_monitors (id, project_id, check_interval_mins, alert_config, log_query, alert_threshold, deactivated_at)
+                  VALUES (?, ?, 5, '{"title":"victim","severity":"warning","subject":"s","message":"m","emails":[],"email_all":false,"slack_channels":[]}'::jsonb, 'status_code == 200', 1, NULL)
+                  ON CONFLICT (id) DO NOTHING |]
+            (otherMonId, otherPid.unwrap)
+
+      -- Acting as testPid, aim the toggle at the other project's monitor.
+      _ <- testServant tr $ Alerts.alertSingleToggleActiveH testPid (QueryMonitorId otherMonId)
+
+      victim <- runQueryEffect tr $ queryMonitorById (QueryMonitorId otherMonId)
+      -- Still active: the toggle must not have reached across the tenant boundary.
+      (victim >>= (.deactivatedAt)) `shouldBe` Nothing
+
     -- The upsert form has no active/inactive control and convertToQueryMonitor defaults
     -- deactivatedAt to Nothing, so once the column became writable, saving an edit here
     -- would silently re-activate a monitor the user had deactivated.

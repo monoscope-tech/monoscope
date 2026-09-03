@@ -2146,7 +2146,7 @@ eventDisplay = \case
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorGroupMembersGetH pid errorId = do
   _ <- Projects.sessionAndProject pid
-  members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
+  members <- PatternMerge.getErrorPatternGroupMembers pid (ErrorPatternId errorId)
   addRespHeaders
     $ unless (null members)
     $ div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do
@@ -2177,7 +2177,7 @@ errorGroupMembersGetH pid errorId = do
 errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorUnmergePostH pid errorId = do
   _ <- Projects.sessionAndProject pid
-  void $ PatternMerge.unmergeErrorPattern (ErrorPatternId errorId)
+  void $ PatternMerge.unmergeErrorPattern pid (ErrorPatternId errorId)
   addSuccessToast "Pattern unmerged" Nothing
   addRespHeaders $ div_ [class_ "p-3 bg-fillSuccess-weak rounded-lg text-sm text-fillSuccess-strong"] "Pattern unmerged successfully"
 
