@@ -1725,11 +1725,7 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , options =
-                      [ TabFilterOpt "Inbox" Nothing
-                      , TabFilterOpt "Acknowledged" Nothing
-                      , TabFilterOpt "Archived" Nothing
-                      ]
+                  , options = [TabFilterOpt (tabSlug t) Nothing | t <- [minBound .. maxBound]]
                   }
               -- Each tab differs only in how long the silence lasts and whether
               -- the issue can come back; saying so is what stops "acknowledged"
