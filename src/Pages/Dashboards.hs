@@ -318,7 +318,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       case dash.tabs of
         Just tabs ->
           -- Tab system with htmx lazy loading - only render active tab content
-          div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"]
+          -- Re-init grids after htmx settles new tab content. The id guard stays: swaps
+          -- inside individual widgets bubble up to this element too. htmx 4's native
+          -- event detail carries no `elt` (see Anomalies.hs), so branch on event.target.
+          div_
+            [ class_ "dashboard-tabs-container"
+            , id_ "dashboard-tabs-content"
+            , term "hx-on::after:swap" "if (event.target.id === 'dashboard-tabs-content') { window.initializeGrids(); window.interpolateVarTemplates(); }"
+            ]
             $ whenJust (tabs !!? activeTabIdx) \activeTab ->
               -- An unanswered required variable IS the tab's content, not a modal over
               -- it. Rendering the widgets underneath meant every one of them ran with
@@ -340,6 +347,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
     widgetOrderTriggerForm_ widgetOrderUrl False
+
+    -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
+    -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
+    -- and htmx processes the swapped content itself.
+    whenJust (join $ lookup "expand" allParams) \wid ->
+      div_ (hxTrigger_ "load" : drawerLoadAttrs_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets/" <> wid <> "/expand")) pass
 
     script_
       [text|
@@ -504,34 +517,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           }).observe({ type: 'layout-shift', buffered: true });
         }
 
-        // Re-initialize grids after htmx settles new tab content
-        document.body.addEventListener('htmx:after:swap', function(e) {
-          if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
-            initializeGrids();
-            window.interpolateVarTemplates();
-          }
-        });
-
-        // Auto-expand widget if expand param is in URL
-        const expandWId = new URLSearchParams(window.location.search).get('expand');
-        if (expandWId) {
-          const drawer = document.getElementById('global-data-drawer');
-          const drawerContent = document.getElementById('global-data-drawer-content');
-          const loaderTmp = document.getElementById('loader-tmp');
-          if (drawer && drawerContent) {
-            drawer.checked = true;
-            document.body.classList.add('overflow-hidden');
-            if (loaderTmp) drawerContent.innerHTML = loaderTmp.innerHTML;
-            fetch('/p/$pidText/dashboards/$dashIdText/widgets/' + expandWId + '/expand')
-              .then(r => r.text())
-              .then(html => {
-                drawerContent.innerHTML = html;
-                htmx.process(drawerContent);
-                if (typeof _hyperscript !== 'undefined') _hyperscript.processNode(drawerContent);
-                if (typeof window.evalScriptsFromContent === 'function') window.evalScriptsFromContent(drawerContent);
-              });
-          }
-        }
+        // Reachable from #dashboard-tabs-content's element-local hx-on::after-swap,
+        // which evaluates in global scope and can't see this closure.
+        window.initializeGrids = initializeGrids;
       });
 
       // Listen for widget-remove-requested custom events
