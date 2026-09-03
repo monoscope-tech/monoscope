@@ -837,3 +837,40 @@ Genuine remaining guard gaps, all Haskell-side:
   date logic is exactly what `TestClock` exists for.
 - `fix(errors): backfill shapes`, `fix(metrics): stale pagination cursor` — both
   integration-testable.
+
+## The two group-review pipelines: a fork by shape, not by substance
+
+`BackgroundJobs.hs` carries two families ~1300 lines apart whose names invite consolidation:
+
+| Endpoints | Errors |
+|---|---|
+| `endpointGroupReviewBatch` | `errorGroupReviewBatch` |
+| `reviewResidualEndpointGroups` | `reviewErrorGroups` |
+| `applyConfirmedGroups` | `applyConfirmedErrorGroups` |
+| `recheckQuarantinedMerges` | `recheckQuarantinedErrorMerges` |
+| — | `refuteErrorGroups` |
+
+The skeleton does match: gate on a config flag + API key, key each group by a members-hash,
+filter to fresh, one LLM call, `PatternMerge.parseGroupReview`, record, auto-apply.
+
+**Do not unify them.** The control flow differs where it counts. Errors paginate by a
+cursor that restarts at the end of the corpus (deliberately — "a cursor that only ever
+moves forward is how a sweep quietly declares itself finished with work left"), require a
+minimum member count, and run a *second* refute pass over only the proposed merges.
+Endpoints take a biggest-first batch (also deliberate — one customer's group is 1,262
+endpoints against a median of three), honour `dueForReconfirm`, and promote id rules after
+applying. A shared config record would need ~12 fields, several of them domain-shaped
+functions plus a type parameter, to save ~20 lines — while coupling two LLM-calling,
+cost-incurring, DB-mutating pipelines whose invariants are documented separately and
+differ.
+
+Contrast `MergeConfig`/`embedAndMerge` in the same file, which *is* the right call: there
+the two families differ only by table and id column type, and the steps are identical.
+Shape similarity justifies consolidation only when the substance matches too.
+
+Reading them side by side did pay, though: `reviewErrorGroups` was calling
+`parseGroupReview` **twice** on the same response (once for verdicts, once for shapes)
+behind a `sh `seq` True` guard that always yields True and silences nothing —
+`-Wno-unused-matches` is already set. The endpoint sibling had it right in one pass.
+Fixed in `79182b4c`. That is the value a consolidation review actually produces here: not
+"merge these two", but "one of them proves the other is doing unnecessary work".
