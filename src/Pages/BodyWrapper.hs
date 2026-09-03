@@ -411,7 +411,6 @@ bodyWrapper bcfg child = do
                   else child
               div_ [class_ "h-0 shrink"] do
                 Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
-                template_ [id_ "loader-tmp"] Components.drawerLoadingSkeleton_
                 -- Modal for copying widgets to other dashboards
                 Components.modal_ "dashboards-modal" "" do
                   input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
