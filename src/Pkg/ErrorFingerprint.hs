@@ -599,6 +599,15 @@ computeErrorFingerprint p s sn rt et msg st = (computeErrorHashes p s sn rt et m
 data ErrorHashes = ErrorHashes
   { narrow :: Text
   , broad :: Text
+  , shape :: Text
+  -- ^ Type plus normalised message, and nothing else — no service, no span name,
+  -- no stack. This is the key errors are /grouped for review/ under, deliberately
+  -- coarser than 'narrow' and stable across the things that split it.
+  --
+  -- It is not a fingerprint and must never be used as one: same shape with
+  -- different stack traces is two bugs by 'narrow''s own definition. It exists so
+  -- that a review, and the merge a review authorises, survive a change to the
+  -- fingerprint — which is otherwise a re-key that orphans both.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -623,14 +632,20 @@ computeErrorHashes :: Text -> Maybe Text -> Maybe Text -> Runtime -> Text -> Tex
 computeErrorHashes projectIdText mService spanName runtime exceptionType message stackTrace =
   let normalizedMsg = normalizeMessage message
       normalizedType = T.strip exceptionType
+      shapeHash = toXXHash $ T.intercalate "|" $ filter (not . T.null) [projectIdText, "shape", normalizedType, normalizedMsg]
    in if isFrameworkTransportError normalizedType normalizedMsg
         then
           -- Framework transport noise is route/stack-agnostic: collapse every
           -- occurrence of the same type+message into one pattern so it does not
           -- fan out into hundreds of distinct issues.
           let h = toXXHash $ T.intercalate "|" $ filter (not . T.null) [projectIdText, "transport", normalizedType, normalizedMsg]
-           in ErrorHashes{narrow = h, broad = h}
-        else ErrorHashes{narrow = go spanName normalizedMsg normalizedType, broad = go Nothing normalizedMsg normalizedType}
+           in ErrorHashes{narrow = h, broad = h, shape = shapeHash}
+        else
+          ErrorHashes
+            { narrow = go spanName normalizedMsg normalizedType
+            , broad = go Nothing normalizedMsg normalizedType
+            , shape = shapeHash
+            }
   where
     go sn normalizedMsg normalizedType =
       let
