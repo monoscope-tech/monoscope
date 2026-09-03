@@ -1211,6 +1211,7 @@ test-suite unit-tests
       Models.Telemetry.DeterministicIdSpec
       Models.Telemetry.MetricServiceNameSpec
       Models.Telemetry.TimestampMicrosSpec
+      Pages.OnboardingSpec
       Pkg.DrainSpec
       Pkg.GitSpec
       Pkg.ParserSpec
