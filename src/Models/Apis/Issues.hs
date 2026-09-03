@@ -75,6 +75,8 @@ module Models.Apis.Issues (
   parseIssueType,
   hashPrefix,
   defaultRecommendedAction,
+  isBoilerplateAction,
+  queryAlertRecommendedAction,
   serviceLabel,
   showRounded,
   showRate,
@@ -181,6 +183,25 @@ hashPrefix = \case
 
 defaultRecommendedAction :: Text
 defaultRecommendedAction = "Review the changes and update your integration accordingly."
+
+
+-- | Every canned @recommendedAction@ we write when the LLM enhancer has not yet
+-- produced a real one. They say nothing an on-call reader does not already know,
+-- and they render in the page's subtitle slot — where Sentry and Datadog both put
+-- the culprit — so the detail page suppresses them.
+--
+-- >>> isBoilerplateAction defaultRecommendedAction
+-- True
+-- >>> isBoilerplateAction "Review the query results and take appropriate action."
+-- True
+-- >>> isBoilerplateAction "Roll back the shipping service to 1.4.2."
+-- False
+isBoilerplateAction :: Text -> Bool
+isBoilerplateAction a = a `elem` [defaultRecommendedAction, queryAlertRecommendedAction]
+
+
+queryAlertRecommendedAction :: Text
+queryAlertRecommendedAction = "Review the query results and take appropriate action."
 
 
 parseIssueType :: Text -> Maybe IssueType
@@ -870,7 +891,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , critical = True
       , severity = Warning
       , title = queryName <> " threshold " <> display thresholdType <> " " <> show threshold
-      , recommendedAction = "Review the query results and take appropriate action."
+      , recommendedAction = queryAlertRecommendedAction
       , migrationComplexity = "n/a"
       , payload =
           QueryAlertP
