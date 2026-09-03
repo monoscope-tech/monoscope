@@ -4,6 +4,7 @@ module Pkg.Components.Table (
   Column (..),
   Config (..),
   Features (..),
+  defaultFeaturesAreInert,
   SearchMode (..),
   BulkAction (..),
   TabFilter (..),
@@ -121,6 +122,37 @@ data Features a = Features
   , resultSummary :: Maybe Text
   , exportName :: Maybe Text
   }
+  -- Every field's default is the generic one (Nothing / [] / False). The
+  -- hand-written instance was 21 lines that had to be edited in lockstep with the
+  -- record; derived, a newly added field cannot be forgotten. The doctest on
+  -- 'defaultFeaturesAreInert' pins that the derived defaults match what the
+  -- hand-written instance produced — every table's behaviour depends on it.
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+-- $setup
+-- >>> :set -XTypeApplications
+-- >>> import Data.Default (def)
+
+
+-- | The derived 'Default' for 'Features' must stay inert: no row link, no bulk
+-- actions, no filter rail. This is what the hand-written instance guaranteed, and
+-- what every @def{...}@ table construction in the codebase assumes.
+--
+-- >>> defaultFeaturesAreInert
+-- True
+defaultFeaturesAreInert :: Bool
+defaultFeaturesAreInert =
+  and
+    [ isNothing d.rowLink
+    , isNothing d.search
+    , isNothing d.pagination
+    , null d.bulkActions
+    , not d.showFilterRail
+    ]
+  where
+    d = def @(Features ())
 
 
 data Config = Config
@@ -290,30 +322,6 @@ facetActions baseUrl targetId filterMenus =
 
 
 -- Default Instances
-
-instance Default (Features a) where
-  def =
-    Features
-      { rowLink = Nothing
-      , rowId = Nothing
-      , rowAttrs = Nothing
-      , selectRow = Nothing
-      , bulkActions = []
-      , search = Nothing
-      , searchPlaceholder = Nothing
-      , tabs = Nothing
-      , sort = Nothing
-      , sortableColumns = Nothing
-      , tableHeaderActions = Nothing
-      , pagination = Nothing
-      , zeroState = Nothing
-      , header = Nothing
-      , treeConfig = Nothing
-      , showFilterRail = False
-      , resultSummary = Nothing
-      , exportName = Nothing
-      }
-
 
 instance Default Config where
   def =
@@ -573,7 +581,7 @@ renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:ga
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ rowClass] <> treeAttrs <> rowAttrs <> linkHandler) do
+  tr_ ([class_ $ "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)] <> treeAttrs <> rowAttrs <> linkHandler) do
     whenJust tbl.features.rowId \getId ->
       td_ [class_ "w-8 align-top pt-4 max-md:hidden"] $ selectRowCheckbox_ (maybe False ($ row) tbl.features.selectRow) (getId row)
     forM_ (zip [0 :: Int ..] tbl.columns) \(idx, c) -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-index" $ show idx]) $ c.render row
@@ -582,7 +590,6 @@ renderTableRow tbl row =
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
     -- single class_ attribute: Lucid concatenates duplicates with no separator
-    rowClass = "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)
     linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
 
 

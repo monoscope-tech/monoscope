@@ -337,16 +337,22 @@ pricingPostAttrs pid cardId outlineCls extras =
     <> extras
 
 
-pricingBtnCls :: Bool -> Text -> Text
-pricingBtnCls isCurrent normalCls = "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else normalCls
+-- | Plan CTA button. The base classes are written inline here rather than returned by
+-- a class-computing helper, so a reader sees the styling on the element and there is one
+-- place holding it. @normalCls@ is the per-plan accent, applied only when this is not
+-- already the current plan — which is also the only case where the label is the caller's.
+pricingButton_ :: Bool -> Text -> [Attribute] -> Text -> Html ()
+pricingButton_ isCurrent normalCls attrs label =
+  button_ ([class_ $ "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> bool normalCls "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" isCurrent] <> attrs)
+    $ toHtml
+    $ bool label "Current plan" isCurrent
 
 
 -- | Plan CTA: inert when already the current plan, else a Stripe checkout POST or a LemonSqueezy popup.
 pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
   div_ [[__|on click halt|]]
-    $ button_ ([class_ $ pricingBtnCls isCurrent normalCls, type_ "button"] <> attrs)
-    $ if isCurrent then "Current plan" else "Start 30 day free trial"
+    $ pricingButton_ isCurrent normalCls (type_ "button" : attrs) "Start 30 day free trial"
   where
     attrs :: [Attribute]
     attrs
@@ -371,7 +377,7 @@ freePricing pid isCurrent =
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-textInverse-strong", [__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] $ if isCurrent then "Current plan" else "Start free")
+        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [[__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] "Start free")
         ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
@@ -417,7 +423,7 @@ openSourcePricing pid isCurrent =
         "Open Source Community Edition"
         "Self-hosted deployment"
         (priceDisplay_ [] "0" "Free forever")
-        (div_ $ button_ ([class_ $ pricingBtnCls isCurrent "bg-green-700 hover:bg-green-600 text-white", type_ "submit"] <> [disabled_ "disabled" | isCurrent]) $ if isCurrent then "Current plan" else "Continue with Open Source")
+        (div_ $ pricingButton_ isCurrent "bg-green-700 hover:bg-green-600 text-white" (type_ "submit" : [disabled_ "disabled" | isCurrent]) "Continue with Open Source")
         ["Unlimited events", "Unlimited team members", "Self-hosted deployment", "Full control over your data", "Community support", "All APItoolkit features"]
         "What's included:"
 
