@@ -19,6 +19,7 @@ module Models.Apis.PatternMerge (
   revertErrorGroupApply,
   getQuarantinedErrorMerges,
   getReviewCursor,
+  canonicalForAppliedShape,
   setReviewCursor,
   -- Log pattern operations
   getUnembeddedLogPatterns,
@@ -183,6 +184,9 @@ data ErrorShapeGroup = ErrorShapeGroup
   { shapeKey :: Text
   , errorType :: Text
   , sample :: Text
+  -- ^ RAW, as stored. Kept for logging and for choosing a representative; it must
+  -- be run through 'EF.normalizeMessage' before it goes anywhere near a prompt,
+  -- which the review job does at the point of the call.
   , memberIds :: V.Vector ErrorPatternId
   , memberCount :: Int64
   }
@@ -335,3 +339,26 @@ setReviewCursor pid k = do
              ON CONFLICT (project_id) DO UPDATE
                SET last_shape_key = EXCLUDED.last_shape_key, updated_at = EXCLUDED.updated_at,
                    swept_at = COALESCE(EXCLUDED.swept_at, apis.error_review_cursor.swept_at) |]
+
+
+-- | The canonical an arriving pattern should be folded into, if a review has
+-- already been applied for its shape.
+--
+-- This is the half of the loop that runs at ingest, and the only one that stops a
+-- notification rather than tidying up after it: everything else merges patterns
+-- whose issues already exist, and an issue that exists has already notified.
+--
+-- Requires the review to be applied and un-reverted. A recorded verdict is not
+-- authority — only one that cleared the evidence gate and survived the refutation
+-- reached @applied_at@.
+canonicalForAppliedShape :: DB es => Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe ErrorPatternId)
+canonicalForAppliedShape pid shapeH service =
+  Hasql.interpOne
+    [HI.sql| SELECT e.id
+             FROM apis.error_group_reviews r
+             JOIN apis.error_patterns e ON e.id = ANY(r.applied_canonical_ids)
+             WHERE r.project_id = #{pid} AND r.group_key = #{shapeH}
+               AND r.applied_at IS NOT NULL AND r.reverted_at IS NULL
+               AND e.canonical_id IS NULL AND e.merge_override = FALSE
+               AND e.service IS NOT DISTINCT FROM #{service}
+             LIMIT 1 |]

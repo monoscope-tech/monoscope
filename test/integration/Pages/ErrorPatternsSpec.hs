@@ -1093,3 +1093,56 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBg frozenTime tr $ PatternMerge.setReviewCursor pid ""
       wrapped <- runTestBg frozenTime tr $ PatternMerge.getReviewCursor pid
       wrapped `shouldBe` ""
+
+    it "appliedReview_preMergesTheNextVariantBeforeItNotifies" \tr -> do
+      -- The half of the loop that stops a notification instead of tidying up after
+      -- one. Byte-equality only catches a message seen character for character, so
+      -- before this the NEXT variant of a group we had just merged still minted its
+      -- own issue and notified.
+      let msgFor n = "payment declined for order SB-" <> n
+          mkErr h m =
+            (def :: ErrorPatterns.ATError)
+              { ErrorPatterns.projectId = Just pid
+              , ErrorPatterns.when = frozenTime
+              , ErrorPatterns.errorType = "PreMergeError"
+              , ErrorPatterns.rootErrorType = "PreMergeError"
+              , ErrorPatterns.message = m
+              , ErrorPatterns.rootErrorMessage = m
+              , ErrorPatterns.stackTrace = ""
+              , ErrorPatterns.hash = h
+              , ErrorPatterns.shapeHash = Just shapeKey
+              }
+          shapeKey = (EF.computeErrorHashes pid.toText Nothing Nothing EF.RGeneric "PreMergeError" (msgFor "3FDBA2D0A0A2") "").shape
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton (mkErr "premerge-canon" (msgFor "3FDBA2D0A0A2"))) frozenTime
+      canonM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "premerge-canon"
+      canon <- maybe (fail "canonical not seeded") pure canonM
+
+      -- An APPLIED review is the authority. A merely recorded verdict must not be.
+      withResource tr.trPool \conn ->
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_group_reviews
+                    (project_id, group_key, members_hash, member_count, verdict, confirmations,
+                     survived_refute, applied_at, applied_canonical_ids)
+                  VALUES (?, ?, 'mh', 2, 'param', 2, TRUE, NOW(), ARRAY[?]::uuid[]) |]
+            (pid, shapeKey, canon.id)
+
+      -- A different order id: different message, different narrow hash, SAME shape.
+      void $ runTestBg frozenTime tr $ BackgroundJobs.processProjectErrors pid (V.singleton (mkErr "premerge-next" (msgFor "90770E7BA9FD"))) frozenTime
+
+      nextM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "premerge-next"
+      -- Isolate the two things that can go wrong independently: the shapes not
+      -- agreeing, and the gate not consulting them.
+      storedShape <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT shape_hash FROM apis.error_patterns WHERE project_id = ? AND hash = 'premerge-next' |] (PGS.Only pid)
+      (storedShape :: [PGS.Only (Maybe Text)]) `shouldBe` [PGS.Only (Just shapeKey)]
+      -- Does the lookup itself find the applied review? Separates "the model query is
+      -- wrong" from "the ingest path never called it".
+      lookedUp <- runTestBg frozenTime tr $ PatternMerge.canonicalForAppliedShape pid shapeKey Nothing
+      fmap (.unErrorPatternId) lookedUp `shouldBe` Just canon.id.unErrorPatternId
+      -- Does the ingest path compute the SAME shape the review is filed under? The
+      -- stored shape_hash above came from the fixture, so it proves nothing here.
+      (EF.computeErrorHashes pid.toText Nothing Nothing EF.RGeneric "PreMergeError" (msgFor "90770E7BA9FD") "").shape `shouldBe` shapeKey
+      fmap (.canonicalId) nextM `shouldBe` Just (Just canon.id)
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssue Issues.defIssueFilters{Issues.types = ["runtime_exception"], Issues.limit = 200}
+      map (.targetHash) issues `shouldSatisfy` notElem "premerge-next"
