@@ -738,10 +738,20 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                         $ code_ []
                         $ toHtml trimmedStack
                     else
+                      -- Every runtime exception in the demo project (151 of 151) lands
+                      -- here: OTel's exception event carries `message` and `type` but no
+                      -- `exception.stacktrace` unless the SDK opts in, which the Go
+                      -- services do not. Blaming browsers was wrong for most readers, and
+                      -- pointing at a "User Journey" section named that nowhere on the
+                      -- page was not actionable. Name the runtime that stayed silent, and
+                      -- point at the evidence this page actually has.
                       emptyState_
                         def{icon = Just "circle-info", size = ESCompact}
-                        "No stack trace captured — common for browser console errors. Check the User Journey for the events that led up to it."
-                        ""
+                        "No stack trace in this event"
+                        ( maybe "The SDK" (\r -> "The " <> r <> " SDK") (errM >>= (.base.errorData.runtime))
+                            <> " reported this exception without frames."
+                            <> maybe " No trace was captured either, so the Logs tab below is the closest evidence." (const " The Trace tab below shows the call path across services that led to it.") traceRef
+                        )
             activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id

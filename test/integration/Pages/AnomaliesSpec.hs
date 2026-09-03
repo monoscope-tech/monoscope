@@ -542,6 +542,50 @@ spec = sequential $ aroundAll withTestResources do
       -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
       html `shouldSatisfy` T.isInfixOf "timestamp="
       html `shouldSatisfy` T.isInfixOf "slow-trace issue"
+
+    -- Regression: every runtime exception without frames (151 of 151 in the demo
+    -- project — OTel's exception event carries message and type, and the Go SDKs
+    -- never opt into exception.stacktrace) rendered "common for browser console
+    -- errors", and pointed at a "User Journey" section labelled that nowhere on
+    -- the page. Name the runtime that stayed silent, and point at real evidence.
+    it "a stackless runtime exception names its runtime instead of blaming browsers" \tr -> do
+      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns
+                  (project_id, error_type, message, stacktrace, hash, runtime, error_data, created_at, updated_at)
+                VALUES (?, '*errors.errorString', 'shipping quote failure', '', ?, 'go', ?::jsonb, ?, ?) |]
+            ( testPid
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "when": #{frozenTime}, "error_type": "*errors.errorString", "root_error_type": "*errors.errorString"
+                         , "message": "shipping quote failure", "root_error_message": "shipping quote failure"
+                         , "stack_trace": "", "hash": #{errHash}, "is_framework": false, "runtime": "go" }|]
+            , frozenTime
+            , frozenTime
+            )
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'stackless go error', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
+            ( testPid
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "error_type": "*errors.errorString", "error_message": "shipping quote failure"
+                         , "stack_trace": "", "occurrence_count": 1
+                         , "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
+            , frozenTime
+            , frozenTime
+            )
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = renderPage page
+      html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
+      html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."
+      html `shouldSatisfy` not . T.isInfixOf "browser console errors"
       html `shouldSatisfy` not . T.isInfixOf "Waterfall"
       -- The user journey rides along in the activity fragment; drop these params
       -- and it disappears with every other assertion still passing.
