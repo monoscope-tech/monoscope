@@ -288,8 +288,13 @@ runtime-exception pages render byte-identically to before (`INVESTIGATION`,
 F2's copy half. 151 of 151 runtime exceptions in the demo project hit this empty
 state, and it read *"No stack trace captured — common for browser console
 errors. Check the User Journey for the events that led up to it."* — wrong for
-readers whose errors are Go, and pointing at a section labelled "User Journey"
-nowhere on the page. It now names the runtime that stayed silent and points at
+readers whose errors are Go. **Correction:** the commit message for `52f86472a`
+also claims the "User Journey" pointer was dangling. That is wrong — previewing
+the page in a browser shows an explicit `USER JOURNEY · 62 events before error`
+section in the Activity panel. Only the browser claim was false. The new copy
+still stands (it names the runtime and points at the Trace tab), but the second
+half of that commit message's rationale does not. It now names the runtime that
+stayed silent and points at
 evidence the page has: the Trace tab when a trace was captured, the Logs tab
 when it wasn't. Guarded by a spec asserting the Go wording and the absence of
 the browser claim.
@@ -299,17 +304,64 @@ data is confirmed present: the errored span's subtree is a real cross-service
 call path (`CheckoutService/PlaceOrder` → `prepareOrderItemsAndShippingQuote…`
 → `CartService/GetCart` / `ProductCatalogService/GetProduct`).
 
+## 6c. Shipped — P2's impact count, and F8 (commit `143879427`)
+
+### F8 — the Error Frequency chart timed out on every runtime exception. *Severity: highest.* *(found by previewing in a browser)*
+
+Not in the original findings, because it is invisible from the HTML — the chart
+fetches its own data. `hashes[*]==` lowers to
+`jsonb_path_exists(to_jsonb(hashes), '$[*] ? (@ == "err:…")')`, whose cost tracks
+the window:
+
+| window | result |
+|---|---|
+| 24H | ~3s |
+| 3D | **60s timeout**, `{"error": "Query timed out"}` |
+
+`defaultSinceRange` returned `3D`/`7D`/`14D` for anything older than a day — so
+every runtime exception past its first day rendered "Query timed out" where its
+chart should be. Capping alone would not fix it: the reference issue last fired
+38h ago, so a now-anchored 24H window answers fast and finds *nothing*. The
+reader got a timeout or an empty chart, never the data.
+
+Fixed by anchoring the default window on the issue's **last activity** rather
+than on `now`, and capping it at a day. Verified in the browser: the chart now
+renders a bar where it previously showed the timeout banner.
+
+*(An apparent anomaly during this investigation — narrow windows returning 0 rows
+via `/chart_data` while TimeFusion returned 1 directly — is `Pkg.QueryCache`,
+which keys on the query and not the range, being poisoned by my own probing. Not
+a product bug; noted so the next person doesn't chase it.)*
+
+### P2's count — by extending the widget, not adding a fragment
+
+§8 previously concluded this needed its own lazy fragment. That was the wrong
+call and the repo's conventions say so: *extend the shared component; never build
+a one-off beside it.* Re-reading the client showed the total already exists —
+`setStatValue` runs on **every** chart-data fetch and fills `#<widget id>Value`
+with `statScalar`, which defaults to the range sum. The page simply never
+rendered that element, because `naked` suppresses the widget's whole header.
+
+So the fix is a consolidation, not an addition: `widgetValueSlot_` is extracted
+out of `renderWidgetHeader` and exported, so the header and any caller supplying
+its own header around a `naked` chart share **one** definition and show the
+**same** number. No new endpoint, no new query, no second total that could
+disagree with the chart. `ERROR FREQUENCY` now carries its count badge.
+
 ## 7. State of verification
 
-Two environmental problems, neither caused by this work, that the next session
-should know about before trusting a green or a red:
-
-- **`:8080` serves stale code.** Two processes are bound to it; the one holding
-  the socket started 21:23 and cannot be replaced while the other session's
-  `Notify.hs` (`dropChannel` shadowing, `-Werror=name-shadowing`) keeps their
-  GHCi from reloading. Anything rendered after that time will not appear.
-  **Gate every screenshot on `curl <url> | grep <string-unique-to-your-change>`
-  first.** Do not kill either PID — the other session is live.
+- **`:8080` serving stale code — FIXED.** Root cause was in `build.log` all
+  along: `runSettings threw: Network.Socket.bind: resource busy (Address already
+  in use)`, then *"a service fiber died … shutting down"*. Two `cabal repl
+  monoscope` ghcids were racing for the port; the loser's server died silently
+  while its compiler kept reporting "All good", so the pane looked healthy and
+  served someone else's build. By the time it was diagnosed both had exited and
+  nothing was listening. Restarted with a fresh pinned pane
+  (`tmux split-window … 'make live-reload | tee build.log'`; `make live-reload`
+  runs `kill-live-reload`, which frees the port by process group). Now exactly
+  one listener, and it is ours.
+  **Keep gating screenshots on `curl <url> | grep <string-unique-to-your-change>`**
+  — that is what caught this, and it is cheaper than diagnosing the topology.
 - **The integration target does not compile**, because
   `test/integration/EndpointDiscoverySpec.hs:436` (another session's
   uncommitted work) references an out-of-scope `env` field. This blocks
@@ -323,19 +375,27 @@ What each change actually rests on:
 |---|---|---|---|
 | `ff8d94ee2` query-alert page | ✓ | ✓ curl + screenshot | written, not run |
 | `dcfa1b58d` chart window | ✓ | ✓ screenshot (y-axis 3000→250) | written, not run |
-| `52f86472a` stack-trace copy | ✓ | ✗ blocked by stale `:8080` | written, not run |
+| `52f86472a` stack-trace copy | ✓ | ✓ browser (once `:8080` was fixed) | written, not run |
+| `143879427` count + F8 window | ✓ | ✓ browser: chart renders, count badge shows | not yet written |
 
 ## 8. Remaining plan
 
-P2–P5 as listed in §5. One precondition is now settled from code:
+P2's count shipped (§6c). **An earlier conclusion here was wrong and is worth
+recording as a lesson:** I read `Widget.value` being server-only and concluded
+"the widget cannot do this, build a fragment." The right move was to read one
+layer further — `widgets.ts` already computes and formats the number — and the
+gap was a *rendering* one, not a data one. Reaching for a new surface because a
+shared component doesn't do something yet is how a codebase grows two of
+everything. Establish that the component genuinely cannot be extended first.
 
-- **P2 cannot get its range total from the widget.** `Widget.value` is only ever
-  filled server-side (`Widget.hs:288`, from `WidgetDataset.rowsCount`), and
-  these charts are `standalone`/`naked` with the dataset fetched client-side —
-  `widgets.ts` never writes a header count back. So the aggregate band needs its
-  own lazy count fragment after all, in the shape `activityPanel_` already uses.
-  The per-type impact slot stays as decided in §5: RuntimeException / LogPattern
-  / ApiChange → total events; QueryAlert → the threshold pair it already has.
+Still open from §5:
+
+- **P2's remaining half — the shared fact row.** State · service · environment ·
+  first seen · last seen, filled by every type, so a reader who learns one issue
+  page has learned all four. The count now has a home; these facts still appear
+  as a "Details" card for two types, chips for one, and nowhere for the fourth.
+- **P3 — attribute distribution.** Datadog's inline `key:value (%)` chips.
+- **P4's other half — span-chain frames** for stackless exceptions.
 
 Also worth doing, found while working and small: the Activity card spends ~160px
 to render "No activity yet." The product register's rule is that empty states
