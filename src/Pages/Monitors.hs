@@ -412,14 +412,15 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
   (_, project, bw) <- mkPageCtx pid
   currTime <- Time.currentTime
 
-  let filterType = fromMaybe "Active" filterTM
+  let tab = parseMonitorTab filterTM
+      filterType = monitorTabSlug tab
 
   allAlerts <- Monitors.queryMonitorsAll pid
   teamMap <- buildTeamMap pid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let (activeAlerts, inactiveAlerts) = partition (isNothing . (.deactivatedAt)) allAlerts
-      alerts = bool inactiveAlerts activeAlerts (filterType == "Active")
+      alerts = case tab of TabActive -> activeAlerts; TabInactive -> inactiveAlerts
       sortKey i = ((statusInfo i.currentStatus).rank, isNothing i.mutedUntil)
       allItems = V.fromList $ sortOn sortKey $ toUnifiedMonitorItem teamMap pid currTime <$> alerts
       currentURL = "/p/" <> pid.toText <> "/monitors?"
@@ -439,7 +440,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 { search = Just ClientSide
                 , rowId = Just (.monitorId)
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-                , bulkActions = bulkActionsFor filterType pid
+                , bulkActions = bulkActionsFor tab pid
                 , zeroState =
                     Just
                       $ ZeroState
@@ -468,8 +469,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                   { current = filterType
                   , currentURL
                   , options =
-                      [ TabFilterOpt{name = "Active", count = Just $ length activeAlerts}
-                      , TabFilterOpt{name = "Inactive", count = Just $ length inactiveAlerts}
+                      [ TabFilterOpt{name = monitorTabSlug TabActive, count = Just $ length activeAlerts}
+                      , TabFilterOpt{name = monitorTabSlug TabInactive, count = Just $ length inactiveAlerts}
                       ]
                   }
           }
@@ -530,18 +531,40 @@ statusInfo = \case
   Monitors.MSNormal -> StatusInfo "bg-fillSuccess-strong" "Normal" 2 "text-textSuccess"
 
 
-bulkActionsFor :: Text -> Projects.ProjectId -> [BulkAction]
-bulkActionsFor filterType pid =
+-- | Which monitors tab is being viewed. Was 'Text' compared against @"Active"@ in two
+-- places with a silent fall-through; the wire spelling stays capitalised because live
+-- @?filter=Active@ URLs carry it. 'monitorTabSlug' is the single source of it.
+--
+-- >>> map monitorTabSlug [minBound .. maxBound]
+-- ["Active","Inactive"]
+-- >>> map parseMonitorTab [Just "Inactive", Just "nonsense", Nothing]
+-- [TabInactive,TabActive,TabActive]
+data MonitorTab = TabActive | TabInactive
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+monitorTabSlug :: MonitorTab -> Text
+monitorTabSlug = \case
+  TabActive -> "Active"
+  TabInactive -> "Inactive"
+
+
+parseMonitorTab :: Maybe Text -> MonitorTab
+parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabSlug =<<)
+
+
+bulkActionsFor :: MonitorTab -> Projects.ProjectId -> [BulkAction]
+bulkActionsFor tab pid =
   let bulkBase = "/p/" <> pid.toText <> "/monitors/alerts/bulk_action/"
-   in case filterType of
-        "Active" ->
+   in case tab of
+        TabActive ->
           [ BulkAction (Just "pause") "Deactivate" (bulkBase <> "deactivate")
           , BulkAction (Just "bell-slash") "Mute" (bulkBase <> "mute")
           , BulkAction (Just "bell") "Unmute" (bulkBase <> "unmute")
           , BulkAction (Just "check") "Resolve" (bulkBase <> "resolve")
           , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
           ]
-        _ ->
+        TabInactive ->
           [ BulkAction (Just "play") "Reactivate" (bulkBase <> "reactivate")
           , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
           ]
