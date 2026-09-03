@@ -190,6 +190,7 @@ import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
 import Unsafe.Coerce (unsafeCoerce)
+import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
@@ -198,6 +199,20 @@ import Web.I18n qualified as I18n
 
 migrationsDirr :: FilePath
 migrationsDirr = "./static/migrations/"
+
+
+-- | Per-file sizes, sorted by name, so a content change that preserves the total
+-- size still invalidates the template.
+migrationsChecksum :: IO Text
+migrationsChecksum = do
+  files <- sort <$> listDirectory migrationsDirr
+  sizes <- mapM (getFileSize . (migrationsDirr <>)) files
+  pure $ toText (show (zip files sizes))
+
+
+-- | A short, filename-safe fingerprint of the migration set.
+migrationsFingerprint :: IO Text
+migrationsFingerprint = T.take 12 . toXXHash <$> migrationsChecksum
 
 
 -- | Test Discord public key (hex-encoded Ed25519 public key derived from deterministic seed)
@@ -276,8 +291,15 @@ testConnInfo dbName = defaultConnectInfo{connectUser = "postgres", connectPasswo
 withExternalDBSetup :: (Pool Connection -> ByteString -> IO ()) -> IO ()
 withExternalDBSetup f = do
   dbHost <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
+  -- The template name carries the migration set's fingerprint, so two checkouts
+  -- with different migrations get different templates instead of dropping and
+  -- rebuilding each other's forever. Before this, a branch that added a migration
+  -- and a branch that had not would thrash the shared template between them and
+  -- every example in both died with `template database ... does not exist` — a
+  -- failure that looks exactly like a broken change and is not one.
+  migFingerprint <- migrationsFingerprint
   let connInfo dbName = (testConnInfo dbName){connectHost = dbHost}
-      templateDbName = "monoscope_test_template"
+      templateDbName = "monoscope_test_template_" <> migFingerprint
 
   -- Create or update template database
   ensureTemplateDatabase connInfo templateDbName
@@ -369,10 +391,7 @@ ensureTemplateDatabase connInfo templateDbName = do
   -- The lock auto-releases when masterConn closes (incl. on exception via finally).
   flip finally (close masterConn) $ do
     _ <- PGS.query_ masterConn "SELECT pg_advisory_lock(873042)::text" :: IO [Only Text]
-    -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
-    files <- sort <$> listDirectory migrationsDirr
-    sizes <- mapM (getFileSize . (migrationsDirr <>)) files
-    let migrationChecksum = toText (show (zip files sizes))
+    migrationChecksum <- migrationsChecksum
 
     -- Read the checksum we stamped as the template's DB comment — from master, no
     -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
