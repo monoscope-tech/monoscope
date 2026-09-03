@@ -294,16 +294,16 @@ updateSchema dashId dashboard updatedAt =
     <> [HI.sql| WHERE id = #{dashId} |]
 
 
-updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
-updateTitle dashId title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
+updateTitle :: DB es => Projects.ProjectId -> DashboardId -> Text -> Eff es Int64
+updateTitle pid dashId title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE project_id = #{pid} AND id = #{dashId} |]
 
 
-updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
-updateTags dashId tags = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
+updateTags :: DB es => Projects.ProjectId -> DashboardId -> V.Vector Text -> Eff es Int64
+updateTags pid dashId tags = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE project_id = #{pid} AND id = #{dashId} |]
 
 
-updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
-updateStarredSince dashId starredSince = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
+updateStarredSince :: DB es => Projects.ProjectId -> DashboardId -> Maybe UTCTime -> Eff es Int64
+updateStarredSince pid dashId starredSince = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE project_id = #{pid} AND id = #{dashId} |]
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)

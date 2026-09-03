@@ -560,8 +560,8 @@ apiDashboardApply pid doc = do
   case existingM of
     Just existing -> do
       _ <- Dashboards.updateSchema existing.id doc.schema (Just now)
-      _ <- Dashboards.updateTitle existing.id newTitle
-      whenJust doc.tags (void . Dashboards.updateTags existing.id . V.fromList)
+      _ <- Dashboards.updateTitle pid existing.id newTitle
+      whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)
       apiDashboardGet pid existing.id
     Nothing -> do
       did <- UUIDId <$> UUID.genUUID
@@ -577,9 +577,9 @@ apiDashboardPatch :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardPa
 apiDashboardPatch pid did patch = do
   _ <- apiDashboardGet pid did
   now <- Time.currentTime
-  whenJust patch.title $ void . Dashboards.updateTitle did
+  whenJust patch.title $ void . Dashboards.updateTitle pid did
   whenJust patch.schema $ \s -> void $ Dashboards.updateSchema did s (Just now)
-  whenJust patch.tags $ void . Dashboards.updateTags did . V.fromList
+  whenJust patch.tags $ void . Dashboards.updateTags pid did . V.fromList
   apiDashboardGet pid did
 
 
@@ -599,11 +599,11 @@ apiDashboardDuplicate pid did = do
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
 apiDashboardStar pid did =
-  withRefetch (apiDashboardGet pid did) (Time.currentTime >>= Dashboards.updateStarredSince did . Just)
+  withRefetch (apiDashboardGet pid did) (Time.currentTime >>= Dashboards.updateStarredSince pid did . Just)
 
 
 apiDashboardUnstar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx NoContent
-apiDashboardUnstar pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.updateStarredSince did Nothing)
+apiDashboardUnstar pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.updateStarredSince pid did Nothing)
 
 
 apiDashboardYaml :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardYAMLDoc

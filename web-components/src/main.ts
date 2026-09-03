@@ -72,18 +72,21 @@ htmx4.registerExtension('json-enc', {
   },
 });
 
+// Params that stop making sense once a given filter changes. `cursor` is the general
+// case and was previously missing everywhere: it is an offset into one filtered result
+// set, so carrying it into a differently-filtered one lands the reader on an unrelated
+// page. Everything under `source` additionally describes a selection within the old
+// result set.
+const INVALIDATED_BY: Record<string, readonly string[]> = {
+  source: ['queryAST', 'query', 'cols', 'target-spans', 'details_width', 'target_event', 'showTrace', 'cursor'],
+  metric_source: ['cursor'],
+  metric_prefix: ['cursor'],
+};
+
 window.setQueryParamAndReload = (key: string, value: string) => {
   const url = new URL(window.location.href);
   url.searchParams.set(key, value);
-  if (key === 'source') {
-    url.searchParams.delete('queryAST');
-    url.searchParams.delete('query');
-    url.searchParams.delete('cols');
-    url.searchParams.delete('target-spans');
-    url.searchParams.delete('details_width');
-    url.searchParams.delete('target_event');
-    url.searchParams.delete('showTrace');
-  }
+  for (const stale of INVALIDATED_BY[key] ?? []) url.searchParams.delete(stale);
   window.location.href = url.toString();
 };
 
