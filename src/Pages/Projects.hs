@@ -97,7 +97,7 @@ import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
-import Servant.Server (err302, errHeaders)
+import Servant.Server (err302, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
@@ -676,9 +676,13 @@ manageMembersPostH pid onboardingM form = do
           & map (.id)
 
   newProjectMembers <- forM uAndPNew \(email, permission) -> do
+    -- createEmptyUser is a get-or-create, so the lookup is only an optimisation:
+    -- losing the race to a concurrent invite now returns the winner's id instead
+    -- of crashing the handler.
     userId' <-
       Projects.userIdByEmail email
-        >>= maybe (Projects.createEmptyUser email >>= maybe (error "duplicate email in createEmptyUser") pure) pure
+        >>= maybe (Projects.createEmptyUser email) (pure . Just)
+        >>= maybe (throwError err500{errBody = "Could not resolve user for " <> encodeUtf8 email}) pure
 
     when (userId' /= currUserId)
       $ void
