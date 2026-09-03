@@ -348,6 +348,22 @@ its own header around a `naked` chart share **one** definition and show the
 **same** number. No new endpoint, no new query, no second total that could
 disagree with the chart. `ERROR FREQUENCY` now carries its count badge.
 
+### F9 — a log-pattern issue can reference a hash no telemetry carries. *Severity: medium. OPEN.* *(found by previewing in a browser)*
+
+Issue #112128 says `14 occurrences`, `first seen 1 day ago`, and renders "No data
+in this time range". Its chart is not at fault, and neither is F8's window
+change — `pat:f07ab941` appears in **zero** rows of `hashes`, at every width
+tried, including a 3h window centred on the issue's own `first_seen_at`
+(`2026-09-02T10:04:54Z`). Other `pat:` hashes are present in the same period
+(the reference error's span carries `{ad9cfe83, err:e03848c6, pat:634f4c70}`), so
+this is not a missing-prefix or missing-column problem.
+
+So the count in the chips (`14 occurrences`, read from `issue_data`) and the
+chart (read from telemetry) disagree, and the page presents both without comment.
+Not diagnosed further here: it is an ingestion/retention question about how a
+pattern hash is written to `hashes`, not a page-design one. Worth chasing,
+because "the issue says 14, the chart says none" costs the reader trust in both.
+
 ## 7. State of verification
 
 - **`:8080` serving stale code — FIXED.** Root cause was in `build.log` all
