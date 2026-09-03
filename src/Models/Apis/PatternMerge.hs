@@ -20,6 +20,8 @@ module Models.Apis.PatternMerge (
   getQuarantinedErrorMerges,
   getReviewCursor,
   canonicalForAppliedShape,
+  errorPatternsMissingShape,
+  setErrorShapeHashes,
   setReviewCursor,
   -- Log pattern operations
   getUnembeddedLogPatterns,
@@ -362,3 +364,29 @@ canonicalForAppliedShape pid shapeH service =
                AND e.canonical_id IS NULL AND e.merge_override = FALSE
                AND e.service IS NOT DISTINCT FROM #{service}
              LIMIT 1 |]
+
+
+-- | Patterns still missing a shape, oldest first.
+--
+-- The upsert fills @shape_hash@ write-once, which covers a row the next time it
+-- occurs — enough for ingest-time suppression, and useless for review: a shape needs
+-- two populated members to be a candidate, so a corpus that predates the column is
+-- invisible to the loop. On prod that was 89 rows of 23,389.
+errorPatternsMissingShape :: DB es => Projects.ProjectId -> Int -> Eff es [(ErrorPatternId, Text, Text)]
+errorPatternsMissingShape pid lim =
+  Hasql.interp
+    [HI.sql| SELECT id, error_type, message FROM apis.error_patterns
+             WHERE project_id = #{pid} AND shape_hash IS NULL
+             ORDER BY created_at
+             LIMIT #{lim} |]
+
+
+setErrorShapeHashes :: DB es => [(ErrorPatternId, Text)] -> Eff es Int64
+setErrorShapeHashes [] = pure 0
+setErrorShapeHashes pairs =
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET shape_hash = u.sh
+             FROM (SELECT unnest(#{V.fromList ids}::uuid[]) AS id, unnest(#{V.fromList shapes}::text[]) AS sh) u
+             WHERE apis.error_patterns.id = u.id |]
+  where
+    (ids, shapes) = unzip pairs
