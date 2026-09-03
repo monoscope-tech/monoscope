@@ -733,6 +733,9 @@ in the other four was *multiple independent defaults drifting apart*; a single `
 against one literal cannot have that failure mode. Converting it would add a type and two
 functions to delete one comparison — the trade running backwards.
 
+Verified green after all four: `808 examples, 0 failures, 90 pending` (full run — a
+truncated run was rejected twice before accepting this one).
+
 Cost, honestly: `SessionSort` +37 lines, `IssueTab` +40, `MonitorTab` +23. All three trade
 size for a compile-time guarantee, against the size-reduction goal, knowingly. The trend
 down is deliberate — the rationale belongs in this file once, not re-argued in Haddock at
