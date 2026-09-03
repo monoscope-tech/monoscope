@@ -707,8 +707,8 @@ the feature just silently does something else.
 | `Endpoints.EndpointSort` | fixed earlier in the sweep — "Alphabetical" silently did nothing |
 | `LogQueries.SessionSort` | fixed (`a0be8e67`) |
 | `Pages.Anomalies.IssueTab` | fixed (`1652d04b`) |
-| `Monitors.hs:415` — `fromMaybe "Active" filterTM` | **open** |
-| `Endpoints.hs:240` — `filterTM == Just "Archived"` | **open** (boolean, so degrades safely) |
+| `Pages.Monitors.MonitorTab` | fixed (`7810598b`) |
+| `Endpoints.hs:240` — `filterTM == Just "Archived"` | **deliberately left, see below** |
 
 `IssueTab` is the one worth studying, because it shows the failure mode is worse than a
 single silent default. The tab was matched in **four independent places** — the
@@ -726,5 +726,15 @@ reaching for the deriving-via shortcut. `GitHost` already documents this for the
 reason: `WrappedEnumSC` would turn `GitHub` into `git_hub`, which migration 0125's CHECK
 constraint rejects.
 
-Cost: `SessionSort` was net +37 lines, `IssueTab` net +40 — mostly Haddock and doctests.
-Both trade size for a compile-time guarantee, against the size-reduction goal, knowingly.
+`Endpoints.hs:240` is left as `filterTM == Just "Archived"` on purpose. It is a boolean
+projection, not a `case` with a fall-through: an unknown filter degrades to `False`, i.e.
+the Endpoints tab, and there is no second site that could disagree with it. The pathology
+in the other four was *multiple independent defaults drifting apart*; a single `==`
+against one literal cannot have that failure mode. Converting it would add a type and two
+functions to delete one comparison — the trade running backwards.
+
+Cost, honestly: `SessionSort` +37 lines, `IssueTab` +40, `MonitorTab` +23. All three trade
+size for a compile-time guarantee, against the size-reduction goal, knowingly. The trend
+down is deliberate — the rationale belongs in this file once, not re-argued in Haddock at
+every site, and `MonitorTab` also *deleted* literal duplication (three sources of
+"Active"/"Inactive" collapsed to one) rather than only adding a type.
