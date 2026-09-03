@@ -5,10 +5,11 @@
 -- that can be fast-forwarded with 'advanceTime'.
 --
 -- The companion migration 0094_app_now_function.sql defines a PostgreSQL
--- @app_now()@ that reads the @app.current_time@ GUC. Pass a test connection
--- through 'syncConnectionTime' before issuing time-sensitive SQL and the
--- triggers / stored procedures will see the same clock as the Haskell
--- effect.
+-- @app_now()@ that reads the @app.current_time@ GUC. 'runHasqlPoolSynced' pushes
+-- the clock into that GUC before every Session, so triggers and stored
+-- procedures see the same clock as the Haskell effect. 'Pkg.TestUtils' wires it
+-- for all test DB access, which is why time-sensitive SQL in specs already
+-- observes 'advanceTime'.
 module Pkg.TestClock (
   TestClock (..),
   newTestClock,
@@ -16,14 +17,11 @@ module Pkg.TestClock (
   setTestTime,
   getTestTime,
   runMutableTime,
-  syncConnectionTime,
   runHasqlPoolSynced,
 ) where
 
 import Data.Effectful.Hasql (Hasql (..))
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
-import Database.PostgreSQL.Simple (Connection)
-import Database.PostgreSQL.Simple qualified as PGS
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Time (Time (..))
@@ -72,17 +70,6 @@ runMutableTime clock = interpret $ \_ -> \case
 -- | Sync a PostgreSQL connection's @app.current_time@ GUC to the test
 -- clock's current value. Uses @set_config(_, _, true)@ so the setting is
 -- transaction-scoped and resets when the connection returns to the pool.
---
--- Call this on every connection that needs to see the test clock from
--- inside triggers / stored procedures / DDL defaults that go through
--- @app_now()@.
-syncConnectionTime :: TestClock -> Connection -> IO ()
-syncConnectionTime clock conn = do
-  t <- getTestTime clock
-  let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
-  void $ PGS.execute conn "SELECT set_config('app.current_time', ?, true)" (PGS.Only timeStr)
-
-
 -- | Hasql twin of 'runHasqlPool' that pushes the test clock into the
 -- @app.current_time@ GUC before each Session. Use in tests that exercise
 -- triggers / stored procedures going through @app_now()@. The setting is

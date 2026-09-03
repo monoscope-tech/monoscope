@@ -625,9 +625,9 @@ runTestEffect pool hpool logger tp action = do
 --
 -- Seeds the shared 'trTestClock' to @t@ before running so subsequent
 -- 'advanceTestTime' / 'advanceMinutes' / etc. calls (and any further
--- 'runTestBg' in the same spec) observe the advanced clock. SQL queries
--- that go through @app_now()@ on a connection that's been synced via
--- 'syncConnectionTime' see the same clock too.
+-- 'runTestBg' in the same spec) observe the advanced clock. SQL queries that go
+-- through @app_now()@ see the same clock too, because all test DB access runs
+-- under 'runHasqlPoolSynced'.
 runTestBg :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO a
 runTestBg t TestResources{..} action = do
   setTestTime trTestClock t
