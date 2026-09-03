@@ -411,3 +411,60 @@ own PR. **This is the highest-value type change left in the codebase.**
 
 No clones, no enum ladders, no hoisted Tailwind classes, no suppressions, no
 partiality across 6,397 lines.
+
+---
+
+# Round eleven — components layer
+
+- `instance Default (Features a)`: 21 hand-written lines setting eighteen fields to
+  Nothing/[]/False — exactly the generic instance. Now derived (−19). Guarded by
+  `defaultFeaturesAreInert`, break-tested (`expected: False but got: True` at
+  Table.hs:143). **Guard's limit:** asserts five representative fields, one per field
+  shape; several fields hold functions with no Show/Eq so a total assertion is not
+  expressible. A future field with a non-generic default would slip past.
+- `pricingBtnCls` (a top-level class function referenced by `class_` — the LoB rule's
+  "Wrong" example) became `pricingButton_`, a markup component holding the literal
+  inline. Also deduped the "Current plan" label logic repeated at three sites.
+- **Kept deliberately:** `Default Config` / `Default FieldCfg` have real non-generic
+  defaults; `emptyState_`'s class tuple has three uses and inlining means three copies
+  of the same case.
+- **Flagged, not changed:** `Widget.cellClass` / `Table.hs:516,579` interpolate
+  `col.align` — data-driven config the Tailwind scanner cannot see, same class as the
+  Onboarding bug. `align` is set nowhere (no Haskell caller, no dashboard YAML), so it
+  is working-but-unused surface; removing it drops a feature. The first value not
+  appearing literally elsewhere will silently no-op.
+
+# Round twelve — background jobs / notifications
+
+## Fixed
+
+1. **`CleanupDemoProject` reinvented `Projects.demoProjectId`** as a bare `UUID.nil`.
+   The constant already existed and is used in three other places. Exactly the
+   "reinvented a pattern we had an equivalent of" case.
+2. **`ErrorAssigned`'s `_ -> pass` hid a tenant-boundary event.** The catch-all
+   conflated deleted rows (routine) with `err.projectId /= pid` — an assignment aimed
+   at an error belonging to a *different project*. Now two arms: cross-tenant logs at
+   `logAttention` with all three ids; missing-row logs at `logInfo` with which lookup
+   failed. Different levels on purpose — `logAttention` is meant to be page-worthy.
+
+## Noted, not changed
+
+- **`Notify.hs:1` carries a file-wide `-Wno-redundant-constraints`.** Suppression is a
+  finding by default; narrowing it means touching effect rows across the notification
+  interpreters, which needs its own verification pass.
+- **`ErrorPatternId` is a bespoke newtype**, not a `UUIDId`, so it has none of the
+  typed-id machinery (no `.toText`; needs `.unErrorPatternId`). Converting it is a
+  separate change with its own blast radius.
+
+## Verified clean, do not re-review
+
+No clones across 7,116 lines. No client surface at all in these three files — zero
+hyperscript/htmx; EmailTemplates' 77 inline `style_` uses are correct, since Tailwind
+classes do not work in email clients. `backfillSessionSql`'s apparent 265 lines are a
+raw SQL quasiquote, not distillable Haskell.
+
+**`ThreadRefs`' hand-written Semigroup/Monoid must stay hand-written.** `<>` is
+first-wins (`<|>` per field), but `Maybe`'s own Semigroup *concatenates* — so
+`deriving via Generically` would silently change alert threading from "keep the parent
+message id" to "append ids". This is a case where deriving is not merely unnecessary
+but wrong; a future distill pass should not "fix" it.

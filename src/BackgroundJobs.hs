@@ -333,7 +333,19 @@ processBackgroundJob authCtx bgJob =
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
               issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
           renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
-        _ -> pass
+        -- The error exists but belongs to a different project than the job names. That is
+        -- not a missing-row case: something addressed an assignment across a tenant
+        -- boundary. Silently passing is exactly how that stays invisible.
+        (Just{}, Just err, Just{}) ->
+          Log.logAttention
+            "ErrorAssigned: error does not belong to the job's project"
+            (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= show @Text errId.unErrorPatternId, "error_project_id" AE..= err.projectId.toText])
+        -- Project, error or assignee deleted between enqueue and run. Routine, but the
+        -- assignment email is dropped, so say so rather than nothing.
+        _ ->
+          Log.logInfo
+            "ErrorAssigned: skipped, project/error/assignee no longer exists"
+            (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= show @Text errId.unErrorPatternId, "has_project" AE..= isJust projectM, "has_error" AE..= isJust errM, "has_user" AE..= isJust userM])
     DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid Projects.RTDaily
@@ -345,7 +357,7 @@ processBackgroundJob authCtx bgJob =
       -- not Serializable's anti-conflict guarantees (which would surface as opaque
       -- retryable errors that the current Hasql retry path does not handle).
       Hasql.transaction TxS.ReadCommitted TxS.Write $ do
-        let pid = UUID.nil
+        let pid = Projects.demoProjectId.unwrap
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_members WHERE project_id = $1 :: uuid|]
         Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
