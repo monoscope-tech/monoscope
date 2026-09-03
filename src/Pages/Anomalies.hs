@@ -34,11 +34,11 @@ import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isHexDigit)
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
-import Data.Char (isHexDigit)
 import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -222,7 +222,16 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           "Issue not found"
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
-      let tp = TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
+      -- `defaultSinceRange` picks a window ~2x the issue's age, which is right for a
+      -- recurring pattern but wrong for a threshold crossing: a day-old alert got a
+      -- 3-day window in which the breach was a sliver at the right edge, on a y-axis
+      -- scaled to the healthy traffic. A query alert's subject is the moment it
+      -- fired, so bracket that instead — unless the reader has chosen a range.
+      let tp = case (sinceM, Issues.issuePayload issue) of
+            (Nothing, Just (Issues.QueryAlertP d)) ->
+              let isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
+               in TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) d.triggeredAt) (Just $ isoT $ addUTCTime 7200 d.triggeredAt)
+            _ -> TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
           (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
@@ -634,7 +643,15 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           Just (Issues.ApiChangeP _) -> createdChip
           Nothing -> unparsablePayload_
       -- Seed URL params with default time range so standalone chart widgets can read it
-      script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since'))window.setParams({{since:'{fromMaybe "1H" tp.since}'}})}});|]
+      -- Seed the URL with whichever form of range the page defaulted to, so the
+      -- standalone chart widgets read the same window the picker shows. A query
+      -- alert defaults to an absolute from/to around its trigger, so seeding
+      -- `since` unconditionally (as this used to) would have overridden it.
+      let seedParams = case (tp.since, tp.from, tp.to) of
+            (Just s, _, _) -> [fmt|since:'{s}'|]
+            (_, Just f, Just t) -> [fmt|from:'{f}',to:'{t}'|] :: Text
+            _ -> "since:'1H'"
+      script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since')&&!new URLSearchParams(location.search).get('from'))window.setParams({{{seedParams}}})}});|]
       -- Volume chart + issue type content
       -- @thresholdM@ draws the alert's own breach line on the chart, so a reader can
       -- see the crossing rather than being told about it in the title. @heightCls@
@@ -812,10 +829,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       -- only filter on our own synthetic "Monitoring" service. Rendering the panel
       -- anyway reserved `lg:h-[70vh]` and filled it with "No trace data available" —
       -- roughly 1100px of void under a two-line query box.
-      unless (issue.issueType == Issues.QueryAlert) do
-        -- Escape closes the open span panel before it exits fullscreen — the panel's close
-        -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
-        div_
+      -- Escape closes the open span panel before it exits fullscreen — the panel's close
+      -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
+      unless (issue.issueType == Issues.QueryAlert)
+        $ div_
           [ class_ "surface-raised rounded-2xl overflow-hidden group/inv"
           , id_ "error-details-container"
           , makeAttribute "tabindex" "-1"

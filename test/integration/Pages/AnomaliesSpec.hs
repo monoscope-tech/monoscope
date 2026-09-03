@@ -445,6 +445,50 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "&amp;from="
       html `shouldSatisfy` T.isInfixOf "&amp;to="
 
+    -- Regression: a query alert used to render its KQL string and nothing else — not
+    -- the threshold, not the value that crossed it, no chart, no monitor link. Below
+    -- that, the Investigation panel reserved lg:h-[70vh] to say "No trace data
+    -- available", which a query alert can never have (mTraceRef is Nothing by
+    -- construction for this type).
+    it "query alert issue shows the breach and no trace panel" \tr -> do
+      monitorId <- DataUUID.toText <$> UUID.nextRandom
+      alertHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn ->
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
+                  VALUES (?, 'query_alert', 'checkout throughput dropped', ?, 'Monitoring', ?::jsonb, ?, ?) RETURNING id |]
+            ( testPid
+            , alertHash
+            , AE.encode
+                -- query_id is stored as a `show` of the newtype, which is what every
+                -- row already in the table looks like; the page must still find the id.
+                -- Hoisted out of the quasi-quote: aesonQQ parses the braces inside
+                -- this Haskell string literal as its own interpolation syntax.
+                let storedQueryId = "QueryMonitorId {unQueryMonitorId = " <> monitorId <> "}"
+                 in [aesonQQ|{ "query_id": #{storedQueryId}
+                         , "query_name": "checkout throughput", "query_expression": "resource.service.name == \"checkout\" | summarize count(*) by bin_auto(timestamp)"
+                         , "threshold_value": 5, "actual_value": 0, "threshold_type": "below"
+                         , "triggered_at": #{frozenTime} }|]
+            , frozenTime
+            , frozenTime
+            )
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = renderPage page
+      -- The two numbers that were compared, and the direction, are all on the page.
+      html `shouldSatisfy` T.isInfixOf "Threshold Breach"
+      html `shouldSatisfy` T.isInfixOf "Actual"
+      html `shouldSatisfy` T.isInfixOf "Threshold (below)"
+      -- The alert's own query is charted, carrying its threshold as a mark line.
+      html `shouldSatisfy` T.isInfixOf "alertThreshold: 5.0"
+      -- The monitor id survives the `show` blob it is stored inside.
+      html `shouldSatisfy` T.isInfixOf ("/monitors/" <> monitorId <> "/overview")
+      -- ...and the void is gone: no trace panel, and no boilerplate subtitle.
+      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
+      html `shouldSatisfy` not . T.isInfixOf Issues.queryAlertRecommendedAction
+
     -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
     -- issue page 504'd behind the gateway. The trace is supporting evidence — past
     -- 'traceViewTimeoutSecs' the page must still render everything else.
