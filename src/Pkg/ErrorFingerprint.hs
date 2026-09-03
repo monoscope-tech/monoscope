@@ -8,6 +8,11 @@ module Pkg.ErrorFingerprint (
   normalizeMessage,
   computeErrorFingerprint,
   computeErrorHashes,
+  ErrorMask (..),
+  deriveErrorMask,
+  applyErrorMasks,
+  shapeWithMasks,
+  maskMinAffixLen,
   isFrameworkTransportError,
 )
 where
@@ -768,3 +773,112 @@ isFrameworkTransportError exceptionType normalizedMessage =
       messageMatches = any (`T.isInfixOf` m) messagePatterns
    in S.member tLower knownTypes
         || (S.member tLower genericTypes && messageMatches)
+
+
+-- | A literal prefix and suffix around a part that varies, learned from a group the
+-- review loop merged.
+data ErrorMask = ErrorMask
+  { prefix :: Text
+  , suffix :: Text
+  , minVarLen :: Int
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | Smallest literal on either side of a mask.
+--
+-- Two characters is not a mask, it is a wildcard with extra steps. The endpoint side
+-- learned this the same way: 'sharedIdPrefix' refuses a prefix under two characters
+-- and is checked against known route words on top.
+maskMinAffixLen :: Int
+maskMinAffixLen = 3
+
+
+-- | Derive a mask from the messages of a group that was merged.
+--
+-- The messages agree everywhere except the values that made them look different, so
+-- the common prefix and suffix are the literal and what is left is the variable.
+--
+-- >>> deriveErrorMask ["SB-3FDBA2D0A0A2 not processing", "SB-90770E7BA9FD not processing"]
+-- Just (ErrorMask {prefix = "SB-", suffix = " not processing", minVarLen = 12})
+--
+-- Refused when either literal is too short to anchor — this would otherwise be
+-- @{anything} declined@, which swallows every error ending in that word:
+--
+-- >>> deriveErrorMask ["a declined", "b declined"]
+-- Nothing
+--
+-- Refused when the messages are identical, which leaves nothing varying and would
+-- produce a mask over the empty string:
+--
+-- >>> deriveErrorMask ["same message", "same message"]
+-- Nothing
+--
+-- Refused below two members: one message shares all of itself with itself.
+--
+-- >>> deriveErrorMask ["SB-3FDBA2D0A0A2 not processing"]
+-- Nothing
+deriveErrorMask :: [Text] -> Maybe ErrorMask
+deriveErrorMask msgs = do
+  let distinct = ordNub msgs
+  guard $ length distinct >= 2
+  firstMsg <- viaNonEmpty head distinct
+  let pfx = foldl' commonPrefix firstMsg distinct
+      sfx = foldl' commonSuffix firstMsg distinct
+      varLens = [T.length m - T.length pfx - T.length sfx | m <- distinct]
+  -- The affixes must not overlap: on near-identical messages the common prefix and
+  -- the common suffix can both run past the middle and describe a negative variable.
+  guard $ all (> 0) varLens
+  guard $ T.length pfx >= maskMinAffixLen && T.length sfx >= maskMinAffixLen
+  pure ErrorMask{prefix = pfx, suffix = sfx, minVarLen = foldl' min (T.length firstMsg) varLens}
+  where
+    commonPrefix a b = maybe "" (\(c, _, _) -> c) $ T.commonPrefixes a b
+    commonSuffix a b = T.reverse $ maybe "" (\(c, _, _) -> c) $ T.commonPrefixes (T.reverse a) (T.reverse b)
+
+
+-- | Replace the variable part of every mask that matches.
+--
+-- >>> applyErrorMasks [ErrorMask "SB-" " not processing" 12] "SB-90770E7BA9FD not processing"
+-- "SB-{masked} not processing"
+--
+-- A variable shorter than the group the mask came from is left alone, so a mask over
+-- ids does not also swallow a one-character flag between the same literals:
+--
+-- >>> applyErrorMasks [ErrorMask "SB-" " not processing" 12] "SB-7 not processing"
+-- "SB-7 not processing"
+--
+-- Non-matching text is returned unchanged:
+--
+-- >>> applyErrorMasks [ErrorMask "SB-" " not processing" 12] "unrelated failure"
+-- "unrelated failure"
+applyErrorMasks :: [ErrorMask] -> Text -> Text
+applyErrorMasks masks msg = foldl' applyOne msg masks
+  where
+    applyOne m mask = fromMaybe m do
+      afterPfx <- T.stripPrefix mask.prefix m
+      var <- T.stripSuffix mask.suffix afterPfx
+      guard $ T.length var >= mask.minVarLen
+      pure $ mask.prefix <> "{masked}" <> mask.suffix
+
+
+-- | The shape, with a project's learned masks applied to the message first.
+--
+-- With no masks this MUST agree with 'computeErrorHashes'. Every @shape_hash@ already
+-- stored was written by one or the other, and a divergence would not fail — it would
+-- quietly stop the ingest gate matching anything:
+--
+-- >>> shapeWithMasks [] "p" "TypeError" "boom" == (computeErrorHashes "p" Nothing Nothing RGeneric "TypeError" "boom" "").shape
+-- True
+--
+-- Masks move the SHAPE and never the fingerprint. That is the whole reason this is a
+-- separate function rather than a parameter on 'computeErrorHashes': a mask that
+-- changed @narrow@ would re-key every pattern it touches, minting new issues for
+-- errors we already know about — the same "a rename is a new hash" trap the endpoint
+-- work hit. Moving only the shape is additive: grouping gets coarser, issue identity
+-- does not move.
+shapeWithMasks :: [ErrorMask] -> Text -> Text -> Text -> Text
+shapeWithMasks masks projectIdText exceptionType message =
+  toXXHash
+    $ T.intercalate "|"
+    $ filter (not . T.null) [projectIdText, "shape", T.strip exceptionType, applyErrorMasks masks (normalizeMessage message)]
