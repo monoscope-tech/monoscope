@@ -264,18 +264,24 @@ runtime-exception pages render byte-identically to before (`INVESTIGATION`,
    Now carries a direction arrow — the second signal design principle 3 requires.
 3. **Fixed:** the `bolt` icon used for "Triggered" existed in neither sprite
    sheet, so it silently rendered nothing. Added via `make fa-add`.
-4. **Still open — the chart cannot show the crossing.** The series runs
-   2000–3000; the threshold is 5. At that y-scale the threshold line is
-   indistinguishable from the axis, so the reader sees the flatline but cannot
-   see that it went *below 5*. The breach is legible as a gap, not as a crossing.
-   Candidate fixes, in preference order: (a) default the time range to bracket
-   `triggeredAt` instead of `defaultSinceRange`'s age heuristic, making the
-   breach the subject rather than a sliver at the right edge; (b) mark the
-   trigger instant with `highlightFrom`/`highlightTo` — the band renderer
-   already degrades to a dashed line when the interval is <1% of the window,
-   but that path needs `timeFrom`/`timeTo` set, which would fight the page's
-   time picker; (c) log y-axis. (a) is the smallest and the most honest.
+4. **Fixed (commit `dcfa1b58d`) — the chart could not show the crossing.** The
+   series ran 2000–3000 against a threshold of 5, so the threshold line sat on
+   the axis and the breach was a sliver at the right edge. Fixed by option (a):
+   a query alert now defaults its window to ±2h around `triggeredAt` rather
+   than `defaultSinceRange`'s age heuristic. The URL seeding had to follow — it
+   wrote `since` unconditionally, which would have overridden the absolute
+   from/to. **Result: y-axis 3000 → 250, and the drop to zero now occupies half
+   the chart.** Options (b) `highlightFrom`/`highlightTo` and (c) log y-axis
+   were not needed; (b) is still the right move if a trigger marker is wanted,
+   but its dashed-line degradation needs `timeFrom`/`timeTo` set, which fights
+   the page's time picker.
 5. **Still open:** the Activity card spends ~160px to say "No activity yet."
+6. **Verified in both themes.** Light-mode parity checked by rendering with a
+   `theme=light` cookie; the amber `↓ 0`, the ink `5`, and the brand-blue
+   monitor link all hold up. Headless recipe for future passes:
+   `curl -H 'Cookie: theme=light' <url> | sed 's|<head>|<head><base href="http://localhost:8080/">|'`
+   then screenshot the file — the server defaults anonymous sessions to dark,
+   so a plain headless run only ever shows one theme.
 
 ## 7. Remaining plan
 
