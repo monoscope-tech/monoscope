@@ -68,10 +68,12 @@ Each has a regression guard unless noted.
 
 These need a human call or a failing test first.
 
-1. **Basic auth mints a `persistent_sessions` row per request.** Browsers resend
-   `Authorization` on every request, so a `BASIC_AUTH_ENABLED` deployment gets one
-   INSERT per page load. Same failure class as the 2,569,021-row demo-guest incident
-   documented ~100 lines away in `Web/Auth.hs`. The fix reorders auth resolution.
+1. ~~**Basic auth mints a `persistent_sessions` row per request.**~~ — **FIXED; entry was
+   stale, verified round thirteen.** `Web/Auth.hs:149-152` now reuses the cookie's session
+   when it is live *and* belongs to the same basic-auth identity, falling back to minting
+   only otherwise. The guard on identity is load-bearing: a cookie for any other user must
+   not be adopted just because it exists.
+
 2. **Two independent project-membership checks.** `Auth.hs:374` (CLI path) vs
    `Projects.sessionAndProject`. The API path is *stricter* — no sudo bypass, no stale
    refetch — so not a vulnerability, but they can drift.
@@ -90,8 +92,11 @@ These need a human call or a failing test first.
 6. **`SortConfig`/`Features.sort` and `SortableConfig`/`Features.sortableColumns` are
    dead** — no caller sets either, so Dashboards' `withSort` columns render no sort
    affordance. Keep-and-wire or delete: a product call.
-7. **`apiMonitorPatch` never recomputes `logQueryAsSql`**, so patching `query` leaves
-   the compiled SQL that drives alert evaluation stale.
+7. ~~**`apiMonitorPatch` never recomputes `logQueryAsSql`**~~ — **FIXED; entry was stale,
+   verified round thirteen.** Both the create path (`ApiHandlers.hs:226`) and the patch
+   path (`:348`) now go through the shared `compileAlertSql`, so a patched `query` can no
+   longer leave stale compiled SQL behind.
+
 8. **`AuthContext` carries `EnvConfig` twice** (`env` and `config`), set from the same
    value, used interchangeably, with nothing enforcing they stay equal.
 9. **`ErrorPatterns.getErrorPatternById` is unscoped** — not currently exploitable, as
@@ -146,8 +151,15 @@ must list it in its deriving clause.
   `LogPattern`, `UpsertPattern`, hourly stats, `Endpoints` and `SchemaLearning`.
 - **Stringly-typed `sourceField`** (`"body"/"summary"/"url_path"/"exception"`) used as a
   DB key in ~12 queries and in web routes.
-- **Stringly-typed `runtime`** in `ErrorFingerprint.parseStackFrame` with an `otherwise`
-  catch-all — a typo at a caller silently produces a different fingerprint.
+- ~~**Stringly-typed `runtime`** in `ErrorFingerprint.parseStackFrame`~~ — **this entry was
+  wrong; verified in round thirteen.** `Runtime` is a proper sum
+  (`RGo | RNodejs | RWebjs | RPython | RJava | RPhp | RDotnet | RGeneric`) derived via
+  `WrappedEnumSC`, and `parseStackFrame` matches all eight constructors exhaustively with
+  no catch-all. A caller cannot pass a typo'd string — the type forbids it. The only
+  residual is that `parseRuntime` maps an unrecognised SDK language attribute to
+  `RGeneric` silently, which is a documented total fallback at the boundary
+  ("Unknown values are 'RGeneric'"), i.e. parse-don't-validate rather than evasion. If
+  anything is wanted here it is a metric on the unknown-language case, not a type change.
 - **Unify `Utils.parseTime` with `TimePicker.parseSince`.** The labels are now shared;
   the parsers are not. `parseTime` returns an unbounded range for absent params and
   `Telemetry.hs:266` depends on exactly that, so each of four callers needs review.
@@ -300,12 +312,16 @@ Weeder's real value this round was not the deletions:
    *correctness* and is probably why it was never noticed — nothing breaks, the table just
    grows. **Now wired onto the same timer as `relayReap`.**
 
-2. **`TestClock.syncConnectionTime` is never called** — only referenced from two comments,
-   one of which (`TestUtils.hs:611`) claims SQL going through `app_now()` "sees the same
-   clock too". If nothing ever syncs the connection, that claim may not hold and
-   time-sensitive SQL in tests could be reading wall-clock. **Not changed** — the whole
-   suite passes today, so touching test-time plumbing needs a deliberate look rather than
-   a drive-by fix. Flagged for a human.
+2. ~~**`TestClock.syncConnectionTime` is never called**~~ — **this entry overstated the
+   risk; verified and resolved in round thirteen.** The clock/SQL sync *does* work: the
+   Hasql twin `runHasqlPoolSynced` is wired at three places in `TestUtils` and pushes the
+   clock into the `app.current_time` GUC before every Session, which is why
+   `AnomaliesSpec:551` can rely on a trigger reading `app_now()`. Test SQL was never
+   reading wall-clock. `syncConnectionTime` was only the unused *postgresql-simple*
+   sibling — genuinely dead (weeder had flagged it), now removed along with its two
+   now-unused imports. Both comments that pointed at it (the `TestClock` module header
+   and `TestUtils.runTestBg`) now name `runHasqlPoolSynced` instead, so the docs describe
+   the mechanism that actually exists.
 
 ---
 
