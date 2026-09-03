@@ -99,9 +99,10 @@ These need a human call or a failing test first.
 
 8. **`AuthContext` carries `EnvConfig` twice** (`env` and `config`), set from the same
    value, used interchangeably, with nothing enforcing they stay equal.
-9. **`ErrorPatterns.getErrorPatternById` is unscoped** — not currently exploitable, as
-   all three handler callers guard `err.projectId /= pid` explicitly, but the guard is
-   repeated rather than structural.
+9. ~~**`ErrorPatterns.getErrorPatternById` is unscoped**~~ — **RESOLVED as
+   deliberately-unscoped; entry was also miscounted.** There are *four* callers, not three:
+   the fourth is `BackgroundJobs.ErrorAssigned`, and it is the reason the query must stay
+   unscoped. See "audited, deliberately left unscoped" below.
 
 ## Pattern hashes are NOT project-scoped (verified)
 
