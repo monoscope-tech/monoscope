@@ -16,6 +16,8 @@ module Models.Apis.LogQueries (
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   fetchSessions,
+  SessionSort (..),
+  sessionSortColumn,
   ExpandKind (..),
   fetchEventExamples,
   selectChildSpansAndLogs,
@@ -58,7 +60,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
-import Pkg.DeriveUtils (DB, WrappedEnumShow (..), encodeEnumSC, rawSql)
+import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), encodeEnumSC, rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
@@ -68,7 +70,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats)
-import Web.HttpApiData (ToHttpApiData (..))
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 
 data SDKTypes
@@ -705,17 +707,47 @@ sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attribu
 -- The session-level summary (header KPIs + over-time buckets) is computed in the
 -- SAME scan via a @summ@ CTE CROSS JOINed onto every page row, so the sessions
 -- viz reads the window once instead of twice (was a separate 'fetchSessionSummary').
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (SessionSummary, Int, [SessionRow])
+-- | Ordering for the Sessions viz. The wire spellings are exactly the values the sort
+-- dropdown in "Pkg.Components.LogQueryBox" emits and what shared URLs carry.
+--
+-- This was 'Text' matched in a @case@ whose fall-through defaulted to @last_seen@, so a
+-- sixth option added to the dropdown would have silently sorted by last-seen instead —
+-- the same failure 'Endpoints.EndpointSort' was introduced to kill, in its sibling
+-- module. An exhaustive 'sessionSortColumn' makes that mismatch a compile error.
+--
+-- >>> map (\s -> parseUrlPiece s :: Either Text SessionSort) ["last_seen", "first_seen", "duration", "errors", "events"]
+-- [Right SortLastSeen,Right SortFirstSeen,Right SortDuration,Right SortErrors,Right SortEvents]
+--
+-- Anything else is rejected rather than quietly reinterpreted:
+--
+-- >>> parseUrlPiece "alphabetical" :: Either Text SessionSort
+-- Left "Invalid Sort value: alphabetical"
+data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | SortEvents
+  deriving stock (Eq, Generic, Read, Show)
+  -- ToJSON is for the trace line below: it logs the *parsed* ordering, so an
+  -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
+  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
+
+
+-- | The column each ordering sorts on. Exhaustive by construction.
+--
+-- >>> map sessionSortColumn [SortLastSeen, SortDuration, SortErrors, SortEvents]
+-- ["last_seen","duration_ns","error_count","event_count"]
+sessionSortColumn :: SessionSort -> Text
+sessionSortColumn = \case
+  SortLastSeen -> "last_seen"
+  SortFirstSeen -> "first_seen"
+  SortDuration -> "duration_ns"
+  SortErrors -> "error_count"
+  SortEvents -> "event_count"
+
+
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   now <- Time.currentTime
   let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
       bucketW = bucketWidthSecs dateRange now
-      sortCol = case sortByM of
-        Just "duration" -> "duration_ns" :: Text
-        Just "errors" -> "error_count"
-        Just "events" -> "event_count"
-        Just "first_seen" -> "first_seen"
-        _ -> "last_seen"
+      sortCol = sessionSortColumn $ fromMaybe SortLastSeen sortByM
   Log.logTrace "fetchSessions: start"
     $ AE.object ["project_id" AE..= pid, "skip" AE..= skip, "date_range" AE..= show dateRange, "sort_by" AE..= sortByM]
   let sortColSql = rawSql sortCol
