@@ -1,7 +1,20 @@
 # Error grouping: why we re-notify, and the loop that fixes it
 
-Status: plan. Phase 1 not yet implemented.
-Measurements are 30 days of prod `apis.error_patterns` taken 2026-09-03.
+Status: **shipped 2026-09-03**, running with auto-apply off.
+Measurements are 30 days of prod `apis.error_patterns` taken the same day.
+
+| what | flag | state |
+|---|---|---|
+| review + refute, records verdicts | `enableErrorGroupReview` | **on** |
+| merges rows on a confirmed verdict | `enableErrorGroupAutoApply` | off |
+| distils a merge into an ingest-time mask | `enableErrorMaskPromotion` | off |
+
+First live run: 6,019 of 23,397 patterns given a shape, **9 groups reviewed and all 9
+survived refutation** — shapes the model named were "RPC hostname", "route ID",
+"product SKU", "query parameter values". Nothing merged: every group sits at one
+confirmation and `errorGroupEvidenceMet` needs two, which is the gate working.
+
+Turn the flags on in the order above, reading a day of verdicts between each.
 
 ## The complaint
 
@@ -122,6 +135,62 @@ the container. Only `embedDocuments` produces nothing. `.env` carries
 `OPENAI_BASE_URL`; a gateway implementing chat completions but not `/embeddings`
 gives exactly this split, with the `logAttention` swallowed by prod's log level.
 **Check the prod base URL.** Either way this plan does not depend on embeddings.
+
+## Prior art, and where we cannot copy it
+
+### Sentry
+
+Groups by **stack trace first, exception type second, message last** — the fallback
+chain, not a blend. On top of that it ships *grouping enhancements*: built-in
+fingerprinting rules for error families known to fan out, plus per-project custom
+fingerprint rules, plus automatic detection and skipping of framework and middleware
+frames so two runs of the same user code group together.
+
+**The part we cannot use is the part it leans on hardest.** 1245 of our 1486 error
+patterns — **84%** — have no stack trace at all, so Sentry's primary signal is absent
+for five errors in six and everything rides on the message. That single number is why
+this document is mostly about message normalisation and not about frame matching.
+
+**The part we copy directly** is the fallback chain, which `computeErrorHashes`
+already implements (stack → type+message → message), and the idea that known-noisy
+families deserve declared rules rather than cleverness — `isFrameworkTransportError`
+is that mechanism, and Phase 4's learned masks are the same idea with the rules
+derived instead of hand-written.
+
+### Drain3 (log template mining)
+
+A streaming template miner: a fixed-depth parse tree plus a similarity threshold
+(`sim_th`, default 0.4), and **masking rules** that replace UUIDs, IPs and timestamps
+before comparison. Its own documentation is blunt that the two parameters that matter
+most are the masking rules and the threshold, and that accuracy improves when you feed
+it only the unstructured free-text part of a message.
+
+**We already run Drain** — `Pkg.Drain`, for log patterns — and it is where the
+observation that our two normalisation vocabularies had drifted came from: Drain knew
+seven token classes `replaceAllFormats` did not.
+
+**Where we deliberately diverge:** Drain's similarity threshold decides "close enough"
+with a number. We use an LLM instead, for one measured reason — the residue after
+masking is not lexically close. `SomeAsyncException` had 11 groups sharing a single
+opening line, and `Error` had 427 singletons across 162 openings; those differ by
+hostname, table name and free-text tail, which a token-overlap threshold either misses
+or, tuned low enough to catch, starts merging genuinely different bugs. A threshold
+cannot tell `already cancelled` from `already completed`. That is the judgement we are
+paying a model for, and the reason the loop is propose-and-refute rather than
+cluster-by-distance.
+
+### Elastic / Datadog
+
+Both lean on categorisation of the same shape — mask the variable parts, cluster the
+rest. Nothing here changes the analysis above.
+
+### What this means for the ordering
+
+Prior art says: normalise hard first, declare rules for known-noisy families, and only
+then reach for judgement. That is why the hex fix shipped first (1486 → 783 on its
+own), why hand-written masks were measured before being written (5% more, so not
+worth it), and why the LLM is aimed at the semantic residue instead of the whole
+corpus.
 
 ## The design
 
