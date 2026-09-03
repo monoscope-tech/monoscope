@@ -577,3 +577,21 @@ foreign row comes back, and an undecodable payload turns the disclosure assertio
 That generalises: **a fixture defect that only manifests when the guard fails is invisible
 to every run in which the guard works.** Break-testing is the only thing that exercises
 that path, which makes it the only way to find this class of bug.
+
+## `getErrorPatternById` — audited, deliberately left unscoped
+
+Flagged during the scans as "keyed on an entity id, unscoped". It is not a
+vulnerability: all four callers hold a `pid` and all four guard. The three handlers in
+`Pages/Anomalies.hs` (`assignErrorPostH`, `resolveErrorPostH`, `errorSubscriptionPostH`)
+each match `err.projectId /= pid`, and `BackgroundJobs.ErrorAssigned` guards
+`err.projectId == pid`.
+
+The tempting consolidation — scope the query, as the other three fixes did — would be a
+regression. `ErrorAssigned` deliberately separates "no such row" from "row in another
+tenant" and `logAttention`s the second, because a cross-tenant assignment is a signal, not
+a miss. Scoping the query collapses both into `Nothing` and deletes that branch. Encoding
+the distinction instead (`data Scoped a = Missing | WrongTenant a | Found a`) costs more
+lines than the three guard arms it would replace.
+
+Scope-in-the-query is the right default *when the caller only needs presence*. It is the
+wrong move when the caller needs to distinguish absence from a tenant mismatch. Leave it.
