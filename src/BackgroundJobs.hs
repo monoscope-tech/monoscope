@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -98,6 +98,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
@@ -2146,11 +2147,33 @@ processProjectErrors pid errors now = do
                 existingM
             else do
               -- Fast pre-merge: skip issue creation if an identical canonical pattern already exists
-              canonicalM <- ErrorPatterns.findCanonicalMatch pid err.service err.errorType err.message
+              -- Excluding this row itself, which the query happily returns: it looks
+              -- for the oldest unmerged pattern with this exact message, and the
+              -- pattern that just arrived is one. The old code was unharmed — a self
+              -- match fell through the `/= err.id` guard into issue creation, which
+              -- was the right answer anyway — but it makes `isJust exactM` useless as
+              -- "an earlier canonical exists", and short-circuited the shape lookup
+              -- below for every single arrival.
+              exactM <- mfilter (/= err.id) <$> ErrorPatterns.findCanonicalMatch pid err.service err.errorType err.message
+              -- Then the shape a review has already authorised. This is what turns the
+              -- review loop from a tidy-up into a fix: byte-equality only catches a
+              -- message we have seen character for character, so the NEXT variant of a
+              -- group we just merged still minted its own issue and notified before any
+              -- sweep could fold it.
+              --
+              -- Only when the arriving error has no stack trace. With one, the
+              -- fingerprint hashes the stack and not the message, so same-shape means
+              -- two different bugs by its own rule and folding them would swallow the
+              -- second one's first notification.
+              shapeM <-
+                if isJust exactM || not (T.null (T.strip err.stacktrace))
+                  then pure Nothing
+                  else PatternMergeDB.canonicalForAppliedShape pid (EF.computeErrorHashes pid.toText err.service Nothing EF.RGeneric err.errorType err.message "").shape err.service
+              let canonicalM = exactM <|> shapeM
               case canonicalM of
                 Just canonicalId | canonicalId /= err.id -> do
                   void $ PatternMergeDB.setCanonicalId err.id canonicalId
-                  Log.logTrace "Pre-merged new error into canonical" (pid, err.id, canonicalId)
+                  Log.logInfo "Pre-merged new error into canonical" (pid, err.id, canonicalId, "by_shape", isNothing exactM)
                 _ -> do
                   issue <- createIssueForError pid err
                   enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
@@ -5193,7 +5216,9 @@ reviewErrorGroups :: Projects.ProjectId -> ATBackgroundCtx ()
 reviewErrorGroups pid = do
   ctx <- ask @Config.AuthContext
   if not ctx.config.enableErrorGroupReview || T.null ctx.config.openaiApiKey
-    then Log.logInfo "Error group review disabled or unconfigured, skipping" (pid, T.null ctx.config.openaiApiKey)
+    -- Attention, not info: the embedding tier this replaces produced nothing for
+    -- months behind a log line nobody's level was low enough to see.
+    then Log.logAttention "Error group review disabled or unconfigured, skipping" (pid, "no_api_key", T.null ctx.config.openaiApiKey)
     else tryStep "errorGroupReview" do
       cursor <- PatternMergeDB.getReviewCursor pid
       groups <- PatternMergeDB.getErrorShapeGroups pid cursor errorGroupReviewBatch
@@ -5218,7 +5243,12 @@ reviewErrorGroups pid = do
             else do
               members <- forM fresh \(gkey, mhash, g) -> do
                 texts <- PatternMergeDB.fetchErrorTexts (V.toList g.memberIds)
-                pure (gkey, mhash, g, ordNub $ Map.elems texts)
+                -- NORMALISED, not raw. `error_patterns.message` is stored exactly as
+                -- the customer's code emitted it — the messages that started this work
+                -- carry order ids and data tokens inline — and normalisation otherwise
+                -- happens only inside hashing. This is a vendor call, so the
+                -- substitution has to be made here, explicitly, before the text leaves.
+                pure (gkey, mhash, g, ordNub $ map EF.normalizeMessage $ Map.elems texts)
               reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members]) ctx.config.openaiApiKey
               case reply of
                 Left err -> Log.logAttention "Error group review: LLM call failed" (pid, err)
@@ -5308,7 +5338,7 @@ recheckQuarantinedErrorMerges pid = do
   when (ctx.config.enableErrorGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "errorMergeRecheck" do
     pending <- PatternMergeDB.getQuarantinedErrorMerges pid
     unless (null pending) do
-      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, et, V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, et, ordNub $ map EF.normalizeMessage $ V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
       case reply of
         Left err -> Log.logAttention "Error quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
         Right txt -> do
