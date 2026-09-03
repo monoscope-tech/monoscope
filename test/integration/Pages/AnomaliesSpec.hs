@@ -599,6 +599,33 @@ spec = sequential $ aroundAll withTestResources do
       whenJust (find (\r -> r.base.id == iid) after) \row ->
         V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
 
+    -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
+    -- adjacent handler. `errorGroupMembersGetH` checks the caller may access `pid`, then
+    -- listed group members by pattern id alone — disclosing another project's error types
+    -- and messages, and rendering unmerge links for them under the caller's own project
+    -- path.
+    it "errorGroupMembers_doesNotDiscloseAnotherProjectsPatterns" \tr -> do
+      let otherPid = UUIDId $ Unsafe.fromJust $ DataUUID.fromString "0000ffff-0000-0000-0000-00000000cd01" :: Projects.ProjectId
+      canonicalId <- UUID.nextRandom
+      memberId <- UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                VALUES (?, 'group-read-authz-victim', 'Free', true, NULL, false, false)
+                ON CONFLICT (id) DO NOTHING |]
+          (PGS.Only otherPid.unwrap)
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, canonical_id, merge_override)
+                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', ?, FALSE)
+                ON CONFLICT (id) DO NOTHING |]
+          (memberId, otherPid.unwrap, canonicalId)
+
+      -- Acting as testPid, ask for the other project's group members.
+      (_, html) <- testServant tr $ AnomalyList.errorGroupMembersGetH testPid canonicalId
+      let rendered = TL.toStrict $ renderText $ toHtml html
+      rendered `shouldSatisfy` not . T.isInfixOf "victim-only-message"
+      rendered `shouldSatisfy` not . T.isInfixOf "SecretTypeError"
+
     -- Sibling of the monitor-toggle authz test. `errorUnmergePostH` checks the caller may
     -- access `pid`, then unmerged by pattern id alone — unlike the three sibling handlers
     -- in the same module, which each guard with `err.projectId /= pid`. So a user on one
