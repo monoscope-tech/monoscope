@@ -283,13 +283,63 @@ runtime-exception pages render byte-identically to before (`INVESTIGATION`,
    then screenshot the file — the server defaults anonymous sessions to dark,
    so a plain headless run only ever shows one theme.
 
-## 7. Remaining plan
+## 6b. Shipped — the stack-trace empty state (commit `52f86472a`)
 
-P2–P5 as listed in §5, unchanged. Note for whoever picks up P2: `make
-test-doctests` currently fails on `test/integration/EndpointDiscoverySpec.hs`
-(another session's uncommitted work, unrelated), so the doctest gate could not
-be run green for P1; the two doctests added there were verified by reasoning and
-the monitor-id extraction confirmed against the live page's `View monitor` href.
+F2's copy half. 151 of 151 runtime exceptions in the demo project hit this empty
+state, and it read *"No stack trace captured — common for browser console
+errors. Check the User Journey for the events that led up to it."* — wrong for
+readers whose errors are Go, and pointing at a section labelled "User Journey"
+nowhere on the page. It now names the runtime that stayed silent and points at
+evidence the page has: the Trace tab when a trace was captured, the Logs tab
+when it wasn't. Guarded by a spec asserting the Go wording and the absence of
+the browser claim.
+
+Synthesising frames from the span chain (P4's other half) is still open. The
+data is confirmed present: the errored span's subtree is a real cross-service
+call path (`CheckoutService/PlaceOrder` → `prepareOrderItemsAndShippingQuote…`
+→ `CartService/GetCart` / `ProductCatalogService/GetProduct`).
+
+## 7. State of verification
+
+Two environmental problems, neither caused by this work, that the next session
+should know about before trusting a green or a red:
+
+- **`:8080` serves stale code.** Two processes are bound to it; the one holding
+  the socket started 21:23 and cannot be replaced while the other session's
+  `Notify.hs` (`dropChannel` shadowing, `-Werror=name-shadowing`) keeps their
+  GHCi from reloading. Anything rendered after that time will not appear.
+  **Gate every screenshot on `curl <url> | grep <string-unique-to-your-change>`
+  first.** Do not kill either PID — the other session is live.
+- **The integration target does not compile**, because
+  `test/integration/EndpointDiscoverySpec.hs:436` (another session's
+  uncommitted work) references an out-of-scope `env` field. This blocks
+  `make test-doctests` *and* the two specs added here, so they are written but
+  never type-checked. When the tree heals:
+  `TEST_MATCH=/AnomaliesSpec/ make live-test-dev` (no spaces in TEST_MATCH).
+
+What each change actually rests on:
+
+| commit | compile | runtime | spec |
+|---|---|---|---|
+| `ff8d94ee2` query-alert page | ✓ | ✓ curl + screenshot | written, not run |
+| `dcfa1b58d` chart window | ✓ | ✓ screenshot (y-axis 3000→250) | written, not run |
+| `52f86472a` stack-trace copy | ✓ | ✗ blocked by stale `:8080` | written, not run |
+
+## 8. Remaining plan
+
+P2–P5 as listed in §5. One precondition is now settled from code:
+
+- **P2 cannot get its range total from the widget.** `Widget.value` is only ever
+  filled server-side (`Widget.hs:288`, from `WidgetDataset.rowsCount`), and
+  these charts are `standalone`/`naked` with the dataset fetched client-side —
+  `widgets.ts` never writes a header count back. So the aggregate band needs its
+  own lazy count fragment after all, in the shape `activityPanel_` already uses.
+  The per-type impact slot stays as decided in §5: RuntimeException / LogPattern
+  / ApiChange → total events; QueryAlert → the threshold pair it already has.
+
+Also worth doing, found while working and small: the Activity card spends ~160px
+to render "No activity yet." The product register's rule is that empty states
+teach the interface rather than announce emptiness.
 
 Deferred, and why: per-event Tags table (P3 covers the higher-value aggregate
 first); release/commit on first-seen (no release tracking wired yet);
