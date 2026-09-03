@@ -561,6 +561,44 @@ fragment** so the Trace tab opens focused on the failure, instead of rendering a
 third view of span data the waterfall and User Journey already show. That is an
 argument for one extra parameter, not a new surface.
 
+### Outcomes — what the measurements said, and what shipped
+
+Recorded against the options above, which were committed (`051a884eb`) before any
+of this was built.
+
+**A — shipped as option 2 (`c4c3b421c`).** `issueFactRow_` renders service,
+environment and first/last seen once, under the badges, for all four types; the
+two panels gave up what they duplicated. Two things the review added that I had
+not planned: omit absent cells rather than printing "Unknown service", and leave
+issue *state* out of the row because `issueStatusStrip_` already owns it and a
+second signal could disagree with it. Deleting the duplicates left "Error
+Details" as a titled card around one line, so the runtime became a chip and the
+card now renders only when there is request context. Verified: the row appears
+exactly once on every type, and 26 examples still pass.
+
+**B — deferred, on the measurement, as the budget said it would be.** Coverage
+was fine (`service` 100%, `version` 95%, `status_code` 70% over a sample window),
+so this is purely cost. A *single* hash-scoped `GROUP BY` at the page's then-
+default 24H window took **48s** against a ~3s budget — 16x over, and that is one
+column, not the three or four a distribution panel needs. **P3 stays unbuilt
+until the predicate is cheaper**; the honest version of this feature needs an
+index or a materialised per-issue rollup, not a UI change. Shipping it as-is
+would have put a second timeout on the page we had just finished un-breaking.
+
+**C — closed as not-to-build, and the useful remainder shipped instead
+(`0ddf925b0`).** The waterfall and User Journey already render this span data;
+a third view would have been the same mistake §8 records. What was genuinely
+missing was that `traceFragmentUrl` never passed a span id even though `traceH`
+resolves one for nav — so the Trace tab now opens focused on the failing span
+instead of the trace root.
+
+**And the measurement caught that F8 was only half-fixed.** The same probe showed
+the *chart's own* count still cost ~48s at the 24H default — no longer an error
+banner, but not a chart anyone waits for either. The width table
+(4h 3.2s / 8h 10.3s / 24h 47.8s / 3d timeout) put the bracket at ±2h, which is
+where the query alert already sat. That is the second time today the fix for
+this page came from measuring rather than reasoning about it.
+
 ### What I want reviewed before building
 
 1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
