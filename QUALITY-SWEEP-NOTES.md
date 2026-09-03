@@ -596,3 +596,33 @@ lines than the three guard arms it would replace.
 
 Scope-in-the-query is the right default *when the caller only needs presence*. It is the
 wrong move when the caller needs to distinguish absence from a tenant mismatch. Leave it.
+
+## Open decision: `detectErrorSpikes` ignores acknowledgements
+
+`Issues.isSilenced` has exactly one caller — `detectLogPatternSpikes`. Its own Haddock
+says "Detectors consult this before firing a fresh issue: an ack means 'don't tell me
+about this again', not merely 'hide the old row'." `detectErrorSpikes` never calls it,
+so the two detectors disagree about what an acknowledgement means.
+
+The mechanism, which is worth understanding before anyone changes it:
+
+- `insertIssue`'s `ON CONFLICT (project_id, target_hash, issue_type) WHERE
+  acknowledged_at IS NULL AND archived_at IS NULL` — that `WHERE` is the **partial-index
+  predicate**, not a `DO UPDATE` condition. An acked row is not in the index, so no
+  conflict is detected and the INSERT creates a *second* row.
+- `mkErrorIssue` sets `issueType = RuntimeException` and `targetHash = p.hash`, which is
+  exactly the key `isSilenced` queries. The data for the check is already present.
+- Note the two fields are not the same notion: the partial index keys on
+  `acknowledged_at IS NULL` ("seen"), `isSilenced` keys on `acknowledged_until > now`
+  ("silenced until"). A plain ack and a timed ack behave differently.
+
+**Do not "fix" this without a product call.** Four tests in `ErrorPatternsSpec` (326,
+392, 433, 467) ack every open issue *in order to* get a fresh spike issue created —
+`-- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue`.
+Gating on `isSilenced` fails all four.
+
+Both readings are defensible: an ack should mean silence (what the word means, what the
+log-pattern path does), or a spike is new information an ack shouldn't mask ("I know about
+this error" ≠ "I know it just went 10x"). The fixture comment suggests the current
+behaviour was discovered as a test convenience rather than chosen, but that is inference,
+not evidence. It is user-visible paging behaviour; wrong either way is expensive.
