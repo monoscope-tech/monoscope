@@ -1000,3 +1000,96 @@ spec = sequential $ aroundAll withTestResources do
       patM2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "empty-trace-hash"
       fmap (.recentTraceId) patM2 `shouldBe` Just (Just "abc123")
       fmap (.firstTraceId) patM2 `shouldBe` Just (Just "abc123")
+
+    -- Regression guards for the four notification paths. `canonical_id` used to gate
+    -- exactly one of them, so merging a pattern after its issue existed silenced
+    -- nothing — and that is the state every post-hoc merge lands in.
+    it "mergedPattern_isSilentOnEverySweepPath" \tr -> do
+      let mkErr h m =
+            (def :: ErrorPatterns.ATError)
+              { ErrorPatterns.projectId = Just pid
+              , ErrorPatterns.when = frozenTime
+              , ErrorPatterns.errorType = "MergeSilenceError"
+              , ErrorPatterns.rootErrorType = "MergeSilenceError"
+              , ErrorPatterns.message = m
+              , ErrorPatterns.rootErrorMessage = m
+              , ErrorPatterns.stackTrace = ""
+              , ErrorPatterns.hash = h
+              , ErrorPatterns.shapeHash = Just "silence-shape"
+              }
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.fromList [mkErr "silence-canon" "canonical form", mkErr "silence-dupe" "duplicate form"]) frozenTime
+      canonM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "silence-canon"
+      dupeM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "silence-dupe"
+      case (canonM, dupeM) of
+        (Just canon, Just dupe) -> do
+          -- An issue exists for the duplicate BEFORE it is merged: this is the whole
+          -- point. A merge that only suppressed at ingest would never reach this row,
+          -- and the sweep JOINs on the issue, so without one it proves nothing.
+          void $ runTestBg frozenTime tr do
+            ci <- Issues.createNewErrorIssue pid canon
+            Issues.insertIssue ci
+            di <- Issues.createNewErrorIssue pid dupe
+            Issues.insertIssue di
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL, subscribed = TRUE, state = 'new' WHERE id IN (?, ?) |] (canon.id, dupe.id)
+
+          void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId dupe.id canon.id
+
+          -- 1. the 24h sweep must not claim it
+          (notifs, _) <-
+            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton dupe.hash)
+          notifs `shouldBe` []
+
+          -- 2. spike detection must not see it
+          rates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+          map (.hash) rates `shouldSatisfy` notElem "silence-dupe"
+          map (.hash) rates `shouldSatisfy` elem "silence-canon"
+        _ -> expectationFailure "seeded merge-silence patterns not found"
+
+    it "revertErrorGroupApply_unassignsAndBlocksRelitigation" \tr -> do
+      -- Seeds its own rows rather than leaning on the test above: `aroundAll` shares a
+      -- database across the file, so a borrowed fixture passes in a full run and fails
+      -- the moment anyone filters to this one example.
+      let mkErr h m =
+            (def :: ErrorPatterns.ATError)
+              { ErrorPatterns.projectId = Just pid
+              , ErrorPatterns.when = frozenTime
+              , ErrorPatterns.errorType = "RevertError"
+              , ErrorPatterns.rootErrorType = "RevertError"
+              , ErrorPatterns.message = m
+              , ErrorPatterns.rootErrorMessage = m
+              , ErrorPatterns.stackTrace = ""
+              , ErrorPatterns.hash = h
+              , ErrorPatterns.shapeHash = Just "revert-shape"
+              }
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.fromList [mkErr "revert-canon" "canonical form", mkErr "revert-dupe" "duplicate form"]) frozenTime
+      canonM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "revert-canon"
+      dupeM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "revert-dupe"
+      case (canonM, dupeM) of
+        (Just canon, Just dupe) -> do
+          void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId dupe.id canon.id
+          void $ runTestBg frozenTime tr $ PatternMerge.revertErrorGroupApply pid "revert-shape" (V.singleton canon.id)
+          after <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "revert-dupe"
+          -- Un-assigned, and fenced off: a group the model both merged and disowned
+          -- is not one to keep re-asking about.
+          fmap (.canonicalId) after `shouldBe` Just Nothing
+          fmap (.mergeOverride) after `shouldBe` Just True
+          -- And merge_override means a later pass cannot re-merge it.
+          void $ runTestBg frozenTime tr $ PatternMerge.setCanonicalId dupe.id canon.id
+          again <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "revert-dupe"
+          fmap (.canonicalId) again `shouldBe` Just Nothing
+        _ -> expectationFailure "seeded revert patterns not found"
+
+    it "reviewCursor_advancesThenRestartsAtTheEnd" \tr -> do
+      start <- runTestBg frozenTime tr $ PatternMerge.getReviewCursor pid
+      start `shouldBe` ""
+      void $ runTestBg frozenTime tr $ PatternMerge.setReviewCursor pid "shape-042"
+      mid <- runTestBg frozenTime tr $ PatternMerge.getReviewCursor pid
+      mid `shouldBe` "shape-042"
+      -- Reaching the end resets rather than stopping: a shape that gains members
+      -- later has to be re-examined, and a cursor that only moves forward is how a
+      -- sweep quietly declares itself done with work left.
+      void $ runTestBg frozenTime tr $ PatternMerge.setReviewCursor pid ""
+      wrapped <- runTestBg frozenTime tr $ PatternMerge.getReviewCursor pid
+      wrapped `shouldBe` ""

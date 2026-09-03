@@ -8,6 +8,18 @@ module Models.Apis.PatternMerge (
   getErrorPatternGroupMembers,
   fetchErrorTexts,
   setCanonicalId,
+  -- Shape-keyed review loop
+  ErrorGroupReview (..),
+  ErrorShapeGroup (..),
+  getErrorShapeGroups,
+  recordErrorGroupReviews,
+  getErrorGroupReviews,
+  markErrorGroupRefuted,
+  markErrorGroupApplied,
+  revertErrorGroupApply,
+  getQuarantinedErrorMerges,
+  getReviewCursor,
+  setReviewCursor,
   -- Log pattern operations
   getUnembeddedLogPatterns,
   getCanonicalLogPatterns,
@@ -22,8 +34,10 @@ where
 
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
@@ -158,3 +172,166 @@ fetchLogSamples ids =
   Map.fromList
     . mapMaybe sequenceA
     <$> Hasql.interp [HI.sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(#{ids}) |]
+
+
+-- | One shape's worth of error patterns, as the review loop sees it.
+--
+-- The @sample@ is a normalised message, never the raw one: raw error text carries
+-- whatever the customer's code put in it, and this is the value that ends up in an
+-- LLM prompt.
+data ErrorShapeGroup = ErrorShapeGroup
+  { shapeKey :: Text
+  , errorType :: Text
+  , sample :: Text
+  , memberIds :: V.Vector ErrorPatternId
+  , memberCount :: Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | A stored verdict plus the evidence accumulated for it.
+data ErrorGroupReview = ErrorGroupReview
+  { groupKey :: Text
+  , membersHash :: Text
+  , memberCount :: Int64
+  , firstMemberCount :: Int64
+  , verdict :: Text
+  , confirmations :: Int64
+  , survivedRefute :: Bool
+  , appliedAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Candidate groups: unmerged patterns sharing a shape, biggest first.
+--
+-- @shape_hash@ is populated write-once by the upsert, so a pattern joins the pool
+-- the next time it occurs. Rows that never recur are not candidates and do not need
+-- to be — there is nothing left for them to suppress.
+getErrorShapeGroups :: DB es => Projects.ProjectId -> Text -> Int -> Eff es [ErrorShapeGroup]
+getErrorShapeGroups pid afterKey lim =
+  Hasql.interp
+    [HI.sql| SELECT shape_hash, MIN(error_type), MIN(message), ARRAY_AGG(id ORDER BY created_at), COUNT(*)::int8
+             FROM apis.error_patterns
+             WHERE project_id = #{pid} AND shape_hash IS NOT NULL
+               AND canonical_id IS NULL AND merge_override = FALSE
+               AND shape_hash > #{afterKey}
+             GROUP BY shape_hash
+             ORDER BY shape_hash
+             LIMIT #{lim} |]
+
+
+-- | Record this pass's verdicts. Agreement with the previous pass is what counts as
+-- confirmation; any disagreement resets the evidence rather than averaging it.
+recordErrorGroupReviews :: DB es => Projects.ProjectId -> [(Text, Text, Int64, Text, Text)] -> Eff es ()
+recordErrorGroupReviews _ [] = pass
+recordErrorGroupReviews pid rows =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.error_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape, confirmations, first_member_count)
+             SELECT #{pid}, k, h, n, v, s, 1, n
+             FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
+             ON CONFLICT (project_id, group_key)
+             DO UPDATE SET members_hash = EXCLUDED.members_hash, member_count = EXCLUDED.member_count,
+                           verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW(),
+                           confirmations = CASE
+                             WHEN apis.error_group_reviews.verdict = EXCLUDED.verdict
+                               THEN apis.error_group_reviews.confirmations + 1
+                             ELSE 1 END,
+                           first_member_count = CASE
+                             WHEN apis.error_group_reviews.verdict = EXCLUDED.verdict
+                               THEN apis.error_group_reviews.first_member_count
+                               ELSE EXCLUDED.member_count END,
+                           -- A changed verdict invalidates a refutation that was run
+                           -- against the old one.
+                           survived_refute = CASE
+                             WHEN apis.error_group_reviews.verdict = EXCLUDED.verdict
+                               THEN apis.error_group_reviews.survived_refute
+                             ELSE FALSE END
+             WHERE apis.error_group_reviews.applied_at IS NULL |]
+  where
+    keys = V.fromList [k | (k, _, _, _, _) <- rows]
+    hashes = V.fromList [h | (_, h, _, _, _) <- rows]
+    counts = V.fromList [n | (_, _, n, _, _) <- rows]
+    verdicts = V.fromList [v | (_, _, _, v, _) <- rows]
+    shapes = V.fromList [s | (_, _, _, _, s) <- rows]
+
+
+getErrorGroupReviews :: DB es => Projects.ProjectId -> Eff es [ErrorGroupReview]
+getErrorGroupReviews pid =
+  Hasql.interp
+    [HI.sql| SELECT group_key, members_hash, member_count::int8, first_member_count::int8,
+                    verdict, confirmations::int8, survived_refute, applied_at
+             FROM apis.error_group_reviews
+             WHERE project_id = #{pid} AND reverted_at IS NULL |]
+
+
+-- | Stamp the outcome of the refute pass. Survivors are eligible to apply; the rest
+-- keep their row as the record that the model argued both ways.
+markErrorGroupRefuted :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> Bool -> Eff es ()
+markErrorGroupRefuted _ [] _ = pass
+markErrorGroupRefuted pid keys survived = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.error_group_reviews SET refuted_at = #{now}, survived_refute = #{survived}
+             WHERE project_id = #{pid} AND group_key = ANY(#{V.fromList keys}) AND applied_at IS NULL |]
+
+
+markErrorGroupApplied :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> V.Vector ErrorPatternId -> Eff es ()
+markErrorGroupApplied pid gkey cids = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.error_group_reviews SET applied_at = #{now}, applied_canonical_ids = #{cids}
+             WHERE project_id = #{pid} AND group_key = #{gkey} |]
+
+
+-- | Undo an applied merge the quarantine re-check refuted.
+--
+-- Nothing was deleted — errors have no destructive cleanup — so this only has to
+-- un-assign. @merge_override@ then keeps the group out of every future pass: one the
+-- model has both merged and disowned is not one to keep re-litigating.
+revertErrorGroupApply :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> V.Vector ErrorPatternId -> Eff es Int64
+revertErrorGroupApply pid gkey cids = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.error_group_reviews SET reverted_at = #{now}
+             WHERE project_id = #{pid} AND group_key = #{gkey} |]
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET canonical_id = NULL, merge_override = TRUE
+             WHERE project_id = #{pid} AND canonical_id = ANY(#{cids}) |]
+
+
+-- | Applied merges still inside their 24h quarantine, with the member text the
+-- challenge prompt needs.
+getQuarantinedErrorMerges :: DB es => Projects.ProjectId -> Eff es [(Text, Text, V.Vector Text, V.Vector ErrorPatternId)]
+getQuarantinedErrorMerges pid =
+  Hasql.interp
+    [HI.sql| SELECT r.group_key, MIN(e.error_type), ARRAY_AGG(DISTINCT LEFT(e.message, 300)), r.applied_canonical_ids
+             FROM apis.error_group_reviews r
+             JOIN apis.error_patterns e
+               ON e.project_id = r.project_id AND e.canonical_id = ANY(r.applied_canonical_ids)
+             WHERE r.project_id = #{pid}
+               AND r.applied_at IS NOT NULL AND r.reverted_at IS NULL
+               AND r.applied_at > NOW() - INTERVAL '24 hours'
+             GROUP BY r.group_key, r.applied_canonical_ids |]
+
+
+getReviewCursor :: DB es => Projects.ProjectId -> Eff es Text
+getReviewCursor pid =
+  fromMaybe ""
+    <$> Hasql.interpOne [HI.sql| SELECT last_shape_key FROM apis.error_review_cursor WHERE project_id = #{pid} |]
+
+
+-- | Advance the sweep. An empty key means the corpus was walked to the end and the
+-- next run starts over — the sweep is a loop, not a one-shot, so a shape that gains
+-- members later is re-examined.
+setReviewCursor :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es ()
+setReviewCursor pid k = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.error_review_cursor (project_id, last_shape_key, updated_at, swept_at)
+             VALUES (#{pid}, #{k}, #{now}, CASE WHEN #{k} = '' THEN #{now} ELSE NULL END)
+             ON CONFLICT (project_id) DO UPDATE
+               SET last_shape_key = EXCLUDED.last_shape_key, updated_at = EXCLUDED.updated_at,
+                   swept_at = COALESCE(EXCLUDED.swept_at, apis.error_review_cursor.swept_at) |]

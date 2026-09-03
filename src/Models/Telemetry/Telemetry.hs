@@ -2176,6 +2176,7 @@ atErrorFrom spanObj typ msg stack =
         , stackTrace = stack
         , hash = hashes.narrow
         , parentHash = Just hashes.broad
+        , shapeHash = Just hashes.shape
         , isFramework = EF.isFrameworkTransportError typ (EF.normalizeMessage msg)
         , technology = Nothing
         , serviceName = serviceName

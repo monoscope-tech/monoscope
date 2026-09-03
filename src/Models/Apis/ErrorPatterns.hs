@@ -152,6 +152,7 @@ data ATError = ATError
   , stackTrace :: Text
   , hash :: Text
   , parentHash :: Maybe Text
+  , shapeHash :: Maybe Text
   , isFramework :: Bool
   , technology :: Maybe LogQueries.SDKTypes
   , requestMethod :: Maybe Text
@@ -407,7 +408,13 @@ getErrorPatternsWithCurrentRates pid now =
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
           AND counts.hour_bucket = #{truncateHour now}
+        -- Merged patterns are excluded for the same reason as in the notification
+        -- sweep: they are no longer their own error, and spike detection mints
+        -- issues and alerts of its own. 'propagateMergedCountsBatch' drains their
+        -- counters to the canonical each minute anyway, so a merged row's rate is
+        -- not a rate anyone should be alerted on.
         WHERE e.project_id = #{pid} AND e.state != 'resolved' AND NOT e.is_ignored
+          AND e.canonical_id IS NULL
       |]
 
 
@@ -438,16 +445,17 @@ batchUpsertErrorPatterns pid errors now =
   filter ((/= UOUnchanged) . snd)
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
-            project_id, error_type, message, stacktrace, hash, parent_hash, is_framework,
+            project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
             environment, service, runtime, error_data,
             first_trace_id, recent_trace_id,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
-          SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.is_framework,
+          SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data,
                  u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
                        unnest(#{stacktraces}::text[]) AS stacktrace, unnest(#{hashes}::text[]) AS hash,
-                       unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{isFrameworks}::bool[]) AS is_framework,
+                       unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
+                       unnest(#{isFrameworks}::bool[]) AS is_framework,
                        unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
                        unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data,
                        unnest(#{traceIds}::text[]) AS trace_id, unnest(#{counts}::bigint[]) AS cnt) u
@@ -458,6 +466,12 @@ batchUpsertErrorPatterns pid errors now =
             message = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.message ELSE apis.error_patterns.message END,
             error_data = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
             parent_hash = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
+            -- Write-once, which is how the 23,372 rows that predate the column acquire
+            -- one: a row takes its shape the next time it occurs and never pays a
+            -- rewrite after that. Unconditional assignment here would rewrite a column
+            -- per occurrence on the hottest path in the product, which is the same
+            -- heap/TOAST churn recent_trace_id is throttled to avoid.
+            shape_hash = COALESCE(apis.error_patterns.shape_hash, EXCLUDED.shape_hash),
             -- Refresh recent_trace_id at most once every 5 minutes per pattern.
             -- Without this guard a busy pattern rewrites this column on every
             -- occurrence, breaking HOT and bloating the heap/TOAST relation.
@@ -493,6 +507,7 @@ batchUpsertErrorPatterns pid errors now =
     stacktraces = V.map (.stackTrace) errs
     hashes = V.map (.hash) errs
     parentHashes = V.map (.parentHash) errs
+    shapeHashes = V.map (.shapeHash) errs
     isFrameworks = V.map (.isFramework) errs
     environments = V.map (.environment) errs
     services = V.map (.serviceName) errs

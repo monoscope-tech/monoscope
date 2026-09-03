@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -160,6 +160,7 @@ data BgJobs
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
+  | ErrorGroupReview UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | EndpointMergeCleanup UTCTime Projects.ProjectId
   | -- | Per-minute dispatcher: atomically lease due Prometheus targets (SKIP LOCKED,
@@ -368,6 +369,7 @@ processBackgroundJob authCtx bgJob =
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
+    ErrorGroupReview scheduledTime pid -> unlessStale "ErrorGroupReview" scheduledTime (15 * 60) $ reviewErrorGroups pid
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
     EndpointMergeCleanup scheduledTime pid -> unlessStale "EndpointMergeCleanup" scheduledTime 3600 $ endpointMergeCleanup pid
     LogPatternPeriodicProcessing scheduledTime pid ->
@@ -921,6 +923,7 @@ runDailyJobScheduling authCtx =
             -- Derived-table maintenance jobs read from `apis.*` tables, not
             -- the hypertable, and are unaffected by the derivation path.
             sched 96 900 (`PatternEmbeddingAndMerge` p)
+            sched 96 900 (`ErrorGroupReview` p)
             sched 96 900 (`LogPatternPeriodicProcessing` p)
             -- Discovery is what releases deferred new-endpoint alerts, so
             -- its period is the worst-case delay on one. Cleanup gates
@@ -1847,6 +1850,13 @@ claimDueErrorNotifications pid mHashes now =
             WHERE e.project_id = #{pid}
               AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
               AND e.state != 'resolved'
+              -- A pattern merged into a canonical is not its own error any more, and
+              -- must not keep reminding anyone that it is. Only the ingest path used
+              -- to consult canonical_id, and it only runs when a row is first created
+              -- — so a pattern merged AFTER its issue existed kept firing here
+              -- forever. That is exactly the population every post-hoc merge lands
+              -- in, which made merging invisible to the person being notified.
+              AND e.canonical_id IS NULL
               AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
               AND (
                 (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
@@ -2116,7 +2126,13 @@ processProjectErrors pid errors now = do
               $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id refs.slackTs refs.discordMsgId now
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
-        whenJust errM \err ->
+        -- A merged pattern is silent on every path, including this one. The
+        -- regression branch below consulted neither 'findCanonicalMatch' nor
+        -- canonical_id, so a pattern that was merged while resolved would mint a
+        -- brand new issue and notify the moment it recurred — and the corpus sweep
+        -- merges thousands of already-resolved historical patterns, every one of
+        -- which is a candidate to recur.
+        whenJust (mfilter (isNothing . (.canonicalId)) errM) \err ->
           if outcome == ErrorPatterns.UORegressed
             then do
               existingM <- Issues.selectIssueByHash pid errorHash (Issues.OfType Issues.RuntimeException)
@@ -5112,3 +5128,194 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     when dispatched
       $ void
       $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalRefs.slackTs finalRefs.discordMsgId now
+
+
+-- | How many shape groups one review run may ask about. Mirrors
+-- 'endpointGroupReviewBatch'; the sweep below is what turns a per-run budget into
+-- full coverage of a 23k-row corpus.
+errorGroupReviewBatch :: Int
+errorGroupReviewBatch = 30
+
+
+-- | Smallest group worth a verdict. Two patterns that read alike are a coincidence
+-- often enough that asking about them spends budget for a merge nobody notices.
+errorGroupMinMembers :: Int64
+errorGroupMinMembers = 2
+
+
+-- | Is there enough evidence to merge an error group?
+--
+-- Looser than 'mergeEvidenceMet' on purpose, and the difference is the undo. A wrong
+-- endpoint merge deletes issues and cannot be taken back once cleanup runs; a wrong
+-- error merge sets a column that 'revertErrorGroupApply' clears, so the cost of being
+-- wrong is a duplicate row for a day rather than lost data.
+--
+-- What it still insists on:
+--
+-- * __Agreement.__ Two passes seeing the group among different neighbours both said
+--   "param".
+-- * __Survived refutation.__ A third pass was asked to find the fault and did not.
+--   This is the one that is worth more than the other two: agreeing twice with the
+--   same question is largely the model agreeing with itself.
+-- * __Not shrinking.__ At least as many members as when the verdict was first argued
+--   for. A group that lost members is a group whose evidence has changed.
+--
+-- >>> errorGroupEvidenceMet 2 3 3 True
+-- True
+--
+-- Refutation is not optional, however many times it was confirmed:
+--
+-- >>> errorGroupEvidenceMet 5 3 3 False
+-- False
+--
+-- Nor is a second opinion:
+--
+-- >>> errorGroupEvidenceMet 1 3 3 True
+-- False
+--
+-- A shrinking group is refused even with the evidence:
+--
+-- >>> errorGroupEvidenceMet 2 4 3 True
+-- False
+errorGroupEvidenceMet :: Int64 -> Int64 -> Int64 -> Bool -> Bool
+errorGroupEvidenceMet confirmations firstCount nowCount survivedRefute =
+  confirmations >= 2 && survivedRefute && firstCount > 0 && nowCount >= firstCount
+
+
+-- | Review error groups by shape, refute the proposals, and merge what survives.
+--
+-- Deliberately not the embedding path. @patternEmbeddingAndMerge@ has produced zero
+-- vectors across 23,372 error patterns and 4,071,862 log patterns since it was
+-- written, and the headroom here is lexical anyway: 427 singleton @Error@ groups
+-- share 162 openings, and 11 @SomeAsyncException@ groups share one. Shape clustering
+-- reaches that for free and does not depend on a tier nobody has seen work.
+reviewErrorGroups :: Projects.ProjectId -> ATBackgroundCtx ()
+reviewErrorGroups pid = do
+  ctx <- ask @Config.AuthContext
+  if not ctx.config.enableErrorGroupReview || T.null ctx.config.openaiApiKey
+    then Log.logInfo "Error group review disabled or unconfigured, skipping" (pid, T.null ctx.config.openaiApiKey)
+    else tryStep "errorGroupReview" do
+      cursor <- PatternMergeDB.getReviewCursor pid
+      groups <- PatternMergeDB.getErrorShapeGroups pid cursor errorGroupReviewBatch
+      -- Walked off the end: start over next run rather than stopping. A shape that
+      -- gains members later deserves re-examining, and a cursor that only ever moves
+      -- forward is how a sweep quietly declares itself finished with work left.
+      if null groups
+        then do
+          PatternMergeDB.setReviewCursor pid ""
+          Log.logInfo "Error group sweep reached the end of the corpus, restarting next run" ("project_id", pid.toText)
+        else do
+          let candidates = [g | g <- groups, g.memberCount >= errorGroupMinMembers]
+              keyed = [(g.shapeKey, toXXHash (T.intercalate "," $ map (show . (.unErrorPatternId)) $ V.toList g.memberIds), g) | g <- candidates]
+          seen <- HM.fromList . map (\r -> (r.groupKey, r)) <$> PatternMergeDB.getErrorGroupReviews pid
+          let fresh = [k | k@(gkey, mhash, _) <- keyed, maybe True (\r -> r.membersHash /= mhash) (HM.lookup gkey seen)]
+          -- The cursor advances over everything examined, including groups that were
+          -- too small or already answered. Advancing only over the ones we asked
+          -- about would re-walk the same skipped prefix forever.
+          whenJust (viaNonEmpty last (map (.shapeKey) groups)) (PatternMergeDB.setReviewCursor pid)
+          if null fresh
+            then Log.logInfo "Error group review: nothing new in this window" ("project_id", pid.toText, "examined", length groups)
+            else do
+              members <- forM fresh \(gkey, mhash, g) -> do
+                texts <- PatternMergeDB.fetchErrorTexts (V.toList g.memberIds)
+                pure (gkey, mhash, g, ordNub $ Map.elems texts)
+              reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorGroupReviewPrompt [(k, g.errorType, msgs) | (k, _, g, msgs) <- members]) ctx.config.openaiApiKey
+              case reply of
+                Left err -> Log.logAttention "Error group review: LLM call failed" (pid, err)
+                Right txt -> do
+                  let verdicts = HM.fromList [(k, v) | (k, v, sh) <- PatternMerge.parseGroupReview txt, sh `seq` True]
+                      shapes = HM.fromList [(k, sh) | (k, _, sh) <- PatternMerge.parseGroupReview txt]
+                      rows =
+                        [ (gkey, mhash, g.memberCount, display v, fromMaybe "" $ HM.lookup gkey shapes)
+                        | (gkey, mhash, g, _) <- members
+                        , Just v <- [HM.lookup gkey verdicts]
+                        ]
+                  PatternMergeDB.recordErrorGroupReviews pid rows
+                  -- Refute only what was proposed as one bug. Asking about the
+                  -- "routes" verdicts would spend a call to be told what we already
+                  -- decided to do, which is nothing.
+                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, HM.lookup gkey verdicts == Just PatternMerge.Param]
+                  unless (null proposed) $ refuteErrorGroups pid ctx proposed
+                  Log.logInfo
+                    "Error group review complete"
+                    ("project_id", pid.toText, "examined", length groups, "asked", length members, "answered", length rows, "proposed_merges", length proposed)
+      when ctx.config.enableErrorGroupAutoApply $ tryStep "errorGroupApply" $ applyConfirmedErrorGroups pid
+      recheckQuarantinedErrorMerges pid
+
+
+-- | Second pass: assert each proposed merge and ask for the fault.
+refuteErrorGroups :: Projects.ProjectId -> Config.AuthContext -> [(Text, PatternMergeDB.ErrorShapeGroup, [Text])] -> ATBackgroundCtx ()
+refuteErrorGroups pid ctx proposed = do
+  reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, g.errorType, msgs) | (k, g, msgs) <- proposed]) ctx.config.openaiApiKey
+  case reply of
+    -- No refutation is not a survived refutation. A failed call leaves the proposals
+    -- unrefuted, which 'errorGroupEvidenceMet' reads as "not eligible" — the whole
+    -- point of storing the two facts separately.
+    Left err -> Log.logAttention "Error merge refutation: LLM call failed, proposals stay ineligible" (pid, err)
+    Right txt -> do
+      let answered = PatternMerge.parseGroupReview txt
+          asked = [k | (k, _, _) <- proposed]
+          refuted = [k | (k, v, _) <- answered, v /= PatternMerge.Param, k `elem` asked]
+          survived = [k | (k, v, _) <- answered, v == PatternMerge.Param, k `elem` asked]
+      PatternMergeDB.markErrorGroupRefuted pid survived True
+      PatternMergeDB.markErrorGroupRefuted pid refuted False
+      Log.logInfo
+        "Error merge refutation complete"
+        ("project_id", pid.toText, "asked", length asked, "survived", length survived, "refuted", length refuted)
+
+
+-- | Merge the groups whose evidence is in, oldest member as the canonical.
+applyConfirmedErrorGroups :: Projects.ProjectId -> ATBackgroundCtx ()
+applyConfirmedErrorGroups pid = do
+  reviews <- PatternMergeDB.getErrorGroupReviews pid
+  cursorless <- PatternMergeDB.getErrorShapeGroups pid "" 5000
+  let byKey = HM.fromList [(g.shapeKey, g) | g <- cursorless]
+      eligible =
+        [ (r.groupKey, g)
+        | r <- reviews
+        , isNothing r.appliedAt
+        , r.verdict == "param"
+        , errorGroupEvidenceMet r.confirmations r.firstMemberCount r.memberCount r.survivedRefute
+        , Just g <- [HM.lookup r.groupKey byKey]
+        ]
+  forM_ eligible \(gkey, g) -> case V.uncons g.memberIds of
+    Nothing -> pass
+    Just (canonical, rest) -> do
+      -- The mechanical gate, and the only one an author of error text cannot argue
+      -- with. Confirmations and the refutation both re-read the same attacker-supplied
+      -- message on every pass; this one never asks the model anything.
+      texts <- PatternMergeDB.fetchErrorTexts (V.toList g.memberIds)
+      let canonText = fromMaybe "" $ Map.lookup canonical texts
+          mergeable = V.filter (\m -> maybe False (PatternMerge.errorCanMerge canonText) (Map.lookup m texts)) rest
+      if V.null mergeable
+        then Log.logAttention "Error group cleared review but no member passed errorCanMerge, not merging" ("project_id", pid.toText, "group", gkey)
+        else do
+          void $ PatternMergeDB.assignErrorsToCanonical [(m, canonical) | m <- V.toList mergeable]
+          PatternMergeDB.markErrorGroupApplied pid gkey (V.singleton canonical)
+          Log.logInfo
+            "Merged an error group on a confirmed, unrefuted verdict"
+            ("project_id", pid.toText, "group", gkey, "canonical", canonical, "merged", V.length mergeable, "declined_by_can_merge", V.length rest - V.length mergeable)
+
+
+-- | Challenge each merge still in quarantine and undo the ones now refuted.
+--
+-- Stands in for a person reading the report, because nobody was going to. Reverting
+-- restores @canonical_id = NULL@ and sets @merge_override@, so a group the model has
+-- both merged and disowned stops being re-litigated every pass.
+recheckQuarantinedErrorMerges :: Projects.ProjectId -> ATBackgroundCtx ()
+recheckQuarantinedErrorMerges pid = do
+  ctx <- ask @Config.AuthContext
+  when (ctx.config.enableErrorGroupAutoApply && not (T.null ctx.config.openaiApiKey)) $ tryStep "errorMergeRecheck" do
+    pending <- PatternMergeDB.getQuarantinedErrorMerges pid
+    unless (null pending) do
+      reply <- ELLM.callLLM ctx.config.openaiSmallModel (PatternMerge.buildErrorMergeChallengePrompt [(k, et, V.toList msgs) | (k, et, msgs, _) <- pending]) ctx.config.openaiApiKey
+      case reply of
+        Left err -> Log.logAttention "Error quarantine re-check: LLM call failed, merges stay quarantined" (pid, err)
+        Right txt -> do
+          let refuted = [k | (k, v, _) <- PatternMerge.parseGroupReview txt, v /= PatternMerge.Param]
+          forM_ [(k, cids) | (k, _, _, cids) <- pending, k `elem` refuted] \(gkey, cids) -> do
+            restored <- PatternMergeDB.revertErrorGroupApply pid gkey cids
+            Log.logAttention
+              "Reverted an error merge the quarantine re-check refuted"
+              ("project_id", pid.toText, "group", gkey, "patterns_restored", restored)
+          Log.logInfo "Error quarantine re-check complete" ("project_id", pid.toText, "challenged", length pending, "reverted", length refuted)
