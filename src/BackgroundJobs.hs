@@ -1847,6 +1847,13 @@ claimDueErrorNotifications pid mHashes now =
             WHERE e.project_id = #{pid}
               AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
               AND e.state != 'resolved'
+              -- A pattern merged into a canonical is not its own error any more, and
+              -- must not keep reminding anyone that it is. Only the ingest path used
+              -- to consult canonical_id, and it only runs when a row is first created
+              -- — so a pattern merged AFTER its issue existed kept firing here
+              -- forever. That is exactly the population every post-hoc merge lands
+              -- in, which made merging invisible to the person being notified.
+              AND e.canonical_id IS NULL
               AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
               AND (
                 (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
@@ -2116,7 +2123,13 @@ processProjectErrors pid errors now = do
               $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id refs.slackTs refs.discordMsgId now
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
-        whenJust errM \err ->
+        -- A merged pattern is silent on every path, including this one. The
+        -- regression branch below consulted neither 'findCanonicalMatch' nor
+        -- canonical_id, so a pattern that was merged while resolved would mint a
+        -- brand new issue and notify the moment it recurred — and the corpus sweep
+        -- merges thousands of already-resolved historical patterns, every one of
+        -- which is a candidate to recur.
+        whenJust (mfilter (isNothing . (.canonicalId)) errM) \err ->
           if outcome == ErrorPatterns.UORegressed
             then do
               existingM <- Issues.selectIssueByHash pid errorHash (Issues.OfType Issues.RuntimeException)

@@ -407,7 +407,13 @@ getErrorPatternsWithCurrentRates pid now =
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
           AND counts.hour_bucket = #{truncateHour now}
+        -- Merged patterns are excluded for the same reason as in the notification
+        -- sweep: they are no longer their own error, and spike detection mints
+        -- issues and alerts of its own. 'propagateMergedCountsBatch' drains their
+        -- counters to the canonical each minute anyway, so a merged row's rate is
+        -- not a rate anyone should be alerted on.
         WHERE e.project_id = #{pid} AND e.state != 'resolved' AND NOT e.is_ignored
+          AND e.canonical_id IS NULL
       |]
 
 

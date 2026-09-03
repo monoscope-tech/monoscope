@@ -252,10 +252,21 @@ data GroupVerdict = Param | Routes | Mixed
 --
 -- >>> map (\(_, v, _) -> display v) $ parseGroupReview "{\"key\":\"a\",\"verdict\":\"mixed\"}"
 -- ["mixed"]
+--
+-- A key answered twice is dropped entirely, not resolved to one of its answers. The
+-- prompt lists every key in the batch, and the group text is written by whoever sent
+-- us the error — so a second line naming a *sibling* key is reachable by anyone who
+-- can put text in a message we review. The caller used to `HM.fromList` these, which
+-- is last-wins, letting that second line overwrite the sibling's real verdict.
+-- Dropping costs nothing: a group with no verdict this pass is simply re-asked.
+--
+-- >>> parseGroupReview "{\"key\":\"a\",\"verdict\":\"param\"}\n{\"key\":\"b\",\"verdict\":\"routes\"}\n{\"key\":\"a\",\"verdict\":\"routes\"}"
+-- [("b",Routes,"")]
 parseGroupReview :: Text -> [(Text, GroupVerdict, Text)]
-parseGroupReview =
-  mapMaybe (decodeLine . T.dropAround (\c -> c == '`' || c == ' ')) . lines . AI.stripCodeBlock
+parseGroupReview txt = filter (\(k, _, _) -> Map.lookup k seen == Just (1 :: Int)) parsed
   where
+    parsed = mapMaybe (decodeLine . T.dropAround (\c -> c == '`' || c == ' ')) $ lines $ AI.stripCodeBlock txt
+    seen = Map.fromListWith (+) [(k, 1) | (k, _, _) <- parsed]
     decodeLine ln = do
       v <- AE.decodeStrict (encodeUtf8 ln) :: Maybe AE.Value
       gkey <- v ^? key "key" . _String
