@@ -4439,8 +4439,8 @@ processGitSyncAction pid conn sync teamMap = \case
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
       _ <- Dashboards.updateSchema dashId schema (Just now)
-      whenJust schema.title $ void . Dashboards.updateTitle dashId
-      _ <- Dashboards.updateTags dashId (V.fromList $ fold schema.tags)
+      whenJust schema.title $ void . Dashboards.updateTitle pid dashId
+      _ <- Dashboards.updateTags pid dashId (V.fromList $ fold schema.tags)
       _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
       Log.logInfo "Updated dashboard from git" (relativePath, dashId)
   GitSync.SyncRename path sha dashId -> do

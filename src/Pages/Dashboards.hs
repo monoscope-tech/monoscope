@@ -1962,7 +1962,7 @@ dashboardRenamePatchH pid dashId form = do
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
-      _ <- Dashboards.updateTitle dashId form.title
+      _ <- Dashboards.updateTitle pid dashId form.title
 
       whenJust dashVM.schema \schema ->
         void $ Dashboards.updateSchema dashId (schema & #title ?~ form.title) Nothing
@@ -2020,7 +2020,7 @@ dashboardStarPostH pid dashId = do
   now <- Time.currentTime
   dashVM <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found"}
   let newStarredSince = if isJust dashVM.starredSince then Nothing else Just now
-  _ <- Dashboards.updateStarredSince dashId newStarredSince
+  _ <- Dashboards.updateStarredSince pid dashId newStarredSince
   addSuccessToast (if isJust newStarredSince then "Dashboard starred" else "Dashboard unstarred") Nothing
   addRespHeaders $ starButton_ pid dashId (isJust newStarredSince)
 
@@ -2549,7 +2549,7 @@ dashboardYamlPutH pid dashId form = do
     Right dashboard -> do
       now <- Time.currentTime
       _ <- Dashboards.updateSchema dashId dashboard (Just now)
-      whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle dashId t
+      whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle pid dashId t
       syncDashboardAndQueuePush pid dashId
       addSuccessToast "Dashboard schema updated" Nothing
       addTriggerEvent "closeYamlDrawer" ""
