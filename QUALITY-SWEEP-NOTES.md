@@ -626,3 +626,42 @@ log-pattern path does), or a spike is new information an ack shouldn't mask ("I 
 this error" ≠ "I know it just went 10x"). The fixture comment suggests the current
 behaviour was discovered as a test convenience rather than chosen, but that is inference,
 not evidence. It is user-visible paging behaviour; wrong either way is expensive.
+
+## Measured: the sweep is net +1811 lines in `src/`, and that is not verbosity
+
+`git diff --numstat 44c38b1c..HEAD -- src web-components/src` over 123 commits:
+**6292 insertions, 4481 deletions — net +1811.** The stated goal was to drastically
+reduce code size. It has grown. The breakdown explains why, and the conclusion is not
+"distill harder":
+
+Distill *worked* where it was applied — Bots (−61 Discord, −57 Slack, −49 Whatsapp),
+Onboarding −66, Dashboards −51, `Data/Effectful/Notify` −41, `log-list.ts` −38.
+
+Growth is feature and bug-fix surface, not bloat — `BackgroundJobs.hs` +400,
+`Models/Apis/PatternMerge.hs` +307, `Pages/Telemetry.hs` +160, `Pages/Bots/Utils.hs` +160,
+`Pkg/ErrorFingerprint.hs` +156, `Pages/Anomalies.hs` +147, `Models/Apis/Issues.hs` +144.
+
+Three distill passes on the largest files found **zero** mechanical wins:
+
+- `BackgroundJobs.hs` (5469 lines) — no cross-file clones exist anywhere in `src` at a
+  10-line normalised window. Its largest binding, `backfillSessionSql` at 265 lines, is
+  62 lines of SQL literal with 8 lines of Haskell around it.
+- `Pages/Dashboards.hs` / `Pages/Anomalies.hs` — modals are already shared (`modal_`,
+  `modalWith_`, `confirmModal_`, used across 8 files; the only hand-rolled `dialog_` is a
+  Slack API payload, not HTML).
+- `PatternMerge` — the error/log families are already unified behind one `MergeConfig`
+  record and a single `embedAndMerge` runner. The four remaining SQL pairs differ by
+  table and id column type (`uuid[]` vs `bigint[]`); unifying them means `HI.Sql`
+  fragment concatenation around each table name, which trades ~35 lines for materially
+  worse readability on hot ingestion queries.
+
+55 hand-written instances of derivable classes exist, and the concentrations are all
+justified: `Pkg/DeriveUtils.hs` *is* the deriving machinery, several are orphans for
+library types that cannot be derived, and `GitHost`'s six carry an explicit rationale —
+`WrappedEnumSC` would snake-case `GitHub` to `git_hub`, which migration 0125's CHECK
+constraint rejects.
+
+**The reduction target has been met on the code that existed; the remaining mass is
+irreducible SQL, genuinely distinct job logic, and new features.** Continuing to squeeze
+already-swept modules would trade correctness for line count. The honest next lever is
+scope — deciding which *features* to drop — and that is a product call, not a refactor.
