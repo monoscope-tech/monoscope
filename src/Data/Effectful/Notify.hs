@@ -257,6 +257,23 @@ imageUrl (AE.Object b) | Just (AE.String "image") <- AEK.lookup "type" b, Just (
 imageUrl _ = Nothing
 
 
+-- | Webhooks reject a top-level @channel@ — the target is baked into the URL.
+-- This is the ONLY difference between what the two transports put on the wire:
+-- both carry the same Block Kit, so an alert renders identically in every
+-- channel. Do not reintroduce a webhook-specific renderer here (a former
+-- @flattenForWebhook@ turned buttons into mrkdwn links, giving one alert two
+-- looks depending on which channel it reached).
+--
+-- >>> let msg extra = AE.object (extra <> ["attachments" AE..= ([AE.object ["blocks" AE..= ([] :: [AE.Value])]] :: [AE.Value])])
+-- >>> dropChannel (msg ["channel" AE..= ("C1" :: Text)]) == msg []
+-- True
+-- >>> dropChannel (msg []) == msg []
+-- True
+dropChannel :: AE.Value -> AE.Value
+dropChannel (AE.Object obj) = AE.Object $ AEK.delete "channel" obj
+dropChannel v = v
+
+
 -- Production interpreter
 runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
@@ -388,27 +405,46 @@ runNotifyProduction = interpret $ \_ -> \case
       _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
 
     -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
-    -- Slack rejects the "channel" field on webhooks. The OAuth-time webhook
-    -- endpoint (hooks.slack.com/services/T.../B.../SECRET) also rejects Block
-    -- Kit nested inside legacy "attachments" with invalid_attachments, so we
-    -- lift the inner blocks to the top level and drop the attachment wrapper
-    -- (losing only the color accent bar). Webhook endpoints return HTTP 200 +
-    -- body "ok" on success; we surface semantic failures as attention logs.
+    -- Slack rejects the "channel" field on webhooks, so it is stripped; the
+    -- Block Kit payload is otherwise sent verbatim — identical to what
+    -- chat.postMessage receives, so an alert looks the same in every channel.
+    --
+    -- Webhooks DO accept Block Kit nested in legacy attachments, including
+    -- image/context blocks and styled buttons (probed against a live webhook
+    -- 2026-09-03). An earlier `invalid_blocks` reading blamed Block Kit for
+    -- what was really a rejected image URL — hence the shared image retry below.
+    -- Webhook endpoints return HTTP 200 + body "ok" on success.
     sendSlackWebhook sd url = do
       -- checkResponse = nop: wreq otherwise throws on 4xx and we lose the body
       -- which is where Slack tells us which block/field it rejected.
       let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pass)
-          cleaned = flattenForWebhook $ dropOversizedImages sd.payload
-          fail_ tag extra = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= cleaned) : extra))
-      liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case
-        Right re
-          | statusIsSuccessful (re ^. responseStatus) ->
-              let body = re ^. responseBody
-               in if body == "ok" || body == "\"ok\""
-                    then pure Nothing
-                    else fail_ "returned non-ok body" ["body" AE..= decodeUtf8 @Text (toStrict body)]
-          | otherwise -> fail_ "HTTP failure" ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody))]
-        Left ex -> fail_ "exception" ["error" AE..= displayException ex]
+          stripped = dropChannel $ dropOversizedImages sd.payload
+          fail_ tag extra body = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= body) : extra))
+          post body = liftIO (try @SomeException $ postWith opts (toString url) body)
+          -- A rejection is HTTP 400 with the reason as the bare body
+          -- ("invalid_attachments"), so the status is context for the log, not
+          -- the classifier — keying off it would skip the retry below entirely.
+          outcome = \case
+            Right re ->
+              let b = decodeUtf8 @Text $ toStrict $ re ^. responseBody
+                  ok = statusIsSuccessful (re ^. responseStatus) && (b == "ok" || b == "\"ok\"")
+               in Right $ if ok then Nothing else Just (b, ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= b])
+            Left ex -> Left ("exception" :: Text, ["error" AE..= displayException ex])
+      post stripped >>= \r -> case outcome r of
+        Left (tag, extra) -> fail_ tag extra stripped
+        Right Nothing -> pure Nothing
+        -- Same failure mode as the chat API: Slack downloads image_url while
+        -- validating, so a slow or wrong-typed chart takes the whole alert down.
+        -- An alert without its chart still tells an on-call engineer what broke.
+        Right (Just (err, extra))
+          | "invalid_attachments" `T.isInfixOf` err -> do
+              Log.logAttention "Slack webhook rejected the chart image; retrying without it" (webhookLog sd url extra)
+              let retry = dropImageBlocks stripped
+              post retry >>= \r2 -> case outcome r2 of
+                Right Nothing -> pure Nothing
+                Right (Just (_, extra2)) -> fail_ "rejected the alert" (("retried_without_image" AE..= True) : extra2) retry
+                Left (tag, extra2) -> fail_ tag extra2 retry
+          | otherwise -> fail_ "rejected the alert" extra stripped
 
     -- Log context builders with transport pre-tagged at the call site.
     slackLogCtx sd extra =
@@ -421,83 +457,6 @@ runNotifyProduction = interpret $ \_ -> \case
     -- Webhook URLs embed secrets (hooks.slack.com/services/T…/B…/SECRET).
     -- Only include a short prefix for debugging; never the secret.
     redactedWebhookSuffix url = T.take 16 (fromMaybe url $ T.stripPrefix "https://hooks.slack.com/services/" url) <> "…"
-
-    -- Incoming webhooks created via the legacy @incoming-webhook@ OAuth scope
-    -- (what Slack installs during app OAuth) reject Block Kit with an opaque
-    -- @invalid_blocks@ error — both nested in attachments and at the top level.
-    -- They only reliably accept @text@ + legacy @attachments@ fields.
-    --
-    -- So for the webhook transport, we walk the Block Kit payload and render
-    -- it to a single @text@ string in Slack mrkdwn (links, bold, code blocks
-    -- all still work). Image blocks are lifted to the legacy attachment's
-    -- @image_url@ so Slack renders the chart inline instead of auto-unfurling
-    -- a bare signed URL into a file-attachment-style preview.
-    flattenForWebhook :: AE.Value -> AE.Value
-    flattenForWebhook payload =
-      let blocks = extractBlocks payload
-          rendered = T.intercalate "\n\n" $ mapMaybe renderBlock blocks
-          text = if T.null rendered then "Monoscope alert" else rendered
-          imgUrl = listToMaybe $ mapMaybe imageUrl blocks
-          color = extractColor payload
-          attachment =
-            AE.object
-              $ catMaybes
-                [ Just $ "fallback" AE..= ("Monoscope alert" :: Text)
-                , ("color" AE..=) <$> color
-                , ("image_url" AE..=) <$> imgUrl
-                ]
-          base = ["text" AE..= text]
-       in AE.object $ case (imgUrl, color) of
-            (Nothing, Nothing) -> base
-            _ -> base <> ["attachments" AE..= AE.Array (V.singleton attachment)]
-
-    extractColor :: AE.Value -> Maybe Text
-    extractColor (AE.Object obj)
-      | Just (AE.Array atts) <- AEK.lookup "attachments" obj
-      , (AE.Object att : _) <- toList atts
-      , Just (AE.String c) <- AEK.lookup "color" att =
-          Just c
-    extractColor _ = Nothing
-
-    -- Blocks may live at top level or inside the first legacy attachment
-    -- (our @slackAttachment@ color-bar wrapper).
-    extractBlocks :: AE.Value -> [AE.Value]
-    extractBlocks = \case
-      AE.Object obj
-        | Just (AE.Array bs) <- AEK.lookup "blocks" obj -> toList bs
-        | Just (AE.Array atts) <- AEK.lookup "attachments" obj
-        , (AE.Object att : _) <- toList atts
-        , Just (AE.Array bs) <- AEK.lookup "blocks" att ->
-            toList bs
-      _ -> []
-
-    renderBlock :: AE.Value -> Maybe Text
-    renderBlock (AE.Object b) = case AEK.lookup "type" b of
-      Just (AE.String "section") -> nestedText b
-      Just (AE.String "context")
-        | Just (AE.Array els) <- AEK.lookup "elements" b ->
-            Just $ T.intercalate "  ·  " [t | AE.Object e <- toList els, Just (AE.String t) <- [AEK.lookup "text" e]]
-      Just (AE.String "actions")
-        | Just (AE.Array els) <- AEK.lookup "elements" b ->
-            let linkOf (AE.Object e)
-                  | Just (AE.String "button") <- AEK.lookup "type" e
-                  , Just (AE.String u) <- AEK.lookup "url" e
-                  , Just label <- nestedText e =
-                      Just $ "<" <> u <> "|" <> label <> ">"
-                linkOf _ = Nothing
-             in Just $ T.intercalate " · " $ mapMaybe linkOf (toList els)
-      -- Image blocks are lifted to the legacy attachment's @image_url@
-      -- field in @flattenForWebhook@ — never emit the signed URL as text.
-      Just (AE.String "image") -> Nothing
-      _ -> Nothing
-    renderBlock _ = Nothing
-
-    -- Read the string out of a nested {text: {type, text: "..."}} shape used
-    -- by section blocks and button elements.
-    nestedText :: AE.Object -> Maybe Text
-    nestedText o = case AEK.lookup "text" o of
-      Just (AE.Object inner) | Just (AE.String t) <- AEK.lookup "text" inner -> Just t
-      _ -> Nothing
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do

@@ -141,6 +141,9 @@ sendSlackAlert = sendSlackAlertWith Nothing
 -- for private channels picked at install time. Otherwise post via
 -- chat.postMessage which supports threading but needs bot membership.
 --
+-- Both transports carry the SAME Block Kit payload, so an alert renders
+-- identically wherever it lands; only threading differs.
+--
 -- Threading caveat: @threadTsM@ is silently dropped on the webhook branch
 -- — Slack's incoming-webhook API does not accept @thread_ts@. If a feature
 -- relies on threaded replies, the thread parent must have been posted via
@@ -679,12 +682,11 @@ slackActions bs = AE.object ["type" AE..= "actions", "elements" AE..= arr bs]
 
 
 -- | Slack's button @style@ is an enum of exactly "primary" and "danger". A
--- "default" style is not "no style" — it makes chat.postMessage reject the
--- ENTIRE message with invalid_attachments, so every error alert carrying a
--- trace id silently failed to any channel reached over the chat API (the
--- webhook transport renders buttons as mrkdwn links, which is why the
--- install's default channel kept working and only extra channels went dark).
--- Omit the key instead: @styleM = Nothing@ is the unstyled button.
+-- "default" style is not "no style" — it makes Slack reject the ENTIRE message
+-- with invalid_attachments, so every error alert carrying a trace id silently
+-- failed. Omit the key instead: @styleM = Nothing@ is the unstyled button.
+-- (This once looked like a chat.postMessage-only bug because the webhook
+-- transport used to flatten buttons to mrkdwn links; both now send Block Kit.)
 slackButton :: Text -> Maybe Text -> Text -> AE.Value
 slackButton label styleM url =
   AE.object

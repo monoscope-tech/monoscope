@@ -17,7 +17,7 @@ import Pages.Settings qualified as Integrations
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec
@@ -45,8 +45,9 @@ spec = sequential $ aroundAll withTestResources $ do
           setup
           (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm issueType channel Nothing)
           verify notifs
-          history :: [(TestStatus, Text, TestChannel)] <- runQueryEffect tr $
-            Hasql.interp [HI.sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = #{channel} ORDER BY created_at DESC LIMIT 1|]
+          history :: [(TestStatus, Text, TestChannel)] <-
+            runQueryEffect tr
+              $ Hasql.interp [HI.sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = #{channel} ORDER BY created_at DESC LIMIT 1|]
           history `shouldBe` [(TSSent, issueType, channel)]
 
     describe "Team-Level Tests" $ do
@@ -115,13 +116,15 @@ spec = sequential $ aroundAll withTestResources $ do
         setEveryoneDisabled tr testPid ["slack"]
         (disabledNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
         any isSlackNotification disabledNotifs `shouldBe` False
-        tests :: [(TestStatus, Maybe Text)] <- runQueryEffect tr $
-          Hasql.interp [HI.sql|SELECT status, error FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = 'slack' ORDER BY created_at DESC LIMIT 1|]
+        tests :: [(TestStatus, Maybe Text)] <-
+          runQueryEffect tr
+            $ Hasql.interp [HI.sql|SELECT status, error FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = 'slack' ORDER BY created_at DESC LIMIT 1|]
         tests `shouldBe` [(TSSkipped, Just "channel_disabled")]
 
         clearTestHistory tr testPid
-        runTestBg frozenTime tr $ Hasql.interpExecute_
-          [HI.sql|UPDATE projects.teams SET slack_channels = ARRAY['C_ONE','C_TWO']::text[], disabled_channels = '{}'
+        runTestBg frozenTime tr
+          $ Hasql.interpExecute_
+            [HI.sql|UPDATE projects.teams SET slack_channels = ARRAY['C_ONE','C_TWO']::text[], disabled_channels = '{}'
                   WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
         (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
         let slackTargets = [d.channelId | SlackNotification d <- notifs]
@@ -129,11 +132,13 @@ spec = sequential $ aroundAll withTestResources $ do
 
     describe "PagerDuty connect/disconnect" $ do
       it "rejects an invalid key, connects a valid service, and disconnects it" \tr -> do
-        runTestBg frozenTime tr $ Hasql.interpExecute_
-          [HI.sql|UPDATE projects.teams SET pagerduty_services = '{}' WHERE project_id = #{testPid} AND is_everyone = TRUE|]
+        runTestBg frozenTime tr
+          $ Hasql.interpExecute_
+            [HI.sql|UPDATE projects.teams SET pagerduty_services = '{}' WHERE project_id = #{testPid} AND is_everyone = TRUE|]
         let services = do
-              [xs] :: [V.Vector Text] <- runQueryEffect tr $
-                Hasql.interp [HI.sql|SELECT pagerduty_services FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+              [xs] :: [V.Vector Text] <-
+                runQueryEffect tr
+                  $ Hasql.interp [HI.sql|SELECT pagerduty_services FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
               pure $ V.toList xs
             key = "a1b2c3d4e5f67890abcdef1234567890"
 
@@ -151,35 +156,65 @@ spec = sequential $ aroundAll withTestResources $ do
       -- pair). A regression dropping either call fails this.
       it "connects credentials and the default channel, then disconnects both" \tr -> do
         -- Clear baseline
-        runTestBg frozenTime tr $ Hasql.interpExecute_
-          [HI.sql|DELETE FROM apis.slack WHERE project_id = #{testPid}|]
-        runTestBg frozenTime tr $ Hasql.interpExecute_
-          [HI.sql|UPDATE projects.teams SET slack_channels = '{}' WHERE project_id = #{testPid} AND is_everyone = TRUE|]
+        runTestBg frozenTime tr
+          $ Hasql.interpExecute_
+            [HI.sql|DELETE FROM apis.slack WHERE project_id = #{testPid}|]
+        runTestBg frozenTime tr
+          $ Hasql.interpExecute_
+            [HI.sql|UPDATE projects.teams SET slack_channels = '{}' WHERE project_id = #{testPid} AND is_everyone = TRUE|]
         -- Simulate what Slack.linkProjectGetH does
         runTestBg frozenTime tr do
           void $ ApisInt.insertAccessToken testPid "T_OAUTH" "C_OAUTH" "Workspace" "xoxb-oauth" "general" "https://hooks.slack.com/services/oauth"
           void $ PM.addSlackChannelToEveryoneTeam testPid "C_OAUTH"
-        slackRows :: [(Text, Maybe Text)] <- runQueryEffect tr $
-          Hasql.interp [HI.sql|SELECT channel_id, team_name FROM apis.slack WHERE project_id = #{testPid}|]
+        slackRows :: [(Text, Maybe Text)] <-
+          runQueryEffect tr
+            $ Hasql.interp [HI.sql|SELECT channel_id, team_name FROM apis.slack WHERE project_id = #{testPid}|]
         slackRows `shouldBe` [("C_OAUTH", Just "Workspace")]
-        [channels] :: [V.Vector Text] <- runQueryEffect tr $
-          Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+        [channels] :: [V.Vector Text] <-
+          runQueryEffect tr
+            $ Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
         V.toList channels `shouldContain` ["C_OAUTH"]
 
         void $ testServant tr $ Pages.slackDisconnectH testPid
-        slackAfter :: [Text] <- runQueryEffect tr $
-          Hasql.interp [HI.sql|SELECT team_id FROM apis.slack WHERE project_id = #{testPid}|]
+        slackAfter :: [Text] <-
+          runQueryEffect tr
+            $ Hasql.interp [HI.sql|SELECT team_id FROM apis.slack WHERE project_id = #{testPid}|]
         slackAfter `shouldBe` []
-        [channelsAfter] :: [V.Vector Text] <- runQueryEffect tr $
-          Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+        [channelsAfter] :: [V.Vector Text] <-
+          runQueryEffect tr
+            $ Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
         channelsAfter `shouldBe` V.empty
+
+    describe "Slack channel removal (form save is authoritative)" $ do
+      -- Regression: the @everyone save unioned the submitted list into the stored
+      -- one and force-included the OAuth-time default, so a channel could never be
+      -- removed. Talstack kept getting alerts in #engineering for months after
+      -- switching to #engineering-alerts. The save handler re-renders the settings
+      -- page, so these assertions also pin that the render doesn't re-add the default.
+      it "drops channels the user removed, including the OAuth default" \tr -> do
+        setupSlackData tr testPid "T_CHANNEL_REMOVAL"
+        runTestBg frozenTime tr
+          $ Hasql.interpExecute_
+            [HI.sql|UPDATE projects.teams SET slack_channels = ARRAY['C_NOTIF_CHANNEL','C_STALE']::text[], disabled_channels = '{}'
+                  WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+        let stored = do
+              [xs] :: [V.Vector Text] <-
+                runQueryEffect tr
+                  $ Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+              pure $ V.toList xs
+
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] ["C_NOTIF_CHANNEL"])
+        stored `shouldReturn` ["C_NOTIF_CHANNEL"]
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] [])
+        stored `shouldReturn` []
 
     describe "disabled_channels inversion (form save)" $ do
       it "stores the complement of enabled channels, including mute-all" \tr -> do
         setupSlackData tr testPid "T_FORM_SAVE"
         let disabled = do
-              [xs] :: [V.Vector Text] <- runQueryEffect tr $
-                Hasql.interp [HI.sql|SELECT disabled_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+              [xs] :: [V.Vector Text] <-
+                runQueryEffect tr
+                  $ Hasql.interp [HI.sql|SELECT disabled_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
               pure $ sort $ V.toList xs
 
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack", "email"] [] [] [])
@@ -193,27 +228,36 @@ spec = sequential $ aroundAll withTestResources $ do
 isSlackNotification :: Notification -> Bool
 isSlackNotification = \case SlackNotification{} -> True; _ -> False
 
+
 setEveryoneDisabled :: TestResources -> Projects.ProjectId -> [Text] -> IO ()
-setEveryoneDisabled tr pid chs = runTestBg frozenTime tr $ Hasql.interpExecute_
-  [HI.sql|UPDATE projects.teams SET disabled_channels = #{V.fromList chs}
+setEveryoneDisabled tr pid chs =
+  runTestBg frozenTime tr
+    $ Hasql.interpExecute_
+      [HI.sql|UPDATE projects.teams SET disabled_channels = #{V.fromList chs}
           WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL|]
 
 
 setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupWhatsappNumber tr pid number = runTestBg frozenTime tr $ Hasql.interpExecute_
-  [HI.sql|UPDATE projects.teams SET phone_numbers = ARRAY[#{number}]
+setupWhatsappNumber tr pid number =
+  runTestBg frozenTime tr
+    $ Hasql.interpExecute_
+      [HI.sql|UPDATE projects.teams SET phone_numbers = ARRAY[#{number}]
           WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL|]
 
 
 setupEmail :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupEmail tr pid email = runTestBg frozenTime tr $ Hasql.interpExecute_
-  [HI.sql|UPDATE projects.teams SET notify_emails = ARRAY[#{email}]
+setupEmail tr pid email =
+  runTestBg frozenTime tr
+    $ Hasql.interpExecute_
+      [HI.sql|UPDATE projects.teams SET notify_emails = ARRAY[#{email}]
           WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL|]
 
 
 setupPagerdutyData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupPagerdutyData tr pid integrationKey = runTestBg frozenTime tr $ Hasql.interpExecute_
-  [HI.sql|UPDATE projects.teams SET pagerduty_services = ARRAY[#{integrationKey}]::text[]
+setupPagerdutyData tr pid integrationKey =
+  runTestBg frozenTime tr
+    $ Hasql.interpExecute_
+      [HI.sql|UPDATE projects.teams SET pagerduty_services = ARRAY[#{integrationKey}]::text[]
           WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL|]
 
 

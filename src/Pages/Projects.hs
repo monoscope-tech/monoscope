@@ -241,11 +241,6 @@ integrationsSettingsGetH pid = do
   discordInfo <- getDiscordDataByProjectId pid
   channelsE <- resolveSlackChannels slackInfo
   let channels = fromRight [] channelsE
-  -- Converge @everyone.slack_channels with the OAuth-time default on every render.
-  -- Idempotent (addSlackChannelToEveryoneTeam no-ops when present). Covers legacy
-  -- installs that pre-date the OAuth-side add, plus out-of-band updates to
-  -- apis.slack.channel_id (e.g. /monoscope-here) that don't go through Save.
-  whenJust slackInfo \s -> void $ ProjectMembers.addSlackChannelToEveryoneTeam pid s.channelId
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let pagerdutyKey = listToMaybe . V.toList . (.pagerduty_services) =<< everyoneTeamM
       existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
@@ -304,18 +299,19 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
       slackInfoM <- getProjectSlackData pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       whenJust everyoneTeamM \team -> do
+        -- The submitted list is authoritative: the tagify input is seeded with every
+        -- stored channel (resolved or not), so anything absent from it was deliberately
+        -- removed — including the OAuth-time default, which projects do swap away from.
         let oldChannels = S.fromList $ V.toList team.slack_channels
-            -- Default channel from OAuth is always preserved — bot is guaranteed a member there.
-            defaultCh = (.channelId) <$> slackInfoM
-            requested = ordNub $ maybeToList defaultCh <> slackChannels
+            requested = ordNub slackChannels
             addedChannels = filter (`S.notMember` oldChannels) requested
 
         -- Gate-on-reachability: try the welcome message for each newly-added
         -- channel; drop any where Slack says not_in_channel / channel_not_found
         -- / etc. so we don't persist unreachable routes that fail every alert.
-        (unreachable, reachableAdds) <- case (,) <$> projectM <*> slackInfoM of
+        unreachable <- case (,) <$> projectM <*> slackInfoM of
           Just (project, slackInfo) ->
-            partitionEithers <$> forM addedChannels \cid -> do
+            lefts <$> forM addedChannels \cid -> do
               -- OAuth-default channel: probe via the channel-bound webhook URL
               -- (works for private channels; no bot membership needed).
               -- Other channels: probe via chat.postMessage (needs bot membership).
@@ -332,12 +328,12 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
           Nothing -> do
             unless (null addedChannels)
               $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
-            pure (addedChannels, [])
+            pure addedChannels
 
         void
           $ ProjectMembers.updateTeam pid team.id
           $ (ProjectMembers.teamToDetails team)
-            { ProjectMembers.slackChannels = V.fromList $ ordNub $ V.toList team.slack_channels <> reachableAdds
+            { ProjectMembers.slackChannels = V.fromList $ filter (`notElem` unreachable) requested
             , ProjectMembers.notifyEmails = V.fromList emails
             , ProjectMembers.phoneNumbers = V.fromList phones
             , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
