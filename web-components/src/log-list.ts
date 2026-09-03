@@ -3194,13 +3194,18 @@ export class LogList extends LitElement {
           // line; this trailing column is a pure *actions* column holding
           // only the replay button, so the header stays unlabeled (actions columns
           // aren't data and don't get a label).
+          //
+          // `sessionActions` renders in BOTH branches. It used to live inside
+          // `rightAlignedBadges`, which only the logs branch renders; splitting it
+          // out for the sessions column silently dropped the Replay button from the
+          // logs/spans list, where it had been since replay shipped (9abed93c).
           let latencyHtml;
           if (this.mode === 'sessions') {
             latencyHtml = html`<div class="flex justify-end items-center">${sessionActions}</div>`;
           } else {
             latencyHtml = html`
               <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
-                ${rightAlignedBadges}
+                ${sessionActions}${rightAlignedBadges}
                 ${spanLatencyBreakdown({
                   track,
                   segments,
