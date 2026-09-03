@@ -249,8 +249,17 @@ userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
 userIdByEmail email = EHasql.interpOne [HI.sql|select id from users.users where email=#{email}|]
 
 
+-- | Get-or-create by email. @DO UPDATE@ rather than @DO NOTHING@ because
+-- @DO NOTHING@ suppresses the @RETURNING@ row, so an email that already existed
+-- came back as 'Nothing' — and the invite-members handler turned that into a 500.
+-- Its caller does lookup-then-insert with no lock between, so two people inviting
+-- the same new address is enough to hit it.
+--
+-- The @SET@ is a deliberate no-op write on the conflict target: it exists only to
+-- make the row visible to @RETURNING@. It must not touch @active@ — assigning
+-- @excluded.active@ would silently reactivate a deactivated user on every invite.
 createEmptyUser :: DB es => Text -> Eff es (Maybe UserId)
-createEmptyUser email = EHasql.interpOne [HI.sql| insert into users.users (email, active) values (#{email}, TRUE) on conflict do nothing returning id |]
+createEmptyUser email = EHasql.interpOne [HI.sql| insert into users.users (email, active) values (#{email}, TRUE) on conflict (email) do update set email = excluded.email returning id |]
 
 
 ---------------------------------

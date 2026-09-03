@@ -306,3 +306,56 @@ Weeder's real value this round was not the deletions:
    time-sensitive SQL in tests could be reading wall-clock. **Not changed** — the whole
    suite passes today, so touching test-time plumbing needs a deliberate look rather than
    a drive-by fix. Flagged for a human.
+
+---
+
+# Round eight — settings / projects / git-sync (branch `quality-sweep-round7`)
+
+All three skills invoked as skills (not applied from memory — that was the round-seven
+correction) over `Settings.hs`, `Projects.hs`, `GitSync.hs`, `CodeContext.hs`,
+`Models/Projects/GitSync.hs`.
+
+## The find: `createEmptyUser` could 500 the invite-members handler
+
+```sql
+insert into users.users (email, active) values (#{email}, TRUE)
+  on conflict do nothing returning id     -- DO NOTHING suppresses RETURNING
+```
+
+`ON CONFLICT DO NOTHING` returns **no row** when the row already exists, so an
+existing email came back as `Nothing`. The only caller did:
+
+```haskell
+Projects.userIdByEmail email
+  >>= maybe (Projects.createEmptyUser email >>= maybe (error "duplicate email …") pure) pure
+```
+
+Lookup-then-insert with nothing between them, and `error` on the losing branch. Two
+people inviting the same new address — or one request racing itself — crashes the
+handler. This is the constraint-evasion shape exactly: a reachable failure mode
+absorbed by `error` rather than modelled.
+
+**Fixed** by making it a real get-or-create: `on conflict (email) do update set email
+= excluded.email returning id`. `DO UPDATE` returns the row. The `SET` is a
+deliberate no-op on the conflict target and **must not touch `active`** — assigning
+`excluded.active` would silently reactivate a deactivated user on every invite. The
+caller's `error` is gone; the residual impossible case is a 500 with a message rather
+than a crash.
+
+Guard: `ManageMembersSpec.createEmptyUser_isIdempotent_soAConcurrentInviteCannotCrashTheHandler`.
+Deterministic — two sequential calls, no concurrency contrivance. Confirmed to fail
+before the fix with `expected: Just (UUIDId …) but got: Nothing` (798 examples, 1 failure).
+
+## Everything else in this group came back clean
+
+- **No clones** (identifier-normalized detector, N=5, across all five files).
+- **No hoisted Tailwind classes.** Every class string keeps both `bool`/`if` branches
+  literal, so the scanner sees them all.
+- **No suppressions**, no other partiality.
+- `Settings.hs` (1687 lines) is already consolidated: `promSave` is shared by the
+  create and update handlers, `apiKeySetActive` by delete and activate,
+  `prometheusMut` by all five Prometheus mutations. Nothing to extract.
+- `safeScrapeUrl`'s `case … of Nothing -> False` could be `maybe False`, saving one
+  line at a cost in readability for a doctested SSRF guard. Left alone.
+- `Default GitHubSync` is hand-written and positional (17 args) because `UTCTime` has
+  no `Default`. Cannot be derived. Worth knowing it is order-sensitive.

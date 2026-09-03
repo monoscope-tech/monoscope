@@ -41,7 +41,7 @@ import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..
 import Pages.Components qualified as Components
 import Pages.Containers (showFFloat')
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.DeriveUtils (DB)
+import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
@@ -51,7 +51,7 @@ import Utils (faSprite_, fmtDate)
 
 
 data RumTab = Overview | Sessions | Performance
-  deriving stock (Bounded, Enum, Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Read, Show)
 
 
 data SessionFilter = AllSessionRows | ErrorSessionRows | ReplaySessionRows
@@ -66,14 +66,11 @@ renderBucket = \case
 
 
 parseTab :: Maybe Text -> RumTab
-parseTab tabM = fromMaybe Overview $ find ((== tabM) . Just . tabParam) [minBound .. maxBound]
+parseTab tabM = fromMaybe Overview $ decodeEnumSC @"" . toString =<< tabM
 
 
 tabParam :: RumTab -> Text
-tabParam = \case
-  Overview -> "overview"
-  Sessions -> "sessions"
-  Performance -> "performance"
+tabParam = toText . encodeEnumSC @""
 
 
 tabLabel :: RumTab -> Text
@@ -471,18 +468,11 @@ data RumLinks = RumLinks
 -- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
 data RumPanel = PanelServices | PanelPulse | PanelTrend | PanelPages | PanelVitals | PanelErrors | PanelSessions
-  deriving stock (Bounded, Enum, Eq, Show)
+  deriving stock (Eq, Read, Show)
 
 
 panelParam :: RumPanel -> Text
-panelParam = \case
-  PanelServices -> "services"
-  PanelPulse -> "pulse"
-  PanelTrend -> "trend"
-  PanelPages -> "pages"
-  PanelVitals -> "vitals"
-  PanelErrors -> "errors"
-  PanelSessions -> "sessions"
+panelParam = toText . encodeEnumSC @"Panel"
 
 
 -- | Ids are the swap contract: 'deferredShell_' selects @#id@ out of the panel response, so
@@ -492,7 +482,7 @@ panelId panel = "rum-panel-" <> panelParam panel
 
 
 parsePanel :: Text -> Maybe RumPanel
-parsePanel value = find ((== value) . panelParam) [minBound .. maxBound]
+parsePanel = decodeEnumSC @"Panel" . toString
 
 
 data RumData = RumData

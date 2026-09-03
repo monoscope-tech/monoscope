@@ -75,3 +75,19 @@ spec = sequential $ aroundAll withTestResources do
       expectError team ""
       expectError team "Team handle already exists for this project."
       for_ invalidCases $ uncurry expectError
+
+    -- `createEmptyUser` is `INSERT … ON CONFLICT DO NOTHING RETURNING id`, and
+    -- DO NOTHING suppresses the RETURNING row. So the *second* call for an email
+    -- that already exists yields Nothing, and the only caller
+    -- (`Pages.Projects.manageMembersPostH`) turns that into
+    -- `error "duplicate email in createEmptyUser"` — a 500 on the invite-members
+    -- handler. Reachable without any test contrivance: two people inviting the
+    -- same new address, or one request racing itself, is enough, because the
+    -- caller does a lookup-then-insert with no lock between them.
+    it "createEmptyUser_isIdempotent_soAConcurrentInviteCannotCrashTheHandler" \tr -> do
+      let email = "race@example.com"
+      first' <- runQueryEffect tr $ Projects.createEmptyUser email
+      again <- runQueryEffect tr $ Projects.createEmptyUser email
+      first' `shouldSatisfy` isJust
+      -- Before the fix this is Nothing, and the caller `error`s on it.
+      again `shouldBe` first'
