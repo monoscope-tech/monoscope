@@ -665,3 +665,32 @@ constraint rejects.
 irreducible SQL, genuinely distinct job logic, and new features.** Continuing to squeeze
 already-swept modules would trade correctness for line count. The honest next lever is
 scope — deciding which *features* to drop — and that is a product call, not a refactor.
+
+## Two corrections to the documented workflow
+
+**1. `cabal test doctests` is NOT safe to run while the watchers are up.** CLAUDE.md lists
+running doctests as one of the few sanctioned direct compiler invocations. In practice it
+builds the *197-module test-dev target* and writes into
+`build/test-dev/test-dev-tmp` — the directory the `make live-test-dev` ghcid owns. Within
+seconds it was emitting `[Mismatched dynamic interface file]`, i.e. corrupting a running
+suite. Killed it. Treat doctests like every other cabal invocation: one cabal process at a
+time. Verify them on a natural watcher run, or stop the test-dev watcher first.
+
+**2. The doctest GHCi session sees the module's full top-level scope, not just its
+exports.** CLAUDE.md and the skill both say exports-only, which would make any example
+using an imported-but-not-re-exported symbol dead. Evidence it is wrong — this failure
+from an earlier run in this session:
+
+    src/Models/Apis/Issues.hs:1203: failure in expression
+      `isJust $ parsePayload QueryAlert (AE.object ["query_expression" AE..= ("x" :: Text)])'
+    expected: True
+     but got: False
+
+`AE` is a qualified import of `Issues.hs` and is not re-exported, yet the example
+*evaluated* (returned `False`) rather than failing on scope. So `parseUrlPiece` resolves
+in `Endpoints.EndpointSort`'s and `LogQueries.SessionSort`'s doctests without a `$setup`.
+
+The exports-only rule still holds for the thing it was actually learned from: projecting
+`.field` off a *type defined elsewhere*, where `HasField` will not solve unless that
+module is imported by `$setup`. Worth keeping the distinction — read narrowly it is a real
+constraint, read broadly it sends you adding `$setup` chunks that nothing needs.
