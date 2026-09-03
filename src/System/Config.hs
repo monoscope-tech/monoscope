@@ -127,6 +127,13 @@ data EnvConfig = EnvConfig
   , -- Whether a verdict that has cleared 'mergeEvidenceMet' may merge rows, as
     -- opposed to only being recorded. Off turns the whole thing into a report.
     enableEndpointGroupAutoApply :: Bool
+  , -- The same pair for the error-group review. Kill switch for the spend, and
+    -- the gate between "recorded a verdict" and "merged rows on it".
+    enableErrorGroupReview :: Bool
+  , -- Defaults OFF. The first deploy records verdicts and refutations without
+    -- acting on them, so a day of them can be read before anything merges — the
+    -- same rollout the endpoint review used.
+    enableErrorGroupAutoApply :: Bool
   , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
   , hostUrl :: Text
@@ -286,6 +293,8 @@ instance DefConfig EnvConfig where
         -- merge) with "LLM judge failed". "low" is the cheapest one it takes.
         enableEndpointGroupReview = True
       , enableEndpointGroupAutoApply = True
+      , enableErrorGroupReview = True
+      , enableErrorGroupAutoApply = False
       , openaiSmallModel = "gpt-5.6-luna#low"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
