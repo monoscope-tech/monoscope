@@ -797,3 +797,43 @@ trade. They are worth doing in a session with a browser open.
 Also confirmed healthy: 3 `htmx.ajax` calls total, and **zero** `dataset.wired` /
 `dataset.bound` manual-wiring guards — the pattern htmx attributes exist to remove is
 absent from this codebase.
+
+## Category 5 — "code that should have changed but didn't"
+
+The evasion lens the mechanical scans cannot reach. Three axes checked.
+
+**New fields vs their codecs — clean.** 124 record fields were added across the sweep.
+Cross-referenced against every type carrying a *hand-written* `ToJSON`/`FromJSON` (where a
+new field silently never serialises): no overlap. The only near-miss, `Replay.FetchSplit`,
+has no JSON instance at all — it is an internal classification record introduced to
+consolidate four repeated comprehensions.
+
+**New fields vs explicit SQL column lists — clean.** `Issues.hs` gained 13 fields and
+`Endpoints.hs` 27, but none landed on a persisted record: they are all on query-config and
+view types (`IssueFilters`, `MkIssueOpts`, listing filters). The persisted `Issue` record
+is unchanged, so `insertIssue`'s hand-written column list cannot have fallen behind.
+
+**Bug fixes without a regression guard — and a correction to how I checked.**
+
+My first pass flagged 19 `fix` commits as untested because they touched no `test/` file.
+**That heuristic is wrong in this repo: doctests live in `src/`.** The clearest example was
+`fix(errors): stop the fingerprint shattering on any hex run of an odd length`, which I
+called unguarded — its guard is a doctest on `Utils.replaceAllFormats` pinning both halves
+of the invariant (the two order ids reaching one group, *and* the below-floor case staying
+`{integer}`). Counting `+.*>>>` in `src/` as a guard drops the list from 19 to 14, and most
+of the remainder are CSS/JS/nav changes with no Haskell surface to test.
+
+`fix(timepicker): one label vocabulary` also needs no guard: it was fixed *structurally* —
+`timePickerItems = map (second snd) sinceWindows` — so the two lists can no longer
+disagree. Deriving beats asserting.
+
+Genuine remaining guard gaps, all Haskell-side:
+
+- `fix(dashboards): "% of Total" truncating to whole numbers` — the fix is a SQL cast
+  (`::numeric` → `::float::text`), so no doctest is possible. Closing it needs an
+  integration test seeding a known distribution and asserting a *fractional* `pct` comes
+  back, on both PG and TF.
+- `fix(reports): weekly emails dated in the server's timezone` — customer-visible, and
+  date logic is exactly what `TestClock` exists for.
+- `fix(errors): backfill shapes`, `fix(metrics): stale pagination cursor` — both
+  integration-testable.
