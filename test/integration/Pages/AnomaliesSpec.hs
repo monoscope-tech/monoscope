@@ -435,6 +435,9 @@ spec = sequential $ aroundAll withTestResources do
             (testPid, noTraceHash, frozenTime, frozenTime)
       (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
       let html = renderPage page
+      -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
+      -- must be clipped by the drawer, or it creates a page-level horizontal scroll range.
+      html `shouldSatisfy` T.isInfixOf "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden"
       html `shouldSatisfy` not . T.isInfixOf "context___trace_id%3D%3D%22%22"
       html `shouldSatisfy` T.isInfixOf "service%3D%3D%22checkout%22"
       -- Lucid escapes the attribute, so the separators render as &amp; — assert on both

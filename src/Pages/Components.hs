@@ -152,6 +152,9 @@ el_ n = with (makeElement n)
 -- >>> let checks b = T.count "checked" $ toStrict $ renderText $ drawer_ "d" b Nothing (Just "x") ""
 -- >>> checks True == checks False + 1
 -- True
+-- >>> let h = toStrict $ renderText $ drawer_ "d" False Nothing Nothing ""
+-- >>> "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden" `T.isInfixOf` h
+-- True
 drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_
@@ -175,7 +178,9 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
            ]
     )
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
-  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
+  -- The closed panel is translated beyond the viewport. Clip it here rather than letting
+  -- its transformed width create a page-level horizontal scroll range.
+  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden"] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_
       [ id_ $ drawerId <> "-panel"
