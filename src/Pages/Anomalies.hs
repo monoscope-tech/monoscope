@@ -597,6 +597,34 @@ detailCard_ iconM cfg title body = div_ ([class_ $ "surface-raised rounded-2xl o
   maybe body (\c -> div_ [class_ c] body) cfg.bodyCls
 
 
+-- | The facts every issue has, in one place and one order, whatever its type.
+--
+-- Sentry and Datadog both fix these in the header and vary only the evidence
+-- below; we had grown the inverse — first/last seen and service appeared in an
+-- "Error Details" card for exceptions, an "Endpoint Details" card for API
+-- changes, as chips for log patterns, and nowhere at all for query alerts, so
+-- learning one issue page taught you nothing about the next.
+--
+-- @seen@ is passed rather than read off the issue because a runtime exception's
+-- real first/last seen live on its error pattern, not on the issue row.
+--
+-- Absent cells are omitted, not rendered as "Unknown service": an issue with no
+-- environment set is not an issue in an environment called Unknown.
+issueFactRow_ :: UTCTime -> Issues.Issue -> (UTCTime, UTCTime) -> Html ()
+issueFactRow_ now issue (firstSeen, lastSeen) =
+  detailRow_
+    $ [ ("calendar", "text-fillBrand-strong", "First seen", ago firstSeen)
+      , ("calendar", "text-fillBrand-strong", "Last seen", ago lastSeen)
+      ]
+    <> catMaybes
+      [ ("server","text-fillSuccess-strong","Service",) <$> nonBlank issue.service
+      , ("layer-group","text-fillWeak","Environment",) <$> nonBlank issue.environment
+      ]
+  where
+    ago = compactTimeAgo . toText . prettyTimeAuto now
+    nonBlank = mfilter (not . T.null . T.strip)
+
+
 -- | Banner stating, in words, what the issue's current state means for
 -- notifications. The whole point of the ack window is that a reader never has
 -- to guess whether alerts are still coming.
@@ -630,14 +658,12 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       unless (Issues.isBoilerplateAction issue.recommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
-      -- Metadata chips + issue type content
-      let createdChip = colorChip_ "text-fillInformation-strong bg-fillInformation-weak" "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
-          -- Prefer a real captured log line (sampleOverride) over the stored
-          -- sample, which the drain pipeline often normalises down to the same
-          -- placeholders as the template. The override is the original summary
-          -- vector — render each element as a single chip so values with
-          -- internal whitespace (user-agents, page titles) stay intact.
-          logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
+      -- Prefer a real captured log line (sampleOverride) over the stored
+      -- sample, which the drain pipeline often normalises down to the same
+      -- placeholders as the template. The override is the original summary
+      -- vector — render each element as a single chip so values with
+      -- internal whitespace (user-agents, page titles) stay intact.
+      let logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             detailCard_ Nothing def{trailing = Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField} "Log Pattern"
               $ renderLogContent_ logPattern
             let renderSample :: Html () -> Html ()
@@ -650,21 +676,28 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
         severityBadge_ (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
         case Issues.issuePayload issue of
+          -- Only what is peculiar to the type belongs here. Service, environment and
+          -- first/last seen are common to every issue and live in the fact row below.
           Just (Issues.LogPatternP d) -> do
             logLevelChip_ d.logLevel d.logPattern
-            metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
             metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
-            metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
           Just (Issues.LogPatternRateChangeP d) -> do
             logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "arrow-trend-up" $ display d.changeDirection
             metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
             metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
-          Just (Issues.RuntimeExceptionP _) -> pass -- First/Last seen shown in Error Details panel
-          Just (Issues.QueryAlertP _) -> createdChip
-          Just (Issues.ApiChangeP _) -> createdChip
+          Just (Issues.RuntimeExceptionP _) -> whenJust (errM >>= (.base.errorData.runtime)) $ metadataChip_ "code"
+          Just (Issues.QueryAlertP _) -> pass
+          Just (Issues.ApiChangeP _) -> pass
           Nothing -> unparsablePayload_
+      -- A runtime exception's real first/last seen live on its error pattern; every
+      -- other type's are the issue row's own.
+      issueFactRow_ now issue
+        $ maybe
+          (zonedTimeToUTC issue.createdAt, zonedTimeToUTC issue.updatedAt)
+          (\errL -> (zonedTimeToUTC errL.base.createdAt, zonedTimeToUTC errL.base.updatedAt))
+          errM
       -- Seed URL params with default time range so standalone chart widgets can read it
       -- Seed the URL with whichever form of range the page defaulted to, so the
       -- standalone chart widgets read the same window the picker shows. A query
@@ -731,21 +764,14 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           -- Chart + Error Details in one row
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Error Frequency"
-            whenJust errM \errL -> do
-              let err = errL.base
-              detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-3"} "Error Details" do
-                whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                  div_ [class_ "mb-1"] do
-                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                    span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                detailRow_
-                  [ ("calendar", "text-fillBrand-strong", "First seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                  , ("calendar", "text-fillBrand-strong", "Last seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-                  ]
-                detailRow_
-                  [ ("code", "text-fillWarning-strong", "Stack", fromMaybe "Unknown stack" err.errorData.runtime)
-                  , ("server", "text-fillSuccess-strong", "Service", fromMaybe "Unknown service" err.errorData.serviceName)
-                  ]
+            -- The runtime rides in the chip row now, and everything else this panel
+            -- used to hold is in the shared fact row, so it renders only when there is
+            -- actually request context to show — rather than a titled card around one
+            -- line, which is what deduplicating it left behind.
+            whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
+              detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4"} "Request" do
+                span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+                span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
           -- Stack trace + Activity (Activity column merges User Journey + issue events)
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
@@ -841,14 +867,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Request Trend"
             detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-3"} "Endpoint Details" do
-              detailRow_
-                [ ("calendar", "text-fillBrand-strong", "First seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
-                , ("calendar", "text-fillBrand-strong", "Last seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
-                ]
-              detailRow_
-                [ ("server", "text-fillSuccess-strong", "Service", fromMaybe "Unknown service" issue.service)
-                , ("hashtag", "text-fillBrand-strong", "Requests", formatWithCommas (fromIntegral issue.affectedRequests :: Double))
-                ]
+              detailRow_ [("hashtag", "text-fillBrand-strong", "Requests", formatWithCommas (fromIntegral issue.affectedRequests :: Double))]
           -- Field changes (or "new endpoint" hint) + Activity panel
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
