@@ -696,6 +696,13 @@ spec = sequential $ aroundAll withTestResources do
       let otherPid = UUIDId $ Unsafe.fromJust $ DataUUID.fromString "0000ffff-0000-0000-0000-00000000cd01" :: Projects.ProjectId
       canonicalId <- UUID.nextRandom
       memberId <- UUID.nextRandom
+      -- `error_data` decodes as ATError on read, and '{}' lacks its required `when` key.
+      -- With the guard working these rows are never returned, so the default is harmless
+      -- — but if the guard ever regresses, the row *is* returned, and an undecodable
+      -- payload makes the test die with a HasqlException instead of the disclosure
+      -- assertion. Supplying a decodable payload is what keeps this a real regression
+      -- guard rather than one that reports a decode crash.
+      let atErrorJson = "{\"when\":\"2026-01-01T00:00:00Z\",\"error_type\":\"SecretTypeError\",\"root_error_type\":\"SecretTypeError\",\"message\":\"victim-only-message\",\"root_error_message\":\"victim-only-message\",\"stack_trace\":\"\",\"hash\":\"group-read-authz-hash\",\"is_framework\":false}" :: Text
       withResource tr.trPool \conn -> do
         void
           $ PGS.execute
@@ -710,17 +717,17 @@ spec = sequential $ aroundAll withTestResources do
         void
           $ PGS.execute
             conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace)
-                VALUES (?, ?, 'group-read-authz-canonical', 'CanonicalType', 'canonical', '')
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data)
+                VALUES (?, ?, 'group-read-authz-canonical', 'CanonicalType', 'canonical', '', ?::jsonb)
                 ON CONFLICT (id) DO NOTHING |]
-            (canonicalId, otherPid.unwrap)
+            (canonicalId, otherPid.unwrap, atErrorJson)
         void
           $ PGS.execute
             conn
-            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, canonical_id, merge_override)
-                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', '', ?, FALSE)
+            [sql| INSERT INTO apis.error_patterns (id, project_id, hash, error_type, message, stacktrace, error_data, canonical_id, merge_override)
+                VALUES (?, ?, 'group-read-authz-hash', 'SecretTypeError', 'victim-only-message', '', ?::jsonb, ?, FALSE)
                 ON CONFLICT (id) DO NOTHING |]
-            (memberId, otherPid.unwrap, canonicalId)
+            (memberId, otherPid.unwrap, atErrorJson, canonicalId)
 
       -- Acting as testPid, ask for the other project's group members.
       (_, html) <- testServant tr $ AnomalyList.errorGroupMembersGetH testPid canonicalId

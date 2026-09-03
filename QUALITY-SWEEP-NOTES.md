@@ -484,3 +484,96 @@ first-wins (`<|>` per field), but `Maybe`'s own Semigroup *concatenates* — so
 `deriving via Generically` would silently change alert threading from "keep the parent
 message id" to "append ids". This is a case where deriving is not merely unnecessary
 but wrong; a future distill pass should not "fix" it.
+
+---
+
+# Rounds fourteen & fifteen — tenant-scoping audit
+
+## Method: three mechanical scans, not reading
+
+Reading had already missed these. An earlier round fixed the *bulk* monitor actions for
+exactly this bug class, and the single-entity siblings survived that pass. What found
+them was enumerating every query and checking for a tenant predicate:
+
+| Scan | Candidates | Real |
+|---|---|---|
+| `UPDATE`/`DELETE`, no `ProjectId` param, no `project_id` predicate | 46 → 15 handler-reachable | **2** |
+| `SELECT` keyed on an entity id, unscoped | 12 | **1** |
+| Takes a `ProjectId` but never references `project_id` in its SQL | 24 | **0** |
+
+The third scan is all false positives for one reason worth remembering: `projects.projects`
+keys on `id`, which *is* the project id, so the string `project_id` never appears in a
+correctly-scoped query against it.
+
+## The three vulnerabilities (all fixed, all on prod)
+
+1. **`alertSingleToggleActiveH` → `monitorToggleActiveById`** — `WHERE id=#{mid}`. A user
+   authorised on one project could deactivate another project's monitor, silencing its
+   alerting. The API path was already safe (`withRefetch`/`apiMonitorGet`/`ownedOr`);
+   only the web route was not.
+2. **`errorUnmergePostH` → `unmergeErrorPattern`** — `WHERE id = #{pid}` (and that
+   parameter was *named* `pid` while holding a **pattern** id, which is what a project id
+   is called everywhere else — plausibly how the bug was written; renamed to `epid`).
+3. **`errorGroupMembersGetH` → `getErrorPatternGroupMembers`** — `WHERE canonical_id =
+   #{eid}`. Disclosed another project's error types and messages, *and* rendered unmerge
+   links for each disclosed row under the caller's own project path — i.e. the read handed
+   out the ids for vulnerability 2.
+
+All three are fixed **in the query**, not at the caller, so every present and future
+caller is covered. `getLogPatternGroupMembers` was scoped too: it has no production
+caller today, so scoping it now means the first one is safe by construction.
+
+## Verified safe, do not re-audit
+
+API keys guard via `ownedKey` from `projectApiKeysByProjectId`; the three sibling
+error-pattern handlers each guard with `err.projectId /= pid`; dashboards go through
+`getDashAndVM pid`; the member-permission list is derived from `projMembers`, not user
+input; `Settings` calls `getConfigByProject pid cid` (the `getConfig` hit was a substring
+false positive).
+
+## The verification lesson — the important part of these rounds
+
+**A failing test is not evidence the test works.** I twice declared these guards "proven"
+on the strength of `[✘]` markers and a `2 failures` count. Both times the tests were
+dying in *setup* and never reached an assertion. Three separate fixture bugs did this,
+each producing a summary identical to a working guard:
+
+- `stacktrace` is `NOT NULL` (migration 0033) and the INSERT omitted it → `SqlError 23502`
+- `canonical_id` is a self-referencing FK → `SqlError 23503` pointing at a random UUID
+- `error_data` is decoded as `ATError` on read; `'{}'` lacks its required `when` key
+
+Only reading the **failure text** distinguishes `expected: [False] but got: [True]` (guard
+works) from `uncaught exception` (guard never ran). This is the mirror image of the
+false-green discipline used everywhere else in this sweep, and I had no habit for it.
+
+**Any future break-test must assert on the failure reason, never the count.**
+
+## Break-test outcome — both guards proven
+
+With the fixtures fixed and each predicate neutralised as `AND (project_id = #{pid} OR
+TRUE)` (a form that keeps `pid` used, so it still compiles under `-Weverything -Werror`),
+both tests failed at their **assertion**:
+
+- `errorUnmerge_…` — `AnomaliesSpec.hs:674` `expected: [False] but got: [True]`
+- `errorGroupMembers_…` — `shouldSatisfy` failed on HTML containing
+  `SecretTypeError: victim-only-message`, `Hash: group-read-authz-hash`, and a live
+  `data-hx-post` **Unmerge** button — the disclosure and the ids for the write bug, in
+  one response body.
+
+Restoring the predicates makes both pass. The guards measure what they claim to.
+
+A side effect worth recording: because the fixture bugs were in the *tests*, master was
+red for these two specs from the moment they landed — they errored in setup on every run.
+A test that has never been observed green is not a regression guard.
+
+Another session found the same two schema bugs concurrently (`6320d244`) and fixed them
+first; that work is upstream and this branch rebased onto it. It did **not** include the
+`error_data` fix, for a good reason: with the guard intact the query returns no rows, so
+nothing is ever decoded and the missing `when` key cannot surface. A filtered run is
+genuinely green either way. The difference only appears when the guard regresses — the
+foreign row comes back, and an undecodable payload turns the disclosure assertion into a
+`HasqlException`. Same red, wrong reason, wrong message.
+
+That generalises: **a fixture defect that only manifests when the guard fails is invisible
+to every run in which the guard works.** Break-testing is the only thing that exercises
+that path, which makes it the only way to find this class of bug.
