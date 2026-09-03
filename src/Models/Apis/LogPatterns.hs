@@ -441,15 +441,15 @@ setPendingAnomaly lpid dir at =
 
 -- | Clear pending anomaly state for the given pattern ids (either after firing
 -- an issue or because the anomaly did not recur within the TTL).
-clearPendingAnomalies :: DB es => V.Vector LogPatternId -> Eff es ()
-clearPendingAnomalies ids
+clearPendingAnomalies :: DB es => Projects.ProjectId -> V.Vector LogPatternId -> Eff es ()
+clearPendingAnomalies pid ids
   | V.null ids = pass
   | otherwise =
       Hasql.interpExecute_
         [HI.sql|
           UPDATE apis.log_patterns
           SET pending_anomaly_direction = NULL, pending_anomaly_detected_at = NULL
-          WHERE id = ANY(#{ids})
+          WHERE project_id = #{pid} AND id = ANY(#{ids})
         |]
 
 

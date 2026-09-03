@@ -858,12 +858,12 @@ fleetShapeReport =
 --
 -- Guarded on @canonical_hash IS NULL@ so re-ingesting a route can never restate
 -- the canonical of an endpoint some other mechanism has already merged.
-frameworkCanonicalHashes :: DB es => V.Vector Text -> Eff es ()
-frameworkCanonicalHashes hashes | V.null hashes = pass
-frameworkCanonicalHashes hashes =
+frameworkCanonicalHashes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es ()
+frameworkCanonicalHashes _ hashes | V.null hashes = pass
+frameworkCanonicalHashes pid hashes =
   Hasql.interpExecute_
     [HI.sql| UPDATE apis.endpoints SET canonical_hash = hash, canonical_path = url_path
-             WHERE hash = ANY(#{hashes}) AND canonical_hash IS NULL |]
+             WHERE project_id = #{pid} AND hash = ANY(#{hashes}) AND canonical_hash IS NULL |]
 
 
 -- | What a previous review settled, as far as deciding whether to ask again goes.
