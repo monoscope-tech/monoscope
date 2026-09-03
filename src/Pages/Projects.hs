@@ -57,6 +57,7 @@ import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time
 import Data.UUID qualified as RealUUID
 import Data.Valor (Valor, check1, failIf, validateM)
@@ -477,17 +478,17 @@ integrationsBody IntegrationsConfig{..} = do
             tgs = encodeText $ V.toList phones
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
-              [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-              , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
-              , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
-              , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-              , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
+              [ ("email", Settings.TCEmail, "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
+              , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
+              , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+              , ("phone", Settings.TCWhatsapp, "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
+              , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
               ]
-                :: [(Text, Text, Bool, Html (), Html ())]
+                :: [(Text, Settings.TestChannel, Text, Bool, Html (), Html ())]
 
         div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-          forM_ integrations \(val, title, configured, icon, content) ->
-            renderNotificationOption pid everyoneTeamId title val (S.notMember val disabledSet) configured icon content
+          forM_ integrations \(val, testCh, title, configured, icon, content) ->
+            renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
 
         div_ [class_ "mt-6"] do
           button_
@@ -530,10 +531,10 @@ integrationsSwapAttrs_ :: [Attribute]
 integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"]
 
 
-renderInlineTestButton :: Text -> Text -> Maybe ProjectMembers.TeamId -> Html ()
+renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> Html ()
 renderInlineTestButton pid channel teamIdM =
   form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
-    input_ [type_ "hidden", name_ "channel", value_ channel]
+    input_ [type_ "hidden", name_ "channel", value_ (display channel)]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
     button_ [type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] do
@@ -541,8 +542,10 @@ renderInlineTestButton pid channel teamIdM =
       "Test"
 
 
-renderNotificationOption :: Text -> Maybe ProjectMembers.TeamId -> Text -> Text -> Bool -> Bool -> Html () -> Html () -> Html ()
-renderNotificationOption pid teamIdM title value isChecked isConfigured icon extraContent = do
+-- | @value@ is the notification-channel toggle key (@phone@ for WhatsApp);
+-- @testCh@ is the separate channel name the test endpoint expects.
+renderNotificationOption :: Text -> Maybe ProjectMembers.TeamId -> Text -> Text -> Settings.TestChannel -> Bool -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption pid teamIdM title value testCh isChecked isConfigured icon extraContent = do
   let isActive = isChecked && isConfigured
   div_ [] do
     -- Compact row: icon, name, test, toggle
@@ -551,7 +554,7 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
       span_ [class_ "text-sm font-medium text-textStrong flex-1 min-w-0"] $ toHtml title
       div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"] do
         if isActive
-          then renderInlineTestButton pid value teamIdM
+          then renderInlineTestButton pid testCh teamIdM
           else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-neutral gap-1 cursor-not-allowed opacity-40", Aria.label_ "Enable first"] do
             faSprite_ "flask-vial" "regular" "h-3 w-3"
             "Test"

@@ -200,6 +200,8 @@ tests:
       - monoscope
       - monoscope-cli
       - monoscope-shared
+      # AuthSpec builds a Set-Cookie header the way a browser round-trips it.
+      - cookie
       # CLI.Harness drives the real CLI parser and captures its stdout.
       - optparse-applicative
       - silently

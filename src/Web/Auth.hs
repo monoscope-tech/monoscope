@@ -34,6 +34,7 @@ import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (ToJSON)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
@@ -136,11 +137,19 @@ authHandler logger env =
           let authHeader = L.lookup hAuthorization $ requestHeaders req
           case authHeader >>= validateBasicAuth env.config of
             Just username -> do
-              -- Basic auth successful, create a session for the basic auth user
               let cookies = getCookies req
+                  basicEmail = username <> "@basic-auth.local"
               requestID <- liftIO $ getRequestID req
-              -- Use a fixed email for basic auth users
-              sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
+              -- Browsers resend `Authorization: Basic` on every request, so minting a
+              -- session here unconditionally wrote one users.persistent_sessions row per
+              -- page load. That is the same failure documented below, which reached
+              -- 2,569,021 rows. Reuse the cookie's session when it is live AND belongs to
+              -- this same basic-auth identity — a cookie for any other user must not be
+              -- adopted just because it exists.
+              existing <- join <$> mapM Projects.getPersistentSession (getSessionId cookies)
+              sessId <- case existing of
+                Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
+                _ -> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
               sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session

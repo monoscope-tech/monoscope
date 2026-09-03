@@ -49,6 +49,7 @@ module Models.Projects.Projects (
   projectCacheById,
   projectCacheByIdIO,
   updateProjectReportNotif,
+  ReportType (..),
   ProjectCache (..),
   defaultProjectCache,
   updateProjectS3Bucket,
@@ -158,7 +159,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude
-import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import Servant (FromHttpApiData (..), Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import System.Envy (Var)
 import Web.Cookie (SetCookie (setCookieHttpOnly, setCookieMaxAge, setCookieName, setCookiePath, setCookieSameSite, setCookieSecure, setCookieValue), defaultSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm)
@@ -666,12 +667,26 @@ updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
 
-updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
+-- | Which periodic report a row/notification belongs to. Encodes to exactly
+-- @daily@/@weekly@ — the value stored in @apis.reports.report_type@ and used in
+-- the @reports_notif@ route capture.
+--
+-- >>> map (display @ReportType) [RTDaily, RTWeekly]
+-- ["daily","weekly"]
+-- >>> map parseUrlPiece ["daily", "weekly"] :: [Either Text ReportType]
+-- [Right RTDaily,Right RTWeekly]
+-- >>> parseUrlPiece "bogus" :: Either Text ReportType
+-- Left "Invalid RT value: bogus"
+data ReportType = RTDaily | RTWeekly
+  deriving (Eq, Generic, NFData, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "RT" ReportType
+
+
+updateProjectReportNotif :: DB es => ProjectId -> ReportType -> Eff es Int64
 updateProjectReportNotif pid reportType =
-  EHasql.interpExecute
-    if reportType == "daily"
-      then [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
-      else [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
+  EHasql.interpExecute case reportType of
+    RTDaily -> [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
+    RTWeekly -> [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
 
 
 deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64

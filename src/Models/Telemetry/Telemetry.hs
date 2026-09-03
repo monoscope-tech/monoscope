@@ -2162,8 +2162,9 @@ atErrorFrom spanObj typ msg stack =
       -- TODO: parse telemetry.sdk.name to SDKTypes
       tech = asTextRaw =<< Map.lookup "language" =<< jsonToMap =<< Map.lookup "sdk" =<< jsonToMap =<< Map.lookup "telemetry" =<< resc
       serviceName = resourceServiceName resc
-      -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
-      rt = fromMaybe "" tech
+      -- An unrecognised/absent SDK language parses to the generic frame parser,
+      -- which is what the old empty-string default selected too.
+      rt = EF.parseRuntime $ fromMaybe "" tech
       hashes = EF.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
    in ErrorPatterns.ATError
         { projectId = UUIDId <$> UUID.fromText spanObj.project_id
