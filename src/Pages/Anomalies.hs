@@ -246,16 +246,14 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       -- happened, so the query stays a ±5min window instead of a multi-day
       -- trace_id scan (a full-table scan on TF; see 2026-07-21 crash).
       let isFirst = isJust firstM
-      mTraceRef <- case issue.issueType of
-        Issues.RuntimeException ->
+      mTraceRef <- case Issues.issuePayload issue of
+        Just (Issues.RuntimeExceptionP _) ->
           pure $ errorM >>= \errL -> (,zonedTimeToUTC $ bool errL.base.updatedAt errL.base.createdAt isFirst) <$> bool errL.base.recentTraceId errL.base.firstTraceId isFirst
-        Issues.ApiChange -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.APIChangeData) ->
-            Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
-          _ -> pure Nothing
-        Issues.QueryAlert -> pure Nothing
-        Issues.LogPattern -> pure Nothing
-        Issues.LogPatternRateChange -> pure Nothing
+        Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
+        Just (Issues.QueryAlertP _) -> pure Nothing
+        Just (Issues.LogPatternP _) -> pure Nothing
+        Just (Issues.LogPatternRateChangeP _) -> pure Nothing
+        Nothing -> pure Nothing
       -- The trace is supporting evidence, not the page. It used to be fetched here
       -- and a cold read of a multi-thousand-span trace took >56s, so the gateway
       -- 504'd the whole issue. The Investigation panel now pulls it as its own
@@ -600,21 +598,22 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge_ (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
-        case issue.issueType of
-          Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
+        case Issues.issuePayload issue of
+          Just (Issues.LogPatternP d) -> do
             logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
             metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
             metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
-          Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
+          Just (Issues.LogPatternRateChangeP d) -> do
             logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "arrow-trend-up" $ display d.changeDirection
             metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
             metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
-          Issues.RuntimeException -> pass -- First/Last seen shown in Error Details panel
-          Issues.QueryAlert -> createdChip
-          Issues.ApiChange -> createdChip
+          Just (Issues.RuntimeExceptionP _) -> pass -- First/Last seen shown in Error Details panel
+          Just (Issues.QueryAlertP _) -> createdChip
+          Just (Issues.ApiChangeP _) -> createdChip
+          Nothing -> unparsablePayload_
       -- Seed URL params with default time range so standalone chart widgets can read it
       script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since'))window.setParams({{since:'{fromMaybe "1H" tp.since}'}})}});|]
       -- Volume chart + issue type content
@@ -645,12 +644,13 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 volumeChart_ "Pattern Volume"
                 logPatternCards sf lp sm
               activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
-      case issue.issueType of
-        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+      case Issues.issuePayload issue of
+        Nothing -> unparsablePayload_
+        Just (Issues.LogPatternP d) ->
           patternLayout d.sourceField d.logPattern d.sampleMessage
-        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+        Just (Issues.LogPatternRateChangeP d) ->
           patternLayout d.sourceField d.logPattern d.sampleMessage
-        Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
+        Just (Issues.RuntimeExceptionP exceptionData) -> do
           let trimmedStack = T.strip exceptionData.stackTrace
               hasStack = not $ T.null trimmedStack
               errorFirstLine = if hasStack then fromMaybe trimmedStack $ viaNonEmpty head $ lines trimmedStack else exceptionData.errorMessage
@@ -702,11 +702,11 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
             activityPanel_ pid issueId "lg:w-80 shrink-0" traceRef
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
-        Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
+        Just (Issues.QueryAlertP alertData) ->
           div_ [class_ "mb-4"] do
             span_ [class_ "text-xs text-textWeak mb-2 block font-semibold uppercase tracking-wide"] "Query"
             div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-        Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
+        Just (Issues.ApiChangeP d) -> do
           let fieldChip color f = span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color] $ toHtml f
               fieldList :: Text -> Text -> Text -> V.Vector Text -> Html ()
               fieldList lbl color icn fields
@@ -1152,8 +1152,8 @@ buildSystemPromptForIssue pid issue now = do
   useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
   (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) (fetchTrace useTf) errorM
-  alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
-    (Issues.QueryAlert, AE.Success alertData) -> do
+  alertContextM <- case Issues.issuePayload issue of
+    Just (Issues.QueryAlertP alertData) -> do
       let twoDaysAgo = addUTCTime (-172800) now
       monitorM <- runMaybeT do
         monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
@@ -1346,8 +1346,26 @@ toolCallView_ tc =
     unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
 
 
-withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
-withIssueDataH d = whenJust (parseMaybe AE.parseJSON $ getAeson d)
+-- $setup
+-- >>> :set -XOverloadedStrings -XTypeApplications
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+-- >>> import Lucid (renderText, toHtml)
+
+
+-- | Shown where an issue's stored @issue_type@ and @issue_data@ do not agree.
+--
+-- Reachable for rows written before 'Issues.IssuePayload' made the pairing the only
+-- constructible thing. The previous code rendered *nothing* for these: an empty
+-- region on an incident page, with no log line and no metric to notice it by. A blank
+-- panel is indistinguishable from "this issue has no details", which is the worst way
+-- for this to fail — the on-call reader's reasonable conclusion is that there is
+-- nothing to see. A visible gap is debuggable; an invisible one is not.
+--
+-- >>> renderText unparsablePayload_
+-- "<span class=\"text-xs italic text-textWeak\">details unavailable</span>"
+unparsablePayload_ :: Html ()
+unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unavailable"
 
 
 -- | Process widgets to use cached tool call data (no re-query)
@@ -1826,17 +1844,14 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
   span_ [class_ "shrink-0 opacity-40"] "·"
   snippet
   where
-    snippet = case base.issueType of
-      Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData base.issueData \d ->
-        previewSnippet $ d.errorType <> ": " <> d.errorMessage
-      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData base.issueData \d ->
-        previewSnippet d.queryExpression
-      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData base.issueData \d ->
-        logPatternPreview d.logPattern d.sampleMessage
-      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData base.issueData \d ->
-        logPatternPreview d.logPattern d.sampleMessage
-      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData base.issueData \d ->
+    snippet = case Issues.issuePayload base of
+      Just (Issues.RuntimeExceptionP d) -> previewSnippet $ d.errorType <> ": " <> d.errorMessage
+      Just (Issues.QueryAlertP d) -> previewSnippet d.queryExpression
+      Just (Issues.LogPatternP d) -> logPatternPreview d.logPattern d.sampleMessage
+      Just (Issues.LogPatternRateChangeP d) -> logPatternPreview d.logPattern d.sampleMessage
+      Just (Issues.ApiChangeP d) ->
         previewSnippet $ d.endpointMethod <> " " <> d.endpointPath <> if T.null d.endpointHost then "" else " on " <> d.endpointHost
+      Nothing -> unparsablePayload_
     previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescSummary txt
     summaryPreview txt = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ txt
     logPatternPreview pat sampleMsg
