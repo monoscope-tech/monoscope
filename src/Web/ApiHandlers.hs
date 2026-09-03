@@ -107,7 +107,7 @@ import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (throwError)
@@ -953,20 +953,18 @@ apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
 -- by default, so without this fallback the API/CLI surfaces an empty string.
 -- TODO(perf): store the synth stack at ingestion to avoid these 2 extra queries.
 enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
-enrichIssue pid issue
-  | issue.issueType /= Issues.RuntimeException = pure issue
-  | otherwise = case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (rd :: Issues.RuntimeExceptionData)
-        | T.null rd.stackTrace -> do
-            epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-            case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
-              Nothing -> pure issue
-              Just (trId, ts) -> do
-                useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
-                now <- Time.currentTime
-                synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
-                pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
-      _ -> pure issue
+enrichIssue pid issue = case Issues.issuePayload issue of
+  Just (Issues.RuntimeExceptionP rd)
+    | T.null rd.stackTrace -> do
+        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+        case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
+          Nothing -> pure issue
+          Just (trId, ts) -> do
+            useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+            now <- Time.currentTime
+            synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
+            pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (Issues.payloadJson (Issues.RuntimeExceptionP rd{Issues.stackTrace = synth}))}
+  _ -> pure issue
 
 
 -- | Build a pseudo-stacktrace from a trace's spans, ordered by start time and

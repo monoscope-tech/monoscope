@@ -13,6 +13,12 @@
 -- - docs/anomaly-detection-system.md (architecture overview)
 -- - docs/anomaly-detection-triggers.sql (database trigger details)
 module Models.Apis.Issues (
+  IssuePayload (..),
+  payloadType,
+  payloadJson,
+  parsePayload,
+  issuePayload,
+
   -- * Core Types
   IssueId,
   IssueType (..),
@@ -226,10 +232,9 @@ serviceLabel = fromMaybe "unknown-service"
 
 
 isNewEndpointOnly :: Issue -> Bool
-isNewEndpointOnly issue =
-  issue.issueType == ApiChange && case AE.fromJSON (getAeson issue.issueData) of
-    AE.Success (d :: APIChangeData) -> all V.null [d.newFields, d.deletedFields, d.modifiedFields]
-    AE.Error _ -> False
+isNewEndpointOnly issue = case issuePayload issue of
+  Just (ApiChangeP d) -> all V.null [d.newFields, d.deletedFields, d.modifiedFields]
+  _ -> False
 
 
 -- | API Change issue data
@@ -834,7 +839,6 @@ createAPIChangeIssue projectId endpointHash anomalies = do
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = ApiChange
       , targetHash = endpointHash
       , parentHash = Nothing
       , isFramework = False
@@ -847,7 +851,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
             else "API structure has changed"
       , recommendedAction = defaultRecommendedAction
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
-      , issueData = apiChangeData
+      , payload = ApiChangeP apiChangeData
       , timestamp = Just firstAnomaly.createdAt
       }
 
@@ -859,7 +863,6 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = QueryAlert
       , targetHash = queryId
       , parentHash = Nothing
       , isFramework = False
@@ -869,16 +872,17 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , title = queryName <> " threshold " <> display thresholdType <> " " <> show threshold
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
-      , issueData =
-          QueryAlertData
-            { queryId
-            , queryName
-            , queryExpression = queryExpr
-            , thresholdValue = threshold
-            , actualValue = actual
-            , thresholdType
-            , triggeredAt = now
-            }
+      , payload =
+          QueryAlertP
+            QueryAlertData
+              { queryId
+              , queryName
+              , queryExpression = queryExpr
+              , thresholdValue = threshold
+              , actualValue = actual
+              , thresholdType
+              , triggeredAt = now
+              }
       , timestamp = Just (utcToZonedTime utc now)
       }
 
@@ -1009,7 +1013,6 @@ createLogPatternRateChangeIssue projectId lp sr = do
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = LogPatternRateChange
       , targetHash = lp.patternHash
       , parentHash = Nothing
       , isFramework = False
@@ -1019,22 +1022,23 @@ createLogPatternRateChangeIssue projectId lp sr = do
       , title
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> showRounded "" (abs sr.zScore) <> " std devs)."
       , migrationComplexity = "n/a"
-      , issueData =
-          LogPatternRateChangeData
-            { patternHash = lp.patternHash
-            , logPattern = lp.logPattern
-            , sampleMessage = lp.sampleMessage
-            , logLevel = lp.logLevel
-            , serviceName = lp.serviceName
-            , sourceField = lp.sourceField
-            , currentRatePerHour = sr.currentRate
-            , baselineMean = sr.mean
-            , baselineMad = sr.mad
-            , zScore = abs sr.zScore
-            , changePercent = changePercentVal
-            , changeDirection = sr.direction
-            , detectedAt = now
-            }
+      , payload =
+          LogPatternRateChangeP
+            LogPatternRateChangeData
+              { patternHash = lp.patternHash
+              , logPattern = lp.logPattern
+              , sampleMessage = lp.sampleMessage
+              , logLevel = lp.logLevel
+              , serviceName = lp.serviceName
+              , sourceField = lp.sourceField
+              , currentRatePerHour = sr.currentRate
+              , baselineMean = sr.mean
+              , baselineMad = sr.mad
+              , zScore = abs sr.zScore
+              , changePercent = changePercentVal
+              , changeDirection = sr.direction
+              , detectedAt = now
+              }
       , timestamp = Just $ utcToZonedTime utc now
       }
 
@@ -1074,7 +1078,6 @@ createLogPatternIssue projectId lp = do
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = LogPattern
       , targetHash = lp.patternHash
       , parentHash = Nothing
       , isFramework = False
@@ -1084,17 +1087,18 @@ createLogPatternIssue projectId lp = do
       , title = "New Log Pattern: " <> sanitizeLogPatternTitle lp.logPattern lp.sampleMessage lp.serviceName
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
       , migrationComplexity = "n/a"
-      , issueData =
-          LogPatternData
-            { patternHash = lp.patternHash
-            , logPattern = lp.logPattern
-            , sampleMessage = lp.sampleMessage
-            , logLevel = lp.logLevel
-            , serviceName = lp.serviceName
-            , sourceField = lp.sourceField
-            , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
-            , occurrenceCount = lp.occurrenceCount
-            }
+      , payload =
+          LogPatternP
+            LogPatternData
+              { patternHash = lp.patternHash
+              , logPattern = lp.logPattern
+              , sampleMessage = lp.sampleMessage
+              , logLevel = lp.logLevel
+              , serviceName = lp.serviceName
+              , sourceField = lp.sourceField
+              , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
+              , occurrenceCount = lp.occurrenceCount
+              }
       , timestamp = Just lp.firstSeenAt
       }
 
@@ -1148,9 +1152,93 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternRateChangeData
 
 
-data MkIssueOpts a = MkIssueOpts
+-- $setup
+-- >>> :set -XOverloadedStrings
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let sampleAlert = QueryAlertP (QueryAlertData "q" "name" "expr" 1 2 Above (UTCTime (fromGregorian 2026 1 1) 0))
+
+
+-- | An issue's payload together with the 'IssueType' that selects it.
+--
+-- The two used to travel as independent values — an 'IssueType' tag beside an
+-- untyped @Aeson AE.Value@ — so every writer could pair them wrongly and every
+-- reader had to guess which type to parse as. This makes the pairing the only
+-- representable thing.
+data IssuePayload
+  = ApiChangeP APIChangeData
+  | RuntimeExceptionP RuntimeExceptionData
+  | QueryAlertP QueryAlertData
+  | LogPatternP LogPatternData
+  | LogPatternRateChangeP LogPatternRateChangeData
+  deriving stock (Generic, Show)
+
+
+-- | Exhaustive on purpose: a sixth 'IssueType' must fail to compile here rather
+-- than silently acquire a wrong tag.
+payloadType :: IssuePayload -> IssueType
+payloadType = \case
+  ApiChangeP{} -> ApiChange
+  RuntimeExceptionP{} -> RuntimeException
+  QueryAlertP{} -> QueryAlert
+  LogPatternP{} -> LogPattern
+  LogPatternRateChangeP{} -> LogPatternRateChange
+
+
+-- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
+-- this sum existed.
+--
+-- Deliberately NOT a derived 'AE.ToJSON' on 'IssuePayload'. The tag lives in the
+-- @issue_type@ column, and SQL both reads inside this object
+-- (@issue_data->>'anomaly_hashes'@) and merges into it with @jsonb ||@ (see
+-- 'bumpOccurrenceCount'). Any tagged or @contents@-wrapped encoding would nest the
+-- fields a level deeper, so those merges would write keys at the wrong level and
+-- every row already in the table would stop parsing.
+payloadJson :: IssuePayload -> AE.Value
+payloadJson = \case
+  ApiChangeP d -> AE.toJSON d
+  RuntimeExceptionP d -> AE.toJSON d
+  QueryAlertP d -> AE.toJSON d
+  LogPatternP d -> AE.toJSON d
+  LogPatternRateChangeP d -> AE.toJSON d
+
+
+-- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
+-- columns disagree, which is a fact about rows written before the pairing was
+-- enforced — not a case the constructors can produce.
+--
+-- The @issue_type@ tag selects the parser, so the same JSON under the wrong tag is
+-- rejected rather than coerced:
+--
+-- >>> fmap payloadType (parsePayload QueryAlert (payloadJson sampleAlert))
+-- Just QueryAlert
+--
+-- >>> isNothing $ parsePayload RuntimeException (payloadJson sampleAlert)
+-- True
+--
+-- >>> isNothing $ parsePayload RuntimeException (AE.String "junk")
+-- True
+parsePayload :: IssueType -> AE.Value -> Maybe IssuePayload
+parsePayload t v = case t of
+  ApiChange -> wrap ApiChangeP
+  RuntimeException -> wrap RuntimeExceptionP
+  QueryAlert -> wrap QueryAlertP
+  LogPattern -> wrap LogPatternP
+  LogPatternRateChange -> wrap LogPatternRateChangeP
+  where
+    wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
+    wrap f = case AE.fromJSON v of
+      AE.Success d -> Just (f d)
+      AE.Error _ -> Nothing
+
+
+-- | 'parsePayload' over a stored row.
+issuePayload :: Issue -> Maybe IssuePayload
+issuePayload i = parsePayload i.issueType (getAeson i.issueData)
+
+
+data MkIssueOpts = MkIssueOpts
   { projectId :: Projects.ProjectId
-  , issueType :: IssueType
   , targetHash :: Text
   , parentHash :: Maybe Text
   , isFramework :: Bool
@@ -1160,12 +1248,13 @@ data MkIssueOpts a = MkIssueOpts
   , title :: Text
   , recommendedAction :: Text
   , migrationComplexity :: Text
-  , issueData :: a
+  , payload :: IssuePayload
+  -- ^ Carries its own 'IssueType'; the two can no longer disagree.
   , timestamp :: Maybe ZonedTime
   }
 
 
-mkIssue :: (AE.ToJSON a, Time :> es, UUIDEff :> es) => MkIssueOpts a -> Eff es Issue
+mkIssue :: (Time :> es, UUIDEff :> es) => MkIssueOpts -> Eff es Issue
 mkIssue opts = do
   issueId <- UUIDId <$> genUUID
   zonedNow <- maybe (utcToZonedTime utc <$> Time.currentTime) pure opts.timestamp
@@ -1175,7 +1264,7 @@ mkIssue opts = do
       , createdAt = zonedNow
       , updatedAt = zonedNow
       , projectId = opts.projectId
-      , issueType = opts.issueType
+      , issueType = payloadType opts.payload
       , targetHash = opts.targetHash
       , parentHash = opts.parentHash
       , isFramework = opts.isFramework
@@ -1193,7 +1282,7 @@ mkIssue opts = do
       , affectedRequests = 0
       , affectedClients = 0
       , errorRate = Nothing
-      , issueData = Aeson $ AE.toJSON opts.issueData
+      , issueData = Aeson $ payloadJson opts.payload
       , requestPayloads = Aeson []
       , responsePayloads = Aeson []
       , llmEnhancedAt = Nothing
@@ -1354,7 +1443,6 @@ mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = RuntimeException
       , targetHash
       , parentHash = p.parentHash
       , isFramework
@@ -1365,15 +1453,16 @@ mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
       , recommendedAction
       , migrationComplexity = "n/a"
       , timestamp = Nothing
-      , issueData =
-          RuntimeExceptionData
-            { errorType = p.errorType
-            , errorMessage = p.message
-            , stackTrace = p.stacktrace
-            , requestPath = Nothing
-            , requestMethod = Nothing
-            , occurrenceCount = occurrences
-            , firstSeen = now
-            , lastSeen = now
-            }
+      , payload =
+          RuntimeExceptionP
+            RuntimeExceptionData
+              { errorType = p.errorType
+              , errorMessage = p.message
+              , stackTrace = p.stacktrace
+              , requestPath = Nothing
+              , requestMethod = Nothing
+              , occurrenceCount = occurrences
+              , firstSeen = now
+              , lastSeen = now
+              }
       }
