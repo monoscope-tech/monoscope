@@ -99,9 +99,10 @@ These need a human call or a failing test first.
 
 8. **`AuthContext` carries `EnvConfig` twice** (`env` and `config`), set from the same
    value, used interchangeably, with nothing enforcing they stay equal.
-9. **`ErrorPatterns.getErrorPatternById` is unscoped** — not currently exploitable, as
-   all three handler callers guard `err.projectId /= pid` explicitly, but the guard is
-   repeated rather than structural.
+9. ~~**`ErrorPatterns.getErrorPatternById` is unscoped**~~ — **RESOLVED as
+   deliberately-unscoped; entry was also miscounted.** There are *four* callers, not three:
+   the fourth is `BackgroundJobs.ErrorAssigned`, and it is the reason the query must stay
+   unscoped. See "audited, deliberately left unscoped" below.
 
 ## Pattern hashes are NOT project-scoped (verified)
 
@@ -484,3 +485,275 @@ first-wins (`<|>` per field), but `Maybe`'s own Semigroup *concatenates* — so
 `deriving via Generically` would silently change alert threading from "keep the parent
 message id" to "append ids". This is a case where deriving is not merely unnecessary
 but wrong; a future distill pass should not "fix" it.
+
+---
+
+# Rounds fourteen & fifteen — tenant-scoping audit
+
+## Method: three mechanical scans, not reading
+
+Reading had already missed these. An earlier round fixed the *bulk* monitor actions for
+exactly this bug class, and the single-entity siblings survived that pass. What found
+them was enumerating every query and checking for a tenant predicate:
+
+| Scan | Candidates | Real |
+|---|---|---|
+| `UPDATE`/`DELETE`, no `ProjectId` param, no `project_id` predicate | 46 → 15 handler-reachable | **2** |
+| `SELECT` keyed on an entity id, unscoped | 12 | **1** |
+| Takes a `ProjectId` but never references `project_id` in its SQL | 24 | **0** |
+
+The third scan is all false positives for one reason worth remembering: `projects.projects`
+keys on `id`, which *is* the project id, so the string `project_id` never appears in a
+correctly-scoped query against it.
+
+## The three vulnerabilities (all fixed, all on prod)
+
+1. **`alertSingleToggleActiveH` → `monitorToggleActiveById`** — `WHERE id=#{mid}`. A user
+   authorised on one project could deactivate another project's monitor, silencing its
+   alerting. The API path was already safe (`withRefetch`/`apiMonitorGet`/`ownedOr`);
+   only the web route was not.
+2. **`errorUnmergePostH` → `unmergeErrorPattern`** — `WHERE id = #{pid}` (and that
+   parameter was *named* `pid` while holding a **pattern** id, which is what a project id
+   is called everywhere else — plausibly how the bug was written; renamed to `epid`).
+3. **`errorGroupMembersGetH` → `getErrorPatternGroupMembers`** — `WHERE canonical_id =
+   #{eid}`. Disclosed another project's error types and messages, *and* rendered unmerge
+   links for each disclosed row under the caller's own project path — i.e. the read handed
+   out the ids for vulnerability 2.
+
+All three are fixed **in the query**, not at the caller, so every present and future
+caller is covered. `getLogPatternGroupMembers` was scoped too: it has no production
+caller today, so scoping it now means the first one is safe by construction.
+
+## Verified safe, do not re-audit
+
+API keys guard via `ownedKey` from `projectApiKeysByProjectId`; the three sibling
+error-pattern handlers each guard with `err.projectId /= pid`; dashboards go through
+`getDashAndVM pid`; the member-permission list is derived from `projMembers`, not user
+input; `Settings` calls `getConfigByProject pid cid` (the `getConfig` hit was a substring
+false positive).
+
+## The verification lesson — the important part of these rounds
+
+**A failing test is not evidence the test works.** I twice declared these guards "proven"
+on the strength of `[✘]` markers and a `2 failures` count. Both times the tests were
+dying in *setup* and never reached an assertion. Three separate fixture bugs did this,
+each producing a summary identical to a working guard:
+
+- `stacktrace` is `NOT NULL` (migration 0033) and the INSERT omitted it → `SqlError 23502`
+- `canonical_id` is a self-referencing FK → `SqlError 23503` pointing at a random UUID
+- `error_data` is decoded as `ATError` on read; `'{}'` lacks its required `when` key
+
+Only reading the **failure text** distinguishes `expected: [False] but got: [True]` (guard
+works) from `uncaught exception` (guard never ran). This is the mirror image of the
+false-green discipline used everywhere else in this sweep, and I had no habit for it.
+
+**Any future break-test must assert on the failure reason, never the count.**
+
+## Break-test outcome — both guards proven
+
+With the fixtures fixed and each predicate neutralised as `AND (project_id = #{pid} OR
+TRUE)` (a form that keeps `pid` used, so it still compiles under `-Weverything -Werror`),
+both tests failed at their **assertion**:
+
+- `errorUnmerge_…` — `AnomaliesSpec.hs:674` `expected: [False] but got: [True]`
+- `errorGroupMembers_…` — `shouldSatisfy` failed on HTML containing
+  `SecretTypeError: victim-only-message`, `Hash: group-read-authz-hash`, and a live
+  `data-hx-post` **Unmerge** button — the disclosure and the ids for the write bug, in
+  one response body.
+
+Restoring the predicates makes both pass. The guards measure what they claim to.
+
+A side effect worth recording: because the fixture bugs were in the *tests*, master was
+red for these two specs from the moment they landed — they errored in setup on every run.
+A test that has never been observed green is not a regression guard.
+
+Another session found the same two schema bugs concurrently (`6320d244`) and fixed them
+first; that work is upstream and this branch rebased onto it. It did **not** include the
+`error_data` fix, for a good reason: with the guard intact the query returns no rows, so
+nothing is ever decoded and the missing `when` key cannot surface. A filtered run is
+genuinely green either way. The difference only appears when the guard regresses — the
+foreign row comes back, and an undecodable payload turns the disclosure assertion into a
+`HasqlException`. Same red, wrong reason, wrong message.
+
+That generalises: **a fixture defect that only manifests when the guard fails is invisible
+to every run in which the guard works.** Break-testing is the only thing that exercises
+that path, which makes it the only way to find this class of bug.
+
+## `getErrorPatternById` — audited, deliberately left unscoped
+
+Flagged during the scans as "keyed on an entity id, unscoped". It is not a
+vulnerability: all four callers hold a `pid` and all four guard. The three handlers in
+`Pages/Anomalies.hs` (`assignErrorPostH`, `resolveErrorPostH`, `errorSubscriptionPostH`)
+each match `err.projectId /= pid`, and `BackgroundJobs.ErrorAssigned` guards
+`err.projectId == pid`.
+
+The tempting consolidation — scope the query, as the other three fixes did — would be a
+regression. `ErrorAssigned` deliberately separates "no such row" from "row in another
+tenant" and `logAttention`s the second, because a cross-tenant assignment is a signal, not
+a miss. Scoping the query collapses both into `Nothing` and deletes that branch. Encoding
+the distinction instead (`data Scoped a = Missing | WrongTenant a | Found a`) costs more
+lines than the three guard arms it would replace.
+
+Scope-in-the-query is the right default *when the caller only needs presence*. It is the
+wrong move when the caller needs to distinguish absence from a tenant mismatch. Leave it.
+
+## Open decision: `detectErrorSpikes` ignores acknowledgements
+
+`Issues.isSilenced` has exactly one caller — `detectLogPatternSpikes`. Its own Haddock
+says "Detectors consult this before firing a fresh issue: an ack means 'don't tell me
+about this again', not merely 'hide the old row'." `detectErrorSpikes` never calls it,
+so the two detectors disagree about what an acknowledgement means.
+
+The mechanism, which is worth understanding before anyone changes it:
+
+- `insertIssue`'s `ON CONFLICT (project_id, target_hash, issue_type) WHERE
+  acknowledged_at IS NULL AND archived_at IS NULL` — that `WHERE` is the **partial-index
+  predicate**, not a `DO UPDATE` condition. An acked row is not in the index, so no
+  conflict is detected and the INSERT creates a *second* row.
+- `mkErrorIssue` sets `issueType = RuntimeException` and `targetHash = p.hash`, which is
+  exactly the key `isSilenced` queries. The data for the check is already present.
+- Note the two fields are not the same notion: the partial index keys on
+  `acknowledged_at IS NULL` ("seen"), `isSilenced` keys on `acknowledged_until > now`
+  ("silenced until"). A plain ack and a timed ack behave differently.
+
+**Do not "fix" this without a product call.** Four tests in `ErrorPatternsSpec` (326,
+392, 433, 467) ack every open issue *in order to* get a fresh spike issue created —
+`-- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue`.
+Gating on `isSilenced` fails all four.
+
+Both readings are defensible: an ack should mean silence (what the word means, what the
+log-pattern path does), or a spike is new information an ack shouldn't mask ("I know about
+this error" ≠ "I know it just went 10x"). The fixture comment suggests the current
+behaviour was discovered as a test convenience rather than chosen, but that is inference,
+not evidence. It is user-visible paging behaviour; wrong either way is expensive.
+
+## Measured: the sweep is net +1811 lines in `src/`, and that is not verbosity
+
+`git diff --numstat 44c38b1c..HEAD -- src web-components/src` over 123 commits:
+**6292 insertions, 4481 deletions — net +1811.** The stated goal was to drastically
+reduce code size. It has grown. The breakdown explains why, and the conclusion is not
+"distill harder":
+
+Distill *worked* where it was applied — Bots (−61 Discord, −57 Slack, −49 Whatsapp),
+Onboarding −66, Dashboards −51, `Data/Effectful/Notify` −41, `log-list.ts` −38.
+
+Growth is feature and bug-fix surface, not bloat — `BackgroundJobs.hs` +400,
+`Models/Apis/PatternMerge.hs` +307, `Pages/Telemetry.hs` +160, `Pages/Bots/Utils.hs` +160,
+`Pkg/ErrorFingerprint.hs` +156, `Pages/Anomalies.hs` +147, `Models/Apis/Issues.hs` +144.
+
+Three distill passes on the largest files found **zero** mechanical wins:
+
+- `BackgroundJobs.hs` (5469 lines) — no cross-file clones exist anywhere in `src` at a
+  10-line normalised window. Its largest binding, `backfillSessionSql` at 265 lines, is
+  62 lines of SQL literal with 8 lines of Haskell around it.
+- `Pages/Dashboards.hs` / `Pages/Anomalies.hs` — modals are already shared (`modal_`,
+  `modalWith_`, `confirmModal_`, used across 8 files; the only hand-rolled `dialog_` is a
+  Slack API payload, not HTML).
+- `PatternMerge` — the error/log families are already unified behind one `MergeConfig`
+  record and a single `embedAndMerge` runner. The four remaining SQL pairs differ by
+  table and id column type (`uuid[]` vs `bigint[]`); unifying them means `HI.Sql`
+  fragment concatenation around each table name, which trades ~35 lines for materially
+  worse readability on hot ingestion queries.
+
+55 hand-written instances of derivable classes exist, and the concentrations are all
+justified: `Pkg/DeriveUtils.hs` *is* the deriving machinery, several are orphans for
+library types that cannot be derived, and `GitHost`'s six carry an explicit rationale —
+`WrappedEnumSC` would snake-case `GitHub` to `git_hub`, which migration 0125's CHECK
+constraint rejects.
+
+**The reduction target has been met on the code that existed; the remaining mass is
+irreducible SQL, genuinely distinct job logic, and new features.** Continuing to squeeze
+already-swept modules would trade correctness for line count. The honest next lever is
+scope — deciding which *features* to drop — and that is a product call, not a refactor.
+
+## Two corrections to the documented workflow
+
+**1. `cabal test doctests` is NOT safe to run while the watchers are up.** CLAUDE.md lists
+running doctests as one of the few sanctioned direct compiler invocations. In practice it
+builds the *197-module test-dev target* and writes into
+`build/test-dev/test-dev-tmp` — the directory the `make live-test-dev` ghcid owns. Within
+seconds it was emitting `[Mismatched dynamic interface file]`, i.e. corrupting a running
+suite. Killed it. Treat doctests like every other cabal invocation: one cabal process at a
+time. Verify them on a natural watcher run, or stop the test-dev watcher first.
+
+**2. The doctest GHCi session sees the module's full top-level scope, not just its
+exports.** CLAUDE.md and the skill both say exports-only, which would make any example
+using an imported-but-not-re-exported symbol dead. Evidence it is wrong — this failure
+from an earlier run in this session:
+
+    src/Models/Apis/Issues.hs:1203: failure in expression
+      `isJust $ parsePayload QueryAlert (AE.object ["query_expression" AE..= ("x" :: Text)])'
+    expected: True
+     but got: False
+
+`AE` is a qualified import of `Issues.hs` and is not re-exported, yet the example
+*evaluated* (returned `False`) rather than failing on scope. So `parseUrlPiece` resolves
+in `Endpoints.EndpointSort`'s and `LogQueries.SessionSort`'s doctests without a `$setup`.
+
+The exports-only rule still holds for the thing it was actually learned from: projecting
+`.field` off a *type defined elsewhere*, where `HasField` will not solve unless that
+module is imported by `$setup`. Worth keeping the distinction — read narrowly it is a real
+constraint, read broadly it sends you adding `$setup` chunks that nothing needs.
+
+## The systemic finding: query-param enums living as `Text`
+
+The evasion review's one real result, and it is a *pattern*, not a bug list. A query
+parameter that is conceptually an enum is carried as `Text`, matched against string
+literals in a `case`, and unmatched values fall through to a default. Nothing ever fails;
+the feature just silently does something else.
+
+| Site | Status |
+|---|---|
+| `Endpoints.EndpointSort` | fixed earlier in the sweep — "Alphabetical" silently did nothing |
+| `LogQueries.SessionSort` | fixed (`a0be8e67`) |
+| `Pages.Anomalies.IssueTab` | fixed (`1652d04b`) |
+| `Pages.Monitors.MonitorTab` | fixed (`7810598b`) |
+| `Endpoints.hs:240` — `filterTM == Just "Archived"` | **deliberately left, see below** |
+
+`IssueTab` is the one worth studying, because it shows the failure mode is worse than a
+single silent default. The tab was matched in **four independent places** — the
+filter/label pair, `tabBlurb`, `issueBulkActions`, `issueZeroState` — each with its own
+fall-through. A rename or typo degrades *one* surface while the other three keep working:
+the Archived tab renders "Nothing to triage" with Inbox's bulk actions, and no code path
+errors. Four separate defaults are four separate opportunities to disagree.
+
+**Wire spelling is the trap when fixing these.** `WrappedEnumSC` snake-cases constructors,
+so `TabAcknowledged` would serialise as `acknowledged` — and every live
+`?filter=Acknowledged` bookmark would fail to parse and land on Inbox, reintroducing the
+exact silent degradation being removed. Where the existing wire form isn't snake_case,
+keep it and make one function the source of it (`tabSlug`, `hostSlug`) rather than
+reaching for the deriving-via shortcut. `GitHost` already documents this for the same
+reason: `WrappedEnumSC` would turn `GitHub` into `git_hub`, which migration 0125's CHECK
+constraint rejects.
+
+`Endpoints.hs:240` is left as `filterTM == Just "Archived"` on purpose. It is a boolean
+projection, not a `case` with a fall-through: an unknown filter degrades to `False`, i.e.
+the Endpoints tab, and there is no second site that could disagree with it. The pathology
+in the other four was *multiple independent defaults drifting apart*; a single `==`
+against one literal cannot have that failure mode. Converting it would add a type and two
+functions to delete one comparison — the trade running backwards.
+
+Cost, honestly: `SessionSort` +37 lines, `IssueTab` +40, `MonitorTab` +23. All three trade
+size for a compile-time guarantee, against the size-reduction goal, knowingly. The trend
+down is deliberate — the rationale belongs in this file once, not re-argued in Haddock at
+every site, and `MonitorTab` also *deleted* literal duplication (three sources of
+"Active"/"Inactive" collapsed to one) rather than only adding a type.
+
+## `BackgroundJobs` catch-alls — all three audited, none changed
+
+- `TrialEndingReminder` (`:701`) — `_` logs the skip explicitly with the sub id and
+  status. A documented no-op, not a silent drop.
+- `ReportUsage` (`:794`) — `case provider of NoBillingProvider -> audit; _ -> drain`.
+  This *is* a catch-all on an in-house sum (`StripeProvider | LemonSqueezyProvider |
+  NoBillingProvider`), which the convention forbids. Left deliberately: the outer test is
+  binary ("is there a usable provider"), and the branch that actually depends on the
+  provider — `case target of Right StripeMeter / Right LemonSqueezyMeter / Right
+  LemonSqueezyEventsItem / Left reason` — is already exhaustive, so a genuinely new
+  provider fails to compile *there*. Making the outer case exhaustive means restructuring
+  a ~40-line block that carries explicit `DOUBLE-SUBMIT RISK` handling, for a guarantee
+  that is largely already held. Not worth it without a reason to touch that code.
+- The third (`:689` region) is the same `TrialEndingReminder` case.
+
+Also noted, not fixed: `Pages/Bots/Discord.hs` uses the magic number `type_ = 11` twice
+for Discord's public-thread channel type. Foreign enum, so the catch-all beside it is
+fine, but the literal deserves a name.

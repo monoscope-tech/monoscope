@@ -1633,11 +1633,9 @@ anomalyListGetH
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (_, project, bw) <- mkPageCtx pid
-  -- The Inbox tab additionally hides severity='low' so demoted silent drops don't clutter it.
-  let (tabFilters, currentFilterTab) = case filterTM of
-        Just "Acknowledged" -> (Issues.defIssueFilters{Issues.ack = Issues.IsNotNull}, "Acknowledged")
-        Just "Archived" -> (Issues.defIssueFilters{Issues.archive = Issues.IsNotNull}, "Archived")
-        _ -> (Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}, "Inbox")
+  let tab = parseTab filterTM
+      currentFilterTab = tabSlug tab
+      tabFilters = tabIssueFilters tab
       filterV = fromMaybe "14d" timeFilter
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
@@ -1709,11 +1707,11 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
               def
                 { rowId = Just issueRowId
                 , rowAttrs = Just issueRowAttrs
-                , bulkActions = issueBulkActions pid currentFilterTab
+                , bulkActions = issueBulkActions pid tab
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
                 , pagination = if totalCount > 0 then Just paginationConfig else Nothing
-                , zeroState = Just $ issueZeroState pid currentFilterTab
+                , zeroState = Just $ issueZeroState pid tab
                 }
           }
       bwconf =
@@ -1736,7 +1734,7 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
               -- Each tab differs only in how long the silence lasts and whether
               -- the issue can come back; saying so is what stops "acknowledged"
               -- from being a mystery.
-              span_ [class_ "tooltip tooltip-bottom", data_ "tip" (tabBlurb currentFilterTab)]
+              span_ [class_ "tooltip tooltip-bottom", data_ "tip" (tabBlurb tab)]
                 $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
           }
   addRespHeaders
@@ -1746,35 +1744,77 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
 
 
 -- | One line under the tab strip saying what the tab *means*.
-tabBlurb :: Text -> Text
+-- | Which issues tab is being viewed.
+--
+-- This was 'Text' matched against string literals in four separate places — the
+-- filter/label pair in 'anomalyListGetH', 'tabBlurb', 'issueBulkActions' and
+-- 'issueZeroState' — each with its own silent fall-through to Inbox. A renamed or
+-- mistyped tab therefore degraded /one/ surface to Inbox behaviour while the others kept
+-- working, and nothing failed anywhere. Parsing once here makes all four exhaustive.
+--
+-- The wire spelling is capitalised because that is what live issue URLs and bookmarks
+-- already carry (@?filter=Acknowledged@); 'tabSlug' is the single source of it.
+--
+-- >>> map tabSlug [minBound .. maxBound]
+-- ["Inbox","Acknowledged","Archived"]
+data IssueTab = TabInbox | TabAcknowledged | TabArchived
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+-- | The tab's wire spelling, used for both the URL and the visible label.
+tabSlug :: IssueTab -> Text
+tabSlug = \case
+  TabInbox -> "Inbox"
+  TabAcknowledged -> "Acknowledged"
+  TabArchived -> "Archived"
+
+
+-- | An absent or unrecognised @filter@ lands on Inbox: the tab is a navigation
+-- affordance, so a stale bookmark should show something useful rather than fail.
+--
+-- >>> map parseTab [Just "Archived", Just "Acknowledged", Just "nonsense", Nothing]
+-- [TabArchived,TabAcknowledged,TabInbox,TabInbox]
+parseTab :: Maybe Text -> IssueTab
+parseTab = fromMaybe TabInbox . (inverseMap tabSlug =<<)
+
+
+-- | Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
+tabIssueFilters :: IssueTab -> Issues.IssueFilters
+tabIssueFilters = \case
+  TabAcknowledged -> Issues.defIssueFilters{Issues.ack = Issues.IsNotNull}
+  TabArchived -> Issues.defIssueFilters{Issues.archive = Issues.IsNotNull}
+  TabInbox -> Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}
+
+
+tabBlurb :: IssueTab -> Text
 tabBlurb = \case
-  "Acknowledged" -> "Someone owns these. Notifications are paused until the acknowledgement expires or the issue regresses."
-  "Archived" -> "Not actionable. Hidden and never notified — unarchive to bring one back."
-  _ -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
+  TabAcknowledged -> "Someone owns these. Notifications are paused until the acknowledgement expires or the issue regresses."
+  TabArchived -> "Not actionable. Hidden and never notified — unarchive to bring one back."
+  TabInbox -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
 
 
 -- | Bulk actions offered on each tab: only transitions that make sense from the
 -- state you're looking at.
-issueBulkActions :: Projects.ProjectId -> Text -> [BulkAction]
+issueBulkActions :: Projects.ProjectId -> IssueTab -> [BulkAction]
 issueBulkActions pid tab =
   [ BulkAction{icon = Just i, title = t, uri = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> a}
   | (i, t, a) <- case tab of
-      "Acknowledged" -> [("arrow-rotate-left", "Unacknowledge", "unacknowledge"), ("archive", "Archive", "archive")]
-      "Archived" -> [("arrow-rotate-left", "Unarchive", "unarchive")]
-      _ -> [("check", "Acknowledge", "acknowledge"), ("archive", "Archive", "archive")]
+      TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", "unacknowledge"), ("archive", "Archive", "archive")]
+      TabArchived -> [("arrow-rotate-left", "Unarchive", "unarchive")]
+      TabInbox -> [("check", "Acknowledge", "acknowledge"), ("archive", "Archive", "archive")]
   ]
 
 
-issueZeroState :: Projects.ProjectId -> Text -> ZeroState
+issueZeroState :: Projects.ProjectId -> IssueTab -> ZeroState
 issueZeroState pid = \case
-  "Acknowledged" ->
-    ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." (ESLink (inboxUrl <> "Inbox") "Go to Inbox")
-  "Archived" ->
-    ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink (inboxUrl <> "Inbox") "Go to Inbox")
-  _ ->
+  TabAcknowledged ->
+    ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." (ESLink inboxUrl "Go to Inbox")
+  TabArchived ->
+    ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink inboxUrl "Go to Inbox")
+  TabInbox ->
     ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides")
   where
-    inboxUrl = "/p/" <> pid.toText <> "/issues?filter="
+    inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabSlug TabInbox
 
 
 data AnomalyListGet

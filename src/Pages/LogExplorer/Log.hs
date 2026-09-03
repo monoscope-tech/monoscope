@@ -79,6 +79,7 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Web.HttpApiData (parseUrlPiece)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
@@ -1029,7 +1030,10 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
       let skip = fromMaybe 0 skipM
-      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM skip
+      -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
+      -- default rather than 400-ing; the parse exists so a new dropdown option can't
+      -- silently land here.
+      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (rightToMaybe . parseUrlPiece =<< sortByM) skip
       -- Summary only rides the first page; later load-more pages don't need it.
       addRespHeaders $ SessionsView total (V.fromList rows) (guard (skip == 0) $> summ)
 
