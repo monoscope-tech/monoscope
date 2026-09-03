@@ -1199,6 +1199,19 @@ getAlertStatusColor = \case
 --
 -- >>> replaceAllFormats "Sep 3, 2024 then 7-Sep-2024 end"
 -- "{Mon DD, YYYY} then {DD-Mon-YYYY} end"
+--
+-- A hex run of a length no named digest claims still normalises, rather than shattering
+-- into a value-dependent mix of `{integer}` and leftover letters. Two order ids have to
+-- reach the same string or they become two error groups:
+--
+-- >>> map replaceAllFormats ["SB-3FDBA2D0A0A2", "SB-90770E7BA9FD"]
+-- ["SB-{hex}","SB-{hex}"]
+--
+-- Below the floor it stays an integer, so a short hex-looking token that genuinely tells
+-- two errors apart is still allowed to:
+--
+-- >>> map replaceAllFormats ["code 1A2B3C", "code 4D5E6F"]
+-- ["code {integer}A{integer}B{integer}C","code {integer}D{integer}E{integer}F"]
 replaceAllFormats :: Text -> Text
 replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
@@ -1367,8 +1380,24 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     isPortContext (Just c) = isAlphaNum c || c `elem` ("})]-. " :: [Char])
 
     -- Fixed-length hex runs recognised as digests, shared by both hex scanners.
+    -- Named digests first, then ANY long hex run.
+    --
+    -- The generic arm is what stops a hex-ish token of an unrecognised length from
+    -- shattering: without it `classifyHexContinuation` falls back to `{integer}` for the
+    -- leading digits and rescans the letters, so `SB-3FDBA2D0A0A2` and `SB-90770E7BA9FD`
+    -- normalise to *different* strings and every order id becomes its own error group.
+    -- Measured on 30 days of prod error_patterns: 1486 distinct hashes -> 783.
+    --
+    -- 12, not 8: at 8 this starts eating short commit SHAs and hex-looking words that are
+    -- the only thing telling two errors apart, and the corpus says the extra reach is worth
+    -- 13 groups (770 vs 783). 16 is far too loose a floor to be useful — it leaves the
+    -- 12-15 char ids that dominate the fan-out (1134).
     hexDigest :: Int -> Bool -> Maybe TLB.Builder
-    hexDigest len atBoundary = guard atBoundary >> lookup len [(64, "{sha256}"), (40, "{sha1}"), (32, "{md5}"), (24, "{uuid}")]
+    hexDigest len atBoundary
+      | not atBoundary = Nothing
+      | Just named <- lookup len [(64, "{sha256}"), (40, "{sha1}"), (32, "{md5}"), (24, "{uuid}")] = Just named
+      | len >= 12 = Just "{hex}"
+      | otherwise = Nothing
 
     -- Hex+digit sequence starting with hex alpha (from suffix peeling)
     scanHexDigit :: Text -> TLB.Builder
