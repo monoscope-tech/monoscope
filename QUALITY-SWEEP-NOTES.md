@@ -757,3 +757,40 @@ every site, and `MonitorTab` also *deleted* literal duplication (three sources o
 Also noted, not fixed: `Pages/Bots/Discord.hs` uses the magic number `type_ = 11` twice
 for Discord's public-thread channel type. Foreign enum, so the catch-all beside it is
 fine, but the literal deserves a name.
+
+## `/hs-lob-review` on the client tier — no violations worth acting on
+
+26 `classList.toggle` sites in real source (the other 29 grep hits were `dist/` build
+output and a minified sourcemap — always exclude `dist/` when counting these). Assessed
+each against the escalation ladder. Verdict per cluster:
+
+**Keep — tier 5 earned.**
+- `main.ts:207-226` `syncTimeTransports`. Looks like four demotable class toggles, but the
+  same function also sets a *three-way* `aria-label`, `aria-pressed`, `disabled`, and
+  `textContent`, none of which CSS expresses. Demoting only the class toggles splits one
+  cohesive state-sync across two tiers and two files. The skill's own rule applies: a
+  demotion that is materially uglier stays.
+- `service-map.ts:670`. The anchor's `href` is computed from graph data in the same loop,
+  so the element is JS-constructed regardless; a CSS rule would not remove the loop.
+
+**Demotable, small, deliberately not applied tonight.**
+- `service-map.ts:684-685` — the `hidden`/`flex` pair on the scope chip is the classic
+  CSS-state pattern: `container.dataset.scoped` + `hidden group-data-[scoped=true]:flex`.
+  Net −1 line, and the chip's visibility becomes readable on the chip.
+- `widgets.ts:237-238` — `setChartLoading` writes two classes to two elements; one
+  `dataset.loading` write on the container would drive both from inline Tailwind. The
+  `requestAnimationFrame` deferral must stay (it exists to keep a fetch from forcing
+  layout mid-scroll).
+- `session-replay.ts:831` — `container?.classList.toggle('expanded')` on a chevron button
+  is a pure expand/collapse with no state read elsewhere. This is a genuine tier-2 case:
+  `<details>/<summary>` removes the handler entirely.
+
+Not applied because none of them can be *verified* tonight: confirming a client change in
+the running app needs a Haskell content-change rebuild to re-fingerprint the Vite assets,
+and these are interactive surfaces (a replay viewer, a service map, chart loading states)
+where "it compiles" is not evidence. Blind-editing them to save four lines is the wrong
+trade. They are worth doing in a session with a browser open.
+
+Also confirmed healthy: 3 `htmx.ajax` calls total, and **zero** `dataset.wired` /
+`dataset.bound` manual-wiring guards — the pattern htmx attributes exist to remove is
+absent from this codebase.
