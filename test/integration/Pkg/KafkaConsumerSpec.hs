@@ -56,7 +56,17 @@ runMockProducer bVar = interpret \_ -> \case
   -- Flush makes every buffered record durable on its topic log (offset order).
   FlushProducer ->
     atomically $ modifyTVar' bVar \b -> (foldl' (\acc (t, v, h) -> appendRecord t v h acc) b b.pending){pending = []}
-  _ -> error "runMockProducer: unexpected producer op"
+  -- Spelled out rather than wildcarded so a kafka-effectful bump that adds an op
+  -- fails to compile here too, matching runSharedKafkaProducer. See cabal.project.
+  AskProducerHandle -> error "runMockProducer: AskProducerHandle"
+  ProduceMessage' _ _ -> error "runMockProducer: ProduceMessage'"
+  ProduceMessageSync _ -> error "runMockProducer: ProduceMessageSync"
+  ProduceMessageBatch _ -> error "runMockProducer: ProduceMessageBatch"
+  InitTransactions _ -> error "runMockProducer: InitTransactions"
+  BeginTransaction -> error "runMockProducer: BeginTransaction"
+  CommitTransaction _ -> error "runMockProducer: CommitTransaction"
+  AbortTransaction _ -> error "runMockProducer: AbortTransaction"
+  SendOffsetsToTransaction{} -> error "runMockProducer: SendOffsetsToTransaction"
 
 
 -- The consumer reads from the subscribed @topics@, advancing each topic's cursor

@@ -155,11 +155,21 @@ runSharedKafkaProducer appCtx = interpret \_ -> \case
   KEP.ProduceMessage rec -> whenJustM (liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec)) throwError
   KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
   KEP.AskProducerHandle -> liftIO (getOrInitKafkaProducer appCtx.config)
-  -- Non-exhaustive by design: we interpret exactly the three ops we use. If a
-  -- kafka-effectful upgrade adds a KafkaProducer op (e.g. transactions), this
-  -- panics at runtime rather than failing to compile — revisit this case (and
-  -- the mock in KafkaConsumerSpec) when bumping kafka-effectful.
-  _ -> error "runSharedKafkaProducer: unsupported KafkaProducer operation"
+  -- The remaining kafka-effectful ops are spelled out rather than caught by a
+  -- wildcard so that a library bump adding a twelfth constructor is a compile
+  -- error here, not a panic in production on whichever request first uses it.
+  -- (cabal.project carried an audit note asking for exactly this.)
+  KEP.ProduceMessage' _ _ -> unsupported "ProduceMessage'"
+  KEP.ProduceMessageSync _ -> unsupported "ProduceMessageSync"
+  KEP.ProduceMessageBatch _ -> unsupported "ProduceMessageBatch"
+  KEP.InitTransactions _ -> unsupported "InitTransactions"
+  KEP.BeginTransaction -> unsupported "BeginTransaction"
+  KEP.CommitTransaction _ -> unsupported "CommitTransaction"
+  KEP.AbortTransaction _ -> unsupported "AbortTransaction"
+  KEP.SendOffsetsToTransaction{} -> unsupported "SendOffsetsToTransaction"
+  where
+    unsupported :: Text -> a
+    unsupported op = error $ "runSharedKafkaProducer: " <> op <> " is not interpreted by the shared producer"
 
 
 -- | One-shot producer for callers not already in a producer scope (web
