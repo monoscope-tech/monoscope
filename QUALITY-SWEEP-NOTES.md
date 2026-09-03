@@ -694,3 +694,37 @@ The exports-only rule still holds for the thing it was actually learned from: pr
 `.field` off a *type defined elsewhere*, where `HasField` will not solve unless that
 module is imported by `$setup`. Worth keeping the distinction — read narrowly it is a real
 constraint, read broadly it sends you adding `$setup` chunks that nothing needs.
+
+## The systemic finding: query-param enums living as `Text`
+
+The evasion review's one real result, and it is a *pattern*, not a bug list. A query
+parameter that is conceptually an enum is carried as `Text`, matched against string
+literals in a `case`, and unmatched values fall through to a default. Nothing ever fails;
+the feature just silently does something else.
+
+| Site | Status |
+|---|---|
+| `Endpoints.EndpointSort` | fixed earlier in the sweep — "Alphabetical" silently did nothing |
+| `LogQueries.SessionSort` | fixed (`a0be8e67`) |
+| `Pages.Anomalies.IssueTab` | fixed (`1652d04b`) |
+| `Monitors.hs:415` — `fromMaybe "Active" filterTM` | **open** |
+| `Endpoints.hs:240` — `filterTM == Just "Archived"` | **open** (boolean, so degrades safely) |
+
+`IssueTab` is the one worth studying, because it shows the failure mode is worse than a
+single silent default. The tab was matched in **four independent places** — the
+filter/label pair, `tabBlurb`, `issueBulkActions`, `issueZeroState` — each with its own
+fall-through. A rename or typo degrades *one* surface while the other three keep working:
+the Archived tab renders "Nothing to triage" with Inbox's bulk actions, and no code path
+errors. Four separate defaults are four separate opportunities to disagree.
+
+**Wire spelling is the trap when fixing these.** `WrappedEnumSC` snake-cases constructors,
+so `TabAcknowledged` would serialise as `acknowledged` — and every live
+`?filter=Acknowledged` bookmark would fail to parse and land on Inbox, reintroducing the
+exact silent degradation being removed. Where the existing wire form isn't snake_case,
+keep it and make one function the source of it (`tabSlug`, `hostSlug`) rather than
+reaching for the deriving-via shortcut. `GitHost` already documents this for the same
+reason: `WrappedEnumSC` would turn `GitHub` into `git_hub`, which migration 0125's CHECK
+constraint rejects.
+
+Cost: `SessionSort` was net +37 lines, `IssueTab` net +40 — mostly Haddock and doctests.
+Both trade size for a compile-time guarantee, against the size-reduction goal, knowingly.
