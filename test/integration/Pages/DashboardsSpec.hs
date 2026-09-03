@@ -304,14 +304,13 @@ spec = sequential $ aroundAll withTestResources do
       (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
       case tm of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          -- Get all team IDs (not handles - the field name is misleading)
           let selectedTeams = V.filter (\t -> t.handle /= "broo") teams'
-          let teamIds = V.toList $ V.map (\t -> t.id.unwrap) selectedTeams
+          let teamIds = V.toList $ V.map (.id) selectedTeams
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let dIds = V.toList $ V.map (.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
-              let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = teamIds}
+              let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds}
               _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "add_teams" bulkActionForm
               (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
               case pg' of
@@ -324,7 +323,7 @@ spec = sequential $ aroundAll withTestResources do
                         -- Should have 3 teams: hello, hii, and @everyone
                         length db.teams `shouldBe` 3
                         -- Get team handles for assertions
-                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id.unwrap == tid) teams' <&> (.handle)) (V.toList db.teams)
+                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id == tid) teams' <&> (.handle)) (V.toList db.teams)
                         -- Verify required teams are present and broo is excluded
                         all (`elem` dbTeamHandles) ["hello", "hii", "everyone"] `shouldBe` True
                         dbTeamHandles `shouldSatisfy` notElem "broo"
@@ -337,7 +336,7 @@ spec = sequential $ aroundAll withTestResources do
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dIds = V.toList $ V.map (.id) d.dashboards
-          let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = []}
+          let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = []}
           _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "delete" bulkActionForm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
           case pg' of

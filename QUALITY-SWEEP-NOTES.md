@@ -165,3 +165,144 @@ Where lines *were* added, it was deliberate type strengthening — `IssueFilters
 `NullFilter` (+34), five billing newtypes (+33), `EndpointQuery`/`HostQuery` (+126),
 frontend helpers (+25). The largest structural win doesn't show in the line count at
 all: `processBackgroundJob` went from 655 lines to 106 by extraction.
+
+---
+
+# Round six — 2026-09-03 (branch `quality-sweep-2026-09-03`)
+
+## The headline: literal duplication is genuinely exhausted
+
+Rounds 1–5 removed the copy-paste. Two independent detectors confirm it:
+
+- Exact-clone detector (6+ identical lines, cross-file): only import blocks plus the two
+  real finds below.
+- **Identifier-normalized** detector (every identifier/string/number rewritten to a
+  placeholder, so a clone survives renaming — the shape that *would* have caught
+  `selectIssueById` vs `selectIssueByIdScoped`), N=6, run over `src`, `test/integration`
+  **and** `web-components/src`: **exactly one hit** in the whole tree.
+
+That one hit was the two API routers in `TestUtils`, now fixed. This is a real result, not
+an absence of effort: the remaining bloat in this codebase is verbosity and weak types,
+not repetition, and future rounds should stop looking for clones.
+
+## Fixed
+
+1. **Unsanitized timezone reached the LLM system prompt.** `Pages/LogExplorer/Log.hs`
+   read `timezone` from the request body and passed it straight into
+   `AgenticConfig.timezone`, which `Pkg/AI.hs:530` interpolates into the **system**
+   message. `Web/MCP.hs` validated the same field; the log-explorer path never did —
+   the identical drift class as rounds 1–5, found by consolidating the two.
+   Both now call one `AI.runNlSearch`, which sanitizes internally, so no transport can
+   forget. *Severity is modest and worth stating plainly: the same request's `input` is
+   already attacker-controlled prompt text, so this grants no new capability — but it
+   lands in the system message rather than the user message, and it was unbounded in
+   length (now ≤64 chars, restricted alphabet).*
+   Guard: `nlSearchConfig` doctests pin both the accept and the reject.
+
+2. **Two API routers, 37 arms, one repeated incantation.** Every arm of
+   `routeApiV1Get`/`routeApiV1Write` spelled `mockResponse . AE.encode <$> runAsBase tr`.
+   Now one `jsonRoute` helper; both routers read as the dispatch tables they are.
+
+3. **Host and container charts built the same Widget by hand.** Byte-identical 9-field
+   records in `Containers.hs` and `Infrastructure.hs`. Now one
+   `Widget.infraTimeseries`; callers layer on only what differs. This is the
+   uniformity goal literally — the two pages can no longer drift apart visually.
+
+## Verified, not changed — do not relitigate
+
+- **Modals are already uniform.** `teamModal`, `confirmModal_` and friends all go
+  through `Components.modalWith_`. No reinvention.
+- **Tailwind classes toggled from TypeScript are safe.** `web-components/**/*.ts` is in
+  the `@source` list, so `bg-fillSuccess-strong` et al. are generated.
+- **`Utils.replaceAllFormats` (355 lines) stays.** It is a deliberately backtrack-free
+  single-pass scanner on the ingestion hot path, with doctests. Dense but earned.
+- **`Models/Telemetry/Telemetry.hs` (2952 lines) is well factored** — `getTraceRowsWith`,
+  `selectSpansWhere`, `mkTrace` are already the shared generalizations.
+- **The other seven standalone-widget sites genuinely differ.** One forced constructor
+  would be over-abstraction; `def` already carries the defaults.
+
+## New open item — needs a product call, not a refactor
+
+**The "Add teams" dashboard bulk action cannot work.** `Table.BulkAction` renders a bare
+`hxPost_` button, so it submits only the table form's `itemId` checkboxes. Nothing in that
+flow supplies a team, so `DashboardBulkActionForm.teamHandles` is always `[]`:
+`getTeamsById` returns `[]`, the length check `0 /= 0` passes, and
+`addTeamsToDashboards` is called with an empty vector — the user always sees "No
+dashboards were updated". This is worse than the round-five note (which read it as a
+naming problem): the action has **no team picker at all**. Fixing it means designing UI
+(a picker modal before the POST), so it is deliberately left for a human.
+
+## Weeder — now installed, and the earlier note was incomplete
+
+436 `.hie` files exist under `dist-newstyle`, so weeder can run. Two blockers, not one:
+
+1. `~/.cabal/bin/weeder` pointed into a pruned store entry — fixed by `cabal install weeder`.
+2. **A plain `cabal install weeder` is not enough.** It resolves to a build against
+   whatever GHC cabal picks (here 9.12.4) and then refuses every `.hie` file with
+   *"weeder must be built with the same GHC version as the project it is used on"*.
+   It has to be pinned to the project's compiler:
+
+   ```
+   cabal install weeder --with-compiler=$(which ghc-9.12.2) --overwrite-policy=always
+   ```
+
+   That is almost certainly why weeder silently fell out of the workflow despite
+   CLAUDE.md mandating it: the obvious install command produces a binary that cannot
+   read this project's hie files, and the error only surfaces at run time.
+
+## Second batch: every team reference is now `TeamId`
+
+`ProjectMembers.TeamId` (a `UUIDId "team"`) existed and was used in *some* places, while a
+parallel set of signatures passed the same value as a bare `UUID`, with `coerce` bridging
+them at four call sites. That is the primitive-obsession CLAUDE.md warns about, and it had
+already produced two naming lies:
+
+- `Monitors.getAlertsByTeamHandle` took a team **id**, not a handle → renamed `getAlertsByTeam`.
+- `DashboardBulkActionForm.teamHandles` held ids → `teamIds` (the spec even carried a
+  comment saying "not handles - the field name is misleading").
+
+Now typed end-to-end: the `teams` column on `QueryMonitor` and `DashboardVM`, the
+`teams` field on six API request/response types, `insertDashboard`, `addTeamsToDashboards`,
+`selectDashboardsByTeam`, `monitorRemoveTeam`, `buildTeamMap`, `toUnifiedMonitorItem`,
+`notificationSettingsSection_`, the git-sync `teamMap`, and three Servant captures /
+query params. Every `coerce` and `.unwrap` on the team path is gone.
+
+**Wire format is unchanged** — `UUIDId` derives its JSON and `FromHttpApiData` instances
+newtype-wise, so the API and form encodings are byte-identical. This is a
+compile-time-only strengthening.
+
+## Weeder: what it actually found (and what it got wrong)
+
+With weeder finally usable, the library-target sweep produced 12 candidates. **Three were
+false positives from Template Haskell**, which weeder cannot see through — worth knowing
+before anyone trusts its output blindly:
+
+- `viteAssetFile` — spliced at `BodyWrapper.hs:307` as `$(viteAssetFile "index.html")`.
+- `assetManifestFingerprint` — forced inside that same splice.
+- `sparklineBlocks` — used two lines below its own definition, inside `sparklineBar`.
+
+Three more are doctested (`sparklineBar`, `ensureUrlParams`, `dynSegmentLabel`); weeder
+does not count a doctest as a use, and deleting them would silently drop coverage of the
+underlying logic. Left in place deliberately.
+
+**Deleted (genuinely dead, no doctest, no splice):** `Pages.BodyWrapper.withPageWrapper`,
+`Pages.Components.jsonTab_`, `DeriveUtils.idToText` (a one-line shim over `.toText` —
+exactly the single-use wrapper CLAUDE.md says to inline), `DeriveUtils.textArrayEnc`.
+
+### Two uncalled functions that are *bugs*, not dead code
+
+Weeder's real value this round was not the deletions:
+
+1. **`LiveTail.reapExpiredSubscriptions` was never called.** Its sibling `relayReap` is
+   wired at `System/Server.hs:237`; this one was exported and forgotten, so
+   `projects.live_tail_subscriptions` grew for the life of the install. Its own comment
+   ("running it late, or not at all, changes nothing a user can observe") is true about
+   *correctness* and is probably why it was never noticed — nothing breaks, the table just
+   grows. **Now wired onto the same timer as `relayReap`.**
+
+2. **`TestClock.syncConnectionTime` is never called** — only referenced from two comments,
+   one of which (`TestUtils.hs:611`) claims SQL going through `app_now()` "sees the same
+   clock too". If nothing ever syncs the connection, that claim may not hold and
+   time-sensitive SQL in tests could be reading wall-clock. **Not changed** — the whole
+   suite passes today, so touching test-time plumbing needs a deliberate look rather than
+   a drive-by fix. Flagged for a human.

@@ -1406,6 +1406,21 @@ classifyUrlPathWith learned = T.intercalate "/" . map seg . T.splitOn "/"
 
 
 -- | Tokenize URL path for Drain: split by "/" and pre-normalize with valueToFormatStr/isUrlIdLike.
+--
+-- Typed ids get their format label; ids that match no known shape collapse to @\<*\>@;
+-- static segments survive untouched (the property the endpoint-grouping job depends on).
+--
+-- >>> V.toList $ tokenizeUrlPath "/api/v1/users/200"
+-- ["","api","v1","users","{http_status}"]
+--
+-- >>> viaNonEmpty last $ V.toList $ tokenizeUrlPath "/api/v1/users/550e8400-e29b-41d4-a716-446655440000"
+-- Just "{uuid}"
+--
+-- >>> V.toList $ tokenizeUrlPath "/api/v2/users/auth0|69a7015edae92e991cd72d91"
+-- ["","api","v2","users","<*>"]
+--
+-- >>> V.toList $ tokenizeUrlPath "/api/v1/health"
+-- ["","api","v1","health"]
 tokenizeUrlPath :: Text -> V.Vector Text
 tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
   where

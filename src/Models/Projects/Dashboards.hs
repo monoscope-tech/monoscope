@@ -36,7 +36,6 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql (SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
@@ -58,6 +57,7 @@ import Effectful.Error.Static (Error, throwError)
 import Hasql.Interpolate qualified as HI
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -82,7 +82,7 @@ data DashboardVM = DashboardVM
   , homepageSince :: Maybe UTCTime
   , tags :: V.Vector Text
   , title :: Text
-  , teams :: V.Vector UUID.UUID
+  , teams :: V.Vector ProjectMembers.TeamId
   , filePath :: Maybe Text
   , fileSha :: Maybe Text
   }
@@ -256,14 +256,14 @@ deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> 
 deleteDashboardsByIds pid dids = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
-addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
+addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector ProjectMembers.TeamId -> Eff es Int64
 addTeamsToDashboards pid dids teamIds =
   Hasql.interpExecute
     [HI.sql| UPDATE projects.dashboards SET teams = teams || #{teamIds}::uuid[]
            WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
-selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
+selectDashboardsByTeam :: DB es => Projects.ProjectId -> ProjectMembers.TeamId -> Eff es [DashboardVM]
 selectDashboardsByTeam pid teamId =
   Hasql.interp
     ( selectFrom @DashboardVM

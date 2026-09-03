@@ -11,7 +11,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import ProcessMessage (tokenizeUrlPath)
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
@@ -158,20 +157,7 @@ spec = around withTestResources do
         forM_ templates \(urlPath, _, _) ->
           urlPath `shouldBe` "/api/v1/items/{param}"
 
-    describe "tokenizeUrlPath" do
-      it "normalizes HTTP status codes to format strings" \_ ->
-        V.toList (tokenizeUrlPath "/api/v1/users/200") `shouldBe` ["", "api", "v1", "users", "{http_status}"]
-
-      it "normalizes UUIDs to format string" \_ -> do
-        let result = V.toList $ tokenizeUrlPath "/api/v1/users/550e8400-e29b-41d4-a716-446655440000"
-        viaNonEmpty last result `shouldBe` Just "{uuid}"
-
-      it "normalizes compound IDs (auth0|xxx) to <*>" \_ ->
-        V.toList (tokenizeUrlPath "/api/v2/users/auth0|69a7015edae92e991cd72d91")
-          `shouldBe` ["", "api", "v2", "users", "<*>"]
-
-      it "keeps static segments unchanged" \_ ->
-        V.toList (tokenizeUrlPath "/api/v1/health") `shouldBe` ["", "api", "v1", "health"]
+    -- tokenizeUrlPath's per-segment normalization is doctested on the function itself.
 
     -- The failure this whole change exists to prevent: a customer whose primary
     -- key is "SB-<hex>" got 18,213 endpoint rows for ~1,900 routes, because no

@@ -1559,49 +1559,39 @@ routeRequest tr path params
     source = p "source" params
 
 
+-- | Run a handler in the base context and encode its result as a mock HTTP
+-- response — the shape almost every arm of the two API routers below shares.
+jsonRoute :: AE.ToJSON a => TestResources -> ATBaseCtx a -> IO (Response LBS.ByteString)
+jsonRoute tr = fmap (mockResponse . AE.encode) . runAsBase tr
+
+
 routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
 routeApiV1Get tr rest params = case T.splitOn "/" rest of
-  ["issues"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing (pInt "page" params) (pInt "per_page" params))
-  ["issues", iid] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueGet testPid (parseUUIDId iid))
-  ["endpoints"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEndpointsList testPid (lookupParam "search" params) (pBool "outgoing" params) (pInt "page" params) (pInt "per_page" params))
-  ["endpoints", eid] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEndpointGet testPid (parseUUIDId eid))
-  ["log_patterns"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsList testPid (pInt "page" params) (pInt "per_page" params))
-  ["log_patterns", lpid] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternGet testPid (parseIntId lpid))
+  ["issues"] -> jsonRoute tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing (pInt "page" params) (pInt "per_page" params))
+  ["issues", iid] -> jsonRoute tr (ApiH.apiIssueGet testPid (parseUUIDId iid))
+  ["endpoints"] -> jsonRoute tr (ApiH.apiEndpointsList testPid (lookupParam "search" params) (pBool "outgoing" params) (pInt "page" params) (pInt "per_page" params))
+  ["endpoints", eid] -> jsonRoute tr (ApiH.apiEndpointGet testPid (parseUUIDId eid))
+  ["log_patterns"] -> jsonRoute tr (ApiH.apiLogPatternsList testPid (pInt "page" params) (pInt "per_page" params))
+  ["log_patterns", lpid] -> jsonRoute tr (ApiH.apiLogPatternGet testPid (parseIntId lpid))
   ["events"] ->
-    mockResponse
-      . AE.encode
-      <$> runAsBase
-        tr
-        (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params))
-  ["events", eid, "time", ts] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
-  ["facets"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
+    jsonRoute
+      tr
+      (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params))
+  ["events", eid, "time", ts] -> jsonRoute tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
+  ["facets"] -> jsonRoute tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
   ["metrics"] -> do
     result <-
       runQueryEffect tr
         $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) Nothing []
     pure $ mockResponse $ AE.encode result
-  ["monitors"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorsList testPid)
-  ["monitors", mid] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorGet testPid (monitorId mid))
-  ["monitors", mid, "yaml"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorYaml testPid (monitorId mid))
-  ["dashboards"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardsList testPid (lookupParam "sort" params) (lookupParam "team_id" params))
-  ["dashboards", did] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardGet testPid (parseUUIDId did))
-  ["dashboards", did, "yaml"] ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardYaml testPid (parseUUIDId did))
-  ["me"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMe testPid)
-  ["project"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiProjectGet testPid)
+  ["monitors"] -> jsonRoute tr (ApiH.apiMonitorsList testPid)
+  ["monitors", mid] -> jsonRoute tr (ApiH.apiMonitorGet testPid (monitorId mid))
+  ["monitors", mid, "yaml"] -> jsonRoute tr (ApiH.apiMonitorYaml testPid (monitorId mid))
+  ["dashboards"] -> jsonRoute tr (ApiH.apiDashboardsList testPid (lookupParam "sort" params) (lookupParam "team_id" params))
+  ["dashboards", did] -> jsonRoute tr (ApiH.apiDashboardGet testPid (parseUUIDId did))
+  ["dashboards", did, "yaml"] -> jsonRoute tr (ApiH.apiDashboardYaml testPid (parseUUIDId did))
+  ["me"] -> jsonRoute tr (ApiH.apiMe testPid)
+  ["project"] -> jsonRoute tr (ApiH.apiProjectGet testPid)
   _ -> error $ "runHTTPtoServant: unhandled GET api/v1/" <> rest
 
 
@@ -1613,48 +1603,27 @@ routeWriteRequest tr verb path params body
 
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
-  ("POST", ["issues", iid, "ack"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
-  ("POST", ["issues", iid, "unack"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
-  ("POST", ["issues", iid, "archive"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
-  ("POST", ["issues", iid, "unarchive"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
-  ("POST", ["issues", "bulk"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesBulk testPid (decodeBody "BulkAction IssueId"))
-  ("POST", ["log_patterns", lpid, "ack"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
-  ("POST", ["log_patterns", "bulk"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsBulk testPid (decodeBody "BulkAction Int64"))
-  ("POST", ["monitors"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorCreate testPid (decodeBody "MonitorInput"))
-  ("POST", ["monitors", "apply"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorApply testPid (decodeBody "MonitorInput"))
-  ("POST", ["share"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiShareLinkCreate testPid (decodeBody "ShareLinkCreate"))
-  ("POST", ["dashboards"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardCreate testPid (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", "apply"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardApply testPid (decodeBody "DashboardYAMLDoc"))
-  ("PUT", ["dashboards", did]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardUpdate testPid (parseUUIDId did) (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", did, "duplicate"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardDuplicate testPid (parseUUIDId did))
-  ("POST", ["dashboards", did, "star"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardStar testPid (parseUUIDId did))
-  ("PUT", ["dashboards", did, "widgets"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardWidgetUpsert testPid (parseUUIDId did) (decodeBody "Widget"))
-  ("PUT", ["monitors", mid]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorUpdate testPid (monitorId mid) (decodeBody "MonitorInput"))
-  ("POST", ["monitors", mid, "mute"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorMute testPid (monitorId mid) (pInt "duration_minutes" params))
-  ("POST", ["monitors", mid, "unmute"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorUnmute testPid (monitorId mid))
-  ("POST", ["monitors", mid, "resolve"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorResolve testPid (monitorId mid))
-  ("POST", ["monitors", mid, "toggle_active"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorToggleActive testPid (monitorId mid))
+  ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
+  ("POST", ["issues", iid, "unack"]) -> jsonRoute tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
+  ("POST", ["issues", iid, "archive"]) -> jsonRoute tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
+  ("POST", ["issues", iid, "unarchive"]) -> jsonRoute tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
+  ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk testPid (decodeBody "BulkAction IssueId"))
+  ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
+  ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk testPid (decodeBody "BulkAction Int64"))
+  ("POST", ["monitors"]) -> jsonRoute tr (ApiH.apiMonitorCreate testPid (decodeBody "MonitorInput"))
+  ("POST", ["monitors", "apply"]) -> jsonRoute tr (ApiH.apiMonitorApply testPid (decodeBody "MonitorInput"))
+  ("POST", ["share"]) -> jsonRoute tr (ApiH.apiShareLinkCreate testPid (decodeBody "ShareLinkCreate"))
+  ("POST", ["dashboards"]) -> jsonRoute tr (ApiH.apiDashboardCreate testPid (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", "apply"]) -> jsonRoute tr (ApiH.apiDashboardApply testPid (decodeBody "DashboardYAMLDoc"))
+  ("PUT", ["dashboards", did]) -> jsonRoute tr (ApiH.apiDashboardUpdate testPid (parseUUIDId did) (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", did, "duplicate"]) -> jsonRoute tr (ApiH.apiDashboardDuplicate testPid (parseUUIDId did))
+  ("POST", ["dashboards", did, "star"]) -> jsonRoute tr (ApiH.apiDashboardStar testPid (parseUUIDId did))
+  ("PUT", ["dashboards", did, "widgets"]) -> jsonRoute tr (ApiH.apiDashboardWidgetUpsert testPid (parseUUIDId did) (decodeBody "Widget"))
+  ("PUT", ["monitors", mid]) -> jsonRoute tr (ApiH.apiMonitorUpdate testPid (monitorId mid) (decodeBody "MonitorInput"))
+  ("POST", ["monitors", mid, "mute"]) -> jsonRoute tr (ApiH.apiMonitorMute testPid (monitorId mid) (pInt "duration_minutes" params))
+  ("POST", ["monitors", mid, "unmute"]) -> jsonRoute tr (ApiH.apiMonitorUnmute testPid (monitorId mid))
+  ("POST", ["monitors", mid, "resolve"]) -> jsonRoute tr (ApiH.apiMonitorResolve testPid (monitorId mid))
+  ("POST", ["monitors", mid, "toggle_active"]) -> jsonRoute tr (ApiH.apiMonitorToggleActive testPid (monitorId mid))
   _ -> error $ "runHTTPtoServant: unhandled " <> verb <> " api/v1/" <> rest
   where
     decodeBody :: AE.FromJSON a => Text -> a

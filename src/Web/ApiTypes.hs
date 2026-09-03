@@ -104,7 +104,7 @@ data MonitorInput = MonitorInput
   , emails :: [Text]
   , emailAll :: Maybe Bool
   , slackChannels :: [Text]
-  , teams :: [UUID.UUID]
+  , teams :: [PM.TeamId]
   , visualizationType :: Maybe Text
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
@@ -134,7 +134,7 @@ data MonitorPatch = MonitorPatch
   , emails :: Maybe [Text]
   , emailAll :: Maybe Bool
   , slackChannels :: Maybe [Text]
-  , teams :: Maybe [UUID.UUID]
+  , teams :: Maybe [PM.TeamId]
   , visualizationType :: Maybe Text
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
@@ -150,7 +150,7 @@ data DashboardSummary = DashboardSummary
   { id :: Dashboards.DashboardId
   , title :: Text
   , tags :: V.Vector Text
-  , teams :: V.Vector UUID.UUID
+  , teams :: V.Vector PM.TeamId
   , starred :: Bool
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
@@ -226,7 +226,7 @@ data DashboardFull = DashboardFull
 data DashboardInput = DashboardInput
   { title :: Text
   , tags :: Maybe [Text]
-  , teams :: Maybe [UUID.UUID]
+  , teams :: Maybe [PM.TeamId]
   , filePath :: Maybe Text
   , schema :: Maybe Dashboards.Dashboard
   }
@@ -239,7 +239,7 @@ data DashboardInput = DashboardInput
 data DashboardPatch = DashboardPatch
   { title :: Maybe Text
   , tags :: Maybe [Text]
-  , teams :: Maybe [UUID.UUID]
+  , teams :: Maybe [PM.TeamId]
   , filePath :: Maybe Text
   , schema :: Maybe Dashboards.Dashboard
   }
@@ -253,7 +253,7 @@ data DashboardYAMLDoc = DashboardYAMLDoc
   { filePath :: Text
   , title :: Maybe Text
   , tags :: Maybe [Text]
-  , teams :: Maybe [UUID.UUID]
+  , teams :: Maybe [PM.TeamId]
   , schema :: Dashboards.Dashboard
   }
   deriving stock (Generic, Show)

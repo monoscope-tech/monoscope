@@ -23,7 +23,6 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.Components.Widget (WidgetType (WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -355,23 +354,11 @@ containerCharts_ pid =
 
 infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget
 infrastructureWidget pid wid title unit query =
-  (def :: Widget.Widget)
-    { Widget.id = Just wid
-    , Widget.wType = WTTimeseriesLine
-    , Widget.title = Just title
-    , Widget.query = Just query
-    , Widget.unit = Just unit
-    , Widget._projectId = Just pid
-    , Widget.standalone = Just True
-    , Widget.hideSubtitle = Just True
-    , Widget.hideValue = Just True
-    , Widget.description = Just $ case unit of
+  (Widget.infraTimeseries pid wid title unit query)
+    { Widget.description = Just $ case unit of
         "cores" -> "Average CPU usage reported for each container in every time bucket."
         "bytes" -> "Average working-set memory reported for each container in every time bucket."
         _ -> "Average value reported for each container in every time bucket."
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
-    , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
     }
 
 

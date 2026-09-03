@@ -16,7 +16,6 @@ module Pkg.DeriveUtils (
   addKeepaliveParams,
   appendConnParams,
   connectPostgreSQL,
-  idToText,
   idFromText,
   unAesonText,
   unAesonTextMaybe,
@@ -27,7 +26,6 @@ module Pkg.DeriveUtils (
   assetHash,
   viteAssetFile,
   showPGFloatArray,
-  textArrayEnc,
   mkHasqlPool,
   rawSql,
   selectFrom,
@@ -160,11 +158,6 @@ instance HasField "toText" (UUIDId name) Text where
 
 instance HasField "unwrap" (UUIDId name) UUID.UUID where
   getField = coerce
-
-
--- | Convert any UUID-based ID to Text
-idToText :: UUIDId name -> Text
-idToText uid = uid.toText
 
 
 -- | Parse Text to a UUID-based ID
@@ -587,11 +580,6 @@ instance HI.DecodeValue (CI Text) where
 
 instance HI.EncodeValue (CI Text) where
   encodeValue = contramap CI.original E.text
-
-
-textArrayEnc :: E.Value (V.Vector Text)
-textArrayEnc = E.array (E.dimension foldl' (E.element (E.nonNullable E.text)))
-{-# INLINE textArrayEnc #-}
 
 
 -- | Build a hasql pool. Timeouts are `DiffTime` (seconds): 30s acquisition,

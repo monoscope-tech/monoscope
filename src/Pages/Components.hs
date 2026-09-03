@@ -1,6 +1,5 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
-import Data.Aeson qualified as AE
 import Data.Default (Default (..))
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -16,7 +15,7 @@ import NeatInterpolation (text)
 import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -568,12 +567,6 @@ httpTab_ grp marker active inner =
 -- never exists. MARKER must match the tab's radio class and GRP the @group/GRP@ container.
 tabPanel_ :: Text -> Text -> Html () -> Html ()
 tabPanel_ visCls elemId = div_ [class_ $ "hidden " <> visCls, id_ elemId]
-
-
--- A tab content panel holding a JSON tree; the common shape behind most tab bodies. @visCls@
--- is the literal group-has class — see 'tabPanel_'.
-jsonTab_ :: Text -> Text -> AE.Value -> Maybe Text -> Html ()
-jsonTab_ visCls elemId val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree val filt
 
 
 -- >>> T.isInfixOf "pt-12" (toStrict $ renderText drawerLoadingSkeleton_)

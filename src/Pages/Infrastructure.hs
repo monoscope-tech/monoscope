@@ -450,22 +450,7 @@ hostWidgets pid host =
     ]
   where
     quoted = kqlQuoted host.name
-    widget signal ident title unit query =
-      signal
-        $> (def :: Widget.Widget)
-          { Widget.id = Just ident
-          , Widget.wType = Widget.WTTimeseriesLine
-          , Widget.title = Just title
-          , Widget.query = Just query
-          , Widget.unit = Just unit
-          , Widget._projectId = Just pid
-          , Widget.standalone = Just True
-          , Widget.hideSubtitle = Just True
-          , Widget.hideValue = Just True
-          , Widget.legendPosition = Just "top-right"
-          , Widget.legendSize = Just "xs"
-          , Widget.layout = Just def{Widget.w = Just 6, Widget.h = Just 4}
-          }
+    widget signal ident title unit query = signal $> Widget.infraTimeseries pid ident title unit query
 
 
 data ImageRow = ImageRow

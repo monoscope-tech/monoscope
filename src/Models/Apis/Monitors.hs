@@ -14,7 +14,7 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
-  getAlertsByTeamHandle,
+  getAlertsByTeam,
   monitorRemoveTeam,
   getActiveQueryMonitors,
   updateLastEvaluatedAt,
@@ -44,6 +44,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
 import Relude
@@ -109,7 +110,7 @@ data QueryMonitor = QueryMonitor
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
-  , teams :: V.Vector UUID.UUID
+  , teams :: V.Vector ProjectMembers.TeamId
   , widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
   , alertRecoveryThreshold :: Maybe Double
@@ -228,11 +229,11 @@ queryMonitorByTitle pid title =
   Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND alert_config->>'title' = #{title} AND deleted_at IS NULL ORDER BY created_at LIMIT 1 |])
 
 
-getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
-getAlertsByTeamHandle pid teamId = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND #{teamId} = ANY(teams) AND deleted_at IS NULL |])
+getAlertsByTeam :: DB es => Projects.ProjectId -> ProjectMembers.TeamId -> Eff es [QueryMonitor]
+getAlertsByTeam pid teamId = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND #{teamId} = ANY(teams) AND deleted_at IS NULL |])
 
 
-monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> Eff es Int64
+monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> ProjectMembers.TeamId -> Eff es Int64
 monitorRemoveTeam pid monitorId teamId =
   Hasql.interpExecute
     [HI.sql|

@@ -41,7 +41,7 @@ import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -1881,7 +1881,6 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
 aiSearchH pid requestBody = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  now <- Time.currentTime
   let envCfg = authCtx.env
       parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
 
@@ -1894,22 +1893,11 @@ aiSearchH pid requestBody = do
     addErrorToast "Please enter a search query" Nothing
     throwError Servant.err400{Servant.errBody = "Empty input"}
 
-  -- Fetch precomputed facets for context (last 24 hours)
-  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2, AI.useTimefusion = envCfg.enableTimefusionReads}
-  result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
-  case result of
+  AI.runNlSearch pid envCfg.enableTimefusionReads timezoneM inputText envCfg.openaiModel envCfg.openaiApiKey >>= \case
     Left errMsg -> do
       addErrorToast "AI search failed" (Just errMsg)
       throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-    Right resp ->
-      addRespHeaders
-        $ AE.object
-          [ "query" AE..= resp.query
-          , "visualization_type" AE..= resp.visualization
-          , "commentary" AE..= resp.explanation
-          , "time_range" AE..= resp.timeRange
-          ]
+    Right payload -> addRespHeaders payload
 
 
 -- | Visible columns = server defaults plus the URL's deltas (@addCols@ show extra, @removeCols@
