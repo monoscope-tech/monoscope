@@ -501,7 +501,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
+  , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)

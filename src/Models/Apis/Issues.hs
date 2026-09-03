@@ -1267,7 +1267,7 @@ data Report = Report
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
-  , reportType :: Text
+  , reportType :: Projects.ReportType
   , reportJson :: AE.Value
   , startTime :: UTCTime
   , endTime :: UTCTime
@@ -1281,7 +1281,7 @@ data ReportListItem = ReportListItem
   { id :: ReportId
   , createdAt :: ZonedTime
   , projectId :: Projects.ProjectId
-  , reportType :: Text
+  , reportType :: Projects.ReportType
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -1304,7 +1304,7 @@ reportHistoryByProject pid page =
   Hasql.interp (selectFrom @ReportListItem <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{page * 20} |])
 
 
-getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
+getLatestReportByType :: DB es => Projects.ProjectId -> Projects.ReportType -> Eff es (Maybe Report)
 getLatestReportByType pid rType = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |])
 
 

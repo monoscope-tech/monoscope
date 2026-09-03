@@ -48,7 +48,7 @@ data NotificationAlerts
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
   | ReportAlert
-      { reportType :: Text
+      { reportType :: Projects.ReportType
       , startTime :: Text
       , endTime :: Text
       , totalErrors :: Int
@@ -200,7 +200,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
           eUrl = fromMaybe "" $ viaNonEmpty last $ T.splitOn "?" errorChartUrl
           contentVars =
             KEM.fromList
-              [ "1" AE..= reportType
+              [ "1" AE..= display reportType
               , "2" AE..= ("*" <> pTitle <> "*")
               , "4" AE..= ("`" <> T.take 10 startTime <> "`")
               , "5" AE..= ("`" <> T.take 10 endTime <> "`")
@@ -230,12 +230,12 @@ sendWhatsAppAlert alert pid pTitle tos = do
             ]
 
 
-slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
+slackReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
 slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown project channelId url allUrl errUrl =
   slackAttachment
     channelId
     "#64748b"
-    [ slackSection ("<" <> url <> "|📊 *" <> T.toTitle reportType <> " report* · " <> project <> ">")
+    [ slackSection ("<" <> url <> "|📊 *" <> T.toTitle (display reportType) <> " report* · " <> project <> ">")
     , slackContext ["*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors]
     , slackImage "Events" (Just $ "Events: " <> show totalEvents) allUrl
     , slackImage "Errors" (Just $ "Errors: " <> show totalErrors) errUrl
@@ -414,13 +414,13 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
     errPrefix = if isError then "Error " else "" :: Text
 
 
-discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
+discordReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
 discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown project url allUrl errUrl =
   AE.object
     [ "flags" AE..= 32768
     , "components"
         AE..= arr
-          [ text ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)
+          [ text ("## 📊 " <> (case reportType of Projects.RTWeekly -> "Weekly"; Projects.RTDaily -> "Daily") <> " Report for " <> project)
           , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
           , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
           , AE.object
@@ -615,8 +615,9 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   _ -> sampleAlert (fromMaybe ApiChange $ parseIssueType issueTypeText) title
 
 
-sampleReport :: Text -> NotificationAlerts
-sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
+-- | The project title is supplied by the sender, not the alert, so this takes none.
+sampleReport :: NotificationAlerts
+sampleReport = ReportAlert Projects.RTWeekly "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
 
 
 -- | Per-alert presentation: Slack-flavored emoji shortcode, short label for titles,

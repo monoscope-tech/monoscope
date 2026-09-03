@@ -91,7 +91,6 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pages.Bots.Utils (ReportType (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
@@ -335,8 +334,8 @@ processBackgroundJob authCtx bgJob =
         _ -> pass
     DailyJob -> runDailyJobScheduling authCtx
     HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
-    DailyReports pid -> sendReportForProject pid DailyReport
-    WeeklyReports pid -> sendReportForProject pid WeeklyReport
+    DailyReports pid -> sendReportForProject pid Projects.RTDaily
+    WeeklyReports pid -> sendReportForProject pid Projects.RTWeekly
     ReportUsage pid -> reportProjectUsage authCtx pid
     TrialEndingReminder pid scheduledDaysLeft -> sendTrialEndingReminder authCtx pid scheduledDaysLeft
     CleanupDemoProject ->
@@ -3045,15 +3044,15 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
   when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
 
 
-sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
+sendReportForProject :: Projects.ProjectId -> Projects.ReportType -> ATBackgroundCtx ()
 sendReportForProject pid rType = do
   Log.logInfo "Generating report for project" pid
   ctx <- ask @Config.AuthContext
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
-  let (prv, typTxt) = case rType of
-        WeeklyReport -> (6 * 86400, "weekly")
-        DailyReport -> (86400, "daily")
+  let prv = case rType of
+        Projects.RTWeekly -> 6 * 86400
+        Projects.RTDaily -> 86400
 
   let startTime = addUTCTime (negate prv) currentTime
       prevStart = addUTCTime (negate (prv * 2)) currentTime
@@ -3118,11 +3117,11 @@ sendReportForProject pid rType = do
             , projectId = pid
             , startTime = startTime
             , endTime = currentTime
-            , reportType = typTxt
+            , reportType = rType
             }
     res <- Issues.addReport report
     Log.logInfo "Completed report generation for" pid
-    unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
+    unless (case rType of Projects.RTDaily -> not pr.dailyNotif; Projects.RTWeekly -> not pr.weeklyNotif) $ do
       Log.logInfo "Sending report notifications for" pid
       let stmTxt = formatUTCMicros startTime
           currentTimeTxt = formatUTCMicros currentTime
@@ -3131,11 +3130,11 @@ sendReportForProject pid rType = do
           errorsWidget = RP.errorsWidget
       allQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       errQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
-      let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
+      let alert = ReportAlert rType stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       teamM <- ProjectMembers.getEveryoneTeam pid
       broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
-      when (typTxt == "weekly")
+      when (rType == Projects.RTWeekly)
         $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           when (totalRequest > 0) do

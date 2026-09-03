@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -10,6 +10,7 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
@@ -319,20 +320,17 @@ verifyWidgetSignature secret pid widgetJson = maybe (Left "Missing signature") \
 
 
 -- | Report query intent detection
-data ReportType = DailyReport | WeeklyReport deriving (Eq, Show)
-
-
-data QueryIntent = ReportIntent ReportType | GeneralQueryIntent deriving (Eq, Show)
+data QueryIntent = ReportIntent Projects.ReportType | GeneralQueryIntent deriving (Eq, Show)
 
 
 -- | Detect if user query is requesting a report. Requires action verb + "report/summary".
 --
 -- >>> detectReportIntent "send daily report"
--- ReportIntent DailyReport
+-- ReportIntent RTDaily
 -- >>> detectReportIntent "get weekly summary"
--- ReportIntent WeeklyReport
+-- ReportIntent RTWeekly
 -- >>> detectReportIntent "show me the report"
--- ReportIntent DailyReport
+-- ReportIntent RTDaily
 -- >>> detectReportIntent "show errors"
 -- GeneralQueryIntent
 -- >>> detectReportIntent "what's my error rate"
@@ -347,15 +345,15 @@ detectReportIntent query =
       has :: [Text] -> Bool
       has = any (`T.isInfixOf` q)
    in if has ["send", "get", "show", "give", "fetch", "retrieve"] && has ["report", "summary"]
-        then ReportIntent $ bool DailyReport WeeklyReport ("week" `T.isInfixOf` q)
+        then ReportIntent $ bool Projects.RTDaily Projects.RTWeekly ("week" `T.isInfixOf` q)
         else GeneralQueryIntent
 
 
 -- | Process report query - retrieves latest report from DB
-processReportQuery :: (DB es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Issues.Report, Text, Text))
+processReportQuery :: (DB es, Log :> es) => Projects.ProjectId -> Projects.ReportType -> EnvConfig -> Eff es (Either Text (Issues.Report, Text, Text))
 processReportQuery pid reportType envCfg = do
-  let typeTxt = case reportType of DailyReport -> "daily"; WeeklyReport -> "weekly"
-  Issues.getLatestReportByType pid typeTxt >>= \case
+  let typeTxt = display reportType
+  Issues.getLatestReportByType pid reportType >>= \case
     Nothing -> pure $ Left $ "No " <> typeTxt <> " report found. Reports are generated automatically on schedule."
     Just report -> do
       let stamp = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
@@ -381,7 +379,7 @@ formatReport target report pid envCfg eventsUrl errorsUrl = case target of
   Discord ->
     dcContainer
       26879
-      [ dcText $ botEmoji "chart" <> " **" <> T.toTitle report.reportType <> " Report**"
+      [ dcText $ botEmoji "chart" <> " **" <> T.toTitle (display report.reportType) <> " Report**"
       , dcText $ "**Period:** " <> period " → "
       , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
       , dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
@@ -392,8 +390,8 @@ formatReport target report pid envCfg eventsUrl errorsUrl = case target of
     reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
     day = toText . formatTime defaultTimeLocale "%Y-%m-%d"
     period sep = day report.startTime <> sep <> day report.endTime
-    title suffix = botEmoji "chart" <> " " <> T.toTitle report.reportType <> suffix
-    chartAlt what sep n = what <> " chart for " <> report.reportType <> " report" <> sep <> show @Text n <> " total " <> T.toLower what
+    title suffix = botEmoji "chart" <> " " <> T.toTitle (display report.reportType) <> suffix
+    chartAlt what sep n = what <> " chart for " <> display report.reportType <> " report" <> sep <> show @Text n <> " total " <> T.toLower what
     (totalEvents, totalErrors) = parseReportStats report.reportJson
 
 

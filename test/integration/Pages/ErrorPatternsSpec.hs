@@ -667,7 +667,7 @@ spec = sequential $ aroundAll withTestResources do
         runTestBg frozenTime tr
           $ ErrorPatterns.getErrorPatternByHash
             pid
-            (EF.computeErrorFingerprint (UUID.toText UUID.nil) (Just "test-service") (Just "POST /api/data") "nodejs" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
+            (EF.computeErrorFingerprint (UUID.toText UUID.nil) (Just "test-service") (Just "POST /api/data") EF.RNodejs "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
       isJust patM `shouldBe` True
 
       -- Different error type → different fingerprint (separate pattern)

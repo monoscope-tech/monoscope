@@ -22,6 +22,7 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
@@ -286,7 +287,7 @@ buildLiveReportEmailHtml pid project userName = do
   dropSubject <$> renderWeeklyEmail reportUrl project userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
 
 
-reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
+reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
 reportsPostH pid t = do
   _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
@@ -316,7 +317,7 @@ singleReportGetH pid rid hxRequestM = do
     Nothing -> pure ("unknown", "Report not found", "")
     Just report -> do
       (dateLabel, emailHtml) <- reportToEmailHtml report project sess.user.firstName
-      pure (report.reportType, dateLabel, emailHtml)
+      pure (display report.reportType, dateLabel, emailHtml)
   wrapSingleResponse bw freeTierStatus "Report" hxRequestM content
 
 
@@ -426,7 +427,7 @@ reportListItems pid reports nextUrl =
   div_ [class_ "flex flex-row md:flex-col gap-4 w-full"] do
     forM_ reports \report ->
       reportCard_ "border-strokeWeak" ("/p/" <> pid.toText <> "/reports/" <> report.id.toText) do
-        reportCardHead_ (if report.reportType == "weekly" then "bg-fillBrand-weak capitalize" else "bg-fillWeak capitalize") (toHtml report.reportType <> " report") mempty
+        reportCardHead_ (if report.reportType == Projects.RTWeekly then "bg-fillBrand-weak capitalize" else "bg-fillWeak capitalize") (toHtml (display report.reportType) <> " report") mempty
         reportCardTitle_ $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     whenJust nextUrl \url ->
       a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"

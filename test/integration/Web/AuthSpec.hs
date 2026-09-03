@@ -1,22 +1,23 @@
 module Web.AuthSpec (spec) where
 
-import Data.ByteString.Builder (toLazyByteString)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.UUID qualified as UUID
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
 import Pkg.TestUtils
 import Relude
-import Network.HTTP.Types (hAuthorization, hCookie)
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
+import Models.Projects.Projects qualified as Projects
 import Network.Wai qualified as Wai
-import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import Servant.API (Header, Headers, ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as Servant
 import Servant.Server (ServerError (..))
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
-import Web.Cookie (SetCookie, renderSetCookie)
+import Web.Cookie (SetCookie)
 import Test.Hspec
 import Web.Auth qualified as Auth
 import Web.I18n qualified as I18n
@@ -90,6 +91,7 @@ spec = aroundAll withTestResources do
     let creds = "dGVzdGVyOnMzY3JldA==" -- base64 of "tester:s3cret"
         basicCtx tr = tr.trATCtx{Config.config = tr.trATCtx.config{Config.basicAuthEnabled = True, Config.basicAuthUsername = "tester", Config.basicAuthPassword = "s3cret"}}
         reqWith hdrs = Wai.defaultRequest{Wai.requestHeaders = hdrs}
+        callAuth :: TestResources -> RequestHeaders -> IO (Either ServerError (Headers '[Header "Set-Cookie" SetCookie] Projects.Session))
         callAuth tr hdrs =
           liftIO $ Servant.runHandler $ unAuthHandler (Auth.authHandler tr.trLogger (basicCtx tr)) (reqWith hdrs)
         basicRows tr = do
@@ -102,10 +104,11 @@ spec = aroundAll withTestResources do
       let authHdr = [(hAuthorization, "Basic " <> creds)]
       Right r1 <- callAuth tr authHdr
       basicRows tr >>= \n -> n `shouldBe` 1
-      -- The cookie the first response set is what the browser sends back.
-      let cookieHdr = case lookupResponseHeader r1 :: ResponseHeader "Set-Cookie" SetCookie of
-            Header sc -> [(hCookie, toStrict $ toLazyByteString $ renderSetCookie sc)]
-            _ -> []
+      -- Send back the session cookie the way a browser would. Built from the session id
+      -- in the response rather than by rendering the Set-Cookie header, so the test needs
+      -- no dependency the built test target lacks.
+      let sid = (getResponse r1).sessionId
+          cookieHdr = [(hCookie, "monoscope_session=" <> UUID.toASCIIBytes sid.getPersistentSessionId)]
       Right _ <- callAuth tr (authHdr <> cookieHdr)
       Right _ <- callAuth tr (authHdr <> cookieHdr)
       -- Under the old code each repeat minted a fresh id: one more row every time.

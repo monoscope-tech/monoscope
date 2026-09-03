@@ -29,8 +29,8 @@ spec = around withTestResources do
       initial <- runTestBg frozenTime tr $ Projects.projectById testPid
       ((.dailyNotif) <$> initial, (.weeklyNotif) <$> initial) `shouldBe` (Just False, Just True)
 
-      void $ testServant tr $ Reports.reportsPostH testPid "daily"
-      void $ testServant tr $ Reports.reportsPostH testPid "weekly"
+      void $ testServant tr $ Reports.reportsPostH testPid Projects.RTDaily
+      void $ testServant tr $ Reports.reportsPostH testPid Projects.RTWeekly
       void $ withResource tr.trPool \conn ->
         PGS.execute conn
           [sql|UPDATE projects.teams
@@ -41,12 +41,12 @@ spec = around withTestResources do
       sent <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
       sent `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
 
-      void $ testServant tr $ Reports.reportsPostH testPid "daily"
+      void $ testServant tr $ Reports.reportsPostH testPid Projects.RTDaily
       advanceDays tr 1
       muted <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.DailyReports testPid)
       muted `shouldBe` []
 
-      void $ testServant tr $ Reports.reportsPostH testPid "weekly"
+      void $ testServant tr $ Reports.reportsPostH testPid Projects.RTWeekly
       weekly <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.WeeklyReports testPid)
       weekly `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
 
@@ -54,8 +54,8 @@ spec = around withTestResources do
       reportId <- case reportsPage of
         Reports.ReportsGetMain (PageCtx _ (_, reports, _)) -> do
           V.length reports `shouldBe` 3
-          V.any ((== "weekly") . (.reportType)) reports `shouldBe` True
-          maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== "daily") . (.reportType)) reports
+          V.any ((== Projects.RTWeekly) . (.reportType)) reports `shouldBe` True
+          maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== Projects.RTDaily) . (.reportType)) reports
         _ -> fail "the reports page did not load after generation"
       (_, reportPage) <- testServant tr $ Reports.singleReportGetH testPid reportId Nothing
       case reportPage of

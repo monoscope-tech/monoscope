@@ -12,7 +12,7 @@ import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Pages.Bots.BotTestHelpers (setupSlackData)
 import Pages.Projects qualified as Pages
-import Pages.Settings (TestForm (..))
+import Pages.Settings (TestChannel (..), TestForm (..), TestStatus (..))
 import Pages.Settings qualified as Integrations
 import Pkg.TestUtils
 import Relude
@@ -27,17 +27,17 @@ spec = sequential $ aroundAll withTestResources $ do
       it "routes each channel through the settings handler and records sent history" \tr -> do
         let whatsappNum = "+1234567890"
             pagerdutyKey = "a1b2c3d4e5f67890abcdef1234567890"
-            cases :: [(Text, Text, IO (), [Notification] -> IO ())]
+            cases :: [(TestChannel, Text, IO (), [Notification] -> IO ())]
             cases =
-              [ ("email", "runtime_exception", setupEmail tr testPid "alerts@example.com", \ns -> [(d.receiver, "[Test]" `T.isPrefixOf` d.subject) | EmailNotification d <- ns] `shouldBe` [("alerts@example.com", True)])
+              [ (TCEmail, "runtime_exception", setupEmail tr testPid "alerts@example.com", \ns -> [(d.receiver, "[Test]" `T.isPrefixOf` d.subject) | EmailNotification d <- ns] `shouldBe` [("alerts@example.com", True)])
               , -- Also assert Slack would accept the shape: the test alert is the only
                 -- Slack message many projects ever saw succeed, because it is rendered
                 -- through the same builder but reached the default channel over the
                 -- webhook transport, which never validates Block Kit.
-                ("slack", "runtime_exception", setupSlackData tr testPid "T_SLACK_TEST", \ns -> [(d.channelId, T.isInfixOf "🧪 TEST" $ payloadText d.payload, slackPayloadViolations d.payload) | SlackNotification d <- ns] `shouldBe` [("C_NOTIF_CHANNEL", True, [])])
-              , ("discord", "api_change", setupDiscordDataWithChannel tr testPid "G_DISCORD_TEST" "C_DISCORD_NOTIF", \ns -> [T.isInfixOf "🧪 TEST" $ payloadText d.payload | DiscordNotification d <- ns] `shouldBe` [True])
-              , ("whatsapp", "runtime_exception", setupWhatsappNumber tr testPid whatsappNum, \ns -> [Notify.to d | WhatsAppNotification d <- ns] `shouldBe` [whatsappNum])
-              , ("pagerduty", "runtime_exception", setupPagerdutyData tr testPid pagerdutyKey, \ns -> [(Notify.integrationKey d, Notify.eventAction d) | PagerdutyNotification d <- ns] `shouldBe` [(pagerdutyKey, Notify.PDTrigger)])
+                (TCSlack, "runtime_exception", setupSlackData tr testPid "T_SLACK_TEST", \ns -> [(d.channelId, T.isInfixOf "🧪 TEST" $ payloadText d.payload, slackPayloadViolations d.payload) | SlackNotification d <- ns] `shouldBe` [("C_NOTIF_CHANNEL", True, [])])
+              , (TCDiscord, "api_change", setupDiscordDataWithChannel tr testPid "G_DISCORD_TEST" "C_DISCORD_NOTIF", \ns -> [T.isInfixOf "🧪 TEST" $ payloadText d.payload | DiscordNotification d <- ns] `shouldBe` [True])
+              , (TCWhatsapp, "runtime_exception", setupWhatsappNumber tr testPid whatsappNum, \ns -> [Notify.to d | WhatsAppNotification d <- ns] `shouldBe` [whatsappNum])
+              , (TCPagerduty, "runtime_exception", setupPagerdutyData tr testPid pagerdutyKey, \ns -> [(Notify.integrationKey d, Notify.eventAction d) | PagerdutyNotification d <- ns] `shouldBe` [(pagerdutyKey, Notify.PDTrigger)])
               ]
 
         for_ cases \(channel, issueType, setup, verify) -> do
@@ -45,9 +45,9 @@ spec = sequential $ aroundAll withTestResources $ do
           setup
           (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm issueType channel Nothing)
           verify notifs
-          history :: [(Text, Text, Text)] <- runQueryEffect tr $
+          history :: [(TestStatus, Text, TestChannel)] <- runQueryEffect tr $
             Hasql.interp [HI.sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = #{channel} ORDER BY created_at DESC LIMIT 1|]
-          history `shouldBe` [("sent", issueType, channel)]
+          history `shouldBe` [(TSSent, issueType, channel)]
 
     describe "Team-Level Tests" $ do
       it "creates a team, routes Slack and PagerDuty to it, then deletes it" \tr -> do
@@ -74,35 +74,35 @@ spec = sequential $ aroundAll withTestResources $ do
         team <- maybe (fail "routing team was not listed after creation") pure $ V.find ((== "routing-team") . (.handle)) teams
         map (.memberEmail) (V.toList team.members) `shouldBe` ["test@monoscope.tech"]
 
-        (slackNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" $ Just team.id)
+        (slackNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack $ Just team.id)
         [(d.channelId, T.isInfixOf "🧪 TEST" $ payloadText d.payload) | SlackNotification d <- slackNotifs] `shouldBe` [("#team-alerts", True)]
 
         clearTestHistory tr testPid
-        (pagerdutyNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "pagerduty" $ Just team.id)
+        (pagerdutyNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCPagerduty $ Just team.id)
         [Notify.integrationKey d | PagerdutyNotification d <- pagerdutyNotifs] `shouldBe` [pagerdutyKey]
 
         (_, Pages.ManageTeamsDelete) <- testServant tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id.unwrap]) Nothing
         (_, Pages.ManageTeamsGet' (_, _, _, _, afterDelete)) <- testServant tr $ Pages.manageTeamsGetH testPid (Just "")
         V.any ((== team.id) . (.id)) afterDelete `shouldBe` False
-        (deletedNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" $ Just team.id)
+        (deletedNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack $ Just team.id)
         any isSlackNotification deletedNotifs `shouldBe` False
 
     describe "Test Report Notifications" $ do
       it "sends test report notification to Slack" \tr -> do
         clearTestHistory tr testPid
         setupSlackData tr testPid "T_REPORT_TEST"
-        let form = TestForm "report" "slack" Nothing
+        let form = TestForm "report" TCSlack Nothing
 
         (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid form
 
         notifs `shouldSatisfy` any isSlackNotification
-        [payloadText sd.payload | SlackNotification sd <- notifs] `shouldSatisfy` any (T.isInfixOf "🧪 Test:")
+        [payloadText sd.payload | SlackNotification sd <- notifs] `shouldSatisfy` any (T.isInfixOf "Weekly report")
 
     describe "Test History Retrieval" $ do
       it "retrieves test history for a project" \tr -> do
         clearTestHistory tr testPid
         setupSlackData tr testPid "T_HISTORY_TEST"
-        void $ testServant tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" Nothing)
+        void $ testServant tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
 
         (_, html) <- testServant tr $ Integrations.notificationsTestHistoryGetH testPid
         let htmlText = show html
@@ -113,17 +113,17 @@ spec = sequential $ aroundAll withTestResources $ do
         clearTestHistory tr testPid
         setupSlackData tr testPid "T_DISABLED_GATE"
         setEveryoneDisabled tr testPid ["slack"]
-        (disabledNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" Nothing)
+        (disabledNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
         any isSlackNotification disabledNotifs `shouldBe` False
-        tests :: [(Text, Maybe Text)] <- runQueryEffect tr $
+        tests :: [(TestStatus, Maybe Text)] <- runQueryEffect tr $
           Hasql.interp [HI.sql|SELECT status, error FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = 'slack' ORDER BY created_at DESC LIMIT 1|]
-        tests `shouldBe` [("skipped", Just "channel_disabled")]
+        tests `shouldBe` [(TSSkipped, Just "channel_disabled")]
 
         clearTestHistory tr testPid
         runTestBg frozenTime tr $ Hasql.interpExecute_
           [HI.sql|UPDATE projects.teams SET slack_channels = ARRAY['C_ONE','C_TWO']::text[], disabled_channels = '{}'
                   WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
-        (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" Nothing)
+        (notifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" TCSlack Nothing)
         let slackTargets = [d.channelId | SlackNotification d <- notifs]
         sort slackTargets `shouldBe` ["C_ONE", "C_TWO"]
 

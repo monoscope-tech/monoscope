@@ -26,6 +26,8 @@ module Pages.Settings (
   parseLabelsText,
   -- Integrations
   TestForm (..),
+  TestChannel (..),
+  TestStatus (..),
   notificationsTestPostH,
   notificationsTestHistoryGetH,
   TestHistory (..),
@@ -81,6 +83,7 @@ import BackgroundJobs qualified as BJ
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq qualified as W
+import Data.Text.Display (Display, display)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -101,12 +104,12 @@ import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
 import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
-import Servant (err400, errBody)
+import Servant (FromHttpApiData (..), err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
@@ -848,9 +851,32 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
 -- Integrations
 ----------------------------------------------------------------------
 
+-- | Which channel a test notification targets. @TCAll@ is the "no filter"
+-- sentinel the form posts; it fans out to every other constructor.
+--
+-- >>> map (display @TestChannel) [minBound .. maxBound]
+-- ["all","email","slack","discord","whatsapp","pagerduty"]
+-- >>> parseUrlPiece "sms" :: Either Text TestChannel
+-- Left "Invalid TC value: sms"
+data TestChannel = TCAll | TCEmail | TCSlack | TCDiscord | TCWhatsapp | TCPagerduty
+  deriving (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TC" TestChannel
+
+
+-- | Outcome recorded in @apis.notification_test_history.status@.
+--
+-- >>> map (display @TestStatus) [TSSent, TSSkipped]
+-- ["sent","skipped"]
+-- >>> parseUrlPiece "delivered" :: Either Text TestStatus
+-- Left "Invalid TS value: delivered"
+data TestStatus = TSSent | TSSkipped
+  deriving (Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "TS" TestStatus
+
+
 data TestForm = TestForm
   { issueType :: Text
-  , channel :: Text
+  , channel :: TestChannel
   , teamId :: Maybe ProjectMembers.TeamId
   }
   deriving stock (Generic, Show)
@@ -861,9 +887,9 @@ data TestHistory = TestHistory
   { id :: UUIDId "test_history"
   , projectId :: Projects.ProjectId
   , issueType :: Text
-  , channel :: Text
+  , channel :: TestChannel
   , target :: Text
-  , status :: Text
+  , status :: TestStatus
   , error :: Maybe Text
   , createdAt :: UTCTime
   }
@@ -889,7 +915,7 @@ notificationsTestPostH pid TestForm{..} = do
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   (_, project) <- Projects.sessionAndProject pid
-  let baseAlert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
+  let baseAlert = bool (sampleAlertByIssueTypeText issueType project.title) sampleReport (issueType == "report")
   -- Build a real signed widget URL so the test exercises the same image path
   -- as production alerts (webhook transport lifts it into attachments.image_url).
   -- The chart may be empty for the sample hash; what matters is that signing,
@@ -921,34 +947,32 @@ notificationsTestPostH pid TestForm{..} = do
           Nothing -> pure (0 :: Int, Just "no_team")
           Just t | Just chKey <- mChKey, not (ProjectMembers.isChannelEnabled chKey t) -> pure (0, Just "channel_disabled")
           Just t -> (,Nothing) <$> run t
-      -- per-channel attempt counts, keyed by the form's `channel` value
-      senders :: [(Text, Maybe ProjectMembers.NotificationChannel, Team -> ATAuthCtx Int)]
-      senders =
-        [ ("email", Nothing, \t -> let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail $> length emails)
-        , ("slack", Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just) $> V.length t.slack_channels)
-        , ("discord", Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just) $> V.length t.discord_channels)
-        , ("whatsapp", Just ProjectMembers.Phone, \t -> if V.null t.phone_numbers then pure 0 else sendWhatsAppAlert alert pid project.title t.phone_numbers $> V.length t.phone_numbers)
-        , ("pagerduty", Just ProjectMembers.Pagerduty, \t -> forM_ t.pagerduty_services (\k -> sendPagerdutyAlertToService k alert project.title projectUrl) $> V.length t.pagerduty_services)
-        ]
+      -- per-channel attempt counts; TCAll has no sender of its own, it fans out over the rest
+      senderFor :: TestChannel -> Maybe (Maybe ProjectMembers.NotificationChannel, Team -> ATAuthCtx Int)
+      senderFor = \case
+        TCAll -> Nothing
+        TCEmail -> Just (Nothing, \t -> let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail $> length emails)
+        TCSlack -> Just (Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just) $> V.length t.slack_channels)
+        TCDiscord -> Just (Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just) $> V.length t.discord_channels)
+        TCWhatsapp -> Just (Just ProjectMembers.Phone, \t -> if V.null t.phone_numbers then pure 0 else sendWhatsAppAlert alert pid project.title t.phone_numbers $> V.length t.phone_numbers)
+        TCPagerduty -> Just (Just ProjectMembers.Pagerduty, \t -> forM_ t.pagerduty_services (\k -> sendPagerdutyAlertToService k alert project.title projectUrl) $> V.length t.pagerduty_services)
 
-  (attempts, skipReason) <- case channel of
-    "all" -> countingSend Nothing \t -> sum <$> traverse (\(_, _, run) -> run t) senders
-    c -> case find (\(n, _, _) -> n == c) senders of
-      Just (_, chKey, run) -> countingSend chKey run
-      Nothing -> throwError err400{errBody = "Unknown notification channel"}
+  (attempts, skipReason) <- case senderFor channel of
+    Nothing -> countingSend Nothing \t -> sum <$> traverse (\(_, run) -> run t) (mapMaybe senderFor [minBound .. maxBound])
+    Just (chKey, run) -> countingSend chKey run
 
   let (status, err) = case (attempts, skipReason) of
-        (_, Just r) -> ("skipped" :: Text, Just r)
-        (0, _) -> ("skipped", Just "no_targets")
-        _ -> ("sent", Nothing)
+        (_, Just r) -> (TSSkipped, Just r)
+        (0, _) -> (TSSkipped, Just "no_targets")
+        _ -> (TSSent, Nothing)
   void
     $ Hasql.interpExecute
       [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{status}, #{err})|]
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
-  if status == "sent"
-    then addSuccessToast (bool ("Test " <> channel <> " notification sent!") "Test notification sent to all channels!" (channel == "all")) Nothing
-    else addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
+  case status of
+    TSSent -> addSuccessToast (maybe "Test notification sent to all channels!" (const $ "Test " <> display channel <> " notification sent!") (senderFor channel)) Nothing
+    TSSkipped -> addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
   addRespHeaders mempty
 
 
@@ -964,7 +988,7 @@ historyHtml_ :: [TestHistory] -> Html ()
 historyHtml_ [] = emptyState_ def{size = ESCompact} "No test notifications sent yet" "Test your integrations to see results here"
 historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
-    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
+    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == TSSent then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == TCAll then "All channels" else display t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
 
 
 ----------------------------------------------------------------------
