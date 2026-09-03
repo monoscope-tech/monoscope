@@ -200,6 +200,17 @@ apiMonitorGet :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Moni
 apiMonitorGet pid mid = ownedOr "Monitor not found" pid =<< Monitors.queryMonitorById mid
 
 
+-- | The compiled form of a monitor's KQL, which is what alert evaluation actually
+-- runs. Shared by the create/PUT path and by PATCH: PATCH used to build its merged
+-- monitor from the stored row, so it updated @log_query@ and inherited the previous
+-- @log_query_as_sql@ — the monitor kept alerting on its old query. Falls back to
+-- @prev@ when the query doesn't parse, so a bad edit cannot blank the compiled SQL.
+compileAlertSql :: Projects.ProjectId -> Int -> Text -> Text -> Text
+compileAlertSql pid windowMins q prev =
+  let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins}
+   in fromMaybe prev $ (.finalAlertQuery) . snd =<< rightToMaybe (Parser.parseQueryToComponents cfg q)
+
+
 -- | Build a 'QueryMonitor' from a 'MonitorInput'. Shared by create/update.
 monitorFromInput :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> Monitors.QueryMonitor
 monitorFromInput pid now mid existingM inp =
@@ -212,12 +223,7 @@ monitorFromInput pid now mid existingM inp =
     , alertThreshold = inp.alertThreshold
     , warningThreshold = inp.warningThreshold
     , logQuery = inp.query
-    , logQueryAsSql =
-        let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = inp.timeWindowMins}
-         in fromMaybe (foldMap (.logQueryAsSql) existingM)
-              $ (.finalAlertQuery)
-              . snd
-              =<< rightToMaybe (Parser.parseQueryToComponents cfg inp.query)
+    , logQueryAsSql = compileAlertSql pid inp.timeWindowMins inp.query (foldMap (.logQueryAsSql) existingM)
     , lastEvaluated = Just now
     , warningLastTriggered = existingM >>= (.warningLastTriggered)
     , alertLastTriggered = existingM >>= (.alertLastTriggered)
@@ -335,6 +341,15 @@ apiMonitorPatch pid mid patch = do
           existing
             { Monitors.updatedAt = now
             , Monitors.logQuery = fromMaybe existing.logQuery patch.query
+            , -- Recompile whenever the query or its window moves: this is what alert
+              -- evaluation runs, and inheriting it from `existing` left the monitor
+              -- alerting on its previous query.
+              Monitors.logQueryAsSql =
+                compileAlertSql
+                  pid
+                  (fromMaybe existing.timeWindowMins patch.timeWindowMins)
+                  (fromMaybe existing.logQuery patch.query)
+                  existing.logQueryAsSql
             , Monitors.alertThreshold = fromMaybe existing.alertThreshold patch.alertThreshold
             , Monitors.warningThreshold = patch.warningThreshold <|> existing.warningThreshold
             , Monitors.triggerLessThan = fromMaybe existing.triggerLessThan patch.triggerLessThan
