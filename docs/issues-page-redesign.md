@@ -238,6 +238,53 @@ Ordered by (reader value ÷ effort):
 - **P4 carries P3's 504 risk.** The span-subtree query gets the same treatment as
   `traceRef`: ±5min around the known error timestamp, `LIMIT`ed, lazy fragment.
 
+## 6. Shipped — P1 (commit `ff8d94ee2`)
+
+Query alert #112126, before → after:
+
+| | before | after |
+|---|---|---|
+| Threshold / actual | not rendered | `↓ 0` vs `THRESHOLD (BELOW) 5` |
+| Chart | none | the alert's own KQL, threshold line drawn |
+| Monitor link | none | `View monitor`, id recovered from the `show` blob |
+| Subtitle | "Review the query results and take appropriate action." | suppressed |
+| Below the fold | ~1100px of "No trace data available" | nothing |
+
+Verified: page renders the threshold, the actual, and the monitor link, and no
+longer contains "No trace data available"; `alertThreshold: 5.0` reaches the
+widget config, where `widgets.ts` turns it into a markLine. Log-pattern and both
+runtime-exception pages render byte-identically to before (`INVESTIGATION`,
+`Stack Trace`, `Error Details`, `Pattern Volume` all still present).
+
+### Critique of the shipped result — what a second pass found
+
+1. **Fixed:** the `Monitor: <name>` row overflowed its card (`detailRow_` sets
+   `whitespace-nowrap`). It also just repeated the page title, so it is gone.
+2. **Fixed:** `ACTUAL 0` signalled "this is the bad number" with amber alone.
+   Now carries a direction arrow — the second signal design principle 3 requires.
+3. **Fixed:** the `bolt` icon used for "Triggered" existed in neither sprite
+   sheet, so it silently rendered nothing. Added via `make fa-add`.
+4. **Still open — the chart cannot show the crossing.** The series runs
+   2000–3000; the threshold is 5. At that y-scale the threshold line is
+   indistinguishable from the axis, so the reader sees the flatline but cannot
+   see that it went *below 5*. The breach is legible as a gap, not as a crossing.
+   Candidate fixes, in preference order: (a) default the time range to bracket
+   `triggeredAt` instead of `defaultSinceRange`'s age heuristic, making the
+   breach the subject rather than a sliver at the right edge; (b) mark the
+   trigger instant with `highlightFrom`/`highlightTo` — the band renderer
+   already degrades to a dashed line when the interval is <1% of the window,
+   but that path needs `timeFrom`/`timeTo` set, which would fight the page's
+   time picker; (c) log y-axis. (a) is the smallest and the most honest.
+5. **Still open:** the Activity card spends ~160px to say "No activity yet."
+
+## 7. Remaining plan
+
+P2–P5 as listed in §5, unchanged. Note for whoever picks up P2: `make
+test-doctests` currently fails on `test/integration/EndpointDiscoverySpec.hs`
+(another session's uncommitted work, unrelated), so the doctest gate could not
+be run green for P1; the two doctests added there were verified by reasoning and
+the monitor-id extraction confirmed against the live page's `View monitor` href.
+
 Deferred, and why: per-event Tags table (P3 covers the higher-value aggregate
 first); release/commit on first-seen (no release tracking wired yet);
 `query_id` `show`-blob repair (needs a migration + tolerant read — worth doing,
