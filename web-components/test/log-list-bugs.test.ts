@@ -152,6 +152,31 @@ describe('LogList — LOWER', () => {
     expect((el as any).fixedColumnWidths.summary).toBeLessThanOrEqual(1200);
   });
 
+  // The Replay button lived inside `rightAlignedBadges` until 9abed93c split it
+  // into a `sessionActions` array for the sessions column — and that array was
+  // rendered only in the sessions branch, so the logs/spans list built the
+  // button and threw it away. The API still returned the `session;` tag, the
+  // recordings still existed, and nothing failed; the button simply stopped
+  // appearing. Assert it renders in the DEFAULT (logs) mode, which is the mode
+  // that regressed.
+  test('the logs list renders the Replay button, not just the sessions tab', async () => {
+    const sid = 'a4c885f5-215c-44ee-891e-d87bb63daa48';
+    const summaryCell = [`session;right-badge-neutral\u21d2${sid}`];
+
+    const cellFor = async (mode?: string) => {
+      const el = await mountList(mode ? ({ mode } as any) : {});
+      (el as any).colIdxMap = { id: 0, summary: 1 };
+      const rowData = { ...row('r1'), data: ['r1', summaryCell], depth: 0, children: 0 };
+      const host = document.createElement('div');
+      render((el as any).logItemCol(rowData, 'latency_breakdown'), host);
+      return host;
+    };
+
+    expect((await cellFor()).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+    // The sessions tab must keep it too — this is a both-modes contract.
+    expect((await cellFor('sessions')).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+  });
+
   test('sessions reserve only a replay action, not a latency column', async () => {
     const el = await mountList({ mode: 'sessions' } as any);
     const header = document.createElement('div');

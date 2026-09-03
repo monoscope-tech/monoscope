@@ -245,7 +245,7 @@ spec = do
       Utils.replaceAllFormats "{\"ip\":\"192.168.1.1\"}" `shouldBe` "{\"ip\":\"{ipv4}\"}"
       
     it "should handle mixed identifiers" do
-      Utils.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_abc{integer}def{integer} for user {integer}"
+      Utils.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_{hex} for user {integer}"
       Utils.replaceAllFormats "pid:1234 tid:5678 processing request" `shouldBe` "pid{port} tid{port} processing request"
       Utils.replaceAllFormats "Transaction 0xDEADBEEF failed with hash a94a8fe5ccb19ba61c4c0873d391e987982fbbd3" `shouldBe` "Transaction {hex} failed with hash {sha1}"
       
@@ -293,9 +293,9 @@ spec = do
       
     it "should handle cloud provider identifiers" do
       Utils.replaceAllFormats "arn:aws:s3:::my-bucket/path/to/file.txt" `shouldBe` "arn:aws:s{integer}:::my-bucket/path/to/file.txt"
-      Utils.replaceAllFormats "i-0a1b2c3d4e5f67890" `shouldBe` "i-{integer}a{integer}b{integer}c{integer}d{integer}e{integer}f{integer}"
+      Utils.replaceAllFormats "i-0a1b2c3d4e5f67890" `shouldBe` "i-{hex}"
       Utils.replaceAllFormats "subnet-12345678" `shouldBe` "subnet-{integer}"
-      Utils.replaceAllFormats "vpc-abc123def456" `shouldBe` "vpc-abc{integer}def{integer}"
+      Utils.replaceAllFormats "vpc-abc123def456" `shouldBe` "vpc-{hex}"
       
     it "should handle performance metrics" do
       Utils.replaceAllFormats "Response time: 123.456ms" `shouldBe` "Response time: {float}ms"
