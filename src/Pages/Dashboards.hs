@@ -1439,7 +1439,7 @@ data WidgetAlertForm = WidgetAlertForm
   , subject :: Maybe Text
   , message :: Maybe Text
   , recipientEmailAll :: Maybe Text
-  , teams :: [UUID.UUID]
+  , teams :: [ManageMembers.TeamId]
   }
   deriving stock (Generic, Show)
   -- Posted by the widget alert config with the same @getTagValues@ hx-vals as
@@ -1639,7 +1639,7 @@ dashboardsGet_ dg = do
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
-    let getTeams x = mapMaybe (\xx -> find (\t -> t.id.unwrap == xx) dg.teams) (V.toList x.teams)
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
         getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
         getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dg.dashTemplates dash)
         noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
@@ -1771,7 +1771,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe ManageMembers.TeamId -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
   (_, project, bw) <- mkPageCtx pid
 
@@ -1844,7 +1844,7 @@ instance ToHtml DashboardRes where
 
 data DashboardForm = DashboardForm
   { file :: Text
-  , teams :: [UUID.UUID]
+  , teams :: [ManageMembers.TeamId]
   , title :: Text
   , fileDir :: Maybe Text
   }
@@ -2040,7 +2040,9 @@ dashboardDeleteH pid dashId = do
 
 data DashboardBulkActionForm = DashboardBulkActionForm
   { itemId :: [Dashboards.DashboardId]
-  , teamHandles :: [UUID.UUID]
+  , -- Named for what it carries: these are team ids, not handles. The form never
+    -- reaches the handle-based path — see the "Add teams" note in QUALITY-SWEEP-NOTES.
+    teamIds :: [ManageMembers.TeamId]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -2054,11 +2056,11 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList $ coerce teamHandles)
-      if V.length teams /= length teamHandles
+      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamIds)
+      if V.length teams /= length teamIds
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else
-          Dashboards.addTeamsToDashboards pid (V.fromList itemId) (V.fromList teamHandles) >>= \case
+          Dashboards.addTeamsToDashboards pid (V.fromList itemId) (V.fromList teamIds) >>= \case
             n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
             _ -> addErrorToast "No dashboards were updated" Nothing
     _ -> addErrorToast "Invalid action" Nothing

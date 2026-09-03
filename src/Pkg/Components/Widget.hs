@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -376,6 +376,28 @@ signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
 signWidgetUrl secret pid widgetJson =
   let payload = pid.toText <> ":" <> widgetJson
    in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
+
+
+-- | Standalone timeseries panel with the shared infrastructure-page chrome:
+-- no subtitle or headline value, compact legend top-right, half-width 6x4 cell.
+-- Used by the host and container pages so their charts stay visually identical;
+-- callers layer on only what differs (e.g. a per-unit description).
+infraTimeseries :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget
+infraTimeseries pid wid title unit query =
+  def
+    { id = Just wid
+    , wType = WTTimeseriesLine
+    , title = Just title
+    , query = Just query
+    , unit = Just unit
+    , _projectId = Just pid
+    , standalone = Just True
+    , hideSubtitle = Just True
+    , hideValue = Just True
+    , legendPosition = Just "top-right"
+    , legendSize = Just "xs"
+    , layout = Just def{w = Just 6, h = Just 4}
+    }
 
 
 -- use either index or the xxhash as id

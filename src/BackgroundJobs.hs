@@ -2955,7 +2955,7 @@ notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Bool -> ATB
 notifyQueryMonitorStatusChange monitor value isRecovery = do
   appCtx <- ask @Config.AuthContext
   whenJustM (Projects.projectById monitor.projectId) \p -> do
-    teams <- ProjectMembers.getTeamsById monitor.projectId (coerce monitor.teams)
+    teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
     when (not (V.null monitor.teams) && null teams)
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
     let monitorListUrl = projectUrl appCtx monitor.projectId <> "/monitors"
@@ -4386,7 +4386,7 @@ gitSyncFromRepo pid = do
           | otherwise -> do
               dbState <- GitSync.getDashboardGitState pid
               allTeams <- ProjectMembers.getTeamsVM pid
-              let teamMap = Map.fromList [(t.handle, t.id.unwrap) | t <- allTeams]
+              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
                   prefix = GitSync.getDashboardsPath sync
                   actions = GitSync.buildSyncPlan prefix entries dbState
                   creates = [a | a@GitSync.SyncCreate{} <- actions]
@@ -4405,7 +4405,7 @@ gitSyncFromRepo pid = do
               Log.logInfo "Completed git sync for project" pid
 
 
-processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es ()
 processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncCreate path sha ->
     fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
@@ -4469,7 +4469,7 @@ gitSyncPushDashboard pid dashId = do
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
 pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
 pushDashboardToGit conn sync pid dash message = do
-  teams <- ProjectMembers.getTeamsById pid (coerce dash.teams)
+  teams <- ProjectMembers.getTeamsById pid dash.teams
   let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
       prefix = GitSync.getDashboardsPath sync
       -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...

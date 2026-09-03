@@ -232,9 +232,12 @@ liveTailRelayPoller appLogger env tp = do
         LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
         LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
     reportSkew appLogger env tp skewed lastReport
-    -- Any pod may reap; the delete is idempotent and bounded by age.
+    -- Any pod may reap; both deletes are idempotent and bounded by age. The subscription
+    -- reaper rides the same timer rather than its own: it only reclaims space (expiry, not
+    -- deletion, is what makes a subscription inactive), so its cadence does not matter — but
+    -- without it running at all, live_tail_subscriptions grows for the life of the install.
     everyN (fromIntegral LiveTail.relayRetentionSecs) lastReap
-      $ runBackground appLogger env tp LiveTail.relayReap
+      $ runBackground appLogger env tp (LiveTail.relayReap >> LiveTail.reapExpiredSubscriptions)
 
 
 -- | Fan the side-topic into this pod's hub.

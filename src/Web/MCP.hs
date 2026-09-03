@@ -17,20 +17,17 @@ import Control.Lens (preview, (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
-import Data.Char (isAlphaNum)
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
 import Data.OpenApi qualified as OA
 import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H
@@ -511,20 +508,8 @@ searchEventsNL =
         | T.null inputT -> pure $ toolError "input must be non-empty"
         | otherwise -> do
             authCtx <- Reader.ask @AuthContext
-            now <- Time.currentTime
-            facets <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-            let cfg = (AI.defaultAgenticConfig pid){AI.facetContext = facets, AI.timezone = sanitizeTimezone =<< textArg "timezone" args, AI.maxIterations = 2, AI.useTimefusion = authCtx.env.enableTimefusionReads}
-            AI.runAgenticQuery cfg inputT authCtx.env.openaiModel authCtx.env.openaiApiKey >>= \case
-              Left err -> pure $ toolError ("AI translation failed: " <> err)
-              Right resp ->
-                pure
-                  $ okResult
-                  $ AE.object
-                    [ "query" AE..= resp.query
-                    , "visualization_type" AE..= resp.visualization
-                    , "commentary" AE..= resp.explanation
-                    , "time_range" AE..= resp.timeRange
-                    ]
+            AI.runNlSearch pid authCtx.env.enableTimefusionReads (textArg "timezone" args) inputT authCtx.env.openaiModel authCtx.env.openaiApiKey
+              <&> either (\err -> toolError ("AI translation failed: " <> err)) okResult
 
 
 -- | Fetch an issue and ask the LLM to diagnose it.
@@ -604,13 +589,3 @@ textArg k o = KM.lookup (AK.fromText k) o >>= \case AE.String s -> Just s; _ -> 
 
 intArg :: Text -> AE.Object -> Maybe Int
 intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (floor n); _ -> Nothing
-
-
--- | Permissive IANA timezone validation: rejects empty/over-long input and
--- anything outside the alphanumeric @+ / _ -@ alphabet. We don't try to verify
--- the zone exists — the LLM tolerates unknown names — but this stops obviously
--- garbage values from polluting the prompt.
-sanitizeTimezone :: Text -> Maybe Text
-sanitizeTimezone = guarded ok . T.strip
-  where
-    ok s = not (T.null s) && T.length s <= 64 && T.all (\c -> isAlphaNum c || c `elem` ("/_-+" :: String)) s

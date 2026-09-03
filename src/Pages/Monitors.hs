@@ -60,7 +60,6 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -93,7 +92,7 @@ data AlertUpsertForm = AlertUpsertForm
   , conditionType :: Maybe Text
   , source :: Maybe Text
   , vizType :: Maybe Text
-  , teams :: [UUID.UUID]
+  , teams :: [ManageMembers.TeamId]
   , -- Recovery thresholds (hysteresis)
     alertRecoveryThreshold :: Maybe Text
   , warningRecoveryThreshold :: Maybe Text
@@ -246,7 +245,7 @@ alertSingleComp pid monitor = do
     div_ [class_ "p-3"] $ span_ "Alert details view not implemented"
 
 
-alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
+alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ManageMembers.TeamId -> ATAuthCtx (RespHeaders Alert)
 alertTeamDeleteH pid monitorId teamId = do
   _ <- Projects.sessionAndProject pid
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
@@ -310,13 +309,13 @@ thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessT
         formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
-notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ManageMembers.Team -> V.Vector UUID.UUID -> Text -> Maybe Monitors.QueryMonitor -> Html ()
+notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Text -> Maybe Monitors.QueryMonitor -> Html ()
 notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selectedTeamIds formId monitorM = do
   let defaultSeverity = fromMaybe "Error" severityM
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
       teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
-      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id.unwrap == tId) allTeams
+      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
       existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
@@ -376,10 +375,10 @@ data UnifiedMonitorDetails = AlertDetails
   }
 
 
-teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (TableRows UnifiedMonitorItem))
+teamAlertsGetH :: Projects.ProjectId -> ManageMembers.TeamId -> ATAuthCtx (RespHeaders (TableRows UnifiedMonitorItem))
 teamAlertsGetH pid teamId = do
   _ <- Projects.sessionAndProject pid
-  alerts <- Monitors.getAlertsByTeamHandle pid teamId
+  alerts <- Monitors.getAlertsByTeam pid teamId
   currTime <- Time.currentTime
   teamMap <- buildTeamMap pid
   let alerts' = V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts
@@ -548,8 +547,8 @@ bulkActionsFor filterType pid =
           ]
 
 
-buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map UUID.UUID Text)
-buildTeamMap pid = Map.fromList . map (\t -> (t.id.unwrap, t.handle)) <$> ManageMembers.getTeams pid
+buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map ManageMembers.TeamId Text)
+buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
 
 
 monitorActionH :: (Projects.ProjectId -> [Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
@@ -586,7 +585,7 @@ renderThresholdCol item =
       span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillWarning-weak text-iconWarning rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
 
 
-toUnifiedMonitorItem :: Map.Map UUID.UUID Text -> Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
+toUnifiedMonitorItem :: Map.Map ManageMembers.TeamId Text -> Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
 toUnifiedMonitorItem teamMap pid currTime alert =
   UnifiedMonitorItem
     { monitorId = alert.id.toText
@@ -605,7 +604,7 @@ toUnifiedMonitorItem teamMap pid currTime alert =
           , warningThreshold = alert.warningThreshold
           , triggerDirection = bool "above" "below" alert.triggerLessThan
           }
-    , teamBadges = mapMaybe (\tid -> (UUID.toText tid,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
+    , teamBadges = mapMaybe (\tid -> (tid.toText,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
     }
 
 
@@ -661,7 +660,7 @@ unifiedMonitorOverviewH pid monitorId = do
     Just alert -> do
       (teams, (slackDataM, discordDataM)) <-
         concurrently
-          (ManageMembers.getTeamsById pid (coerce alert.teams))
+          (ManageMembers.getTeamsById pid alert.teams)
           (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       (channels, discordChannels) <-
         concurrently

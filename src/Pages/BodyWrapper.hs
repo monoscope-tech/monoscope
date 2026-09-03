@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withPageWrapper, withSettingsPage, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -43,15 +43,6 @@ mkPageCtx pid = do
   where
     envValues (SchemaCatalog.FacetData m) =
       V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
-
-
--- | Build a full page response: bootstraps page ctx, lets the caller tweak
--- BWConfig (page title, flags, etc.) given the project, then wraps the body.
-withPageWrapper :: Projects.ProjectId -> (Projects.Project -> BWConfig -> (BWConfig, Html ())) -> ATAuthCtx (RespHeaders (Html ()))
-withPageWrapper pid build = do
-  (_, project, bw) <- mkPageCtx pid
-  let (bw', body) = build project bw
-  addRespHeaders $ bodyWrapper bw' body
 
 
 -- | Shortcut for settings sub-pages: sets pageTitle + isSettingsPage = True.

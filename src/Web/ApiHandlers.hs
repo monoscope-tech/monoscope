@@ -435,7 +435,7 @@ toFull d = DashboardFull{summary = toSummary d, fileSha = d.fileSha, schema = d.
 
 apiDashboardsList :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx [DashboardSummary]
 apiDashboardsList pid sortM teamIdM = do
-  ds <- case teamIdM >>= UUID.fromText of
+  ds <- case UUIDId <$> (teamIdM >>= UUID.fromText) of
     Just teamId -> Dashboards.selectDashboardsByTeam pid teamId
     Nothing -> Dashboards.selectDashboardsSortedBy pid (fromMaybe "updated_at" sortM)
   pure $ toSummary <$> ds
@@ -520,7 +520,7 @@ renderWidgetTree pid timeParams params w = do
 
 
 -- | Insert a new dashboard row from an input.
-insertDashboard :: Projects.ProjectId -> Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Text -> Maybe [Text] -> Maybe [UUID.UUID] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
+insertDashboard :: Projects.ProjectId -> Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Text -> Maybe [Text] -> Maybe [PM.TeamId] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
 insertDashboard pid uid now did title tags teams filePath schema = do
   let d =
         Dashboards.DashboardVM
