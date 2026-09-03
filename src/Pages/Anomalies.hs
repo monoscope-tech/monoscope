@@ -2036,7 +2036,7 @@ eventDisplay = \case
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorGroupMembersGetH pid errorId = do
   _ <- Projects.sessionAndProject pid
-  members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
+  members <- PatternMerge.getErrorPatternGroupMembers pid (ErrorPatternId errorId)
   addRespHeaders
     $ unless (null members)
     $ div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do

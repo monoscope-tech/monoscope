@@ -32,8 +32,8 @@ module Models.Apis.PatternMerge (
   getCanonicalLogPatterns,
   updateLogEmbeddings,
   assignLogsToCanonical,
-  unmergeLogPattern,
   getLogPatternGroupMembers,
+  unmergeLogPattern,
   fetchLogTexts,
   fetchLogSamples,
 )
@@ -114,9 +114,15 @@ unmergeErrorPattern pid epid =
   Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{epid} AND project_id = #{pid} |]
 
 
-getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
-getErrorPatternGroupMembers eid =
-  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE canonical_id = #{eid} ORDER BY updated_at DESC |])
+-- | Members of an error pattern's merge group.
+--
+-- Scoped by project: keyed on @canonical_id@ alone this disclosed another project's
+-- error types and messages to any caller who knew (or guessed) a canonical id, and the
+-- rendering handler built unmerge links for them under the *caller's* project path.
+-- Scoping here covers every caller, not just the one that had the bug.
+getErrorPatternGroupMembers :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es [ErrorPattern]
+getErrorPatternGroupMembers pid eid =
+  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE canonical_id = #{eid} AND project_id = #{pid} ORDER BY updated_at DESC |])
 
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
@@ -166,14 +172,19 @@ assignLogsToCanonical pairs = do
         WHERE apis.log_patterns.id = u.id |]
 
 
+-- | Members of a log pattern's merge group. Scoped by project for the same reason as
+-- 'getErrorPatternGroupMembers': keyed on @canonical_id@ alone it would disclose another
+-- project's log patterns to anyone who knew a canonical id. No production caller today
+-- (only 'LogPatternsSpec' asserts on it), so scoping it now means the first production
+-- use is safe by construction rather than repeating the error-pattern bug.
+getLogPatternGroupMembers :: DB es => Projects.ProjectId -> LogPatternId -> Eff es [LogPattern]
+getLogPatternGroupMembers pid lid =
+  Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE canonical_id = #{lid} AND project_id = #{pid} ORDER BY last_seen_at DESC |])
+
+
 unmergeLogPattern :: DB es => LogPatternId -> Eff es Int64
 unmergeLogPattern lid =
   Hasql.interpExecute [HI.sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{lid} |]
-
-
-getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
-getLogPatternGroupMembers lid =
-  Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |])
 
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
