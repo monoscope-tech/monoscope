@@ -100,7 +100,7 @@ spec = sequential $ aroundAll withTestResources $ describe "@everyone notify_ema
     memberId <- withResource tr.trPool \conn -> do
       rs <- PGS.query conn
         [sql| SELECT id FROM projects.project_members WHERE project_id = ? AND user_id = ? |]
-        (testPid, u1) :: IO [PGS.Only UUID.UUID]
+        (testPid, u1) :: IO [PGS.Only PM.ProjectMemberId]
       case rs of
         [PGS.Only mid] -> pure mid
         _ -> fail "expected exactly one project_members row for u1"

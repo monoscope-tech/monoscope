@@ -14,6 +14,7 @@ module Pages.Reports (
   pctChange,
   eventsWidget,
   errorsWidget,
+  renderWeeklyEmail,
 )
 where
 
@@ -26,8 +27,10 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
+import Effectful (Eff, type (:>))
 import Effectful.Concurrent.Async (concurrently)
-import Effectful.Reader.Static (ask)
+import Effectful.Log (Log)
+import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
@@ -42,11 +45,11 @@ import Pages.Components (EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
-import Relude hiding (ask)
+import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, loadingIndicatorWith_)
+import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -177,14 +180,17 @@ computeDurationChanges current prev = V.map compute current
        in (h, m, u, dur, change dur (fst <$> pv), req, change req (snd <$> pv))
 
 
--- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
--- Returns (dateLabel based on endTime, rendered email HTML)
-renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
-renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
+-- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email.
+-- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
+-- row so both the request handlers and the weekly-report background job render the same email;
+-- @reportUrl@ is host-relative.
+renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Eff es (Text, Text, Text)
+renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
-  let tzName = if T.null project.timeZone then "UTC" else project.timeZone
+  let pid = project.id
+      tzName = if T.null project.timeZone then "UTC" else project.timeZone
       tz = fromMaybe utcTZ $ TZ.tzByName (encodeUtf8 tzName)
-      reportUrl' = ctx.env.hostUrl <> reportUrl
+      reportUrl' = hostPath ctx.env.hostUrl reportUrl
       dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
       stmTxt = formatUTCMicros startTime
@@ -192,7 +198,7 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
       (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
   eventsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
   errorsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
-  let projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
+  let projectUrl = hostPath ctx.env.hostUrl ("p/" <> pid.toText)
       reportData =
         ET.WeeklyReportData
           { userName
@@ -219,7 +225,7 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
           , freeTierExceeded
           }
       (subj, html) = ET.weeklyReportEmail reportData
-  pure (dayEnd, ET.renderEmail subj html)
+  pure (dayEnd, subj, ET.renderEmail subj html)
 
 
 -- | Reconstruct the email HTML from a stored Report's reportJson. Returns (dateLabel, emailHtml)
@@ -231,7 +237,12 @@ reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.
         performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
         slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
         reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
-    renderWeeklyEmail reportUrl project project.id userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False
+    dropSubject <$> renderWeeklyEmail reportUrl project userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False
+
+
+-- | The page views show the email body; only the background job needs its subject line.
+dropSubject :: (Text, Text, Text) -> (Text, Text)
+dropSubject (dateLabel, _, html) = (dateLabel, html)
 
 
 -- | Build live "week to date" email preview. Returns (dateLabel, emailHtml)
@@ -272,7 +283,7 @@ buildLiveReportEmailHtml pid project userName = do
       topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
       reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = Projects.isFreeTier project.paymentPlan && totalRequest > 5000
-  renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
+  dropSubject <$> renderWeeklyEmail reportUrl project userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)

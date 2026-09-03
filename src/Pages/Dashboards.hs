@@ -162,7 +162,7 @@ syncDashboardFileInfo :: (DB es, Time.Time :> es) => Dashboards.DashboardId -> E
 syncDashboardFileInfo dashId = do
   dashM <- Dashboards.getDashboardByIdUnscoped dashId
   forM_ dashM \dash -> when (isJust dash.schema) do
-    teams <- ManageMembers.getTeamsById dash.projectId dash.teams
+    teams <- ManageMembers.getTeamsById dash.projectId (coerce dash.teams)
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
         filePath = dashFilePath (folderFromPath dash.filePath) dash.title
         newSha = GitSync.computeContentSha $ GitSync.dashboardToYaml schema
@@ -642,7 +642,7 @@ processVariable :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text
 processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
-      variable' = Dashboards.replaceQueryVariables pid fromD toD allParams now variableBase
+      variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
@@ -833,7 +833,7 @@ withRenderBudget label fallback action =
 processConstant :: forall es. WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> Eff es Dashboards.Constant
 processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
+      constant = Dashboards.replaceDashboardVariables pid fromD toD allParams now constantBase
       runQuery :: forall a. Text -> Eff es (Either Text a) -> (a -> [[Text]]) -> Eff es Dashboards.Constant
       runQuery label action toResult = do
         (res, duration) <- Log.timeAction action
@@ -990,7 +990,7 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
 
-  _ <- Dashboards.updateSchema dashId $ updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated
+  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated) Nothing
   syncDashboardAndQueuePush pid dashId
   whenJust normalizedWidgetIdM \nwid -> syncWidgetAlert pid nwid widget
 
@@ -1091,7 +1091,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
       unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid deletedWidgetIds
 
-      _ <- Dashboards.updateSchema dashId $ overDashWidgets tabSlugM (const reorderedWidgets) dash
+      _ <- Dashboards.updateSchema dashId (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
       syncDashboardAndQueuePush pid dashId
       addRespHeaders NoContent
 
@@ -1475,7 +1475,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
     (_, dash) <- getDashAndVM pid dashboardId Nothing
     let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
         dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
-    void $ Dashboards.updateSchema dashboardId dash'
+    void $ Dashboards.updateSchema dashboardId dash' Nothing
 
   -- If alertEnabled is not checked, delete the monitor
   case form.alertEnabled of
@@ -1651,7 +1651,7 @@ dashboardsGet_ dg = do
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
-    let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
+    let getTeams x = mapMaybe (\xx -> find (\t -> t.id.unwrap == xx) dg.teams) (V.toList x.teams)
         getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
         getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dg.dashTemplates dash)
         noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
@@ -1977,7 +1977,7 @@ dashboardRenamePatchH pid dashId form = do
       _ <- Dashboards.updateTitle dashId form.title
 
       whenJust dashVM.schema \schema ->
-        void $ Dashboards.updateSchema dashId (schema & #title ?~ form.title)
+        void $ Dashboards.updateSchema dashId (schema & #title ?~ form.title) Nothing
 
       let newPath = dashFilePath (fromMaybe "" form.fileDir) form.title
       when (Just newPath /= dashVM.filePath)
@@ -2044,7 +2044,7 @@ dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (R
 dashboardDeleteH pid dashId = do
   _ <- Projects.sessionAndProject pid
   _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404{errBody = "Dashboard not found or does not belong to this project"}
-  _ <- Dashboards.deleteDashboard dashId
+  _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
   redirectCS $ "/p/" <> pid.toText <> "/dashboards"
   addSuccessToast "Dashboard was deleted successfully" Nothing
   addRespHeaders DashboardNoContent
@@ -2066,7 +2066,7 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
     "add_teams" -> do
-      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamHandles)
+      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList $ coerce teamHandles)
       if V.length teams /= length teamHandles
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
         else
@@ -2156,7 +2156,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
           ]
 
       let updatedDash = maybe (targetDash & #widgets %~ (<> [widgetCopy])) (\t -> updateTabBySlug (slugify t.name) (#widgets %~ (<> [widgetCopy])) targetDash) destinationTabM
-      _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
+      _ <- Dashboards.updateSchema targetDashId updatedDash (Just now)
       syncDashboardAndQueuePush pid targetDashId
 
       addWidgetJSON $ encodeText widgetCopy
@@ -2476,7 +2476,7 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
   (idx, _) <- findTabBySlug tabs tabSlug `whenNothing` throwError err404{errBody = "Tab not found: " <> encodeUtf8 tabSlug}
 
   let newSlug = slugify form.newName
-  _ <- Dashboards.updateSchemaAndUpdatedAt dashId (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) now
+  _ <- Dashboards.updateSchema dashId (dash & #tabs ?~ (tabs & ix idx . #name .~ form.newName)) (Just now)
   syncDashboardAndQueuePush pid dashId
 
   addSuccessToast "Tab renamed successfully" Nothing
@@ -2541,7 +2541,7 @@ dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (
 dashboardYamlGetH pid dashId = do
   _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
-  teams <- ManageMembers.getTeamsById pid dashVM.teams
+  teams <- ManageMembers.getTeamsById pid (coerce dashVM.teams)
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
       yamlText = decodeUtf8 $ GitSync.dashboardToYaml schema
   addRespHeaders $ yamlEditorContent_ yamlText
@@ -2560,7 +2560,7 @@ dashboardYamlPutH pid dashId form = do
     Left err -> addRespHeaders $ yamlValidationError_ err
     Right dashboard -> do
       now <- Time.currentTime
-      _ <- Dashboards.updateSchemaAndUpdatedAt dashId dashboard now
+      _ <- Dashboards.updateSchema dashId dashboard (Just now)
       whenJust dashboard.title $ \t -> void $ Dashboards.updateTitle dashId t
       syncDashboardAndQueuePush pid dashId
       addSuccessToast "Dashboard schema updated" Nothing

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -887,6 +887,24 @@ confirmModal_ modalId title description confirmAttrs confirmText =
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
       button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+
+
+-- | Copy-to-clipboard button. @src@ is the hyperscript expression naming what to copy — an
+-- element's text (@#api-key's innerText@) or one of the button's own attributes
+-- (@my \@data-url@, paired with that attribute in @attrs@). The label reverts after two
+-- seconds so the control stops claiming a copy that happened minutes ago.
+copyButton_ :: Text -> Text -> Text -> [Attribute] -> Html ()
+copyButton_ cls iconCls src attrs =
+  button_
+    ( [ type_ "button"
+      , class_ cls
+      , term "_" $ "on click call navigator.clipboard.writeText(" <> src <> ") then put 'Copied!' into the first <span/> in me then wait 2s then put 'Copy' into the first <span/> in me"
+      ]
+        <> attrs
+    )
+    do
+      faSprite_ "copy" "regular" iconCls
+      span_ "Copy"
 
 
 colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()

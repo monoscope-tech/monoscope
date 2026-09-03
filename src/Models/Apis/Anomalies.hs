@@ -34,7 +34,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC)
 import Pkg.SchemaLearning.Catalog qualified as Fields (
   FieldCategoryEnum,
   FieldId,
@@ -61,14 +61,15 @@ data AnomalyTypes
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_type") "AT" AnomalyTypes
 
 
-parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
-parseAnomalyTypes "unknown" = Just ATUnknown
-parseAnomalyTypes "field" = Just ATField
-parseAnomalyTypes "endpoint" = Just ATEndpoint
-parseAnomalyTypes "shape" = Just ATShape
-parseAnomalyTypes "format" = Just ATFormat
-parseAnomalyTypes "runtime_exception" = Just ATRuntimeException
-parseAnomalyTypes _ = Nothing
+-- | The stored spelling back into the enum — the exact inverse of the @WrappedEnumSC@
+-- encoding above, so a new constructor cannot be added without this following it.
+--
+-- >>> parseAnomalyTypes "runtime_exception"
+-- Just ATRuntimeException
+-- >>> parseAnomalyTypes "not_a_type"
+-- Nothing
+parseAnomalyTypes :: Text -> Maybe AnomalyTypes
+parseAnomalyTypes = decodeEnumSC @"AT" . toString
 
 
 data AnomalyActions
@@ -198,17 +199,15 @@ acknowledgeAnomalies pid uid until' issueIds
       now <- Time.currentTime
       Hasql.interp
         [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}, acknowledged_until=#{until'}
-                 WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
+                 WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
         -- Project-scoped for the same two reasons as 'acknowlegeCascade': an anomaly hash is
         -- content-derived and not unique across projects, and (project_id, target_hash) is the
         -- index this can actually use.
         <* Hasql.interpExecute_
-          [HI.sql| WITH related AS (
-                     SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                     FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
-                   )
-                   UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
-                   WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
+          ( relatedAnomalyHashes pid issueIds
+              <> [HI.sql| UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+                          WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
+          )
 
 
 -- | Sweep every issue and anomaly whose @target_hash@ starts with one of @targets@.
@@ -260,22 +259,36 @@ hashPrefixWidth :: Int
 hashPrefixWidth = 8
 
 
+-- | The @anomaly_hashes@ carried by a set of issues, as a @related(h)@ CTE.
+--
+-- Project-scoped on the way in: the ids arrive from a bulk-action form, so without it any
+-- issue id at all is archivable\/acknowledgeable by any tenant.
+relatedAnomalyHashes :: Projects.ProjectId -> V.Vector Text -> HI.Sql
+relatedAnomalyHashes pid issueIds =
+  [HI.sql| WITH related AS (
+             SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+             FROM apis.issues WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[])
+           ) |]
+
+
 -- | Archive issues by id and cascade-archive their underlying anomalies via
 -- the @issue_data.anomaly_hashes@ JSONB field. Returns the row count from the
 -- issues update (the user-visible action target).
-archiveAnomaliesAndIssues :: (DB es, Time :> es) => V.Vector Text -> Eff es Int64
-archiveAnomaliesAndIssues issueIds
+--
+-- Project-scoped for the reasons spelled out on 'acknowlegeCascade': the ids come straight
+-- off a bulk-action form, and a @target_hash@ is content-derived so it collides across
+-- tenants. Unscoped, this archived another project's issues and anomalies.
+archiveAnomaliesAndIssues :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es Int64
+archiveAnomaliesAndIssues pid issueIds
   | V.null issueIds = pure 0
   | otherwise = do
       now <- Time.currentTime
-      Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE id=ANY(#{issueIds}::uuid[]) |]
+      Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[]) |]
         <* Hasql.interpExecute_
-          [HI.sql| WITH related AS (
-                     SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                     FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
-                   )
-                   UPDATE apis.anomalies a SET archived_at=#{now}
-                   WHERE a.target_hash IN (SELECT h FROM related) |]
+          ( relatedAnomalyHashes pid issueIds
+              <> [HI.sql| UPDATE apis.anomalies a SET archived_at=#{now}
+                          WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
+          )
 
 
 -- Orphans: postgresql-simple's Aeson wrapper provides neither.
@@ -327,8 +340,28 @@ data FieldChangeKind = Modified | Added | Removed
 
 
 -- | Derive a service name from the path (@\/api\/v1\/auth\/login@ → @auth-service@), falling back to the host.
+--
+-- The @api@ form skips the version segment, so @\/api\/v1\/auth\/…@ and @\/api\/v2\/auth\/…@ are
+-- one service rather than two:
+--
+-- >>> detectService Nothing (Just "/api/v1/auth/login")
+-- "auth-service"
+-- >>> detectService Nothing (Just "/billing/invoices")
+-- "billing-service"
+--
+-- Anything with no usable first segment — no path, a bare @\/@, or an @\/api@ too short to
+-- carry a service — falls back to the host, then to a constant:
+--
+-- >>> detectService (Just "checkout.internal") (Just "/")
+-- "checkout.internal"
+-- >>> detectService Nothing Nothing
+-- "api-service"
 detectService :: Maybe Text -> Maybe Text -> Text
 detectService hostM endpointPathM = case maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM of
   ("api" : _ : service : _) -> service <> "-service"
   (service : _) | service /= "" -> service <> "-service"
   _ -> fromMaybe "api-service" hostM
+
+
+-- $setup
+-- >>> :set -XOverloadedStrings

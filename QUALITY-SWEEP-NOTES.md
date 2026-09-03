@@ -98,6 +98,47 @@ These need a human call or a failing test first.
    all three handler callers guard `err.projectId /= pid` explicitly, but the guard is
    repeated rather than structural.
 
+## Pattern hashes are NOT project-scoped (verified)
+
+`patternHash = toXXHash dp.templateStr` (`BackgroundJobs.hs:2765`) hashes the template
+string alone — no project id. Two projects logging the same message template therefore
+produce the **same** `pattern_hash`, and that value becomes the issue's `target_hash`.
+
+Endpoint hashes are different: `toXXHash $ projectId.toText <> host <> method <> urlPath`
+(`ProcessMessage.hs:273`) embeds the project, so they cannot collide across tenants.
+
+This asymmetry is why the unscoped `archiveAnomaliesAndIssues` cascade
+(`WHERE target_hash IN (…)`) was a genuine cross-tenant write rather than a
+theoretical one, and it is the reason any future query keyed on `target_hash` or
+`pattern_hash` **must** carry a `project_id` predicate.
+
+Audited after that fix: every `UPDATE`/`DELETE` in `src/Models` and `src/Pages`
+carrying `ANY(#{…})` or keyed on those hashes. The remaining two unscoped writes are
+not exploitable — `clearPendingAnomalies` takes ids from an already project-scoped
+query in `BackgroundJobs`, and `frameworkCanonicalHashes` keys on endpoint hashes,
+which embed the project. Both would still benefit from a `pid` parameter as
+defence-in-depth. The two hash-rewrite updates in `Endpoints.hs` are scoped through
+their subquery join.
+
+## Remaining stringly-typed enums, surveyed
+
+Ranked by how many sites compare against the literal. Each is a `WrappedEnumSC`
+candidate; remember it does **not** supply `FromHttpApiData` automatically — the type
+must list it in its deriving clause.
+
+- **`reportType`** — `== "daily"` / `== "weekly"` at `BackgroundJobs.hs:3125,3138`,
+  `Projects.hs:672`, `Reports.hs:429`, `Mail.hs:423`. A `ReportType` sum **already
+  exists** (`Pages/Bots/Utils.hs`) and is converted to `Text` and discarded at the top
+  of `sendReportForProject`. The type is there; it just doesn't flow.
+- **`status == "sent"`** — `Settings.hs:949,967`. Two-state delivery outcome.
+- **`channel == "all"`** — `Settings.hs:967` and six other `"all"` comparisons; a
+  sentinel standing in for "no filter", which is what `Maybe` is for.
+- **`sourceField`** — `"body"/"summary"/"url_path"/"exception"`, used as a DB key in
+  ~12 queries and in web routes.
+- **`runtime`** — `"go"/"nodejs"/"webjs"/"python"/"java"/"php"/"dotnet"` in
+  `ErrorFingerprint.parseStackFrame`, with an `otherwise` catch-all, so a typo at a
+  caller silently produces a different fingerprint.
+
 ## Recommended follow-up PRs
 
 - **`PatternHash` newtype.** `patternHash`, `hash`, `pattern_hash`, `keyHash`,

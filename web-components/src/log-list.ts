@@ -1,10 +1,10 @@
 'use strict';
 import '@lit-labs/virtualizer';
 import { FlowLayout } from '@lit-labs/virtualizer/layouts/flow.js';
-import { LitElement, html, css, TemplateResult, nothing, render as renderLit } from 'lit';
+import { LitElement, html, css, TemplateResult, nothing, type PropertyValues, render as renderLit } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
-import { ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry } from './types/types';
+import { ChildrenForLatency, ColIdxMap, EventLine, FetchMeta, LogDataResponse, ServerTraceEntry } from './types/types';
 import debounce from 'lodash/debounce';
 import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 // Import worker as URL instead of worker instance
@@ -91,6 +91,24 @@ const _ensureBadgeClasses = html`
 
 const noopRef: RefOrCallback = () => {};
 
+// The `--col-<name>-width` custom properties a table or a row declares. The width lookup is
+// a parameter because the table and its rows deliberately size from different maps.
+const columnWidthVars = (columns: string[], width: (column: string) => number | undefined): string =>
+  columns
+    .map((column) => [column, width(column)] as const)
+    .filter(([, w]) => !!w)
+    .map(([column, w]) => `--col-${column}-width: ${w}px`)
+    .join('; ');
+
+// Every JSON read this list makes wants the same three things: the Accept header that
+// keeps an expired session answering 401 instead of redirecting to an HTML login page,
+// the session cookie, and a message a human can act on when it fails.
+async function fetchJson<T>(url: string): Promise<T> {
+  const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
+  if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
+  return (await resp.json()) as T;
+}
+
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
 // `index` is the row's position in virtualListItems, so a reader whose anchor row is cut
@@ -163,6 +181,19 @@ const MEASURED_LAYOUT = {};
  * every row already, so neither costs a query.
  */
 export type LatencyDim = 'service' | 'kind';
+
+/** One page from the fetch seam: grouped rows plus the metadata that describes them. */
+type FetchPage = { tree: EventLine[]; meta: FetchMeta };
+
+/** The /log_explorer/expand body: child rows of one pattern or session. */
+type ExpandResponse = {
+  rows?: any[][];
+  cols?: string[];
+  colIdxMap?: ColIdxMap;
+  traces?: ServerTraceEntry[];
+  hasMore?: boolean;
+  queryResultCount?: number;
+};
 
 /**
  * jsdom in this setup provides no `localStorage` at all, and a browser in private mode can
@@ -341,7 +372,7 @@ export class LogList extends LitElement {
   private debouncedUpdateChartMarkArea: ReturnType<typeof debounce>;
 
   // Bound functions for event listeners
-  private boundHandleResize: any;
+  private boundHandleResize: (event: MouseEvent) => void;
   private handleFormSubmit = (e: Event) => {
     if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
       e.preventDefault();
@@ -403,10 +434,10 @@ export class LogList extends LitElement {
   private scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
   private worker: Worker | null = null;
   private workerReqId = 0;
-  private workerCallbacks = new Map<number, { resolve: Function; reject: Function }>();
+  private workerCallbacks = new Map<number, { resolve: (page: FetchPage) => void; reject: (error: Error) => void }>();
   // Seam for tests: the fetch+group step. Defaults to the worker-backed path;
   // tests override it to feed canned {tree, meta} responses deterministically.
-  transport: (url: string) => Promise<{ tree: any[]; meta: any }> = (url) => this.workerFetch(url);
+  transport: (url: string) => Promise<FetchPage> = (url) => this.workerFetch(url);
 
   constructor() {
     super();
@@ -462,21 +493,19 @@ export class LogList extends LitElement {
     return msg;
   }
 
-  private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+  private async workerFetch(url: string): Promise<FetchPage> {
     // Patterns / sessions: fetch directly, no span grouping needed
     if (this.isAggregate || this.mode === 'sessions') {
       // Consume the <head> preload (server points it at the matching viz endpoint)
       // so the initial aggregate load overlaps shell render instead of starting
       // only now. Subsequent refetches fall through to a direct fetch.
-      const early = (window as any).logDataPromise;
-      let data: any;
+      const early = window.logDataPromise;
+      let data: LogDataResponse;
       if (early) {
-        (window as any).logDataPromise = null;
+        window.logDataPromise = null;
         data = await early;
       } else {
-        const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
-        if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-        data = await resp.json();
+        data = await fetchJson<LogDataResponse>(url);
       }
       if (data.error) throw new Error(this.reportQueryError(data.error));
       const colIdxMap = data.colIdxMap || {};
@@ -492,7 +521,7 @@ export class LogList extends LitElement {
           region.removeAttribute('aria-busy');
           // Idempotent; rAF retry guards the load-time race where the formatter
           // (defined in the page init script) isn't ready at first injection.
-          const applyFmt = () => (window as any).formatSummaryChart?.(region);
+          const applyFmt = () => window.formatSummaryChart?.(region);
           applyFmt();
           requestAnimationFrame(applyFmt);
         }
@@ -518,6 +547,7 @@ export class LogList extends LitElement {
           childErrors: false,
           hasErrors: errorCount > 0,
           isNew: false,
+          parent: null,
           startNs: 0,
           duration: 0,
           traceStart: 0,
@@ -544,26 +574,27 @@ export class LogList extends LitElement {
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
-    const earlyPromise = (window as any).logDataPromise;
+    const earlyPromise = window.logDataPromise;
     if (earlyPromise) {
-      (window as any).logDataPromise = null;
+      window.logDataPromise = null;
       const data = await earlyPromise;
       // Propagate server errors instead of silently falling through to the worker —
       // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
       if (data.error) throw new Error(this.reportQueryError(data.error));
-      const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
+      const { logsData, serviceColors, nextUrl, recentUrl, count, traces } = data;
+      const colIdxMap = data.colIdxMap ?? {};
       const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
       return {
         tree,
         meta: {
           serviceColors,
-          nextUrl,
+          nextUrl: nextUrl ?? '',
           recentUrl,
-          cols,
+          cols: data.cols ?? [],
           colIdxMap,
           count,
           traces: traces || [],
-          hasMore: data.hasMore ?? logsData?.length > 0,
+          hasMore: data.hasMore ?? (logsData?.length ?? 0) > 0,
           queryResultCount: data.queryResultCount ?? logsData?.length ?? 0,
         },
       };
@@ -588,10 +619,6 @@ export class LogList extends LitElement {
         }
       }, 120000);
     });
-  }
-
-  updateChartDataZoom(start: number, end: number) {
-    // Chart data zoom functionality - currently disabled
   }
 
   private get isAggregate() {
@@ -754,14 +781,17 @@ export class LogList extends LitElement {
   private handleLiveRows(rows: unknown[]) {
     if (!rows.length || !this.colIdxMap) return;
     const positional = rows
-      .map((r: any) => (r?.shape === 'table' ? tableRowToArray(r.cols ?? {}, this.colIdxMap as any) : null))
+      .map((r) => {
+        const row = r as { shape?: string; cols?: Record<string, unknown> } | null;
+        return row?.shape === 'table' ? tableRowToArray(row.cols ?? {}, this.colIdxMap) : null;
+      })
       .filter((r): r is unknown[] => r !== null);
     if (!positional.length) return;
 
     // Trace adjacency has to be synthesised: a fetch receives it from the server, but a pushed
     // row arrives alone, and groupSpans keys the tree off adjacency rather than off the rows.
-    const traces = traceEntriesFor(positional as any, this.colIdxMap as any);
-    const tree = groupSpans(positional as any, this.colIdxMap, this.expandedTraces, this.flipDirection, traces as any);
+    const traces = traceEntriesFor(positional, this.colIdxMap);
+    const tree = groupSpans(positional as any[][], this.colIdxMap, this.expandedTraces, this.flipDirection, traces);
     if (!tree.length) return;
     tree.forEach((t) => (t.isNew = true));
     this.fetchedNew = true;
@@ -1126,10 +1156,6 @@ export class LogList extends LitElement {
     }
   }
 
-  firstUpdated() {
-    // Initialization handled by lit-virtualizer
-  }
-
   // Runs BEFORE render (unlike updated), so clearing here means the first frame
   // after a viz-mode switch already shows the loading skeleton — not the previous
   // mode's rows. Switching logs↔patterns↔sessions replaces the result set with a
@@ -1137,7 +1163,7 @@ export class LogList extends LitElement {
   // reads virtualListItems, so that (and the count display) must be wiped too, or
   // the stale rows keep painting until the new data lands. Guard on a defined old
   // value so the initial undefined→mode set doesn't wipe server-seeded rows.
-  willUpdate(changedProperties: Map<string, any>) {
+  willUpdate(changedProperties: PropertyValues) {
     if (changedProperties.has('mode') && changedProperties.get('mode') !== undefined) {
       this.spanListTree = [];
       this.seenIds.clear();
@@ -1213,7 +1239,7 @@ export class LogList extends LitElement {
     });
   }
 
-  updated(changedProperties: Map<string, any>) {
+  updated(changedProperties: PropertyValues) {
     // The blank check is NOT run per update. It reads layout, and a render happens on every
     // scroll batch, so doing it here put a forced style+layout flush in the frame path — the
     // largest app-level cost in a CPU profile of a throttled scroll. The three triggers below
@@ -1490,9 +1516,7 @@ export class LogList extends LitElement {
       this.requestUpdate();
     }
     try {
-      const resp = await fetch(this.buildExpandUrl(key, skip), { headers: { Accept: 'application/json' }, credentials: 'include' });
-      if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-      const data = await resp.json();
+      const data = await fetchJson<ExpandResponse>(this.buildExpandUrl(key, skip));
       const cols: string[] = data.cols || [];
       const childIdxMap: ColIdxMap = data.colIdxMap || {};
       if (!Object.keys(childIdxMap).length) cols.forEach((c, i) => (childIdxMap[c] = i));
@@ -1555,7 +1579,7 @@ export class LogList extends LitElement {
         ${state.hasMore
           ? html`<button
               class="mt-1 text-xs px-2 py-1 relative"
-              @click=${(e: any) => {
+              @click=${(e: Event) => {
                 e.stopPropagation();
                 this.fetchAggregateChildren(parentKey, state.skip);
               }}
@@ -1652,10 +1676,7 @@ export class LogList extends LitElement {
     this.loadingSessions = { ...this.loadingSessions, [sessionId]: true };
     this.requestUpdate();
     try {
-      const url = this.buildExpandUrl(sessionId, 0);
-      const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
-      if (!resp.ok) throw new Error(`Server error (${resp.status})`);
-      const data = await resp.json();
+      const data = await fetchJson<ExpandResponse>(this.buildExpandUrl(sessionId, 0));
       const childIdxMap: ColIdxMap = data.colIdxMap || {};
       const rows = data.rows || [];
       const traces = data.traces || [];
@@ -1789,7 +1810,7 @@ export class LogList extends LitElement {
         if (!this.hasMore) this.expandTimeRange = true;
       }
       if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
-      if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
+      if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl ?? '';
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
       if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
       if (meta.totalSessions !== undefined && !isLoadMore) this.totalSessions = meta.totalSessions;
@@ -1879,7 +1900,7 @@ export class LogList extends LitElement {
       const measure = () => {
         if (this.isConnected) this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean));
       };
-      if ('requestIdleCallback' in window) (window as any).requestIdleCallback(measure, { timeout: 2000 });
+      if ('requestIdleCallback' in window) window.requestIdleCallback(measure, { timeout: 2000 });
       else setTimeout(measure, 100);
     } catch (error) {
       // A newer full fetch owns the UI now. Do not surface an error from the
@@ -1981,7 +2002,7 @@ export class LogList extends LitElement {
       }
     });
   };
-  toggleLogRow = (event: any, targetInfo: [string, string, string], pid: string) => {
+  toggleLogRow = (_event: Event, targetInfo: [string, string, string], pid: string) => {
     // Use refs when available, fallback to querySelector
     const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
@@ -2043,7 +2064,7 @@ export class LogList extends LitElement {
     // in-place mutation means hyperscript never installs FieldMenuDelegate on the new
     // content, which silently kills the field context menu.
     void Promise.resolve(
-      (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
+      window.htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' })
     )
       .catch(() => {})
       // A dropped, aborted or failed request still has to hand the loader back — that omission
@@ -2074,7 +2095,7 @@ export class LogList extends LitElement {
 
   // New rows enter at the top for recent/live fetches and the bottom for load-more,
   // flipped when oldest-first is on.
-  private orderMerge(current: any[], newData: any[], isRecentFetch: boolean) {
+  private orderMerge<T>(current: T[], newData: T[], isRecentFetch: boolean): T[] {
     return this.flipDirection
       ? isRecentFetch
         ? [...current, ...newData]
@@ -2109,7 +2130,7 @@ export class LogList extends LitElement {
 
   // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
   // tail paused for hours while inspecting an older row.
-  private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
+  private addWithFlipDirection(current: EventLine[], newData: EventLine[], isRecentFetch: boolean): EventLine[] {
     // Drop rows already on screen here rather than at merge time: mergeIntoTree filters them
     // anyway, so buffering them only inflates the "N new" pill above what it will insert.
     const fresh = newData.filter((r) => !this.seenIds.has(r.id));
@@ -2490,7 +2511,7 @@ export class LogList extends LitElement {
     });
   };
 
-  handleVisibilityChange = (e: any) => {
+  handleVisibilityChange = (e: { first: number; last: number }) => {
     const first = e.first;
     const last = e.last;
     if (!Number.isInteger(first) || !Number.isInteger(last)) return;
@@ -2579,7 +2600,7 @@ export class LogList extends LitElement {
             {
               markArea: {
                 itemStyle: {
-                  color: (window as any).echarts.color.modifyAlpha(cssTokenToHex('--color-fillBrand-strong'), 0.2),
+                  color: window.echarts.color.modifyAlpha(cssTokenToHex('--color-fillBrand-strong'), 0.2),
                   borderColor: cssTokenToHex('--color-fillBrand-strong'),
                   borderWidth: 1,
                   borderType: 'dashed',
@@ -2599,7 +2620,7 @@ export class LogList extends LitElement {
 
     // Use requestIdleCallback for non-critical chart updates
     if ('requestIdleCallback' in window) {
-      (window as any).requestIdleCallback(updateChart, { timeout: 500 });
+      window.requestIdleCallback(updateChart, { timeout: 500 });
     } else {
       setTimeout(updateChart, 250);
     }
@@ -2770,20 +2791,7 @@ export class LogList extends LitElement {
           class="table-fixed ${isAggregate || this.wrapsLines || this.isNarrow
             ? 'w-full'
             : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
-          style=${Object.entries(
-            this.logsColumns.reduce(
-              (acc, column) => {
-                const width = this.columnWidth(column);
-                if (width) {
-                  acc[`--col-${column}-width`] = `${width}px`;
-                }
-                return acc;
-              },
-              {} as Record<string, string>
-            )
-          )
-            .map(([k, v]) => `${k}: ${v}`)
-            .join('; ')}
+          style=${columnWidthVars(this.logsColumns, (column) => this.columnWidth(column))}
         >
           <!-- Column headers label columns; a stacked phone row has none, so they are noise there. -->
           <thead class=${clsx('z-10 sticky top-0 isolate', this.isNarrow && 'hidden')}>
@@ -2893,7 +2901,7 @@ export class LogList extends LitElement {
   renderSummaryElements = (() => {
     // Private cache with fast hashing
     const cache = new Map<number, TemplateResult[]>();
-    const parseCache = new WeakMap<string[], any[]>();
+    const parseCache = new WeakMap<string[], ReturnType<typeof parseSummaryElement>[]>();
     const unescapeCache = new Map<string, string>();
 
     // FNV-1a hash for ultra-fast cache keys
@@ -2994,7 +3002,7 @@ export class LogList extends LitElement {
           // Top-level session rows are rendered via renderSessionSummary in
           // the summary case; this fallback handles regular log rows and
           // also expanded span children inside a session.
-          result.push(renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value));
+          result.push(renderBadge(clsx('cbadge-sm', getStyleClass(style), wrapClass), value));
         }
       }
 
@@ -3005,11 +3013,7 @@ export class LogList extends LitElement {
     };
   })();
 
-  getStyleClass(style: string): string {
-    return getStyleClass(style);
-  }
-
-  logItemCol = (rowData: EventLine, key: string): any => {
+  logItemCol = (rowData: EventLine, key: string): TemplateResult | typeof nothing => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapsLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
     // When rendering inside aggregate children, use overridden colIdxMap
@@ -3118,7 +3122,7 @@ export class LogList extends LitElement {
           // made this a per-operation palette wearing the name "service colors": two spans in
           // one service got two colours, the same operation in two services got one, and any
           // name missing the palette fell back to grey.
-          const dimOf = (arr: any) => lookupVecValue<string>(arr, colIdxMap, this.latencyDim) || '';
+          const dimOf = (arr: any[]) => lookupVecValue<string>(arr, colIdxMap, this.latencyDim) || '';
           const colorOf = (value: string) => this.dimColor(value);
           const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
           const chil = childrenTimeSpans.map(({ startNs, duration, data, depth }: ChildrenForLatency) => {
@@ -3152,7 +3156,7 @@ export class LogList extends LitElement {
             const { field, style, value } = parsed;
             if (!RIGHT_PREFIX_REGEX.test(style)) continue;
 
-            const badgeStyle = this.getStyleClass(style);
+            const badgeStyle = getStyleClass(style);
 
             if (field === 'session') {
               // In tree mode, the play button only renders on tree roots
@@ -3284,11 +3288,11 @@ export class LogList extends LitElement {
                     : nothing}
                   ${children > 0
                     ? html`<button
-                        @click=${(e: any) => {
+                        @click=${(e: Event) => {
                           e.stopPropagation();
                           e.preventDefault();
                         }}
-                        @pointerdown=${(e: any) => {
+                        @pointerdown=${(e: Event) => {
                           e.stopPropagation();
                           e.preventDefault();
                           this.expandTrace(traceId, id);
@@ -3509,14 +3513,6 @@ export class LogList extends LitElement {
     </tr>`;
   };
 
-  renderLoadMore() {
-    return this.renderLoadMoreButton();
-  }
-
-  fetchRecent() {
-    return this.renderFetchRecentButton();
-  }
-
   // On a phone the desktop table is ~4000px wide, so summary — the column that says
   // what actually happened — starts off-screen behind two columns of chrome. Narrow
   // viewports render the same rows with only the identifying columns, and summary
@@ -3606,18 +3602,6 @@ export class LogList extends LitElement {
         : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
       const isNew = rowData.isNew;
 
-      // Pre-calculate CSS custom properties for widths
-      const columnStyles = effectiveLogsColumns.reduce(
-        (acc, column) => {
-          const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-          if (width) {
-            acc[`--col-${column}-width`] = `${width}px`;
-          }
-          return acc;
-        },
-        {} as Record<string, string>
-      );
-
       const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
       const severity = classifyLevel(
         lookupVecValue<string>(rowData.data, effectiveColIdxMap, 'level') ||
@@ -3654,20 +3638,20 @@ export class LogList extends LitElement {
         isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
         isNew && 'animate-fadeBg'
       );
-      const rowStyle = Object.entries(columnStyles)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('; ');
+      // Deliberately NOT this.columnWidth: that one narrows the sessions latency column and
+      // drops every width on a phone, and the row cells are sized from the raw maps.
+      const rowStyle = columnWidthVars(effectiveLogsColumns, (column) => this.columnMaxWidthMap[column] || this.fixedColumnWidths[column]);
       const rowClick = isAggregate
-        ? (event: any) => {
+        ? (event: Event) => {
             event.stopPropagation();
             this.toggleAggregateRow(rowData);
           }
         : effectiveMode === 'sessions' && rowData.depth === 0
-          ? (event: any) => {
+          ? (event: Event) => {
               event.stopPropagation();
               this.expandTrace(rowData.traceId, rowData.id);
             }
-          : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId);
+          : (event: Event) => this.toggleLogRow(event, targetInfo, this.projectId);
       const cells = effectiveLogsColumns
         .filter((v) => v !== 'latency_breakdown')
         .map((column) => {
@@ -3780,7 +3764,7 @@ export class LogList extends LitElement {
             : nothing}
         </ul>
         <div
-          @pointerdown=${(event: any) => {
+          @pointerdown=${(event: PointerEvent) => {
             this.resizeTarget = column;
             this.mouseState = { x: event.clientX };
             document.body.style.userSelect = 'none';
@@ -3870,11 +3854,11 @@ export class LogList extends LitElement {
       )}
       data-tip=${hasErrors ? 'Replay — errors in this session' : 'Replay recording'}
       aria-label=${hasErrors ? 'Replay session with errors' : 'Replay session recording'}
-      @click=${(e: any) => {
+      @click=${(e: Event) => {
         e.stopPropagation();
         e.preventDefault();
       }}
-      @pointerdown=${(e: any) => {
+      @pointerdown=${(e: Event) => {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));
@@ -3896,7 +3880,7 @@ export class LogList extends LitElement {
         type="checkbox"
         class="checkbox checkbox-xs checkbox-primary mr-1"
         .checked=${checked}
-        @change=${(e: any) => onChange(e.target.checked)}
+        @change=${(e: Event) => onChange((e.target as HTMLInputElement).checked)}
       />
       ${faSprite(icon, 'regular', 'h-4 w-4')}
       <span class="sm:inline hidden">${label}</span>
@@ -4097,7 +4081,7 @@ class ColumnsSettings extends LitElement {
   createRenderRoot() {
     return this;
   }
-  updated(changedProperties: Map<string, any>) {
+  updated(changedProperties: PropertyValues) {
     if (changedProperties.has('columns')) {
       const currentNames = new Set(this.defaultColumns);
       const merged = [...this.defaultColumns, ...this.columns.filter((c) => !currentNames.has(c))];
@@ -4115,8 +4099,8 @@ class ColumnsSettings extends LitElement {
             placeholder="Search columns..."
             class="input input-xs w-full max-w-xs focus:outline-none focus:border-textBrand focus:ring-0"
             .value=${this.searchTerm || ''}
-            @input=${(e: any) => {
-              this.searchTerm = e.target.value;
+            @input=${(e: Event) => {
+              this.searchTerm = (e.target as HTMLInputElement).value;
             }}
           />
 
@@ -4166,9 +4150,9 @@ class ColumnsSettings extends LitElement {
                   col === 'latency_breakdown' ? 'cursor-default select-none' : 'cursor-move hover:bg-fillWeak'
                 } ${this.dragOverIndex === index ? 'border border-strokeBrand-strong' : ''}`}
                 draggable=${col === 'latency_breakdown' ? 'false' : 'true'}
-                @dragstart=${(e: any) => this._onDragStart(e, index)}
-                @dragover=${(e: any) => this._onDragOver(e, index)}
-                @drop=${(e: any) => this._onDrop(e, index)}
+                @dragstart=${(e: DragEvent) => this._onDragStart(e, index)}
+                @dragover=${(e: DragEvent) => this._onDragOver(e, index)}
+                @drop=${(e: DragEvent) => this._onDrop(e, index)}
               >
                 <span class="text-textStrong">${col}</span>
                 <div class="flex items-center gap-2">
@@ -4185,7 +4169,7 @@ class ColumnsSettings extends LitElement {
     `;
   }
 
-  _onDragOver(e: any, index: number) {
+  _onDragOver(e: DragEvent, index: number) {
     e.preventDefault();
     if (this.columns[index] === 'latency_breakdown' || index === this.dragIndex) {
       this.dragOverIndex = null;
@@ -4200,11 +4184,11 @@ class ColumnsSettings extends LitElement {
     this._emitChanges();
   }
 
-  _onDragStart(e: any, index: number) {
+  _onDragStart(_e: DragEvent, index: number) {
     this.dragIndex = index;
   }
 
-  _onDrop(e: any, index: number) {
+  _onDrop(_e: DragEvent, index: number) {
     if (index === this.dragIndex || !this.dragIndex) return;
     if (index === this.columns.length - 1 && this.columns[index] === 'latency_breakdown') return;
     const dragged = this.columns[this.dragIndex];
@@ -4283,6 +4267,17 @@ const LATENCY_LABELS: Record<Exclude<LatencyState, 'missing'>, string> = {
   critical: 'Critical latency (at least 5s)',
 };
 
+// The non-colour half of the latency signal, so the phone badge and the desktop bar can
+// never disagree about which shape means "slow" and which means "critical".
+const LATENCY_MARKER_ICONS = { warning: 'triangle-exclamation', critical: 'circle-exclamation' } as const;
+
+const latencyMarker = (state: LatencyState, classes = '') =>
+  state === 'warning' || state === 'critical'
+    ? html`<span data-latency-marker=${state} class=${classes} aria-hidden="true"
+        >${faSprite(LATENCY_MARKER_ICONS[state], 'regular', 'h-3 w-3')}</span
+      >`
+    : nothing;
+
 function mobileLatencyBadge(duration: number) {
   const state = latencyState(duration);
   if (state === 'missing') return nothing;
@@ -4297,11 +4292,7 @@ function mobileLatencyBadge(duration: number) {
     class=${`inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border px-1 text-xs tabular-nums ${classes}`}
     aria-label=${`${LATENCY_LABELS[state]}: ${fmtNs(duration)}`}
   >
-    ${state === 'warning'
-      ? html`<span data-latency-marker="warning" aria-hidden="true">${faSprite('triangle-exclamation', 'regular', 'h-3 w-3')}</span>`
-      : state === 'critical'
-        ? html`<span data-latency-marker="critical" aria-hidden="true">${faSprite('circle-exclamation', 'regular', 'h-3 w-3')}</span>`
-        : nothing}
+    ${latencyMarker(state)}
     <span>${fmtNs(duration)}</span>
   </span>`;
 }
@@ -4602,21 +4593,7 @@ export function spanLatencyBreakdown({
         style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
       ></div>`;
     })}
-    ${state === 'warning'
-      ? html`<span
-          data-latency-marker="warning"
-          class="absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center text-textInverse-strong"
-          aria-hidden="true"
-          >${faSprite('triangle-exclamation', 'regular', 'h-3 w-3')}</span
-        >`
-      : state === 'critical'
-        ? html`<span
-            data-latency-marker="critical"
-            class="absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center text-textInverse-strong"
-            aria-hidden="true"
-            >${faSprite('circle-exclamation', 'regular', 'h-3 w-3')}</span
-          >`
-        : nothing}
+    ${latencyMarker(state, 'absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center text-textInverse-strong')}
     <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
            a span two thirds of the way into a trace is just a small block somewhere. -->
     ${frame

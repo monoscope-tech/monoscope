@@ -1,4 +1,4 @@
-module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlert, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -285,7 +285,7 @@ topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.
 errRoute :: ErrorPatterns.ATError -> Text
 errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.requestPath]) of
   [] -> ""
-  parts -> "`" <> T.unwords parts <> "`"
+  parts -> "`" <> unwords parts <> "`"
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text

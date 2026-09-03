@@ -33,7 +33,7 @@ import Data.Time (DayOfWeek (Monday), UTCTime (..), ZonedTime, addDays, addUTCTi
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -2956,7 +2956,7 @@ notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Bool -> ATB
 notifyQueryMonitorStatusChange monitor value isRecovery = do
   appCtx <- ask @Config.AuthContext
   whenJustM (Projects.projectById monitor.projectId) \p -> do
-    teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
+    teams <- ProjectMembers.getTeamsById monitor.projectId (coerce monitor.teams)
     when (not (V.null monitor.teams) && null teams)
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
     let monitorListUrl = projectUrl appCtx monitor.projectId <> "/monitors"
@@ -3140,39 +3140,27 @@ sendReportForProject pid rType = do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           when (totalRequest > 0) do
             patterns <- LogPatterns.getLogPatterns pid 10 0
-            let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
-                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
-                dayStart = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone sevenDaysAgoUTCTime))
-                (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = RP.anomalyTypeCounts (.issueType) anomalies'
-                topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
+            -- Date labels render in the project's timezone, not the server's — see RP.renderWeeklyEmail.
+            let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
+                freeTierExceeded = Projects.isFreeTier pr.paymentPlan && totalRequest > 5000
             forM_ users \user -> do
-              let reportData =
-                    ET.WeeklyReportData
-                      { userName = user.firstName
-                      , projectName = pr.title
-                      , reportUrl = projectUrl ctx pid <> "/reports/" <> report.id.toText
-                      , projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
-                      , startDate = dayStart
-                      , endDate = dayEnd
-                      , eventsChartUrl = allQ
-                      , errorsChartUrl = errQ
-                      , totalEvents
-                      , totalErrors
-                      , eventsChangePct = eventsChange
-                      , errorsChangePct = errorsChange
-                      , runtimeErrorsCount = errTotal
-                      , apiChangesCount = apiTotal
-                      , alertsCount = qTotal
-                      , logPatternCount = lpTotal
-                      , rateChangeCount = rcTotal
-                      , anomalies = anomalies'
-                      , performance = endpointPerformance
-                      , slowQueries = slowDbQueries
-                      , topPatterns
-                      , freeTierExceeded = Projects.isFreeTier pr.paymentPlan && totalRequest > 5000
-                      }
-                  (subj, html) = ET.weeklyReportEmail reportData
-              sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
+              (_, subj, rendered) <-
+                RP.renderWeeklyEmail
+                  ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
+                  pr
+                  user.firstName
+                  startTime
+                  currentTime
+                  totalEvents
+                  totalErrors
+                  eventsChange
+                  errorsChange
+                  anomalies'
+                  endpointPerformance
+                  slowDbQueries
+                  topPatterns
+                  freeTierExceeded
+              sendRenderedEmail (CI.original user.email) subj rendered
       Log.logInfo "Completed sending report notifications for" pid
 
 
@@ -4399,7 +4387,7 @@ gitSyncFromRepo pid = do
           | otherwise -> do
               dbState <- GitSync.getDashboardGitState pid
               allTeams <- ProjectMembers.getTeamsVM pid
-              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+              let teamMap = Map.fromList [(t.handle, t.id.unwrap) | t <- allTeams]
                   prefix = GitSync.getDashboardsPath sync
                   actions = GitSync.buildSyncPlan prefix entries dbState
                   creates = [a | a@GitSync.SyncCreate{} <- actions]
@@ -4412,7 +4400,7 @@ gitSyncFromRepo pid = do
                 Ki.atomically $ Ki.awaitAll scope
               -- Process deletes (no HTTP needed)
               forM_ deletes \(path, dashId) -> do
-                _ <- Dashboards.deleteDashboard dashId
+                _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
                 Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
               _ <- GitSync.updateLastRevision sync.id revision
               Log.logInfo "Completed git sync for project" pid
@@ -4451,7 +4439,7 @@ processGitSyncAction pid conn sync teamMap = \case
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
-      _ <- Dashboards.updateSchemaAndUpdatedAt dashId schema now
+      _ <- Dashboards.updateSchema dashId schema (Just now)
       whenJust schema.title $ void . Dashboards.updateTitle dashId
       _ <- Dashboards.updateTags dashId (V.fromList $ fold schema.tags)
       _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
@@ -4482,7 +4470,7 @@ gitSyncPushDashboard pid dashId = do
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
 pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
 pushDashboardToGit conn sync pid dash message = do
-  teams <- ProjectMembers.getTeamsById pid dash.teams
+  teams <- ProjectMembers.getTeamsById pid (coerce dash.teams)
   let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
       prefix = GitSync.getDashboardsPath sync
       -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...

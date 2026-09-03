@@ -262,14 +262,18 @@ spec = sequential do
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
       it "connects, updates, and disconnects a repository" \tr -> do
-        let form owner repo branch token = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = Nothing}
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test")
+        let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
         sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
 
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "ghp_new")
+        -- The update path used to write every field of this form except the folder, so an edit
+        -- to "Folder in repo" vanished on save while the page redrew as if it had stuck. An
+        -- empty token box still means "keep the stored credential".
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
         updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
-        (updated.owner, updated.repo, updated.branch) `shouldBe` ("updated", "updated-repo", "dev")
+        (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
+        updated.accessToken `shouldBe` sync.accessToken
 
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= (`shouldSatisfy` isNothing)

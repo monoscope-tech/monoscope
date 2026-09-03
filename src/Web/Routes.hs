@@ -70,6 +70,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -681,7 +682,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
-  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" UUID.UUID :> Delete '[HTML] (RespHeaders (Html ()))
+  , membersDeleteH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Capture "memberId" ProjectMembers.ProjectMemberId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamsManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> QPT "what" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamsManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> ReqBody '[JSON] ManageMembers.TeamForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)

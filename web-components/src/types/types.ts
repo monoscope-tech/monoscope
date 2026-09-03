@@ -23,12 +23,24 @@ declare global {
     serviceMapFilter: (q: string, id?: string) => void;
     downloadJson: (event: any) => void;
     getTimeRange: () => { from: string; to: string; since: string } | undefined;
-    formatNumber: (num: number) => string;
+    formatNumber: (num: number | null | undefined) => string;
     getUTCOffset: () => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
     tagifyTemplateFunc: (this: TagifyTemplateContext, tagData: TagifyTagData) => string;
     getTagValues: (selector: string) => string[];
     updateTimePicker: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }) => string;
+    // Server-rendered <head> script starts the first log_explorer request before this
+    // bundle evaluates; the list adopts the in-flight promise and clears the slot.
+    logDataPromise?: Promise<LogDataResponse> | null;
+    // Installed by the log_explorer page init; formats the injected sessions summary chart.
+    formatSummaryChart?: (region: HTMLElement) => void;
+    htmx: {
+      ajax: (method: string, url: string, opts: Record<string, unknown>) => Promise<void> | void;
+      trigger: (target: string | Element, event: string, detail?: unknown) => void;
+    };
+    // The echarts UMD global, loaded from a <script> tag rather than bundled — there is
+    // no module to import its types from at this seam.
+    echarts: any;
   }
   type TagifyTagData = { value?: string; email?: string; class?: string; name?: string };
   type TagifyTemplateContext = {
@@ -72,6 +84,35 @@ export type EventLine = {
   _summaryCache?: { content: TemplateResult[]; wrapLines: boolean };
   _latencyCache?: { content: TemplateResult; width: number; expanded: boolean; dim: string };
 } & Omit<APTEvent, 'children'>;
+
+/**
+ * The JSON body the log_explorer data/patterns/sessions endpoints return. Every field is
+ * optional because the three endpoints answer with different subsets of it, and the readers
+ * below already defend with `??`.
+ */
+export type LogDataResponse = {
+  error?: string;
+  logsData?: any[][];
+  summaryHtml?: string;
+  serviceColors?: Record<string, string>;
+  nextUrl?: string;
+  recentUrl?: string;
+  cols?: string[];
+  colIdxMap?: ColIdxMap;
+  count?: number;
+  totalPatterns?: number;
+  totalSessions?: number;
+  traces?: ServerTraceEntry[];
+  hasMore?: boolean;
+  queryResultCount?: number;
+};
+
+/** What the log list's fetch seam returns alongside the grouped rows. */
+export type FetchMeta = Omit<LogDataResponse, 'error' | 'logsData' | 'summaryHtml' | 'cols' | 'colIdxMap' | 'nextUrl'> & {
+  nextUrl: string;
+  cols: string[];
+  colIdxMap: ColIdxMap;
+};
 
 export interface ServerTraceEntry {
   trace_id: string;

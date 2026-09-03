@@ -81,7 +81,7 @@ spec = sequential $ aroundAll withTestResources $ do
         (pagerdutyNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "pagerduty" $ Just team.id)
         [Notify.integrationKey d | PagerdutyNotification d <- pagerdutyNotifs] `shouldBe` [pagerdutyKey]
 
-        (_, Pages.ManageTeamsDelete) <- testServant tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id]) Nothing
+        (_, Pages.ManageTeamsDelete) <- testServant tr $ Pages.manageTeamBulkActionH testPid "delete" (Pages.TBulkActionForm [team.id.unwrap]) Nothing
         (_, Pages.ManageTeamsGet' (_, _, _, _, afterDelete)) <- testServant tr $ Pages.manageTeamsGetH testPid (Just "")
         V.any ((== team.id) . (.id)) afterDelete `shouldBe` False
         (deletedNotifs, _) <- testServantWithNotifications tr $ Integrations.notificationsTestPostH testPid (TestForm "runtime_exception" "slack" $ Just team.id)
