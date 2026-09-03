@@ -932,7 +932,7 @@ spec = sequential $ aroundAll withTestResources do
         ((mergedId, _canonId) : _) -> do
           patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           -- Unmerge
-          void $ runTestBg frozenTime tr $ PatternMerge.unmergeErrorPattern mergedId
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergeErrorPattern pid mergedId
           -- Pattern reappears in getErrorPatterns (canonical_id = NULL)
           patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           length patternsAfter `shouldBe` (length patternsBefore + 1)

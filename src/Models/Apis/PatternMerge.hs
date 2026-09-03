@@ -100,9 +100,18 @@ setCanonicalId patternId canonicalId =
   Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET canonical_id = #{canonicalId} WHERE id = #{patternId} AND merge_override = FALSE |]
 
 
-unmergeErrorPattern :: DB es => ErrorPatternId -> Eff es Int64
-unmergeErrorPattern pid =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{pid} |]
+-- | Detach an error pattern from its canonical group.
+--
+-- Scoped by project: keyed on @id@ alone, a caller authorised on one project could
+-- unmerge another project's pattern and corrupt its error grouping. The web route
+-- (@errorUnmergePostH@) did exactly that, unlike its sibling handlers which each
+-- guard with @err.projectId /= pid@. Scoping here covers every caller.
+--
+-- NB the parameter was named @pid@ for the *pattern* id, which is what a project id
+-- is called everywhere else in this codebase — renamed to @epid@ to remove the trap.
+unmergeErrorPattern :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es Int64
+unmergeErrorPattern pid epid =
+  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{epid} AND project_id = #{pid} |]
 
 
 getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
