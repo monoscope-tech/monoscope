@@ -5160,6 +5160,32 @@ errorGroupReviewBatch :: Int
 errorGroupReviewBatch = 30
 
 
+-- | Rows given a shape per run. Bounded so one project cannot monopolise a pass, and
+-- self-limiting: once the corpus is covered the query returns nothing and this costs
+-- one index scan.
+errorShapeBackfillBatch :: Int
+errorShapeBackfillBatch = 2000
+
+
+-- | Give older patterns the shape the upsert only grants on recurrence.
+--
+-- Without this the review loop is starved rather than wrong: a shape needs two
+-- populated members to be a candidate, and a corpus written before the column existed
+-- has none. Measured on prod immediately after the column shipped — 89 rows of 23,389
+-- had a shape, 31 shapes in the busiest project, not one of them with two members.
+--
+-- Computed in Haskell because the shape is a normalisation of the message and there
+-- is no SQL equivalent; that is also why it could not be a migration.
+backfillErrorShapes :: Projects.ProjectId -> ATBackgroundCtx ()
+backfillErrorShapes pid = do
+  missing <- PatternMergeDB.errorPatternsMissingShape pid errorShapeBackfillBatch
+  unless (null missing) do
+    updated <-
+      PatternMergeDB.setErrorShapeHashes
+        [(eid, (EF.computeErrorHashes pid.toText Nothing Nothing EF.RGeneric etype msg "").shape) | (eid, etype, msg) <- missing]
+    Log.logInfo "Backfilled error pattern shapes" ("project_id", pid.toText, "rows", updated)
+
+
 -- | Smallest group worth a verdict. Two patterns that read alike are a coincidence
 -- often enough that asking about them spends budget for a merge nobody notices.
 errorGroupMinMembers :: Int64
@@ -5220,6 +5246,7 @@ reviewErrorGroups pid = do
     -- months behind a log line nobody's level was low enough to see.
     then Log.logAttention "Error group review disabled or unconfigured, skipping" (pid, "no_api_key", T.null ctx.config.openaiApiKey)
     else tryStep "errorGroupReview" do
+      backfillErrorShapes pid
       cursor <- PatternMergeDB.getReviewCursor pid
       groups <- PatternMergeDB.getErrorShapeGroups pid cursor errorGroupReviewBatch
       -- Walked off the end: start over next run rather than stopping. A shape that
