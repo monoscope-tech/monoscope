@@ -443,6 +443,104 @@ Also worth doing, found while working and small: the Activity card spends ~160px
 to render "No activity yet." The product register's rule is that empty states
 teach the interface rather than announce emptiness.
 
+## 9. Options for the remaining work — thinking out loud before building
+
+Written before any of this is implemented, so the alternatives are on record
+rather than reverse-engineered from whatever shipped. Grounded in §3's research
+and in what the codebase already provides. Reviewed by the advisor before
+implementation.
+
+### A. The shared identity/impact band (P2's remaining half)
+
+Both vendors put the same five facts in a fixed place: state, service,
+environment, first seen, last seen. We scatter them — an "Error Details" card for
+runtime exceptions, an "Endpoint Details" card for API changes, chips for log
+patterns, nothing for query alerts.
+
+1. **Extend the existing chip row.** Cheapest — the chips already exist under the
+   title. But that row is currently *type-specific detail* (log level, occurrence
+   count, change direction). Folding identity into it blurs "what is this issue"
+   with "what is peculiar about this issue type", and the row is already long.
+2. **A dedicated fact row under the title, rendered for every type.** Mirrors
+   Sentry's Header→Workflow→Aggregate zoning. Requires the per-type panels to
+   *give up* the four facts they currently duplicate, otherwise the page says
+   "first seen" twice. That giving-up is the actual work, and the actual win.
+3. **Keep per-type panels, standardise their contents.** Least disruptive, but it
+   preserves the thing that makes the four pages feel unrelated, which is the
+   whole point of §3c. Rejected.
+
+**Leaning to 2.** The `detailRow_` helper already renders exactly this shape, so
+the new code is a call site plus deletions from three branches. Net negative
+lines, which is the right smell. Type-specific panels keep only what is genuinely
+type-specific (method/path and runtime for errors; host and request count for
+endpoints).
+
+### B. Attribute distribution (P3) — the one I am least sure about
+
+Datadog's `operation_name:… (100%)  env:prod (78%)  @version:… (52%)` is the
+single highest-value thing we lack: it answers "is this everywhere or one pod?"
+
+What already exists, and what it does not do:
+- `SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" from to` is already
+  called in this very module (for the AI prompt), and `renderFacets` is an
+  exported component in `Pages.LogExplorer.Log`. Tempting to reuse wholesale.
+- **But it is project-wide over a window, not scoped to one issue's hash.** It
+  answers "what does this project look like", not "what does *this error* look
+  like". Reusing it would put a confidently-rendered, subtly-wrong panel on the
+  page — worse than no panel.
+
+So the options are:
+1. **Hash-scoped aggregation, new query, reuse `FacetValue`/`FacetSummary` types
+   and the `renderFacets` shape.** Correct answer, honest data.
+   **Feasibility concern, and it is serious:** F8 just established that
+   `hashes[*]==` is an unindexed array scan whose cost tracks the window. A
+   `GROUP BY` over several attribute columns *filtered by that same predicate*
+   is strictly more expensive than the count that already takes ~3s at 24H. This
+   could easily be the next "Query timed out".
+2. **Derive it from the trace we already fetch**, rather than a new aggregate —
+   one trace's attributes, labelled honestly as one sample, not a distribution.
+   Cheap and safe, but it is not the Datadog feature; percentages over n=1 are
+   noise, and implying otherwise is worse than omitting it.
+3. **Defer P3 until the predicate is cheaper.** Unsatisfying, but F8 is a live
+   demonstration that shipping an expensive per-issue aggregate on this page is
+   how the chart broke in the first place.
+
+**Leaning to 1, but measure first and be willing to land on 3.** Concretely:
+before writing any UI, time a hash-scoped `GROUP BY` over 3–4 attribute columns
+at the page's default 24H window. If it is materially slower than the count, take
+option 3 and say so in the doc. **Do not ship a second timeout onto this page.**
+
+### C. Span-chain frames for stackless exceptions (P4's other half)
+
+I proposed this in §5 and I now think it is **probably wrong**, which is worth
+writing down before building it.
+
+The argument for: the errored span's subtree is a real cross-service call path
+(`CheckoutService/PlaceOrder` → `prepareOrderItemsAndShippingQuote…` →
+`CartService/GetCart`), and it is frame-shaped.
+
+The argument against, which I find stronger: **the page already renders that.**
+The Investigation panel's Trace tab is a waterfall of exactly those spans, and
+the Activity panel already shows `USER JOURNEY · 62 events before error`.
+Building a third rendering of the same span data would be a new surface that
+duplicates two existing ones — the precise mistake §8 records me making with the
+count. Sentry's stack trace earns its place because it shows *source context and
+in-app frames*, which we do not have and cannot synthesise from spans.
+
+**Leaning to: do not build it.** Instead, make the existing evidence easier to
+reach — the empty state now names the runtime and points at the Trace tab
+(`52f86472a`), which may already be the whole fix. If anything more is wanted,
+the cheap version is scrolling/deep-linking the Trace tab to the errored span
+rather than rendering a parallel frame list.
+
+### What I want reviewed before building
+
+1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
+   a cheaper shape for per-issue distribution I am not seeing?
+2. Is C's "we already render this twice" argument right, or does a frames view
+   genuinely read differently enough from a waterfall to earn its keep?
+3. A is mostly deletion — any reason not to just do it?
+
 Deferred, and why: per-event Tags table (P3 covers the higher-value aggregate
 first); release/commit on first-seen (no release tracking wired yet);
 `query_id` `show`-blob repair (needs a migration + tolerant read — worth doing,
