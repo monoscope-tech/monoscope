@@ -1564,7 +1564,6 @@ apiLogsPage page = do
     <> page.preloadUrl
     <> "\", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
   sectionWrapper_ do
-    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" pidTxt, term "containerId" "sessionPlayerWrapper"] ("" :: Text)

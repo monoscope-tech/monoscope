@@ -2426,7 +2426,7 @@ processEagerBatch batch shard
           -- can be marked as their own canonical template.
           forkNonEmpty endpointsFinal \eps -> do
             Endpoints.bulkInsertEndpoints eps
-            Endpoints.frameworkCanonicalHashes $ V.fromList $ ordNub $ V.toList $ V.catMaybes frameworkHashes
+            Endpoints.frameworkCanonicalHashes pid $ V.fromList $ ordNub $ V.toList $ V.catMaybes frameworkHashes
           -- Legacy apis.shapes/fields/formats writes removed; the
           -- in-memory schema-learning catalog (observeSpans above) +
           -- runSchemaFlusherFiber replaces them.
@@ -4941,7 +4941,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
 
   forM_ pends \(lp, dir) ->
     LogPatterns.setPendingAnomaly lp.patternId dir scheduledTime
-  unless (V.null clears) $ LogPatterns.clearPendingAnomalies clears
+  unless (V.null clears) $ LogPatterns.clearPendingAnomalies pid clears
 
   -- Step 4: acknowledgement filter, then insert.
   firesAllowed <- flip filterM fires \(lp, _) ->
@@ -4965,7 +4965,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   -- Clear the pending markers for anything we just fired; a new detection
   -- will need to re-qualify through two windows again.
   let firedPatternIds = V.fromList [lp.patternId | (lp, _) <- firesAllowed]
-  unless (V.null firedPatternIds) $ LogPatterns.clearPendingAnomalies firedPatternIds
+  unless (V.null firedPatternIds) $ LogPatterns.clearPendingAnomalies pid firedPatternIds
 
   unless (null issueIds) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.fromList issueIds)]
   Log.logTrace

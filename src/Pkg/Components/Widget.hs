@@ -624,28 +624,21 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     whenJust widget._dashboardId \dashId ->
       let pid = projectIdText widget
        in button_
-            [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
-            , Aria.label_ "Expand widget"
-            , data_ "tippy-content" "Expand widget"
-            , data_ "expand-btn" wId
-            , term
-                "_"
-                [text| on pointerdown or click
-            add .pointer-events-none to me
-            set :icon to my.querySelector('svg')
-            if :icon then add .animate-spin to :icon end
-            js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end
-            set #global-data-drawer.checked to true
-            then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-            then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
-            then if :icon then remove .animate-spin from :icon end
-            then remove .pointer-events-none from me
-            then set #global-data-drawer-content.innerHTML to it
-            then htmx.process(#global-data-drawer-content)
-            then _hyperscript.processNode(#global-data-drawer-content)
-            then window.evalScriptsFromContent(#global-data-drawer-content)
-         |]
-            ]
+            ( [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 tap-target transition-opacity"
+              , Aria.label_ "Expand widget"
+              , data_ "tippy-content" "Expand widget"
+              , data_ "expand-btn" wId
+              , -- Only the URL stamp is genuinely client-side; drawerLoadAttrs_ owns the
+                -- fetch, the target, the loading skeleton and opening the drawer (and
+                -- installs the focus trap the old hand-rolled chain skipped). The stamp
+                -- has to stay hyperscript because it appends to whatever query string the
+                -- page already has, which the server can't know. Reloading that URL now
+                -- reopens the drawer server-side — Pages.Dashboards renders the trigger.
+                term "_" [text|on click js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end|]
+              , term "hx-disabled-elt" "this"
+              ]
+                <> Utils.drawerLoadAttrs_ ("/p/" <> pid <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/expand")
+            )
             $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     let widgetMenuPop = wId <> "-widget-menu"
     div_ [class_ "inline-block"] do

@@ -254,6 +254,22 @@ spec = around withTestResources do
         reenabled <- runQueryEffect tr $ Monitors.queryMonitorById created.id
         (reenabled >>= (.deactivatedAt)) `shouldBe` Nothing
 
+      -- log_query_as_sql is the compiled form that alert evaluation actually runs.
+      -- PATCH built the merged monitor from `existing`, so it updated log_query and
+      -- inherited the OLD compiled SQL -- the monitor kept alerting on its previous
+      -- query. PUT/apply recompute it via monitorFromInput; PATCH did not.
+      it "monitorPatch_query_recompilesTheCompiledSql" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input = (def :: ApiT.MonitorInput){ApiT.title = "recompile", ApiT.query = "status_code == 200", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+        created <- runB $ ApiH.apiMonitorCreate testPid input
+        compiledBefore <- runQueryEffect tr $ Monitors.queryMonitorById created.id
+        fmap (.logQueryAsSql) compiledBefore `shouldSatisfy` maybe False (T.isInfixOf "200")
+        void $ runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.query = Just "status_code == 500"})
+        compiledAfter <- runQueryEffect tr $ Monitors.queryMonitorById created.id
+        fmap (.logQuery) compiledAfter `shouldBe` Just "status_code == 500"
+        fmap (.logQueryAsSql) compiledAfter `shouldSatisfy` maybe False (T.isInfixOf "500")
+
       it "bulk delete marks monitors as deleted" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
