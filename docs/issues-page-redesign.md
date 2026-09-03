@@ -533,6 +533,34 @@ reach — the empty state now names the runtime and points at the Trace tab
 the cheap version is scrolling/deep-linking the Trace tab to the errored span
 rather than rendering a parallel frame list.
 
+### Budget for B, fixed before measuring
+
+Committed ahead of the numbers so the decision is not negotiated with the result:
+
+- Columns: `resource___service___name`, `resource___environment` (or its
+  equivalent), `status_code`, `resource___service___version` — bounded
+  cardinality only, never arbitrary attributes.
+- **If the set of GROUP BYs exceeds ~3s at the page's default 24H window, defer
+  P3** and record it. ~3s is what the count already costs at that window, and
+  this page has the 504 scar twice over.
+- **Coverage counts as much as cost.** If the columns are largely NULL in real
+  telemetry, a fast query still renders an empty panel. Container/resource
+  attributes are known to vary by receiver, so measure distinct-value counts in
+  the same probe.
+- Whatever the outcome, it ships as a lazy fragment, never inline.
+- Perturb the query between timings — `Pkg.QueryCache` keys on the query and not
+  the range, which already produced one false "0 rows in 1s" reading today.
+
+### Decision on C: not building it (closed)
+
+`traceH` already takes a `span_id` query param and explicitly supports finding a
+span by id for nav ("Span lookup is not span rendering… nav has to FIND one span
+by id"). `traceFragmentUrl` simply never passes one. So the whole defensible
+remainder of C is **threading the errored span's id into the existing trace
+fragment** so the Trace tab opens focused on the failure, instead of rendering a
+third view of span data the waterfall and User Journey already show. That is an
+argument for one extra parameter, not a new surface.
+
 ### What I want reviewed before building
 
 1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
