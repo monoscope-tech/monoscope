@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -2168,7 +2168,14 @@ processProjectErrors pid errors now = do
               shapeM <-
                 if isJust exactM || not (T.null (T.strip err.stacktrace))
                   then pure Nothing
-                  else PatternMergeDB.canonicalForAppliedShape pid (EF.computeErrorHashes pid.toText err.service Nothing EF.RGeneric err.errorType err.message "").shape err.service
+                  else do
+                    -- Learned masks are applied HERE and nowhere near `narrow`. A mask
+                    -- coarsens the shape, which is additive — grouping gets broader and
+                    -- issue identity does not move. Applying one to the fingerprint
+                    -- would re-key every pattern it touches and mint new issues for
+                    -- errors we already know about.
+                    masks <- map snd . filter ((== err.errorType) . fst) <$> PatternMergeDB.learnedErrorMasks pid
+                    PatternMergeDB.canonicalForAppliedShape pid (EF.shapeWithMasks masks pid.toText err.errorType err.message) err.service
               let canonicalM = exactM <|> shapeM
               case canonicalM of
                 Just canonicalId | canonicalId /= err.id -> do
@@ -5180,9 +5187,14 @@ backfillErrorShapes :: Projects.ProjectId -> ATBackgroundCtx ()
 backfillErrorShapes pid = do
   missing <- PatternMergeDB.errorPatternsMissingShape pid errorShapeBackfillBatch
   unless (null missing) do
+    -- Same masks as the ingest gate: a backfilled shape computed without them would
+    -- never match what an arrival resolves to, and the gate would look correct while
+    -- finding nothing.
+    masksByType <- PatternMergeDB.learnedErrorMasks pid
+    let masksFor et = [m | (t, m) <- masksByType, t == et]
     updated <-
       PatternMergeDB.setErrorShapeHashes
-        [(eid, (EF.computeErrorHashes pid.toText Nothing Nothing EF.RGeneric etype msg "").shape) | (eid, etype, msg) <- missing]
+        [(eid, EF.shapeWithMasks (masksFor etype) pid.toText etype msg) | (eid, etype, msg) <- missing]
     Log.logInfo "Backfilled error pattern shapes" ("project_id", pid.toText, "rows", updated)
 
 
@@ -5349,6 +5361,8 @@ applyConfirmedErrorGroups pid = do
         else do
           void $ PatternMergeDB.assignErrorsToCanonical [(m, canonical) | m <- V.toList mergeable]
           PatternMergeDB.markErrorGroupApplied pid gkey (V.singleton canonical)
+          tryStep "errorMaskPromotion"
+            $ promoteErrorMask pid gkey g.errorType (Map.elems $ Map.restrictKeys texts (S.fromList (canonical : V.toList mergeable))) g.shapeKey
           Log.logInfo
             "Merged an error group on a confirmed, unrefuted verdict"
             ("project_id", pid.toText, "group", gkey, "canonical", canonical, "merged", V.length mergeable, "declined_by_can_merge", V.length rest - V.length mergeable)
@@ -5376,3 +5390,68 @@ recheckQuarantinedErrorMerges pid = do
               "Reverted an error merge the quarantine re-check refuted"
               ("project_id", pid.toText, "group", gkey, "patterns_restored", restored)
           Log.logInfo "Error quarantine re-check complete" ("project_id", pid.toText, "challenged", length pending, "reverted", length refuted)
+
+
+-- | Would this mask merge two shapes that are currently distinct?
+--
+-- The mechanical half of promotion, and the only check that does not trust the model.
+-- Applying a mask coarsens shapes on purpose; what it must not do is collapse two the
+-- review loop is holding apart, because those are either an unanswered question or a
+-- judged "different bugs".
+--
+-- >>> maskCollapsesDistinctShapes (EF.ErrorMask "SB-" " failed" 4) [("SB-1234 failed", "s1"), ("SB-5678 failed", "s1")]
+-- False
+--
+-- Two rows under DIFFERENT shapes that the mask would give the same text is the
+-- refusal case:
+--
+-- >>> maskCollapsesDistinctShapes (EF.ErrorMask "SB-" " failed" 4) [("SB-1234 failed", "s1"), ("SB-5678 failed", "s2")]
+-- True
+--
+-- Rows the mask does not touch cannot collapse anything:
+--
+-- >>> maskCollapsesDistinctShapes (EF.ErrorMask "XX-" " failed" 4) [("SB-1234 failed", "s1"), ("other", "s2")]
+-- False
+maskCollapsesDistinctShapes :: EF.ErrorMask -> [(Text, Text)] -> Bool
+maskCollapsesDistinctShapes mask rows =
+  any ((> 1) . S.size) $ HM.elems byMasked
+  where
+    byMasked =
+      HM.fromListWith
+        S.union
+        [ (EF.applyErrorMasks [mask] (EF.normalizeMessage msg), S.singleton shp)
+        | (msg, shp) <- rows
+        , not (T.null shp)
+        ]
+
+
+-- | Turn a merged group into a rule that runs at ingest.
+--
+-- The verdict is expensive and arrives after the notification; the rule it implies is
+-- free and arrives before. Mirrors 'promoteConfirmedIdRules' on the endpoint side,
+-- including the shape of its safety test: derive the candidate, refuse it outright if
+-- it collides with something the system is deliberately keeping separate, and say so
+-- when refusing rather than dropping it silently.
+promoteErrorMask :: Projects.ProjectId -> Text -> Text -> [Text] -> Text -> ATBackgroundCtx ()
+promoteErrorMask pid gkey etype msgs canonShape = do
+  ctx <- ask @Config.AuthContext
+  when ctx.config.enableErrorMaskPromotion $ case EF.deriveErrorMask (map EF.normalizeMessage msgs) of
+    Nothing -> Log.logInfo "No mask derivable from merged group" ("project_id", pid.toText, "group", gkey)
+    Just mask -> do
+      corpus <- PatternMergeDB.errorMessagesForMaskCheck pid etype
+      if maskCollapsesDistinctShapes mask corpus
+        then
+          Log.logAttention
+            "Declined a mask that would merge shapes the review kept apart"
+            ("project_id", pid.toText, "group", gkey, "prefix", mask.prefix, "suffix", mask.suffix)
+        else do
+          void $ PatternMergeDB.insertLearnedErrorMask pid etype mask gkey
+          -- Re-file the review and its members under the post-mask shape. Skipped when
+          -- the mask does not move this group's own shape, which would make the rekey
+          -- a no-op update over the whole project.
+          masks <- map snd . filter ((== etype) . fst) <$> PatternMergeDB.learnedErrorMasks pid
+          let newShape = EF.shapeWithMasks masks pid.toText etype (fromMaybe "" $ viaNonEmpty head msgs)
+          moved <- if newShape == canonShape then pure 0 else PatternMergeDB.rekeyErrorReviewShape pid canonShape newShape
+          Log.logInfo
+            "Promoted an error group to a deterministic mask"
+            ("project_id", pid.toText, "group", gkey, "prefix", mask.prefix, "suffix", mask.suffix, "min_var_len", mask.minVarLen, "reviews_rekeyed", moved)

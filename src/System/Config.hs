@@ -134,6 +134,10 @@ data EnvConfig = EnvConfig
     -- acting on them, so a day of them can be read before anything merges — the
     -- same rollout the endpoint review used.
     enableErrorGroupAutoApply :: Bool
+  , -- Whether a merged group may also become a deterministic mask applied at
+    -- ingest. Downstream of auto-apply: with nothing merging, nothing is
+    -- promotable. Off until merges have been read.
+    enableErrorMaskPromotion :: Bool
   , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
   , hostUrl :: Text
@@ -295,6 +299,7 @@ instance DefConfig EnvConfig where
       , enableEndpointGroupAutoApply = True
       , enableErrorGroupReview = True
       , enableErrorGroupAutoApply = False
+      , enableErrorMaskPromotion = False
       , openaiSmallModel = "gpt-5.6-luna#low"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True

@@ -22,6 +22,10 @@ module Models.Apis.PatternMerge (
   canonicalForAppliedShape,
   errorPatternsMissingShape,
   setErrorShapeHashes,
+  learnedErrorMasks,
+  insertLearnedErrorMask,
+  errorMessagesForMaskCheck,
+  rekeyErrorReviewShape,
   setReviewCursor,
   -- Log pattern operations
   getUnembeddedLogPatterns,
@@ -46,6 +50,7 @@ import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.PatternMerge (embeddingTextForError)
 import Relude
 import System.Types (DB)
@@ -390,3 +395,53 @@ setErrorShapeHashes pairs =
              WHERE apis.error_patterns.id = u.id |]
   where
     (ids, shapes) = unzip pairs
+
+
+-- | Live masks for a project, newest first.
+learnedErrorMasks :: DB es => Projects.ProjectId -> Eff es [(Text, EF.ErrorMask)]
+learnedErrorMasks pid =
+  map (\(et, p, sfx, n) -> (et, EF.ErrorMask p sfx (fromIntegral @Int64 n)))
+    <$> Hasql.interp
+      [HI.sql| SELECT error_type, prefix, suffix, min_var_len::int8 FROM apis.learned_error_masks
+               WHERE project_id = #{pid} AND retired_at IS NULL |]
+
+
+insertLearnedErrorMask :: DB es => Projects.ProjectId -> Text -> EF.ErrorMask -> Text -> Eff es Int64
+insertLearnedErrorMask pid etype mask gkey =
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.learned_error_masks (project_id, error_type, prefix, suffix, min_var_len, group_key)
+             VALUES (#{pid}, #{etype}, #{mask.prefix}, #{mask.suffix}, #{fromIntegral @Int @Int64 mask.minVarLen}, #{gkey})
+             ON CONFLICT (project_id, error_type, prefix, suffix) DO NOTHING |]
+
+
+-- | Every (error_type, message) a mask candidate would have to survive, and the
+-- shape the review loop currently files it under.
+--
+-- The safety test needs both: a mask is refused when applying it would give two
+-- messages the same shape that the judge deliberately kept apart.
+errorMessagesForMaskCheck :: DB es => Projects.ProjectId -> Text -> Eff es [(Text, Text)]
+errorMessagesForMaskCheck pid etype =
+  Hasql.interp
+    [HI.sql| SELECT e.message, COALESCE(e.shape_hash, '')
+             FROM apis.error_patterns e
+             WHERE e.project_id = #{pid} AND e.error_type = #{etype}
+               AND e.created_at > NOW() - INTERVAL '30 days'
+             LIMIT 5000 |]
+
+
+-- | Re-file a review and its canonical under a new shape.
+--
+-- A promoted mask changes what the shape of its members is, so the review that
+-- authorised it and the row the ingest gate resolves against both have to move with
+-- it. Without this the gate looks up arrivals under the post-mask shape, finds a
+-- review filed under the pre-mask one, and the rule silently does nothing — which is
+-- the failure mode this codebase specialises in.
+rekeyErrorReviewShape :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int64
+rekeyErrorReviewShape pid oldKey newKey = do
+  void
+    $ Hasql.interpExecute
+      [HI.sql| UPDATE apis.error_patterns SET shape_hash = #{newKey}
+               WHERE project_id = #{pid} AND shape_hash = #{oldKey} |]
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_group_reviews SET group_key = #{newKey}
+             WHERE project_id = #{pid} AND group_key = #{oldKey} |]
