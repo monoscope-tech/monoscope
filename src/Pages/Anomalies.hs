@@ -11,6 +11,7 @@ module Pages.Anomalies (
   anomalyDetailHashGetH,
   AnomalyAction (..),
   IssueVM (..),
+  withIssueDataH,
   AssignErrorForm (..),
   assignErrorPostH,
   resolveErrorPostH,
@@ -1346,8 +1347,36 @@ toolCallView_ tc =
     unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
 
 
-withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
-withIssueDataH d = whenJust (parseMaybe AE.parseJSON $ getAeson d)
+-- $setup
+-- >>> :set -XOverloadedStrings -XTypeApplications
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+-- >>> import Lucid (renderText, toHtml)
+
+
+-- | Render @f@ over an issue's typed payload, chosen by its @issue_type@.
+--
+-- A payload that does not parse as @a@ means the row's @issue_type@ and @issue_data@
+-- disagree. That is reachable — they are separate columns, and the writers that set
+-- them are spread across the pattern, alert and API-change paths — and the previous
+-- 'whenJust' rendered *nothing* for it: an empty region on an incident page, with no
+-- log line and no metric to notice it by. A blank panel is indistinguishable from
+-- "this issue has no details", which is the worst way for this to fail, because the
+-- on-call reader's reasonable conclusion is that there is nothing to see.
+--
+-- Say so instead. A visible gap is debuggable; an invisible one is not.
+--
+-- >>> renderText $ withIssueDataH @Int (Aeson (AE.toJSON (5 :: Int))) (toHtml . show @Text)
+-- "5"
+--
+-- A payload of the wrong shape renders the notice rather than nothing:
+--
+-- >>> renderText $ withIssueDataH @Int (Aeson (AE.String "not-an-int")) (toHtml . show @Text)
+-- "<span class=\"text-xs italic text-textWeak\">details unavailable</span>"
+withIssueDataH :: AE.FromJSON a => Aeson AE.Value -> (a -> Html ()) -> Html ()
+withIssueDataH d f = maybe unparsable f (parseMaybe AE.parseJSON $ getAeson d)
+  where
+    unparsable = span_ [class_ "text-xs italic text-textWeak"] "details unavailable"
 
 
 -- | Process widgets to use cached tool call data (no re-query)

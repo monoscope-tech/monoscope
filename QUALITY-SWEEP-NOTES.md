@@ -359,3 +359,55 @@ before the fix with `expected: Just (UUIDId …) but got: Nothing` (798 examples
   line at a cost in readability for a doctested SSRF guard. Left alone.
 - `Default GitHubSync` is hand-written and positional (17 args) because `UTCTime` has
   no `Default`. Cannot be derived. Worth knowing it is order-sensitive.
+
+---
+
+# Round nine — ingestion pipeline
+
+`runSharedKafkaProducer` interpreted 3 of kafka-effectful's **11** `KafkaProducer`
+constructors and caught the rest with `_ -> error`. `cabal.project` carried a note
+asking whoever bumps the tag to remember to audit it — a comment doing a type's job.
+The other 8 are now spelled out, so a bump that adds a 12th op is a compile error at
+both the real interpreter and the `KafkaConsumerSpec` mock (which had the same
+wildcard, and which the rewritten cabal.project note would otherwise have described
+falsely). +13 lines, deliberately, to retire a production-panic path.
+
+Verified clean and **not to be re-reviewed**: no clones across OtlpServer /
+ProcessMessage / Queue / LiveTail (5,418 lines); LiveTail's three hand-written JSON
+instances are all justified; every swallow-site is counted or logged — the publish
+drop feeds `publishFailed`, the gRPC catch logs at `logAttention`, and the two
+`handleAny (const pass)` sites are best-effort control-plane work covered by lease
+expiry. The `ce-type` fallthrough logs **and** DLQs as poison rather than empty-acking
+(which would stall the partition).
+
+# Round ten — anomalies / dashboards / issues
+
+## `withIssueDataH` rendered nothing for a payload that did not parse
+
+```haskell
+withIssueDataH d = whenJust (parseMaybe AE.parseJSON $ getAeson d)   -- silent
+```
+
+`issue_type` and `issue_data` are separate columns written by paths spread across the
+pattern, alert and API-change code. When they disagree, this rendered **nothing** — no
+log, no metric, no visible gap — at eight call sites on the anomaly detail page and
+the issue list. A blank panel is indistinguishable from "this issue has no details",
+so the on-call reader concludes there is nothing to see. Same failure class the
+LiveTail author flagged as the worst that feature has.
+
+Now renders a "details unavailable" notice. Exported (it was unexported, which is part
+of why nothing could test it) and doctested on **both** paths — well-formed payload
+renders content, malformed renders the notice.
+
+## The larger type change, deliberately not attempted
+
+`issueData :: Aeson AE.Value` + a separate `issueType` tag is untyped-blob-plus-tag.
+One sum type — `LogPattern LogPatternData | RuntimeException RuntimeExceptionData | …`
+— makes a mismatched pairing unrepresentable and deletes the entire class of bug the
+above only makes *visible*. It touches the DB codec and every writer, so it needs its
+own PR. **This is the highest-value type change left in the codebase.**
+
+## Clean
+
+No clones, no enum ladders, no hoisted Tailwind classes, no suppressions, no
+partiality across 6,397 lines.
