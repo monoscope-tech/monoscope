@@ -542,12 +542,30 @@ spec = sequential $ aroundAll withTestResources do
       -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
       html `shouldSatisfy` T.isInfixOf "timestamp="
       html `shouldSatisfy` T.isInfixOf "slow-trace issue"
+      html `shouldSatisfy` not . T.isInfixOf "Waterfall"
+      -- The user journey rides along in the activity fragment; drop these params
+      -- and it disappears with every other assertion still passing.
+      html `shouldSatisfy` T.isInfixOf "/activity?trace_id="
+      html `shouldSatisfy` T.isInfixOf "trace_ts="
+      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
+
+      -- And the fragment itself is budgeted: starved, it answers with a retryable
+      -- state rather than hanging past the gateway timeout.
+      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
+      case frag of
+        Trace.TraceDetails{} -> pass
+        _ -> expectationFailure "expected the trace fragment to render with the default budget"
+      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
+      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
+      case starvedFrag of
+        Trace.TraceDetailsNotFound _ retryUrl _ -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
+        _ -> expectationFailure "expected a starved trace fetch to yield the retryable not-found state"
 
     -- Regression: every runtime exception without frames (151 of 151 in the demo
     -- project — OTel's exception event carries message and type, and the Go SDKs
     -- never opt into exception.stacktrace) rendered "common for browser console
-    -- errors", and pointed at a "User Journey" section labelled that nowhere on
-    -- the page. Name the runtime that stayed silent, and point at real evidence.
+    -- errors", which is wrong for anyone whose backend is not a browser. Name the
+    -- runtime that stayed silent instead.
     it "a stackless runtime exception names its runtime instead of blaming browsers" \tr -> do
       errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
       issueId <- withResource tr.trPool \conn -> do
@@ -586,24 +604,6 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
       html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."
       html `shouldSatisfy` not . T.isInfixOf "browser console errors"
-      html `shouldSatisfy` not . T.isInfixOf "Waterfall"
-      -- The user journey rides along in the activity fragment; drop these params
-      -- and it disappears with every other assertion still passing.
-      html `shouldSatisfy` T.isInfixOf "/activity?trace_id="
-      html `shouldSatisfy` T.isInfixOf "trace_ts="
-      html `shouldSatisfy` not . T.isInfixOf "No trace data available"
-
-      -- And the fragment itself is budgeted: starved, it answers with a retryable
-      -- state rather than hanging past the gateway timeout.
-      (_, frag) <- testServant tr $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      case frag of
-        Trace.TraceDetails{} -> pass
-        _ -> expectationFailure "expected the trace fragment to render with the default budget"
-      let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
-      (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
-      case starvedFrag of
-        Trace.TraceDetailsNotFound _ retryUrl _ -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
-        _ -> expectationFailure "expected a starved trace fetch to yield the retryable not-found state"
 
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.
