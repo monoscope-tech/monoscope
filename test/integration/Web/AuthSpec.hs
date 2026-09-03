@@ -1,5 +1,6 @@
 module Web.AuthSpec (spec) where
 
+import Data.ByteString.Builder (toLazyByteString)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
@@ -7,9 +8,15 @@ import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
 import Pkg.TestUtils
 import Relude
+import Network.HTTP.Types (hAuthorization, hCookie)
+import Network.Wai qualified as Wai
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
+import Servant.Server qualified as Servant
 import Servant.Server (ServerError (..))
+import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
+import System.Config qualified as Config
+import Web.Cookie (SetCookie, renderSetCookie)
 import Test.Hspec
 import Web.Auth qualified as Auth
 import Web.I18n qualified as I18n
@@ -75,6 +82,34 @@ spec = aroundAll withTestResources do
       Right _ <- guestOf tr
       Right _ <- guestOf tr
       guestRows tr >>= \n -> n `shouldBe` 1
+
+  -- Same failure class as the demo-guest rows above, on the basic-auth path: browsers
+  -- resend `Authorization: Basic` on every request, and the handler minted a session
+  -- row each time rather than reusing the one the cookie already names.
+  describe "basic auth session reuse" do
+    let creds = "dGVzdGVyOnMzY3JldA==" -- base64 of "tester:s3cret"
+        basicCtx tr = tr.trATCtx{Config.config = tr.trATCtx.config{Config.basicAuthEnabled = True, Config.basicAuthUsername = "tester", Config.basicAuthPassword = "s3cret"}}
+        reqWith hdrs = Wai.defaultRequest{Wai.requestHeaders = hdrs}
+        callAuth tr hdrs =
+          liftIO $ Servant.runHandler $ unAuthHandler (Auth.authHandler tr.trLogger (basicCtx tr)) (reqWith hdrs)
+        basicRows tr = do
+          rows :: V.Vector Int <-
+            runQueryEffect tr
+              $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM users.persistent_sessions ps JOIN users.users u ON u.id = ps.user_id WHERE u.email = 'tester@basic-auth.local' |]
+          pure $ V.head rows
+
+    it "basicAuth_repeatRequests_reuseOneSessionRow" \tr -> do
+      let authHdr = [(hAuthorization, "Basic " <> creds)]
+      Right r1 <- callAuth tr authHdr
+      basicRows tr >>= \n -> n `shouldBe` 1
+      -- The cookie the first response set is what the browser sends back.
+      let cookieHdr = case lookupResponseHeader r1 :: ResponseHeader "Set-Cookie" SetCookie of
+            Header sc -> [(hCookie, toStrict $ toLazyByteString $ renderSetCookie sc)]
+            _ -> []
+      Right _ <- callAuth tr (authHdr <> cookieHdr)
+      Right _ <- callAuth tr (authHdr <> cookieHdr)
+      -- Under the old code each repeat minted a fresh id: one more row every time.
+      basicRows tr >>= \n -> n `shouldBe` 1
 
   describe "loginH" do
     -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so
