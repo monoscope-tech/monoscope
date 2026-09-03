@@ -738,3 +738,22 @@ size for a compile-time guarantee, against the size-reduction goal, knowingly. T
 down is deliberate — the rationale belongs in this file once, not re-argued in Haddock at
 every site, and `MonitorTab` also *deleted* literal duplication (three sources of
 "Active"/"Inactive" collapsed to one) rather than only adding a type.
+
+## `BackgroundJobs` catch-alls — all three audited, none changed
+
+- `TrialEndingReminder` (`:701`) — `_` logs the skip explicitly with the sub id and
+  status. A documented no-op, not a silent drop.
+- `ReportUsage` (`:794`) — `case provider of NoBillingProvider -> audit; _ -> drain`.
+  This *is* a catch-all on an in-house sum (`StripeProvider | LemonSqueezyProvider |
+  NoBillingProvider`), which the convention forbids. Left deliberately: the outer test is
+  binary ("is there a usable provider"), and the branch that actually depends on the
+  provider — `case target of Right StripeMeter / Right LemonSqueezyMeter / Right
+  LemonSqueezyEventsItem / Left reason` — is already exhaustive, so a genuinely new
+  provider fails to compile *there*. Making the outer case exhaustive means restructuring
+  a ~40-line block that carries explicit `DOUBLE-SUBMIT RISK` handling, for a guarantee
+  that is largely already held. Not worth it without a reason to touch that code.
+- The third (`:689` region) is the same `TrialEndingReminder` case.
+
+Also noted, not fixed: `Pages/Bots/Discord.hs` uses the magic number `type_ = 11` twice
+for Discord's public-thread channel type. Foreign enum, so the catch-all beside it is
+fine, but the literal deserves a name.
