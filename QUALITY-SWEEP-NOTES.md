@@ -1007,6 +1007,36 @@ declaration of *any* kind, counting non-comment lines only.
 | 275 | `bodyWrapper` |
 | 229 | `apiLogsPage` |
 | 216 | `backfillSessionSql` — SQL literal, justified |
+
+**Corrected again (fourth attempt).** The measure above still under-detected: a signature
+whose name sits on its own line with `::` on the next (`containersInWindow\n  :: (DB es,
+...)`) was invisible, so its body counted against the *previous* function —
+`freshnessWindow` reported as 156 lines when it is 2, and `backfillSessionSql` as 216 when
+it absorbed a neighbour. Correct rule: a top-level declaration begins at **any non-comment,
+non-blank line at column 0**. Final figures:
+
+| code lines | function |
+|---|---|
+| 325 | `dashboardPage_` |
+| 291 | `anomalyDetailPage` |
+| 290 | `tracePage` |
+| 287 | `replaceAllFormats` — scanner, justified |
+| 274 | `bodyWrapper` |
+| 228 | `apiLogsPage` |
+| 211 | `logQueryBox_` |
+| 183 | `queryEditorInitializationCode`, `processEagerBatch` |
+| 151 | `containersInWindow` |
+
+The conclusion is unchanged — the outliers are Lucid page renderers, long because markup is
+verbose, with no duplication in them.
+
+**The meta-lesson is the real finding here.** Four separate attempts to measure function
+size by regex, each fixing a case the previous missed: (1) charging a function for the next
+one's Haddock, (2) not ending at a `data` block, (3) not matching multi-line signatures,
+(4) a `ps | sort -t= -k5` key that landed on the wrong field and hid a 2.4 GB process.
+**Ad-hoc structural parsing of Haskell with regex is unreliable, and every intermediate
+result looked plausible enough to quote.** Any figure in this file derived that way was
+checked against the source before being trusted; treat new ones the same way.
 | 212 | `logQueryBox_` |
 
 The page renderers are long but **not duplicated**: a 4-line normalised clone scan inside
