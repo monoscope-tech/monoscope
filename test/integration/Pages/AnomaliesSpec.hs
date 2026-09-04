@@ -491,6 +491,57 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "Events"
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
 
+    -- Sentry's stack trace earns its slot by separating the code you wrote from the
+    -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
+    -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo
+    -- error carries a stack trace, so this is the only place the structured render is
+    -- exercised at all.
+    it "a stack trace renders as frames, with runtime frames folded away" \tr -> do
+      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      let stack = "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
+      issueId <- withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.error_patterns
+                  (project_id, error_type, message, stacktrace, hash, runtime, error_data, created_at, updated_at)
+                VALUES (?, 'NullPointerException', 'boom', ?, ?, 'java', ?::jsonb, ?, ?) |]
+            ( testPid
+            , stack
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "when": #{frozenTime}, "error_type": "NullPointerException", "root_error_type": "NullPointerException"
+                         , "message": "boom", "root_error_message": "boom", "stack_trace": #{stack}
+                         , "hash": #{errHash}, "is_framework": false, "runtime": "java" }|]
+            , frozenTime
+            , frozenTime
+            )
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'java stack issue', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
+            ( testPid
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "error_type": "NullPointerException", "error_message": "boom", "stack_trace": #{stack}
+                         , "occurrence_count": 1, "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
+            , frozenTime
+            , frozenTime
+            )
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = renderPage page
+      -- Your frame is shown by function and file:line.
+      html `shouldSatisfy` T.isInfixOf "doWork"
+      html `shouldSatisfy` T.isInfixOf "MyClass.java:25"
+      -- Spring is the runtime's, not yours, so it is folded away behind a count —
+      -- singular, because there is exactly one.
+      html `shouldSatisfy` T.isInfixOf "Show 1 runtime frame"
+      html `shouldSatisfy` not . T.isInfixOf "Show 1 runtime frames"
+      -- ...and the original text stays one disclosure away.
+      html `shouldSatisfy` T.isInfixOf "Raw"
+
     -- Regression: a query alert used to render its KQL string and nothing else — not
     -- the threshold, not the value that crossed it, no chart, no monitor link. Below
     -- that, the Investigation panel reserved lg:h-[70vh] to say "No trace data

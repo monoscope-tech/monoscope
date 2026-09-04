@@ -86,6 +86,7 @@ import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), assetUrl)
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
@@ -342,6 +343,58 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                           LIMIT 1 |]
             else pure Nothing
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp sampleOverride stateEvent
+
+
+-- | A stack trace rendered the way Sentry renders one: frames split into the code you
+-- wrote and the code you did not, with the runtime\'s own frames folded away behind a
+-- count until asked for.
+--
+-- The parser already existed and this page never used it. @parseStackTrace@ classifies
+-- frames per language and marks @isInApp@, and it is what @computeErrorHashes@ is
+-- computed from — so the frames shown here are the same ones the issue is keyed on,
+-- not a second opinion about the text.
+--
+-- Falls back to the raw block when the parser recognises nothing, and keeps the
+-- original text one disclosure away regardless: a reader chasing a stack trace should
+-- never be forced to trust our parse of it.
+stackTrace_ :: Maybe Text -> Text -> Html ()
+stackTrace_ runtimeM raw = case EF.parseStackTrace (EF.parseRuntime $ fromMaybe "" runtimeM) raw of
+  [] -> rawBlock
+  frames -> do
+    let systemCount = length $ filter (not . (.isInApp)) frames
+    div_ [class_ "group/frames"] do
+      div_ [class_ "max-h-80 overflow-y-auto divide-y divide-strokeWeak"] $ forM_ frames \f ->
+        -- Runtime frames stay in position rather than being grouped to the bottom: the
+        -- order is the call path, and resequencing it to tidy the list would misreport
+        -- what called what.
+        div_ [class_ $ "px-4 py-2 text-sm " <> bool "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" "" f.isInApp] do
+          div_ [class_ "flex flex-wrap items-baseline gap-x-2"] do
+            span_ [class_ $ "font-mono " <> bool "text-textWeak" "text-textStrong font-medium" f.isInApp] $ toHtml f.functionName
+            whenJust (mfilter (not . T.null) $ Just f.filePath) \fp ->
+              span_ [class_ "font-mono text-xs text-textWeak break-all"]
+                $ toHtml
+                $ fp
+                <> foldMap (\l -> ":" <> show l) f.lineNumber
+          -- Source context is the thing that makes a Sentry frame readable. No SDK we
+          -- ingest sends it yet, so this renders only when one starts to.
+          whenJust f.contextLine
+            $ pre_ [class_ "mt-1 text-xs font-mono text-textStrong bg-fillWeaker rounded px-2 py-1 overflow-x-auto"]
+            . toHtml
+      when (systemCount > 0)
+        $ label_ [class_ "flex items-center gap-1.5 px-4 py-2 text-xs text-textBrand cursor-pointer border-t border-strokeWeak hover:bg-fillWeaker transition-colors"] do
+          input_ [type_ "checkbox", class_ "sys-frames sr-only"]
+          faSprite_ "chevron-down" "regular" "w-3 h-3 shrink-0 group-has-[.sys-frames:checked]/frames:rotate-180 transition-transform"
+          span_ [class_ "group-has-[.sys-frames:checked]/frames:hidden"] $ toHtml $ "Show " <> show systemCount <> bool " runtime frames" " runtime frame" (systemCount == 1)
+          span_ [class_ "hidden group-has-[.sys-frames:checked]/frames:inline"] "Hide runtime frames"
+      details_ [class_ "border-t border-strokeWeak"] do
+        summary_ [class_ "px-4 py-2 text-xs text-textWeak cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:text-textStrong"] "Raw"
+        rawBlock
+  where
+    rawBlock =
+      div_ [class_ "max-h-80 overflow-y-auto"]
+        $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap px-4 py-3"]
+        $ code_ []
+        $ toHtml raw
 
 
 -- | Run a lookup that only decides whether an *optional* panel renders, degrading
@@ -853,11 +906,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
                     pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml exceptionData.errorMessage
                   if hasStack
-                    then
-                      div_ [class_ "max-h-80 overflow-y-auto"]
-                        $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap px-4 py-3"]
-                        $ code_ []
-                        $ toHtml trimmedStack
+                    then stackTrace_ (errM >>= (.base.errorData.runtime)) trimmedStack
                     else
                       -- Every runtime exception in the demo project (151 of 151) lands
                       -- here: OTel's exception event carries `message` and `type` but no
