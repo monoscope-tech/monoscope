@@ -1473,7 +1473,7 @@ ever *produced* anywhere in `src`:
 
 | case | produced? |
 |---|---|
-| `Passing`, `Failing`, `Healthy`, `Pending`, `NoData` | **никогда — 0 occurrences** |
+| `Passing`, `Failing`, `Healthy`, `Pending`, `NoData` | **never — 0 occurrences** |
 | `Active` | only as a *tab* name (`monitorTabParam`), never as a status |
 | `Warning`, `Inactive` | yes, handled correctly |
 | `Alerting` | yes — not in the case list, but caught by the `isAlerting` guard |
