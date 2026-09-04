@@ -16,6 +16,7 @@ module Pages.Monitors (
   unifiedMonitorOverviewH,
   teamAlertsGetH,
   alertBulkActionH,
+  MonitorBulkAction (..),
   alertMuteH,
   alertUnmuteH,
   alertResolveH,
@@ -26,7 +27,6 @@ where
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Either.Extra (fromRight')
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
@@ -38,7 +38,6 @@ import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -60,6 +59,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -69,6 +69,7 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -207,7 +208,7 @@ alertUpsertPostH pid form = do
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
     $ void
-    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = #{pid} AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |]
+    $ Projects.completeOnboardingStep pid "created_monitor"
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 
@@ -257,7 +258,7 @@ monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Html ()
 monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-      isByos = paymentPlan == "Bring your own storage"
+      isByos = Projects.isByosPlan paymentPlan
       isFree = Projects.isFreeTier paymentPlan
       minFreq
         | isFree = 60
@@ -386,21 +387,50 @@ teamAlertsGetH pid teamId = do
   addRespHeaders $ TableRows [] alerts' False Nothing Nothing Nothing
 
 
-alertBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
+-- | A bulk action on the monitors list.
+--
+-- This was 'Text', matched against six string literals with a @_ -> pass@ fall-through —
+-- so an unknown action returned 200 and fired the list-refresh event while doing nothing,
+-- and the UI reported success. The action URLs are *generated* by 'bulkActionsFor', so
+-- producer and consumer were two literal lists that had to agree by hand. Capturing this
+-- in the route makes Servant reject an unknown action and the dispatch exhaustive.
+--
+-- The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: MonitorBulkAction]
+-- ["deactivate","reactivate","mute","unmute","resolve","delete"]
+data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
+
+
+-- | Which tab to land on after a bulk action — deactivating moves the monitors to
+-- Inactive, everything else leaves them on Active. Spelled out rather than defaulted so a
+-- new action has to state where the user ends up instead of silently landing on Active.
+tabAfter :: MonitorBulkAction -> MonitorTab
+tabAfter = \case
+  BADeactivate -> TabInactive
+  BAReactivate -> TabActive
+  BAMute -> TabActive
+  BAUnmute -> TabActive
+  BAResolve -> TabActive
+  BADelete -> TabActive
+
+
+alertBulkActionH :: Projects.ProjectId -> MonitorBulkAction -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 alertBulkActionH pid action form = do
   _ <- Projects.sessionAndProject pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
     case action of
-      "deactivate" -> void $ Monitors.monitorDeactivateByIds pid monitorIds
-      "reactivate" -> void $ Monitors.monitorReactivateByIds pid monitorIds
-      "mute" -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
-      "unmute" -> void $ Monitors.monitorUnmuteByIds pid monitorIds
-      "resolve" -> void $ Monitors.monitorResolveByIds pid monitorIds
-      "delete" -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
-      _ -> pass
+      BADeactivate -> void $ Monitors.monitorDeactivateByIds pid monitorIds
+      BAReactivate -> void $ Monitors.monitorReactivateByIds pid monitorIds
+      BAMute -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
+      BAUnmute -> void $ Monitors.monitorUnmuteByIds pid monitorIds
+      BAResolve -> void $ Monitors.monitorResolveByIds pid monitorIds
+      BADelete -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
-  unifiedMonitorsGetH pid (Just $ bool "Active" "Inactive" (action == "deactivate")) Nothing
+  unifiedMonitorsGetH pid (Just $ monitorTabParam $ tabAfter action) Nothing
 
 
 unifiedMonitorsGetH
@@ -413,7 +443,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
   currTime <- Time.currentTime
 
   let tab = parseMonitorTab filterTM
-      filterType = monitorTabSlug tab
+      filterType = monitorTabParam tab
 
   allAlerts <- Monitors.queryMonitorsAll pid
   teamMap <- buildTeamMap pid
@@ -469,8 +499,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                   { current = filterType
                   , currentURL
                   , options =
-                      [ TabFilterOpt{name = monitorTabSlug TabActive, count = Just $ length activeAlerts}
-                      , TabFilterOpt{name = monitorTabSlug TabInactive, count = Just $ length inactiveAlerts}
+                      [ TabFilterOpt{name = monitorTabParam TabActive, count = Just $ length activeAlerts}
+                      , TabFilterOpt{name = monitorTabParam TabInactive, count = Just $ length inactiveAlerts}
                       ]
                   }
           }
@@ -533,9 +563,9 @@ statusInfo = \case
 
 -- | Which monitors tab is being viewed. Was 'Text' compared against @"Active"@ in two
 -- places with a silent fall-through; the wire spelling stays capitalised because live
--- @?filter=Active@ URLs carry it. 'monitorTabSlug' is the single source of it.
+-- @?filter=Active@ URLs carry it. 'monitorTabParam' is the single source of it.
 --
--- >>> map monitorTabSlug [minBound .. maxBound]
+-- >>> map monitorTabParam [minBound .. maxBound]
 -- ["Active","Inactive"]
 -- >>> map parseMonitorTab [Just "Inactive", Just "nonsense", Nothing]
 -- [TabInactive,TabActive,TabActive]
@@ -543,14 +573,14 @@ data MonitorTab = TabActive | TabInactive
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
-monitorTabSlug :: MonitorTab -> Text
-monitorTabSlug = \case
+monitorTabParam :: MonitorTab -> Text
+monitorTabParam = \case
   TabActive -> "Active"
   TabInactive -> "Inactive"
 
 
 parseMonitorTab :: Maybe Text -> MonitorTab
-parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabSlug =<<)
+parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabParam =<<)
 
 
 bulkActionsFor :: MonitorTab -> Projects.ProjectId -> [BulkAction]
@@ -558,15 +588,15 @@ bulkActionsFor tab pid =
   let bulkBase = "/p/" <> pid.toText <> "/monitors/alerts/bulk_action/"
    in case tab of
         TabActive ->
-          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> "deactivate")
-          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> "mute")
-          , BulkAction (Just "bell") "Unmute" (bulkBase <> "unmute")
-          , BulkAction (Just "check") "Resolve" (bulkBase <> "resolve")
-          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
+          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> bulkActionSlug BADeactivate)
+          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> bulkActionSlug BAMute)
+          , BulkAction (Just "bell") "Unmute" (bulkBase <> bulkActionSlug BAUnmute)
+          , BulkAction (Just "check") "Resolve" (bulkBase <> bulkActionSlug BAResolve)
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
           ]
         TabInactive ->
-          [ BulkAction (Just "play") "Reactivate" (bulkBase <> "reactivate")
-          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
+          [ BulkAction (Just "play") "Reactivate" (bulkBase <> bulkActionSlug BAReactivate)
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
           ]
 
 

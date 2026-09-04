@@ -47,7 +47,7 @@ import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -199,7 +199,7 @@ instance ToHtml OnboardingPhoneEmailsPost where
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
   (_, project) <- Projects.sessionAndProject pid
-  whenJust stepM $ markStepCompleted pid project.onboardingStepsCompleted
+  whenJust stepM $ markStepCompleted pid
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> bool "Info" "Pricing" (stepM == Just "Integration")
   addRespHeaders ""
 
@@ -207,13 +207,15 @@ onboardingStepSkipped pid stepM = do
 dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 dismissChecklistH pid = do
   (_, project) <- Projects.sessionAndProject pid
-  markStepCompleted pid project.onboardingStepsCompleted "checklist_dismissed"
+  markStepCompleted pid "checklist_dismissed"
   addRespHeaders ""
 
 
-markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> V.Vector Text -> Text -> Eff es ()
-markStepCompleted pid stepsCompleted step =
-  Hasql.interpExecute_ [HI.sql| update projects.projects set onboarding_steps_completed=#{insertIfNotExist step stepsCompleted} where id=#{pid} |]
+-- | Delegates to 'Projects.completeOnboardingStep', which appends atomically. The previous
+-- form took the caller's already-read vector and wrote the whole array back, so two
+-- requests completing different steps could lose one.
+markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
+markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
@@ -221,7 +223,7 @@ phoneEmailPostH pid form = do
   (_, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
-  markStepCompleted pid project.onboardingStepsCompleted "NotifChannel"
+  markStepCompleted pid "NotifChannel"
   ProjectMembers.setEveryoneTeamEmails pid (V.fromList form.emails)
   unless (T.null form.phoneNumber) $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [form.phoneNumber])
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
@@ -234,7 +236,7 @@ checkIntegrationGet pid languageM = do
   case v of
     Nothing -> addErrorToast "No events found yet" Nothing >> addRespHeaders ""
     Just _ -> do
-      markStepCompleted pid project.onboardingStepsCompleted "Integration"
+      markStepCompleted pid "Integration"
       if isJust languageM
         then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
           span_ "verified"
@@ -253,7 +255,8 @@ onboardingInfoPostH pid form = do
           , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
           ]
       userId = sess.user.id
-  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes},onboarding_steps_completed=#{insertIfNotExist "Info" project.onboardingStepsCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes} where id=#{pid} |]
+  markStepCompleted pid "Info"
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
@@ -268,7 +271,8 @@ onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (Re
 onboardingConfPostH pid form = do
   (_, project) <- Projects.sessionAndProject pid
   let jsonBytes = mergeQuestions project.questions [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
-  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{insertIfNotExist "Survey" project.onboardingStepsCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes} where id=#{pid} |]
+  markStepCompleted pid "Survey"
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 

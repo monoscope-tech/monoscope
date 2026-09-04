@@ -181,6 +181,39 @@ computeDurationChanges current prev = V.map compute current
        in (h, m, u, dur, change dur (fst <$> pv), req, change req (snd <$> pv))
 
 
+-- $setup
+-- Relude hides partial @read@, so the examples below cannot build a 'UTCTime' from a
+-- string literal. @marchUTC d@ is 20:00 UTC on 2026-03-0/d/.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+-- >>> :set -XOverloadedStrings
+-- >>> let marchUTC d = UTCTime (fromGregorian 2026 3 d) (secondsToDiffTime 72000)
+
+
+-- | The report window's start and end day, rendered in the *project's* timezone rather
+-- than the server's. An unknown or empty zone falls back to UTC.
+--
+-- Extracted from 'renderWeeklyEmail' so the invariant can be pinned: the same UTC instant
+-- must label differently either side of a zone's midnight, or a customer in Auckland gets
+-- an email dated a day behind the week it covers.
+--
+-- >>> reportDayLabels "Pacific/Auckland" (marchUTC 1) (marchUTC 8)
+-- ("2026-03-02","2026-03-09")
+--
+-- >>> reportDayLabels "UTC" (marchUTC 1) (marchUTC 8)
+-- ("2026-03-01","2026-03-08")
+--
+-- Empty and unrecognised zones both fall back to UTC rather than failing:
+--
+-- >>> map (\z -> fst $ reportDayLabels z (marchUTC 1) (marchUTC 8)) ["", "Not/AZone"]
+-- ["2026-03-01","2026-03-01"]
+reportDayLabels :: Text -> UTCTime -> UTCTime -> (Text, Text)
+reportDayLabels zone startTime endTime =
+  let tz = fromMaybe utcTZ $ TZ.tzByName $ encodeUtf8 $ if T.null zone then "UTC" else zone
+      label = show . localDay . utcToLocalTimeTZ tz
+   in (label startTime, label endTime)
+
+
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email.
 -- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
 -- row so both the request handlers and the weekly-report background job render the same email;
@@ -189,11 +222,8 @@ renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.P
 renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
   let pid = project.id
-      tzName = if T.null project.timeZone then "UTC" else project.timeZone
-      tz = fromMaybe utcTZ $ TZ.tzByName (encodeUtf8 tzName)
       reportUrl' = hostPath ctx.env.hostUrl reportUrl
-      dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
-      dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
+      (dayStart, dayEnd) = reportDayLabels project.timeZone startTime endTime
       stmTxt = formatUTCMicros startTime
       endTxt = formatUTCMicros endTime
       (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
@@ -291,7 +321,7 @@ reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHead
 reportsPostH pid t = do
   _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
-  addSuccessToast "Report notifications updated Successfully" Nothing
+  addSuccessToast "Report notifications updated successfully" Nothing
   addRespHeaders $ ReportsPost "updated"
 
 

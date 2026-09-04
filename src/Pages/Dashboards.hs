@@ -19,6 +19,7 @@ module Pages.Dashboards (
   dashboardStarPostH,
   WidgetMoveForm (..),
   DashboardBulkActionForm (..),
+  DashboardBulkAction (..),
   DashboardRes (..),
   DashboardsGetD (..),
   dashboardDuplicateWidgetPostH,
@@ -103,7 +104,7 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), assetUrl)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
@@ -120,6 +121,7 @@ import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- | Dashboard critical grid geometry. SQL-preview dependencies are loaded only
@@ -1722,8 +1724,8 @@ dashboardsGet_ dg = do
                       if noBulkActions
                         then []
                         else
-                          [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
-                          , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
+                          [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/" <> bulkActionSlug BAAddTeams}
+                          , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/" <> bulkActionSlug BADelete}
                           ]
                   , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
@@ -2048,14 +2050,23 @@ data DashboardBulkActionForm = DashboardBulkActionForm
   deriving anyclass (FromForm)
 
 
-dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
+-- | The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: DashboardBulkAction]
+-- ["delete","add_teams"]
+data DashboardBulkAction = BADelete | BAAddTeams
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" DashboardBulkAction
+
+
+dashboardBulkActionPostH :: Projects.ProjectId -> DashboardBulkAction -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
 dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
   _ <- Projects.sessionAndProject pid
   case action of
-    "delete" -> do
+    BADelete -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
-    "add_teams" -> do
+    BAAddTeams -> do
       teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamIds)
       if V.length teams /= length teamIds
         then addErrorToast "Some teams not found or don't belong to this project" Nothing
@@ -2063,7 +2074,6 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
           Dashboards.addTeamsToDashboards pid (V.fromList itemId) (V.fromList teamIds) >>= \case
             n | n > 0 -> addSuccessToast "Teams added to selected dashboards successfully" Nothing
             _ -> addErrorToast "No dashboards were updated" Nothing
-    _ -> addErrorToast "Invalid action" Nothing
   addRespHeaders NoContent
 
 

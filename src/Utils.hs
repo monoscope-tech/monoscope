@@ -23,7 +23,6 @@ module Utils (
   formatUTCMicros,
   fmtDate,
   encodeText,
-  insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
   lookupVecNonEmptyText,
@@ -324,9 +323,24 @@ fieldContextMenuItems_ ctx = traverse_ \case
 
 -- | Middle-truncate a display string to at most @n@ chars (keeps head + tail),
 -- e.g. @k6NOL5dPP3Yzy9ZD…pI/B@ — for showing long values in menu labels.
+--
+-- >>> truncateMiddle 20 "k6NOL5dPP3Yzy9ZDaWq0pI/B"
+-- "k6NOL5dPP3Yzy9\8230\&0pI/B"
+-- >>> truncateMiddle 20 "short"
+-- "short"
+--
+-- The ellipsis plus the kept tail is 6 characters, so @n@ below that cannot be met by
+-- middle-truncation; it degrades to a plain head-truncation rather than returning
+-- something longer than @n@, which the unguarded arithmetic used to do:
+--
+-- >>> map (\n -> truncateMiddle n "abcdefghij") [0, 3, 6, 7]
+-- ["","abc","abcdef","a\8230fghij"]
+-- >>> all (\n -> T.length (truncateMiddle n "abcdefghij") <= max 0 n) [0 .. 12]
+-- True
 truncateMiddle :: Int -> Text -> Text
 truncateMiddle n t
   | T.length t <= n = t
+  | n <= 6 = T.take n t
   | otherwise = T.take (n - 6) t <> "…" <> T.takeEnd 5 t
 
 
@@ -435,6 +449,23 @@ htmxOverlayIndicator_ :: Monad m => Text -> HtmlT m ()
 htmxOverlayIndicator_ elId = span_ [id_ elId, class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots z-10 top-10", role_ "status", Aria.label_ "Loading"] ""
 
 
+-- | Drop @key@ (and its value) from a URL's query string, keeping the remainder a valid
+-- query — a leading @&@ is promoted back to @?@ when the original @?@ was the one removed.
+--
+-- >>> deleteParam "filter" "/x?filter=old&sort=name"
+-- "/x?sort=name"
+-- >>> deleteParam "sort" "/x?filter=old&sort=name"
+-- "/x?filter=old"
+-- >>> deleteParam "period" "/x?filter=old"
+-- "/x?filter=old"
+--
+-- KNOWN LIMIT: the match is not anchored at a parameter boundary, so a key that is a
+-- prefix of another parameter corrupts the URL. Not reachable today — the only keys used
+-- are @filter@ and @period@, and no route declares a query parameter starting with
+-- either — but a future @?filters=@ or @?period_days=@ would trigger it:
+--
+-- >>> deleteParam "page" "/x?a=1&pageSize=3"
+-- "/x?a=1Size=3"
 deleteParam :: Text -> Text -> Text
 deleteParam key url
   | needle == "" = url
@@ -828,12 +859,6 @@ parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
         t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
         disp = fmtDate "%F %T"
      in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
-
-
-insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
-insertIfNotExist x vec
-  | x `V.elem` vec = vec
-  | otherwise = V.snoc vec x
 
 
 -- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,

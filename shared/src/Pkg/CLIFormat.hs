@@ -9,7 +9,6 @@ module Pkg.CLIFormat (
   extractInt,
   valToText,
   evalCond,
-  sparklineBar,
   renderSummaryItems,
   cleanSummaryValue,
 ) where
@@ -252,23 +251,3 @@ showScientific :: Scientific -> Text
 showScientific n
   | isInteger n = show (round n :: Integer)
   | otherwise = toText $ formatScientific Fixed Nothing n
-
-
-sparklineBlocks :: Text
-sparklineBlocks = "▁▂▃▄▅▆▇█"
-
-
--- | Convert a normalized value (0-1) to a sparkline bar character.
---
--- >>> sparklineBar (Just 0.0)
--- "\9601"
--- >>> sparklineBar (Just 1.0)
--- "\9608"
--- >>> sparklineBar Nothing
--- " "
-sparklineBar :: Maybe Double -> Text
-sparklineBar Nothing = " "
-sparklineBar (Just v) =
-  let maxIdx = T.length sparklineBlocks - 1
-      idx = min maxIdx $ max 0 $ round (v * fromIntegral maxIdx)
-   in one $ T.index sparklineBlocks idx

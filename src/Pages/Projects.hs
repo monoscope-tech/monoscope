@@ -101,7 +101,7 @@ import Servant.Server (err302, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
-import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -286,8 +286,18 @@ data NotifListForm = NotifListForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
+-- | Every notification channel, in wire form. Derived from the type rather than listed,
+-- so a new constructor cannot be forgotten here — the handler writes
+-- @disabled_channels = allChannels \\ enabledChannels@, and a channel missing from this
+-- list is silently treated as enabled for every project.
+--
+-- Pinned, because the wire spellings are what the form posts and what
+-- @disabled_channels@ stores: a change here silently re-enables a channel everywhere.
+--
+-- >>> allChannels
+-- ["email","slack","discord","phone","pagerduty"]
 allChannels :: [Text]
-allChannels = ["email", "slack", "discord", "phone", "pagerduty"]
+allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationChannel]
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -341,7 +351,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
 
         unless (null unreachable)
           $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
-      addSuccessToast "Updated Notification Channels Successfully" Nothing
+      addSuccessToast "Updated Notification Channels successfully" Nothing
   integrationsSettingsGetH pid
 
 
@@ -464,10 +474,10 @@ integrationsBody IntegrationsConfig{..} = do
       a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
       " team."
 
-    -- Form posts `enabledChannels` (the set of channel types whose toggles are checked).
-    -- The handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
-    -- If a new channel type is ever added, it must also be added to `allChannels`
-    -- or it will silently be treated as "enabled" for every project.
+    -- Form posts `enabledChannels` (the set of channel types whose toggles are checked);
+    -- the handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
+    -- `allChannels` is derived from 'NotificationChannel', so adding a constructor is
+    -- enough — see the note there.
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
         let ems = encodeText $ V.toList emails
@@ -1351,7 +1361,7 @@ deleteProjectGetH pid = do
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
       Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
-      addSuccessToast "Deleted Project Successfully" Nothing
+      addSuccessToast "Deleted Project successfully" Nothing
       redirectCS "/"
   addRespHeaders $ PostNoContent ""
 
@@ -1394,8 +1404,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
-      newStepsComp = insertIfNotExist "Pricing" project.onboardingStepsCompleted
-      updatePricing name sid fid oid = Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid) newStepsComp
+      updatePricing name sid fid oid = do
+        n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
+        n <$ Projects.completeOnboardingStep pid "Pricing"
       handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName
@@ -1459,7 +1470,7 @@ processProjectPostForm cpRaw pid = do
     else do
       _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
       Projects.logAuditS pid Projects.AEProjectUpdated sess Nothing
-      addSuccessToast "Updated Project Successfully" Nothing
+      addSuccessToast "Updated Project successfully" Nothing
   addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 

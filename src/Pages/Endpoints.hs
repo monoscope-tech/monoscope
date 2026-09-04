@@ -1,16 +1,14 @@
-module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), CatalogBulkAction (..)) where
+module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
-import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
-import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
@@ -20,9 +18,9 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
 import PyF qualified
 import Relude hiding (ask, asks)
-import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
@@ -36,14 +34,14 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   (_, project, bw) <- mkPageCtx pid
 
   -- Legacy request_type=… kept alongside the unified ?filter=… for shared links.
-  let normTab = guarded (`elem` ["Incoming", "Outgoing", "Archived"])
-      currentTab = fromMaybe "Incoming" $ asum $ map (>>= normTab) [filterTabM, currentTabM]
+  let currentTab = fromMaybe TabIncoming $ asum $ map (>>= parseTabM) [filterTabM, currentTabM]
+      currentTabT = tabParam currentTab
       currentSort = fromMaybe "-events" sortM
       -- Unrecognised values keep their pre-typed meaning (the default window), so a
       -- stale shared link still renders instead of 400ing.
       filterV = parseOr Endpoints.Since24h timeFilter
       period = parseOr Endpoints.Window24h periodM
-      showArchived = currentTab == "Archived"
+      showArchived = currentTab == TabArchived
       outgoingM = directionOf currentTab
       sortV = bool Endpoints.SortEvents Endpoints.SortName (currentSort `elem` ["-name", "+name"])
 
@@ -55,27 +53,25 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   -- toggles — and every other viewer of the project — read it for free.
   let statsMode = if statsM == Just "true" then Endpoints.WithStats else Endpoints.ShellOnly
       skip = fromMaybe 0 skipM
-      cacheKey = (pid, currentTab, sortV, filterV, period, skip)
+      cacheKey = (pid, currentTabT, sortV, filterV, period, skip)
       hostQuery = Endpoints.HostQuery{direction = outgoingM, archived = showArchived, sort = sortV, skip, since = filterV, period}
       fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   hostsAndEvents <- case statsMode of
     Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
-    Endpoints.WithStats ->
-      liftIO (Cache.lookup appCtx.hostStatsCache cacheKey)
-        >>= maybe (fetch Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.hostStatsCache cacheKey fresh)) pure
+    Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ -> fetch Endpoints.WithStats
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
 
   let periodT = display period
-      baseUrl = "/p/" <> pid.toText <> "/api_catalog?filter=" <> currentTab <> "&sort=" <> currentSort <> "&period=" <> periodT
+      baseUrl = "/p/" <> pid.toText <> "/api_catalog?filter=" <> currentTabT <> "&sort=" <> currentSort <> "&period=" <> periodT
       statsUrl = baseUrl <> "&stats=true"
       -- On the Archived tab the action spans both directions, so we omit
       -- request_type and let the handler resolve direction per row.
       bulkActionItem =
         if showArchived
-          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/unarchive"}
-          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive?request_type=" <> currentTab}
+          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAUnarchive}
+          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAArchive <> "?request_type=" <> currentTabT}
       hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
       cols = catalogColumns pid baseUrl periodT
       hostRowId = Just \(vm :: HostEventsVM) -> vm.events.host
@@ -111,8 +107,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                     Just
                       $ ZeroState
                         { icon = "empty-set"
-                        , title = "No " <> currentTab <> " Requests Monitored."
-                        , description = "Once you integrate an SDK, your " <> T.toLower currentTab <> " requests appear here automatically."
+                        , title = "No " <> currentTabT <> " Requests Monitored."
+                        , description = "Once you integrate an SDK, your " <> T.toLower currentTabT <> " requests appear here automatically."
                         , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
                         }
                 }
@@ -125,13 +121,9 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
               Just
                 $ toHtml
                 $ TabFilter
-                  { current = currentTab
+                  { current = currentTabT
                   , currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&period=" <> periodT
-                  , options =
-                      [ TabFilterOpt{name = "Incoming", count = Nothing}
-                      , TabFilterOpt{name = "Outgoing", count = Nothing}
-                      , TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
+                  , options = [TabFilterOpt{name = tabParam t, count = Nothing} | t <- [minBound .. maxBound]]
                   }
           }
   addRespHeaders case skipM of
@@ -168,9 +160,46 @@ parseOr :: FromHttpApiData a => a -> Maybe Text -> a
 parseOr d = maybe d (fromRight d . parseUrlPiece)
 
 
--- | The direction a tab label filters on; @Nothing@ (the Archived tab) spans both.
-directionOf :: Text -> Maybe Endpoints.Direction
-directionOf = (`lookup` [("Outgoing", Endpoints.Outgoing), ("Incoming", Endpoints.Incoming)])
+-- | The api_catalog / endpoints direction tab. The wire spelling is capitalised and
+-- written out rather than derived, because live shared links carry it.
+--
+-- >>> map tabParam [minBound .. maxBound]
+-- ["Incoming","Outgoing","Archived"]
+data CatalogTab = TabIncoming | TabOutgoing | TabArchived
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+tabParam :: CatalogTab -> Text
+tabParam TabIncoming = "Incoming"
+tabParam TabOutgoing = "Outgoing"
+tabParam TabArchived = "Archived"
+
+
+-- | Strict parse — 'Nothing' for an unrecognised spelling. Use where absence and
+-- "unrecognised" must stay distinguishable (the bulk handler treats absent as
+-- "both directions").
+--
+-- >>> (parseTabM "Outgoing", parseTabM "outgoing", parseTabM "nope")
+-- (Just TabOutgoing,Nothing,Nothing)
+parseTabM :: Text -> Maybe CatalogTab
+parseTabM = inverseMap tabParam
+
+
+-- | Tolerant parse for page handlers: a stale shared link renders the default tab
+-- instead of 400ing, which is why these stay 'QueryParam' @Text@ rather than a typed
+-- capture.
+--
+-- >>> (parseTab (Just "Archived"), parseTab (Just "bogus"), parseTab Nothing)
+-- (TabArchived,TabIncoming,TabIncoming)
+parseTab :: Maybe Text -> CatalogTab
+parseTab = fromMaybe TabIncoming . (parseTabM =<<)
+
+
+-- | The direction a tab filters on; @Nothing@ (the Archived tab) spans both.
+directionOf :: CatalogTab -> Maybe Endpoints.Direction
+directionOf TabOutgoing = Just Endpoints.Outgoing
+directionOf TabIncoming = Just Endpoints.Incoming
+directionOf TabArchived = Nothing
 
 
 -- | The two labels that vary by request direction: (kindVal, sourceLabel).
@@ -243,8 +272,11 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       host = maybeToMonoid hostParam
       page = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = max 1 $ min 200 $ fromMaybe 25 $ readMaybe . toString =<< perPageM
-      currentTab = fromMaybe "Incoming" currentTabM
-      direction = parseOr Endpoints.Incoming currentTabM
+      -- Was an unvalidated 'fromMaybe "Incoming"' here while apiCatalogH validated the
+      -- same parameter, so the two handlers disagreed on what a bad tab meant.
+      currentTab = parseTab currentTabM
+      currentTabT = tabParam currentTab
+      direction = fromMaybe Endpoints.Incoming $ directionOf currentTab
       currentSort = fromMaybe "-events" sortM
       period = parseOr Endpoints.Window24h periodM
       periodT = display period
@@ -256,20 +288,18 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       -- seconds, so the first paint renders skeletons and HTMX re-fetches with stats=true.
       -- Row-only responses (load-more, search) can't defer, so they always carry stats.
       statsMode = if statsM == Just "true" || isJust loadMoreM || isJust searchM then Endpoints.WithStats else Endpoints.ShellOnly
-      cacheKey = ((pid, currentTab, host, currentSort), (fromMaybe "" searchM, page, perPage, period))
+      cacheKey = ((pid, currentTabT, host, currentSort), (fromMaybe "" searchM, page, perPage, period))
       fetchStats mode = Endpoints.endpointRequestStatsByProject mode useTf pid endpointQuery
       fetchStatsCached = case statsMode of
         Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
-        Endpoints.WithStats ->
-          liftIO (Cache.lookup appCtx.endpointStatsCache cacheKey)
-            >>= maybe (fetchStats Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.endpointStatsCache cacheKey fresh)) pure
+        Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ -> fetchStats Endpoints.WithStats
   (endpointStats, totalCount) <-
     concurrently
       fetchStatsCached
       (Endpoints.countEndpointsForHost pid endpointQuery)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
-  let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTab}&host={host}&sort={currentSort}&period={periodT}|]
+  let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTabT}&host={host}&sort={currentSort}&period={periodT}|]
       bwconf =
         bw
           { prePageTitle = Just "API Catalog"
@@ -341,7 +371,7 @@ data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.Endpoin
   deriving stock (Show)
 
 
-endpointColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column EnpReqStatsVM]
+endpointColumns :: Projects.ProjectId -> Text -> Text -> CatalogTab -> [Column EnpReqStatsVM]
 endpointColumns pid baseUrl period currentTab =
   [ col "Endpoint" (renderEndpointMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
@@ -379,9 +409,9 @@ activityCell_ :: V.Vector Int -> Html ()
 activityCell_ = sparkline_ . V.toList
 
 
-renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
+renderEndpointMainCol :: Projects.ProjectId -> CatalogTab -> EnpReqStatsVM -> Html ()
 renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
-  let outgoing = currentTab == "Outgoing"
+  let outgoing = currentTab == TabOutgoing
       (kindVal, sourceLabel) = directionLabels outgoing
       -- server.address in both directions: the local server on a server span, the remote
       -- one on a client span. It is also the column apis.endpoints.host is resolved from,
@@ -425,8 +455,24 @@ instance ToHtml CatalogBulkAction where
   toHtmlRaw = toHtml
 
 
+-- | The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: HostBulkAction]
+-- ["archive","unarchive"]
+data HostBulkAction = BAArchive | BAUnarchive
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" HostBulkAction
+
+
+-- | Past-tense verb for the success toast. Was built as @action <> "d"@, which only
+-- worked because both slugs happen to end in @e@.
+actionPast :: HostBulkAction -> Text
+actionPast BAArchive = "Archived"
+actionPast BAUnarchive = "Unarchived"
+
+
 apiCatalogBulkActionH
-  :: Projects.ProjectId -> Text -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
+  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
 apiCatalogBulkActionH pid action currentTabM items = do
   -- TODO: emit a host-activity log entry per item once the activity feed
   -- accepts non-issue events (mirrors anomalyBulkActionsPostH's per-item
@@ -434,27 +480,26 @@ apiCatalogBulkActionH pid action currentTabM items = do
   (sess, _project) <- Projects.sessionAndProject pid
   -- request_type=Incoming/Outgoing scopes the action; absent (e.g. on the
   -- Archived tab) means apply to whichever direction the host carries.
-  let outgoingM = directionOf =<< currentTabM
+  let outgoingM = directionOf =<< (parseTabM =<< currentTabM)
       requested = length items.itemId
-      logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= action, "requested_count" AE..= requested] <> extra
+      logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= bulkActionSlug action, "requested_count" AE..= requested] <> extra
   if requested == 0
     then addErrorToast "No hosts selected" Nothing
     else do
-      op <- case action of
-        "archive" -> pure $ Endpoints.ArchiveBy sess.user.id
-        "unarchive" -> pure Endpoints.Unarchive
-        _ -> throwError err400{errBody = "unhandled api_catalog bulk action: " <> encodeUtf8 action}
+      let op = case action of
+            BAArchive -> Endpoints.ArchiveBy sess.user.id
+            BAUnarchive -> Endpoints.Unarchive
       affected <- Endpoints.setHostsArchived pid outgoingM op items.itemId
       let touched = fromIntegral affected :: Int
           noun = bool "hosts" "host" (requested == 1)
       if touched == 0
         then do
           logAttention "api_catalog bulk action affected 0 rows" $ logCtx ["outgoing" AE..= outgoingM]
-          addErrorToast ("Could not " <> action <> " " <> noun) (Just "Already in that state, or rows were removed")
+          addErrorToast ("Could not " <> bulkActionSlug action <> " " <> noun) (Just "Already in that state, or rows were removed")
         else do
           when (touched < requested)
             $ logAttention "api_catalog bulk action partially applied"
             $ logCtx ["affected_count" AE..= touched]
-          addSuccessToast (action <> "d " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
+          addSuccessToast (actionPast action <> " " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
           addTriggerEvent "apiCatalogChanged" AE.Null
   addRespHeaders CatalogBulkDone

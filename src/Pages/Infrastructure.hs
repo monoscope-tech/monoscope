@@ -984,7 +984,7 @@ coresText value = Containers.showFFloat' 2 value <> " cores"
 
 
 plainCell :: Maybe Text -> Html ()
-plainCell = maybe (span_ [class_ "text-textWeak"] "—") (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong tabular-nums", term "data-tippy-content" value] $ toHtml value)
+plainCell = maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong tabular-nums", term "data-tippy-content" value] $ toHtml value)
 
 
 utilizationCell :: Maybe Double -> Html ()
