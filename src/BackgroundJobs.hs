@@ -3897,7 +3897,7 @@ confirmedGroups reviews keyed =
   [ (r, gkey, prefix, pos, kids)
   | (gkey, _, n, prefix, pos, kids) <- keyed
   , Just r <- [HM.lookup gkey byKey]
-  , r.verdict == "param"
+  , r.verdict == display PatternMerge.Param
   , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
   ]
   where
@@ -5355,7 +5355,7 @@ applyConfirmedErrorGroups pid = do
         [ (r.groupKey, g)
         | r <- reviews
         , isNothing r.appliedAt
-        , r.verdict == "param"
+        , r.verdict == display PatternMerge.Param
         , errorGroupEvidenceMet r.confirmations r.firstMemberCount r.memberCount r.survivedRefute
         , Just g <- [HM.lookup r.groupKey byKey]
         ]
