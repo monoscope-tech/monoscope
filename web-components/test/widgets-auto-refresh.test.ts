@@ -21,7 +21,7 @@ const chart = () => ({
 
 const widget = (chartId: string) => ({
   chartType: 'bar',
-  opt: { dataset: {}, series: [], legend: {} },
+  opt: { dataset: {}, series: [], legend: {}, yAxis: {} },
   chartId,
   query: '',
   sql: '',
@@ -87,6 +87,31 @@ describe('Log Explorer chart auto-refresh', () => {
 
     responses.splice(0).forEach((resolve) => resolve(chartData));
     await frame();
+  });
+
+  test('shows the loader when the time picker refreshes a chart', async () => {
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => chart() };
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volume_loader" class="hidden"></div><div id="volume_bordered"></div>';
+
+    const responses: Array<(data: typeof chartData) => void> = [];
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: () => new Promise<typeof chartData>((resolve) => responses.push(resolve)) })) as any;
+    (window as any).chartWidget(widget('volume'));
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(responses).toHaveLength(1));
+    responses.splice(0).forEach((resolve) => resolve(chartData));
+    await frame();
+    await frame();
+
+    // TimePicker.hs emits an unadorned update-query event after its form submits.
+    window.dispatchEvent(new CustomEvent('update-query'));
+    await vi.waitFor(() => expect(responses).toHaveLength(1));
+    await frame();
+
+    expect(document.querySelector('#volume_loader')?.classList.contains('hidden')).toBe(false);
+
+    responses.splice(0).forEach((resolve) => resolve(chartData));
+    await frame();
+    expect(document.querySelector('#volume_loader')?.classList.contains('hidden')).toBe(true);
   });
 
   // Regression guard for the critical "SyntaxError: Failed to fetch new data: The string did
