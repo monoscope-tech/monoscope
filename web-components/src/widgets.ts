@@ -909,15 +909,15 @@ const chartWidget = (widgetData: WidGetData) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
     document.querySelector(selector)?.addEventListener(event, () => {
       updateQuery();
-      updateChartData(chart, opt, true, widgetData, controller.signal, false);
+      updateChartData(chart, opt, true, widgetData, controller.signal);
     }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: Event) => {
     updateQuery();
-    const ast = (e as CustomEvent<{ ast?: string }>).detail?.ast;
-    if (ast) widgetData.queryAST = ast;
-    updateChartData(chart, opt, true, widgetData, controller.signal, false);
+    const detail = (e as CustomEvent<{ ast?: string; source?: string }>).detail;
+    if (detail?.ast) widgetData.queryAST = detail.ast;
+    updateChartData(chart, opt, true, widgetData, controller.signal, detail?.source !== 'auto-refresh');
   }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
