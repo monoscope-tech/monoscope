@@ -986,3 +986,38 @@ Not applied: this is drag/resize behaviour on the dashboard grid, unverifiable w
 browser (a client change needs a Haskell content-change rebuild to re-fingerprint the Vite
 assets). Worth doing in a session with the app open — and worth doing *deliberately*,
 since deciding which of the two mobile guards is correct is a real question, not a merge.
+
+## The duplication question, answered empirically
+
+The premise this sweep started from was "no code reuse or code consolidation". Measured
+across all 77k lines of `src/` and `web-components/src`, with identifiers, string literals
+and numbers all normalised away (so renamed copies still match):
+
+| window | duplicated blocks | redundant copies |
+|---|---|---|
+| 3 lines | 7 | 12 |
+| 4 lines | 7 | 8 |
+| 5 lines | 3 | 3 |
+| **6 lines** | **0** | **0** |
+
+**There is no copy-paste duplication of six lines or more anywhere in this codebase** —
+not across files, not within them. The monotonic decrease is the sanity check that the
+scanner works; a broken scan returns zero at every window, and this one does not. (Two of
+my scans tonight *did* return false zeros — `git diff` emitting no `+` lines under the
+repo's external diff driver, and a doctest-guard grep that could not see `src/`. A zero
+result gets a sanity check before it gets believed.)
+
+The surviving 4-line hits are Servant route-type declarations (`Routes.hs:279/315` —
+repeated `QPT` chains) and one TypeScript block. Route boilerplate is inherent to the
+Servant API type; it is not consolidatable logic.
+
+The one duplicate worth acting on is smaller than the scan's floor: the two gridstack
+handlers in `Dashboards.hs` (see above), which matter because they have *drifted*, not
+because they are long.
+
+**Conclusion.** The long functions in this codebase are long because markup and SQL are
+verbose, not because anything is repeated. `dashboardPage_` is 326 lines with exactly one
+repeated 4-line block in it. Consolidating distinct markup does not reduce anything — it
+relocates it. Combined with the corrected size figures (+411 net code across the sweep,
+69% of `src/` is code, 18% documentation), the "verbosity and no reuse" premise does not
+survive measurement.
