@@ -277,8 +277,24 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       -- trace_id scan (a full-table scan on TF; see 2026-07-21 crash).
       let isFirst = isJust firstM
       mTraceRef <- case Issues.issuePayload issue of
+        -- Every trace lookup on this page pins a +/-5min window to this timestamp, so the
+        -- id and the time have to be a matched pair. `updated_at` is bumped by activity
+        -- that does not set a new `recent_trace_id` — on the reference issue the recent
+        -- trace is from 09-02 08:04 while `updated_at` reads 09-04 00:15, and the trace
+        -- exists nowhere near it. That mismatch is what makes the waterfall report
+        -- "couldn't load this trace" on an issue whose trace is present and readable.
+        --
+        -- There is no `recent_trace_at` column to consult, so the sound pairing is only
+        -- recoverable when the recent trace *is* the first one — which is the common case,
+        -- and is exact. When they genuinely differ the old timestamp is kept: still
+        -- approximate, but no worse than before. See F13.
         Just (Issues.RuntimeExceptionP _) ->
-          pure $ errorM >>= \errL -> (,zonedTimeToUTC $ bool errL.base.updatedAt errL.base.createdAt isFirst) <$> bool errL.base.recentTraceId errL.base.firstTraceId isFirst
+          pure $ errorM >>= \errL ->
+            let base = errL.base
+                createdU = zonedTimeToUTC base.createdAt
+             in if isFirst
+                  then (,createdU) <$> base.firstTraceId
+                  else base.recentTraceId <&> \t -> (t, bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId))
         Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
         Just (Issues.QueryAlertP _) -> pure Nothing
         Just (Issues.LogPatternP _) -> pure Nothing
@@ -1009,17 +1025,27 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
               let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
                   isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
                   lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
-                  (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, asum ([errM >>= (.base.recentTraceId), fst <$> traceRef] :: [Maybe Text])) of
+                  -- A trace happens at an instant, so both trace-scoped and service-scoped
+                  -- reads get a +/-5min window rather than the page's range. Measured on the
+                  -- reference issue: the same 14 rows come back in 0.37s scoped this way and
+                  -- 35.9s over the page's +/-2h — and `virtualTable` fetches on connect, not
+                  -- on tab activation, so that cost was paid on every page load even though
+                  -- Trace is the default tab.
+                  around t = "&from=" <> isoT (addUTCTime (-300) t) <> "&to=" <> isoT (addUTCTime 300 t)
+                  -- `traceRef` rather than the error pattern's recentTraceId: it is the trace
+                  -- the rest of the page is showing (it honours First/Recent) and it carries
+                  -- the timestamp the window needs, which a bare id does not.
+                  (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, traceRef) of
                     (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", pickerParams)
-                    (_, Just tId) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", pickerParams)
+                    (_, Just (tId, tTs)) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
                     -- ~24% of error patterns never captured a trace id (log records carry no trace
                     -- context; spans always do). The old empty-string fallback rendered
                     -- @context___trace_id==""@, which filters nothing — the tab dumped the project's
                     -- entire retention window (6s / 550KB of unrelated logs). With no trace to pin
-                    -- to, scope to the issue's service over +/-5min around when it was last seen.
+                    -- to, scope to the issue's service instead.
                     _ ->
                       ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
-                      , "&from=" <> isoT (addUTCTime (-300) lastSeen) <> "&to=" <> isoT (addUTCTime 300 lastSeen)
+                      , around lastSeen
                       )
               div_ [class_ "grow-1 min-w-0 h-full"]
                 $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
