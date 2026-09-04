@@ -1882,3 +1882,27 @@ justified cross-module near-duplicate in 1161 functions, 0 duplicate route endpo
 "no code reuse" premise does not hold. The defects that do exist are **divergence** — the
 same operation implemented twice and drifting — which is a different problem needing
 different instruments.
+
+## Toast capitalisation: 46 sentence case, 6 Title Case
+
+The uniformity complaint at its most visible layer. Of 57 distinct
+`addSuccessToast`/`addErrorToast` strings, **46 are sentence case** — the clear convention —
+and six diverge:
+
+| location | current | should be |
+|---|---|---|
+| `Pages/Settings.hs:264` | "Created API Key Successfully" | "Created API key successfully" |
+| `Pages/Projects.hs:1364` | "Deleted Project Successfully" | "Deleted project successfully" |
+| `Pages/Projects.hs:1472` | "Updated Project Successfully" | "Updated project successfully" |
+| `Pages/Projects.hs:354` | "Updated Notification Channels Successfully" | "Updated notification channels successfully" |
+| `Pages/Reports.hs:324` | "Report notifications updated Successfully" | "…updated successfully" (stray capital) |
+| `Pages/LogExplorer/Log.hs:793` | "Error Parsing Query" | "Error parsing query" |
+
+Not outliers: "Connect GitHub first" and "Removed S3 bucket" — proper nouns, correct as-is.
+
+Also worth a look: "No hosts selected" (`Pages/Infrastructure.hs`) vs "No items selected"
+(`Pages/Anomalies.hs`) — the same condition (nothing selected for a bulk action) worded two
+ways.
+
+Zero logic risk; six string edits. Deferred only because the integration suite was
+mid-run and a source edit restarts it.
