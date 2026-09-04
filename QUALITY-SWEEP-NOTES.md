@@ -940,3 +940,49 @@ function for the *next* one's Haddock. It reported `getAlertStatusColor` as 102 
 is 4, followed by 98 lines of `replaceAllFormats` doctests. Any "largest function" figure
 in this file taken from that script is inflated the same way unless separately verified
 (`backfillSessionSql` was checked directly and is genuinely mostly SQL).
+
+## Largest functions, measured correctly
+
+My earlier size scripts were wrong twice. The first charged each function for the *next*
+one's Haddock (`getAlertStatusColor` reported as 102 lines; it is 4). The second ended a
+function's extent only at the next `^ident ::`, so an intervening `data` block was
+attributed to the preceding function (`otlpHttpH` reported as 440 lines; it is 3 — the
+rest was the `ApiV1Routes` record). Correct measure: extent ends at the next top-level
+declaration of *any* kind, counting non-comment lines only.
+
+| code lines | function |
+|---|---|
+| 326 | `dashboardPage_` |
+| 292 | `anomalyDetailPage` |
+| 291 | `tracePage` |
+| 288 | `replaceAllFormats` — single-pass scanner, algorithmic, justified |
+| 275 | `bodyWrapper` |
+| 229 | `apiLogsPage` |
+| 216 | `backfillSessionSql` — SQL literal, justified |
+| 212 | `logQueryBox_` |
+
+The page renderers are long but **not duplicated**: a 4-line normalised clone scan inside
+`dashboardPage_` finds exactly one repeated block in 326 lines. Lucid markup is verbose
+because markup is verbose; that is not the same as copy-paste.
+
+### The one real duplicate: two gridstack handlers that have drifted
+
+`Dashboards.hs:411` and `:482` are the same change-handler written twice — once for the
+top-level grid, once for nested grids — inside embedded JS. They have already diverged
+in three ways, and at least two look accidental:
+
+| | top-level (`:411`) | nested (`:482`) |
+|---|---|---|
+| mobile guard | `grid.getColumn() === 1` | `window.innerWidth < 768` |
+| collapse lookup | `gridEl.querySelector(...)` | `nestedEl.closest(...)` |
+| interaction events | `dragstart resizestart` | `dragstart resizestart removed` |
+
+Two different tests for "are we on mobile", and `querySelector` (descendant) versus
+`closest` (ancestor) is a semantic difference, not a rename. One shared
+`wireGridChange(inst, el, isMobile)` would remove ~8 lines and, more importantly, stop the
+next divergence.
+
+Not applied: this is drag/resize behaviour on the dashboard grid, unverifiable without a
+browser (a client change needs a Haskell content-change rebuild to re-fingerprint the Vite
+assets). Worth doing in a session with the app open — and worth doing *deliberately*,
+since deciding which of the two mobile guards is correct is a real question, not a merge.
