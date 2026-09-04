@@ -1533,3 +1533,30 @@ sources of a string *inside* one module does not find the copies in modules that
 import it. The grep that finds them is for the *literal*, run across the whole tree, after
 the type exists — not for the type's name. I checked call sites of the functions I
 changed; I did not re-grep the literals afterwards, which is why this survived.
+
+## Two operational rules learned the hard way tonight
+
+**1. Stop a watcher by killing its `make` pid, never `pkill -f 'live-test-dev'`.**
+`pkill` matches the `make` wrapper but not the `ghcid` it spawned, so the ghcid survives
+with `ppid=1` — still watching files, still able to re-run the suite into a build directory
+another process is using, and holding ~3.5 GB. I did this to myself and then found it in a
+straggler sweep. `kill <make-pid>` takes the whole chain down; `ps -eo pid,ppid,command |
+grep test:test-dev` shows the chain to confirm.
+
+**2. Never anchor a code insertion on a function's *signature* line.** Doing so places the
+new code between the target's Haddock block and the function it documents. It compiles
+cleanly — Haskell does not care — and the only symptom is a doctest failure elsewhere,
+because expected output runs until a blank line and now continues into the inserted
+Haddock. This happened twice tonight (`reportDayLabels`, then `sessionSortParam`). Anchor
+on the *start of the Haddock block*, or insert after the target's definition.
+
+Corollary for reading such a failure: the diff is useless. It printed
+
+```
+expected: ["last_seen","duration_ns","error_count","event_count"]
+ but got: ["last_seen","duration_ns","error_count","event_count"]
+```
+
+— identical, because the difference was appended prose beyond the visible line. What
+located it was `sed` refusing the file with `RE error: illegal byte sequence` (an em-dash
+nearby). **When a diff shows two identical strings, stop reading the diff and dump bytes.**
