@@ -1,4 +1,7 @@
-roots = [ "^Main.main$", "^Paths_", "^Spec\\.main$", "^Spec\\.spec$" ]
+# ^Start\.startApp$ roots the server closure for units that have no Main (test-dev,
+# test suites). Without it weeder reports the whole transitive closure of the
+# executable — 89 hits instead of 20, all noise.
+roots = [ "^Main\\.main$", "^Start\\.startApp$", "^Paths_", "^Spec\\.main$", "^Spec\\.spec$" ]
 type-class-roots = true
 
 root-modules = [

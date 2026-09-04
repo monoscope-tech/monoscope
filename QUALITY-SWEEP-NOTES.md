@@ -2016,3 +2016,56 @@ literal sits in.**
 None of this is a defect; all of it is what "the platform is not uniform anymore" looks like
 where users actually see it. Roughly a dozen string edits, no logic touched. Deferred here
 only because the integration suite was mid-run and source edits restart it.
+
+## Weeder: 81 hits, 1 real — and the config fix that gets there
+
+`CLAUDE.md` says to run weeder regularly and delete what it reports. Run as configured, it
+emitted **89 hits (81 unique file+symbol)**.
+
+Adding one missing root (below) drops that to **20 hits, 11 unique** — and those 11 I checked
+one at a time against the source, which is the only classification here I'll stand behind:
+
+| Symbol(s) | Verdict |
+| --- | --- |
+| `sparklineBlocks`, `sparklineBar` | **genuinely dead** — deleted |
+| `assetManifestFingerprint`, `viteAssetFile` | TH: `$(viteAssetFile "index.html")`, `BodyWrapper.hs:298` |
+| `ensureUrlParams`, `dynSegmentLabel`, `isUrlIdLike`, `tokenizeUrlPath`, `defPid`, `defaultFeaturesAreInert` | doctest-only reference |
+| `updateTreeWithLog` | used at `test/unit/Pkg/DrainSpec.hs:190` |
+| `OtlpServerSpec.spec` | stale `.hie`; I deleted that file earlier tonight |
+
+So **1 real find in 11**, and the documented workflow followed literally would have deleted
+live code — including
+`viteAssetFile` (used as `$(viteAssetFile "index.html")` in `BodyWrapper.hs:298`) and the
+pure URL helpers in `ProcessMessage.hs` whose only callers are their own doctests. Deleting
+those breaks the doctest suite rather than the build, which is the slow way to find out.
+
+**Root cause of the bulk of it: a missing root.** 79 of the 89 hits came from the `test-dev`
+unit, which has no `Main.main`. Weeder therefore treats the entire transitive closure of the
+executable — `startApp`, `runServer`, every middleware and background fiber — as unreachable.
+Adding `^Start\.startApp$` to `roots` cuts **89 → 20** with no loss of real signal.
+
+The remaining 20 are the irreducible blind spots (doctests, TH, stale `.hie`), now written
+into the `CLAUDE.md` weeder section along with the operational rule that actually matters:
+**grep the whole repo before deleting — including `shared/` and `cli/`.** I needed that rule
+myself: my first pass grepped only `src cli app test`, concluded `sparklineBar` was
+referenced nowhere, and missed that the file lives at `shared/src/Pkg/CLIFormat.hs`. It
+happened to be dead anyway; the method was still wrong.
+
+Two further method notes, both mine:
+
+- My first classifier scored `mkOtlpRpcHandler` and `optionsMiddleware` as dead. Both are
+  used — in *multi-line* function applications, where the symbol sits alone on its own line
+  and is textually identical to an export-list entry, which I was filtering out. A
+  line-oriented reference counter cannot distinguish those two without parsing.
+- `weeder` reads `.hie`, not source, so a deletion does not leave the report until the
+  owning package recompiles. Right after deleting the sparklines the count was still 20.
+  Don't read that as the edit failing.
+
+**Net yield of this lens: 21 lines deleted, one config fix, and the audit result that the
+repo has essentially no dead top-level bindings.** That last part is the useful finding —
+whatever this codebase's problems are, accumulated dead functions is not one of them.
+
+`sparklineBar` was exported from `Pkg.CLIFormat` with three doctests and zero callers; the
+CLI renders its summaries through `renderSummaryItems`/`renderSummaryCell` instead. Deleted
+with its private helper `sparklineBlocks`. Verified via the doctest suite, since `build.log`
+cannot see edits under `shared/` — the watcher builds that package before its repl starts.
