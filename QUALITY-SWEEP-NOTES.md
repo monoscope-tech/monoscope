@@ -1775,3 +1775,20 @@ just here. A NULL row is therefore already impossible in any working system.
 No `COALESCE` added — that would be error handling for a state the type system already
 excludes, which is exactly what CLAUDE.md tells you not to write. Recorded instead, since
 the next reader will have the same doubt.
+
+### Verifying an encoding without running it
+
+The `GroupVerdict` change (`r.verdict == display Param` replacing `== "param"`) is
+high-stakes in a quiet way: if `display Param` were not exactly `"param"`, **no error group
+would ever be confirmed** and the merge pipeline would silently do nothing.
+
+It is verifiable without a run, using another type as the witness. `GroupVerdict` and
+`IssueSeverity` both derive `Display` via **the same instance** —
+`WrappedEnumSC 'Nothing ""`. Before `5134a124`, `severityBadge_ (display issue.severity)`
+matched the literal `"critical"` and rendered correctly in production. That is observed
+behaviour establishing `display Critical == "critical"` for that deriving, so
+`display Param == "param"` follows.
+
+Generalisable: **when a change depends on a derived encoding, look for another type using
+the identical deriving whose output is already pinned by a test or by working behaviour.**
+That converts "I reasoned about `quietSnake`" into evidence, at no cost.
