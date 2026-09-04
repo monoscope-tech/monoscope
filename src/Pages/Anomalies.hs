@@ -979,10 +979,21 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                       )
               div_ [class_ "grow-1 min-w-0 h-full"]
                 $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
-              div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+              -- Starts hidden alongside the collapsed pane; the swap handler below reveals
+              -- both together, and closeDetailPanel puts them back.
+              div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
               div_
                 [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/2 investigation-details"
                 , id_ "log_details_container"
+                , -- Collapsed until a row is actually selected. The log explorer's own panel
+                  -- does this (`w-0 max-w-0`, Log.hs), but its open state is driven by
+                  -- `group-has-[#viz-logs:checked]` variants that do not exist on this page, so
+                  -- the width is inline here and `lg:w-1/2` is what it reopens to: the two
+                  -- hyperscript handlers below already clear and restore exactly that.
+                  -- Without it the panel held half the Investigation area blank from first
+                  -- paint, which on an issue whose telemetry is missing is most of a screen
+                  -- of nothing.
+                  style_ "width:0"
                 , -- Last-click-wins; see the matching note in Pages.LogExplorer.Log.detailsPanel.
                   term "hx-sync" "this:replace"
                 , [__|on closeDetailPanel
