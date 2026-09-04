@@ -415,7 +415,13 @@ spec = sequential $ aroundAll withTestResources do
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
       (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
-      renderPage pageByHash `shouldSatisfy` T.isInfixOf "since=14D"
+      -- The reader's chosen range still drives the page: it seeds the URL the charts
+      -- read and it is the time picker's selected value. It is deliberately no longer
+      -- in the Logs tab's own URL — a trace-scoped query is about the trace's instant,
+      -- not the page's range, and pinning it to +/-2h cost 35.9s for the same 14 rows.
+      let hashHtml = renderPage pageByHash
+      hashHtml `shouldSatisfy` T.isInfixOf "since:'14D'"
+      hashHtml `shouldSatisfy` T.isInfixOf "data-start=\"14D\""
 
     -- Regression: an issue that never captured a trace id used to render the logs tab as
     -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
