@@ -1835,3 +1835,40 @@ otherwise, but a browser and a decision beat my inference.
 Also noted: `countActiveForUser` / `countActiveForProject` in `Pkg/LiveTail.hs` differ only
 by `AND user_id = #{uid}`. One function taking `Maybe UserId` and composing the predicate
 fragment would cover both — the codebase already composes `HI.Sql` fragments elsewhere.
+
+## The definitive duplication measurement
+
+Body-similarity comparison over **1161 functions** (7–40 lines each, comments stripped),
+using `difflib` on the normalised body text — this catches reimplementation that shares no
+identifiers, which every text-based clone scan misses.
+
+**Cross-module, >78% similar: exactly one pair.** `Endpoints.revertGroupApply` ~
+`PatternMerge.revertErrorGroupApply`, and it is justified — parallel operations on
+different tables (`endpoint_group_reviews`/`apis.endpoints` vs
+`error_group_reviews`/`apis.error_patterns`), clearing different columns, with an extra
+`AND hash <> canonical_hash` guard on the endpoint side that the error side does not need
+(a canonical pattern has `canonical_id IS NULL`, so it is excluded naturally). Merging
+costs `HI.Sql` fragment composition to save ~8 lines.
+
+**Within-module, >80% similar: 12 pairs**, all triaged:
+- 4 are the `PatternMerge` error/log families — differ by table and id type (`uuid[]` vs
+  `bigint[]`), recorded earlier as not worth `HI.Sql` surgery.
+- 3 are the OTLP gRPC handlers, which are **already correctly factored** — each is a thin
+  protobuf-specific adapter over a shared `mkOtlpRpcHandler`; the similarity is the call
+  shape, and the differing parts are lens accessors on different message types that cannot
+  be shared.
+- `atAuthToBase` / `atAuthToBaseTest` — the prod/test interpreter pair CLAUDE.md mandates.
+  Factoring the four shared lines needs a rank-2 type; not worth it.
+- `hostsGetH` / `hostMapGetH` — four lines of shared page setup, then a table vs a map.
+- `sessionSortColumn` / `sessionSortLabel` — a false positive; two `\case`s over the same
+  enum, structurally alike and semantically unrelated.
+- **`selectActiveProjectMembers` / `selectAllProjectMembers` — the one that mattered.** Not
+  duplication at all: reading *why* they differed exposed the deactivated-members bug
+  above.
+
+**Conclusion.** There is no meaningful duplication in this codebase at any granularity
+measured: 0 clones at 6 normalised lines, 1 exact-duplicate SQL block (test setup), 1
+justified cross-module near-duplicate in 1161 functions, 0 duplicate route endpoints. The
+"no code reuse" premise does not hold. The defects that do exist are **divergence** — the
+same operation implemented twice and drifting — which is a different problem needing
+different instruments.
