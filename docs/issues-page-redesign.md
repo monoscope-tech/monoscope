@@ -785,6 +785,42 @@ connect rather than on tab activation, so every runtime-exception page load paid
 that cost even though Trace is the default tab. The fallback branch already
 narrowed to ±5min and documented why; the trace branch never did.
 
+## 12. The stack trace — the claim I made and then checked
+
+I closed the last round saying Sentry's stack trace "earns its place through source
+context and in-app frames, which we can't synthesise from spans". Half of that was
+an untested assumption, and checking it changed the answer.
+
+**Ingestion is fine.** `Telemetry.extractATError` reads the OTel-canonical
+`event_attributes.exception.stacktrace`, with `extractATErrorFromRecord` as the
+span-attribute fallback, and `OtlpServer` normalises `error.stack` /
+`error.stacktrace` into that namespace at the edge. Nothing is dropped. The demo's
+Go services genuinely send `{message, type}` and no frames — which is an SDK fact,
+not a product defect.
+
+**Presentation was the actual gap, and the parser already existed.**
+`Pkg.ErrorFingerprint.parseStackTrace` parses frames per language (Go, JS, Python,
+Java), fills `filePath` / `functionName` / `lineNumber` / `contextLine`, and marks
+`isInApp` — and it is what `computeErrorHashes` is computed from. The page called
+none of it and rendered a `<pre>` blob. **That is the fourth instance of the
+pattern this doc has been tracking**, after the widget value slot, the trace
+fragment's span id, and the details-pane collapse: the capability existed and one
+call site didn't use it. §10 asked where the fourth would be; it was here.
+
+Shipped (`6d247257b`): frames render Sentry-style — your code by function and
+`file:line`, the runtime's folded behind "Show N runtime frames", ordering
+preserved (the order is the call path; grouping runtime frames to the bottom would
+misreport what called what), `contextLine` rendered when an SDK starts sending it,
+raw text one disclosure away, and a `<pre>` fallback when the parser recognises
+nothing. No demo error has a stack trace, so a spec with a real Java trace is the
+only thing exercising it.
+
+**What remains genuinely un-closable by this page:** source context. Sentry shows
+the erroring line and its neighbours because SDKs upload source maps and release
+artefacts and Sentry resolves against them. We have the field (`contextLine`) and
+nothing populates it. That is an SDK-and-artefact-pipeline problem, not a
+rendering one, and it is the one place Sentry's stack trace is still ahead.
+
 ### Still open after this pass
 
 - **F9** — a log-pattern issue referencing a hash no telemetry carries (data).
