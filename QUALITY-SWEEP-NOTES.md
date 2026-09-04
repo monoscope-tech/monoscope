@@ -1906,3 +1906,29 @@ ways.
 
 Zero logic risk; six string edits. Deferred only because the integration suite was
 mid-run and a source edit restarts it.
+
+## Where drift happens, and why — a predictor
+
+Two aggregate comparisons, opposite results:
+
+- **Table column headers: 47 distinct, zero case inconsistencies**, one wording split
+  (`"Last Modified"` in Dashboards vs `"Modified"` in Projects; `"Container"` vs
+  `"Containers"` is correct — one table's rows *are* containers, the other counts them per
+  host).
+- **Toast messages: 57 distinct, six diverging from the sentence-case norm**, including a
+  stray mid-sentence capital.
+
+The difference is not care; it is **whether the author sees the set while writing**. Column
+headers are authored in a list — `[col "Name" …, col "Status" …, col "Memory" …]` — so an
+inconsistent one looks wrong immediately. Toasts are written one at a time, scattered across
+handlers, and nobody ever sees them together.
+
+That predicts where uniformity will decay next: **anywhere a user-visible string is authored
+alone rather than in a list.** Toasts, page titles, empty-state copy, aria-labels. And it
+suggests the cheap defence — periodically collect each class and read it as a set, which is
+exactly how both of these were measured.
+
+It also explains why the earlier structural findings clustered where they did.
+`servicePicker_`, `plainCell` and the Kubernetes readiness badge all render *one* thing in
+*one* place; nothing ever displays them side by side, so divergence is invisible until
+someone diffs the modules.
