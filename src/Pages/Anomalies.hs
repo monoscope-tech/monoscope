@@ -294,7 +294,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                 createdU = zonedTimeToUTC base.createdAt
              in if isFirst
                   then (,createdU) <$> base.firstTraceId
-                  else base.recentTraceId <&> \t -> (t, bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId))
+                  else (,bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId)) <$> base.recentTraceId
         Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
         Just (Issues.QueryAlertP _) -> pure Nothing
         Just (Issues.LogPatternP _) -> pure Nothing
@@ -802,6 +802,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                   , Widget.hideSubtitle = Just True
                   , Widget.alertThreshold = thresholdM
                   , Widget.showThresholdLines = "always" <$ thresholdM
+                  , -- Error volume is red; a query alert's series is whatever the alert
+                    -- happens to count (checkout throughput, on the reference issue) and
+                    -- must not borrow the error colour just because it is on an issue page.
+                    Widget.seriesIntent = "error" <$ guard (issue.issueType `elem` [Issues.RuntimeException, Issues.LogPattern, Issues.LogPatternRateChange])
                   }
           volumeChart_ chartTitle = whenJust (Issues.hashPrefix issue.issueType) \prefix ->
             chartCard_ chartTitle "h-24" Nothing $ "hashes[*]==\"" <> prefix <> issue.targetHash <> "\" | summarize count(*) by bin_auto(timestamp)"

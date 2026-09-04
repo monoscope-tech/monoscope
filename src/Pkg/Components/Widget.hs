@@ -214,6 +214,12 @@ data Widget = Widget
   , alertThreshold :: Maybe Double -- For threshold line rendering
   , warningThreshold :: Maybe Double
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
+  , seriesIntent :: Maybe Text
+  -- ^ What a lone aggregate series *means*, when the series name cannot say. A bare
+  -- @count(*)@ is error volume on one chart and healthy throughput on another, and the
+  -- widget cannot tell them apart from the name — so red was being applied by a hash of
+  -- the string. @\"error\"@ opts a chart into the error colour; anything else stays brand.
+  -- Grouped series are named by their group value and keep their own mapping.
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
@@ -985,6 +991,7 @@ renderChart widget = do
                 legendPos = fromMaybe "bottom" widget.legendPosition
                 widgetUnit = maybeToMonoid widget.unit
                 alertThresholdJS = maybe "null" show widget.alertThreshold
+                seriesIntentJS = encodeText widget.seriesIntent
                 warningThresholdJS = maybe "null" show widget.warningThreshold
                 hideValueJS = bool "false" "true" $ isTrue widget.hideValue
                 -- Mirrors chartWidget's `!opt.dataset.source` test: a widget with eager
@@ -1019,6 +1026,7 @@ renderChart widget = do
                   legendPosition: "${legendPos}",
                   unit: "${widgetUnit}",
                   alertThreshold: ${alertThresholdJS},
+                  seriesIntent: ${seriesIntentJS},
                   warningThreshold: ${warningThresholdJS},
                   hideValue: ${hideValueJS},
                   timeFrom: ${timeFromJS},

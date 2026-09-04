@@ -318,8 +318,11 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   // principle is "colour is signal, not decoration". Grouped series are named by their
   // group value (service, status, ...) and still hash, which is the case the hash is for.
   const isGenericAggregate = name === 'value' || name.startsWith('count') || !name;
+  // The page can say what a bare aggregate means when its name cannot (error volume vs
+  // healthy throughput are both "count(*)"). Explicit intent, never a hash.
+  const isErrorSeries = isGenericAggregate && widgetData.seriesIntent === 'error';
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
-  const paletteColor = isErrorStat ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name);
+  const paletteColor = isErrorStat || isErrorSeries ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name);
 
   const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },
@@ -649,6 +652,7 @@ type WidGetData = {
   legendPosition?: string;
   unit?: string;
   alertThreshold?: number | null;
+  seriesIntent?: string | null;
   warningThreshold?: number | null;
   hideValue?: boolean;
   // Pins the widget's own query window instead of inheriting the page's, and shades
