@@ -27,7 +27,6 @@ where
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Either.Extra (fromRight')
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
@@ -39,7 +38,6 @@ import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))

@@ -2208,3 +2208,34 @@ Generalises to: **before extracting a helper over a library call, read that libr
 call's semantics for the argument you are about to make configurable.** The duplication
 was real and the instinct was right; the default-vs-absent distinction in the API was the
 part that had to be checked first, and "the library already has this function" beat both.
+
+## Where the lenses stopped paying, and what that says about the codebase
+
+By this point most of the mechanical lenses return clean. Recording that plainly, because
+"I looked and found nothing" is a result and the next person should not re-run these:
+
+| Lens | Result |
+| --- | --- |
+| Clone detection (6+ normalised lines) | 0 in 77k lines |
+| Near-duplicate function bodies | 1 justified cross-module pair in 1161 functions |
+| Duplicate route endpoints | 0 in 279 |
+| Dead top-level bindings (weeder, after the root fix) | 1 real pair in 11 reported |
+| Tab/enum literals in tab UIs | 2 left repo-wide, and both collapse to a `Bool` |
+| Hand-rolled reimplementations of library functions in `Utils.hs` | none — the helpers are already thin wrappers over `mfilter`, `AE.encode`, base's `showFFloat`, `fmt`'s `commaizeF` |
+| Repeated Tailwind class strings across modules | all generic utility combos, no extractable component |
+
+That last row is worth a caution. Grouping identical `class_` strings by how many modules
+use them surfaces things like `flex items-center gap-1.5` in 8 files — which looks like a
+missing component and is not one. A shared class string is not shared markup; those
+elements are unrelated. Extracting a component keyed on a utility-class combination is
+precisely what `CLAUDE.md` forbids, so the lens is worse than useless here.
+
+**The honest summary of the night's diff:** the wins were not where "verbose, no reuse,
+poor quality" predicted. There was very little dead code and almost no copy-paste. What
+there *was*, repeatedly, is **the same concept spelled two different ways in two places** —
+`apiCatalogH` validating a tab that `endpointListGetH` did not, three archive paths
+disagreeing, two stack-trace parsers, a slug written by hand at the link and matched by
+hand in the handler. Duplication detectors do not find that class of defect, because the
+two copies do not look alike; they look like two different pieces of code that happen to
+mean the same thing. Reading by *concept* — "who else answers this question?" — found
+every one of them, and it is the only lens that kept paying all night.

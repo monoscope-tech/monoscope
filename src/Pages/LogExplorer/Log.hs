@@ -36,7 +36,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -49,7 +48,6 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
