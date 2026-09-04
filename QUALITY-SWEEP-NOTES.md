@@ -1991,8 +1991,11 @@ The page-title split nearly has a rule — nav destinations Title Case ("API Cat
 "Shared event"). But **"Team details" and "Monitor Overview" are the same kind of page with
 different casing**, so it is drift rather than a convention someone chose.
 
-Also: `"Endpoints for"` (`Endpoints.hs:276`) reads like a title with its suffix lost —
-worth checking whether it is meant to be interpolated with a host name.
+~~Also: `"Endpoints for"` reads like a title with its suffix lost.~~ **Checked — not a
+bug.** The code is `pageTitle = "Endpoints for " <> host`; my scan captured only the string
+literal and missed that it is one operand of a concatenation. Third false positive of the
+night from the same cause: **a regex matching a string literal cannot see the expression the
+literal sits in.**
 
 None of this is a defect; all of it is what "the platform is not uniform anymore" looks like
 where users actually see it. Roughly a dozen string edits, no logic touched. Deferred here
