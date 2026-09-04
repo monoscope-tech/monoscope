@@ -747,11 +747,48 @@ row, and the events figure.
 "14 occurrences" beside a chart reading "No data in this time range" reads as the
 page contradicting itself rather than as two true numbers at different scopes.
 
+### F13 — the trace id and its timestamp were not a matched pair. *Severity: highest this round. Partly fixed (`356968f5e`).*
+
+Found while fixing F12, and much worse than F12 itself.
+
+Every trace lookup on this page pins a ±5min window to the timestamp carried
+next to the trace id, so the two must agree. They did not: `traceRef` paired
+`recent_trace_id` with `updated_at`, and `updated_at` is bumped by activity that
+does not set a new trace id. On the reference issue:
+
+```
+recent_trace_id  04e7b47d…   (a trace from 2026-09-02 08:04)
+updated_at       2026-09-04 00:15
+rows for that trace within ±15min of updated_at:  0
+```
+
+So the waterfall — the page's primary evidence when there is no stack trace, and
+the thing the stackless empty state now explicitly sends readers to — was looking
+in a window the trace is nowhere near. **This is what produced the "Couldn't load
+this trace / A slow or unavailable read timed out" state** that Assessment B
+caught in the browser and that source review alone had missed.
+
+Fixed exactly where it can be: when the recent trace *is* the first trace (the
+common case, and true here), `created_at` is the timestamp that genuinely goes
+with it. When they differ, the old timestamp is kept — no worse than before.
+
+**Still open:** there is no `recent_trace_at` column, so a genuinely-different
+recent trace still gets an approximate window. The real fix is to record the
+timestamp when `recent_trace_id` is written. That is a migration plus a writer
+change in the error-pattern path, deliberately out of scope for a page pass.
+
+### F12 — fixed (`356968f5e`)
+
+The Logs tab scoped a *trace-scoped* query to the *page's* range. Measured on the
+reference issue: **35.9s → 0.49s for the same 14 rows.** `virtualTable` fetches on
+connect rather than on tab activation, so every runtime-exception page load paid
+that cost even though Trace is the default tab. The fallback branch already
+narrowed to ±5min and documented why; the trace branch never did.
+
 ### Still open after this pass
 
 - **F9** — a log-pattern issue referencing a hash no telemetry carries (data).
 - **F11** — the Logs tab hangs on "Loading events…" when the result is empty.
-- **F12** — the trace-scoped logs query costs ~47s and fires on every page load.
 - The critique's own open questions, which I think are the strongest remaining
   design leads: whether a QueryAlert belongs on this page at all, and why the AI
   is still a hidden chat drawer when §3b recorded the opposite as Datadog's win.
