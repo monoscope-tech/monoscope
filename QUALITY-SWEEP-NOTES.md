@@ -1950,3 +1950,27 @@ It also explains why the earlier structural findings clustered where they did.
 `servicePicker_`, `plainCell` and the Kubernetes readiness badge all render *one* thing in
 *one* place; nothing ever displays them side by side, so divergence is invisible until
 someone diffs the modules.
+
+## Empty states: 15 of them, one small inconsistency
+
+Aggregate scan of `emptyState_` / `ZeroState` copy. Mostly consistent. The one drift is
+**trailing periods on titles**: `"No activity yet."` (`Anomalies.hs:2197`) and
+`"No usage recorded yet this cycle."` (`Settings.hs:1320`) end with a full stop; the other
+thirteen do not (`"No members yet"`, `"No teams yet"`, `"Nothing archived"`, …). Body text
+mostly *does* end with a period, except `"Test your integrations to see results here"`
+(`Settings.hs:988`).
+
+Same class as the toast capitalisation split, and the same fix: pick the convention (titles
+without, bodies with) and make the three outliers match.
+
+**A note on the scan, not the code.** It initially reported `Share.hs:194` as having a URL
+in the title position — apparently a swapped-argument bug. It is not: the real code is
+`blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn
+about Monoscope"}`, and my regex grabbed the first two quoted strings after `emptyState_`,
+which belong to the `ESLink` action rather than the title/body. The call sites
+(`blank "clock" "Link expired" "…"`) are correct.
+
+Worth recording because it is the same failure mode as the earlier measurement bugs:
+**a regex that matches position rather than structure will confidently report a defect that
+is not there.** Every hit from these aggregate scans needs the source read before it is
+believed.
