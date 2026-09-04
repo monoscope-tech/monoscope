@@ -210,7 +210,7 @@ alertUpsertPostH pid form = do
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
     $ void
-    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = #{pid} AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |]
+    $ void (Projects.completeOnboardingStep pid "created_monitor")
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 

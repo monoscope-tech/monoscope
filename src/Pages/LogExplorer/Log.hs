@@ -876,7 +876,7 @@ recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [
 recordExploration pid uid stepsDone queryAST = do
   unless (V.elem "explored_logs" stepsDone)
     $ void
-    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = #{pid} AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |]
+    $ void (Projects.completeOnboardingStep pid "explored_logs")
   Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
 
 
