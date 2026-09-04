@@ -261,7 +261,7 @@ apiPostH pid apiKeyForm = do
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
     $ Just
     $ AE.object ["key_title" AE..= apiKeyForm.title]
-  addSuccessToast "Created API Key Successfully" Nothing
+  addSuccessToast "Created API Key successfully" Nothing
   addTriggerEvent "closeModal" ""
   let newKey = Just (pApiKey, encryptedKeyB64)
   addRespHeaders $ maybe (ApiPost pid apiKeys newKey) (const $ ApiPostCopy newKey True) apiKeyForm.from
@@ -1232,7 +1232,7 @@ billingPage d = div_ [] do
       basePriceNum =
         if
           | isFree -> 0
-          | d.paymentPlan == "Bring your own storage" -> 199
+          | Projects.isByosPlan d.paymentPlan -> 199
           | otherwise -> 29 :: Int64
       planPrice = show basePriceNum
       overageNum = overageReqs reqs
