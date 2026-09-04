@@ -1974,3 +1974,26 @@ Worth recording because it is the same failure mode as the earlier measurement b
 **a regex that matches position rather than structure will confidently report a defect that
 is not there.** Every hit from these aggregate scans needs the source read before it is
 believed.
+
+## The user-visible copy cluster — one actionable task
+
+Three aggregate scans found the same class of drift. Together they are one small, zero-risk
+piece of work:
+
+| class | scanned | convention | outliers |
+|---|---|---|---|
+| toast messages | 57 | sentence case (46) | **6** — see the table above |
+| empty-state copy | 15 | titles without a full stop, bodies with | **3** |
+| page titles | 27 | Title Case for multi-word (9) | **4** sentence case |
+
+The page-title split nearly has a rule — nav destinations Title Case ("API Catalog",
+"Service Map", "Live Tail"), transient/status pages sentence case ("Discord app installed",
+"Shared event"). But **"Team details" and "Monitor Overview" are the same kind of page with
+different casing**, so it is drift rather than a convention someone chose.
+
+Also: `"Endpoints for"` (`Endpoints.hs:276`) reads like a title with its suffix lost —
+worth checking whether it is meant to be interpolated with a host name.
+
+None of this is a defect; all of it is what "the platform is not uniform anymore" looks like
+where users actually see it. Roughly a dozen string edits, no logic touched. Deferred here
+only because the integration suite was mid-run and source edits restart it.
