@@ -2298,3 +2298,36 @@ It is deterministic rather than concurrent: instead of racing two requests, it r
 step through the atomic path and *then* performs the write whose snapshot predates it —
 the interleaving the race produces, made explicit. A genuinely concurrent test here would
 be flaky in the dangerous direction (passing while the bug is present).
+
+### The same shape, one column over
+
+Having found the steps race by asking "who computes a new value for this column?", the
+same question against its immediate neighbour answered itself: `questions` was written the
+same way — read the blob, merge in Haskell (`mergeQuestions`), write the whole thing back.
+
+Postgres already has that operation. `jsonb ||` merges with the right operand winning,
+which is exactly what `mergeQuestions` meant by "new answers win", so both handlers became
+
+```sql
+questions = COALESCE(questions, '{}'::jsonb) || #{answers}
+```
+
+and the helper is gone. This one is **narrower than the steps race and I could not
+reproduce it deterministically**: `sessionAndProject` re-reads instead of trusting the
+session cache while a project is still onboarding, so losing an answer requires two
+genuinely concurrent submissions rather than a stale snapshot. Recorded as hardening
+rather than claimed as a bug fix — and tested for what the change actually risks, which is
+the merge semantics, not the race. The onboarding walkthrough never asserted that the
+survey write preserves the info step's answers; it does now.
+
+Two smaller things worth keeping:
+
+- `mergeQuestions` folded a non-object `questions` value to `mempty`. The jsonb form does
+  not. Only these two statements ever write that column and both write an object, so that
+  branch defended against a state nothing can produce — the case `CLAUDE.md` says to
+  delete rather than preserve.
+- Removing the read nearly removed the **authorization** with it. `onboardingConfPostH`
+  called `sessionAndProject` for `project.questions`, but that call is also the membership
+  check. Dropping it because its *value* became unused would have made the handler
+  writable by any authenticated user. It stays, with a comment saying why. General form:
+  **before deleting a call whose result you stopped using, ask what else it was doing.**
