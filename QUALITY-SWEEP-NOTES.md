@@ -1560,3 +1560,32 @@ expected: ["last_seen","duration_ns","error_count","event_count"]
 — identical, because the difference was appended prose beyond the visible line. What
 located it was `sed` refusing the file with `RE error: illegal byte sequence` (an em-dash
 nearby). **When a diff shows two identical strings, stop reading the diff and dump bytes.**
+
+## Checking every `WrappedEnumSC` enum for hardcoded wire strings
+
+Generalised the literal-grep: for each of the 32 `WrappedEnumSC` enums, compute its wire
+slugs and look for them hardcoded outside the owning module. High false-positive rate —
+short slugs like `error`, `info`, `service`, `events` collide with route paths, CSS classes
+and field names — but two hits were the same concept:
+
+**Fixed (`91bf6807`): `allChannels`.** `Pages/Projects.hs` listed
+`["email","slack","discord","phone","pagerduty"]` while `NotificationChannel` derives
+exactly those. The code documented its own bug — *"If a new channel type is ever added, it
+must also be added to `allChannels` or it will silently be treated as enabled for every
+project"* — which is a comment doing a type's job. Now `map display [minBound .. maxBound]`,
+pinned by a doctest because those spellings are what the form posts and what
+`disabled_channels` stores.
+
+**Recorded, not fixed: `"above"`/`"below"` in `Pages/Monitors.hs`.** Three literals — the
+dropdown values (`:305`), its selected-value `bool` (`:305`), and
+`triggerLessThan = alertForm.direction == "below"` (`:156`). The failure mode is nasty: if
+the dropdown value ever changed case, the comparison silently yields `False` and **alerts
+fire in the wrong direction**.
+
+Left alone because the obvious fix is disproportionate and slightly wrong. `Monitors.hs`
+does not import `Models.Apis.Issues`, and `ThresholdDirection` belongs to a different
+domain — it describes a *fired alert's* direction (`QueryAlertData.thresholdType`), while
+a monitor stores `triggerLessThan :: Bool`. Typing the form field would need a
+cross-module dependency plus a `FromHttpApiData` instance, to remove three literals that
+sit in one file 150 lines apart. Worth doing only if the form gains a third direction or
+the monitor starts storing the direction rather than a Bool.
