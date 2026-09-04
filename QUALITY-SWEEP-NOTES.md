@@ -1928,6 +1928,24 @@ alone rather than in a list.** Toasts, page titles, empty-state copy, aria-label
 suggests the cheap defence — periodically collect each class and read it as a set, which is
 exactly how both of these were measured.
 
+**Tested immediately, and it failed.** Aria-labels are authored individually and never
+viewed together, so the predictor says they should have drifted. They have not: **96
+distinct labels, zero case duplicates, 79 sentence case**, and all seven apparent outliers
+are justified proper nouns or feature names ("AI", "YAML", "AI Assistant", "Real User
+Monitoring", "Open Documentation").
+
+So "authored alone" is *not* sufficient to cause drift. The likelier difference is that
+aria-labels are usually derived from adjacent visible text — `Aria.label_ "Close YAML
+editor"` sits next to the button it labels — so they inherit consistency from copy the
+author is already looking at. Toast messages are free-form sentences with no neighbour to
+match.
+
+Refined, and stated as a hypothesis rather than a rule: **drift needs both isolation and
+the absence of a nearby exemplar.** That still predicts toasts (isolated, free-form), and
+correctly predicts that headers and aria-labels are safe. It is one data point away from
+being wrong again, so treat the aggregate scan as the reliable tool and the theory as
+scaffolding.
+
 It also explains why the earlier structural findings clustered where they did.
 `servicePicker_`, `plainCell` and the Kubernetes readiness badge all render *one* thing in
 *one* place; nothing ever displays them side by side, so divergence is invisible until
