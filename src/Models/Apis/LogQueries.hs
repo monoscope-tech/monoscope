@@ -735,6 +735,15 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
 --
 -- >>> map sessionSortColumn [SortLastSeen, SortDuration, SortErrors, SortEvents]
 -- ["last_seen","duration_ns","error_count","event_count"]
+sessionSortColumn :: SessionSort -> Text
+sessionSortColumn = \case
+  SortLastSeen -> "last_seen"
+  SortFirstSeen -> "first_seen"
+  SortDuration -> "duration_ns"
+  SortErrors -> "error_count"
+  SortEvents -> "event_count"
+
+
 -- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
 -- 'Pages.RealUserMonitoring.tabParam' and the tab functions.
 --
@@ -755,15 +764,6 @@ sessionSortLabel = \case
   SortDuration -> "Duration"
   SortErrors -> "Errors"
   SortEvents -> "Events"
-
-
-sessionSortColumn :: SessionSort -> Text
-sessionSortColumn = \case
-  SortLastSeen -> "last_seen"
-  SortFirstSeen -> "first_seen"
-  SortDuration -> "duration_ns"
-  SortErrors -> "error_count"
-  SortEvents -> "event_count"
 
 
 fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
