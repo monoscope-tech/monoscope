@@ -1052,3 +1052,34 @@ vocabularies are disjoint (`deactivate|reactivate|mute|unmute|resolve|delete` vs
 `archive|unarchive`). A shared `BulkAction` type would make `mute` representable on the
 dashboards route. A blind `sed` over `Capture "action" Text` hits all five — I did exactly
 that and caught it in the output before it landed.
+
+## Silent no-op fall-throughs, codebase-wide: 13, one worth fixing
+
+Scanned every `_ -> pass|pure ()|mempty|pure Nothing` arm in `src/`. Most are correct:
+`Config.hs:492` covers migration success (the failure arm `error`s loudly);
+`Settings.hs:1612` covers a normal non-trialing subscription, with the anomalous
+"trialing but no trial_end" case logged at attention on the line above; the `Discord.hs`
+arms are on Discord's own foreign enums.
+
+**`Anomalies.severityBadge_` is the one to fix.** All three callers hold a typed severity
+and throw the type away to call it:
+
+```haskell
+severityBadge_ (display issue.severity)   -- x3
+severityBadge_ :: Text -> Html ()
+severityBadge_ = \case
+  "critical" -> ...
+  "warning"  -> ...
+  _ -> pass
+```
+
+`data IssueSeverity = Critical | Warning | Info | Low`, so `Info` and `Low` render no
+badge. That is probably intended — but it is expressed as a fall-through on a
+round-trip through `Text`, which means a renamed constructor silently removes *both*
+badges rather than failing to compile. Taking `IssueSeverity` directly and spelling out
+`Info -> pass` / `Low -> pass` makes the omission a stated decision, drops three `display`
+calls, and turns a rename into a compile error.
+
+`issueStateBadge_` (`:2013`) is the same shape on `Maybe IssueEvent` — six events badged,
+the rest silently unbadged. Lower value (the events genuinely are a long tail and most
+should not badge), but it is the same trade if anyone touches it.
