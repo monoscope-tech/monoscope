@@ -1021,3 +1021,34 @@ repeated 4-line block in it. Consolidating distinct markup does not reduce anyth
 relocates it. Combined with the corrected size figures (+411 net code across the sweep,
 69% of `src/` is code, 18% documentation), the "verbosity and no reuse" premise does not
 survive measurement.
+
+## The five bulk-action handlers — one silent outlier, now fixed
+
+Five routes share the `Capture "action" Text` + `case action of` shape. Surveyed all of
+them for what happens on an unrecognised action:
+
+| handler | unknown action | verdict |
+|---|---|---|
+| `alertBulkActionH` (monitors) | `_ -> pass` — **200, fires `monitorsListChanged`, does nothing** | **defect, fixed in `7058d5c7`** |
+| `anomalyBulkActionsPostH` | `throwError err400` naming the action | correct |
+| `dashboardBulkActionPostH` | `addErrorToast "Invalid action"` | correct |
+| `apiCatalogBulkActionH` | `throwError err400` naming the action | correct |
+| `manageTeamBulkActionH` | `toastError "Invalid action"` | correct |
+
+Four of five fail visibly; one reported success while doing nothing. That is the
+uniformity problem in its clearest form — not five different designs, but one silent
+divergence from a norm the other four already hold.
+
+**The other four are deliberately left stringly-typed.** They are still producer/consumer
+literal pairs that could drift, but a drift is *visible* (400 or an error toast), so the
+marginal value of a sum type is much lower than it was for monitors, where drift was
+silent. Typing each would cost ~20 lines for a guarantee already enforced at runtime with
+a clear error. Revisit if one of them grows a third consumer, which is what made the
+monitors case worth it.
+
+Note for whoever does revisit: **they need four separate types, not one shared enum.** The
+vocabularies are disjoint (`deactivate|reactivate|mute|unmute|resolve|delete` vs
+`acknowledge|unacknowledge|archive|unarchive` vs `delete|add_teams` vs
+`archive|unarchive`). A shared `BulkAction` type would make `mute` representable on the
+dashboards route. A blind `sed` over `Capture "action" Text` hits all five — I did exactly
+that and caught it in the output before it landed.
