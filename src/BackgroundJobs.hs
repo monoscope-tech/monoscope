@@ -1,12 +1,12 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (.~), (^.), (^?), _1, _3)
+import Control.Lens (view, (.~), (^.), (^..), (^?), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
@@ -2942,12 +2942,31 @@ reportUsageToStripe apiKey customerId eventName quantity = do
 
 
 -- | `trialEnd` is Nothing when the sub has no trial or the trial is over.
+-- `currentPeriodStart`/`currentPeriodEnd` are the subscription's own billing window
+-- — the one Stripe invoices against — as POSIX seconds.
 data StripeSubDetails = StripeSubDetails
   { subItemId :: Text
   , priceId :: Text
   , status :: Text
   , trialEnd :: Maybe Int
+  , currentPeriodStart :: Maybe Int
+  , currentPeriodEnd :: Maybe Int
   }
+
+
+-- | One Stripe invoice. `periodStart`/`periodEnd` (POSIX seconds) are the usage
+-- window the invoice bills for — contiguous with the subscription item's period,
+-- which is why they, and not our own month arithmetic, define a past cycle.
+-- `total` is in cents; `hostedUrl` is absent on drafts.
+data StripeInvoice = StripeInvoice
+  { periodStart :: Int
+  , periodEnd :: Int
+  , total :: Int
+  , status :: Text
+  , hostedUrl :: Maybe Text
+  , number :: Maybe Text
+  }
+  deriving stock (Eq, Show)
 
 
 -- | Returns Nothing on HTTP/network/TLS error or JSON decode miss. Callers
@@ -2963,7 +2982,32 @@ getStripeSubDetails apiKey subId = do
     priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
     let status = fromMaybe "" (v ^? AL.key "status" . AL._String)
         trialEnd = v ^? AL.key "trial_end" . AL._Integer <&> fromInteger
+        -- API version 2025-03-31.basil moved these off the subscription and onto
+        -- each item; read the item first and fall back for older-versioned accounts.
+        epochAt k = fmap fromInteger $ v ^? AL.key "items" . AL.key "data" . AL.nth 0 . AL.key k . AL._Integer <|> v ^? AL.key k . AL._Integer
+        currentPeriodStart = epochAt "current_period_start"
+        currentPeriodEnd = epochAt "current_period_end"
     pure StripeSubDetails{..}
+
+
+-- | A subscription's invoices, newest first. Empty on any HTTP/decode failure —
+-- this only enriches the billing page, so a Stripe outage must degrade it, not fail it.
+getStripeInvoices :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Eff es [StripeInvoice]
+getStripeInvoices apiKey subId = do
+  respE <- tryAny $ W.getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/invoices?limit=12&subscription=" <> toString subId)
+  pure $ fromMaybe [] do
+    resp <- rightToMaybe respE
+    v <- AE.decode @AE.Value (resp ^. responseBody)
+    pure
+      [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
+      | inv <- v ^.. AL.key "data" . AL.values
+      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
+      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
+      , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
+            status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
+            hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
+            number = inv ^? AL.key "number" . AL._String
+      ]
 
 
 -- | Enqueues TrialEndingReminder jobs at T-7d and T-3d. Enqueue failures are

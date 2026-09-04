@@ -43,6 +43,8 @@ module Pages.Settings (
   manageBillingGetH,
   BillingGet (..),
   BillingData (..),
+  BillingCycle (..),
+  billingPage,
   -- Stripe
   stripeWebhookPostH,
   createStripeCheckoutSession,
@@ -68,7 +70,7 @@ import Data.Effectful.Notify qualified as Notify
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -1172,8 +1174,26 @@ data BillingData = BillingData
   , dailyUsage :: [Projects.DailyUsage]
   -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
   , cycleStart :: Day
-  , pastCycles :: [(Day, Day, Int64, Int64)]
-  -- ^ (cycleStart, cycleEndExclusive, totalRequests, totalBytes) for prior cycles, newest first
+  , cycleEnd :: Maybe Day
+  -- ^ End of the current cycle. Known only when Stripe told us — we don't
+  -- project a renewal date we can't stand behind.
+  , currentInvoice :: Maybe BJ.StripeInvoice
+  -- ^ Stripe's own invoice for the cycle in flight, once it has cut one. Its
+  -- total is what the customer will be charged, so it wins over our estimate.
+  , pastCycles :: [BillingCycle]
+  -- ^ Newest first.
+  }
+
+
+-- | One closed billing cycle. `invoice` is present for Stripe-billed cycles and
+-- carries what Stripe actually charged, plus where the customer can read it.
+data BillingCycle = BillingCycle
+  { start :: Day
+  , end :: Day
+  -- ^ Exclusive.
+  , requests :: Int64
+  , bytes :: Int64
+  , invoice :: Maybe BJ.StripeInvoice
   }
 
 
@@ -1191,30 +1211,50 @@ manageBillingGetH pid = do
   let dat = fromMaybe project.createdAt project.billingDay
       envCfg = bw.config
   currentTime <- Time.currentTime
-  let cycleStart = calculateCycleStartDate dat currentTime
+  stripeM <- stripeBillingPeriods envCfg project
+  let cycleStart = maybe (calculateCycleStartDate dat currentTime) (.periodStart) stripeM
+      cycleEnd = utctDay . (.periodEnd) <$> stripeM
+      -- Closed invoices only: a draft covers the cycle in flight, and a void one
+      -- was never charged. Both would read as a past cycle that isn't one.
+      -- Stripe also issues a zero-length invoice at subscription start (the $0
+      -- trial opener, period_start == period_end); it bills no window, and its
+      -- exclusive-end label would render as a backwards date range.
+      billed = [i | i <- foldMap (.invoices) stripeM, i.status `notElem` ["draft", "void"], i.periodEnd > i.periodStart, epochDay i.periodEnd <= utctDay cycleStart]
       thirtyDaysAgo = addUTCTime (negate $ 30 * 86400) currentTime
       -- Walk cycle anchors backwards: each previous boundary is calculated by
       -- evaluating the cycle that ended 1s before the current one started.
       prevCycleStart cs = calculateCycleStartDate dat (addUTCTime (-1) cs)
       pastCycleCount = 6 :: Int
       pastBoundaries = take (pastCycleCount + 1) $ iterate prevCycleStart cycleStart
-      historyStart = fromMaybe cycleStart (viaNonEmpty last pastBoundaries)
+      historyStart = foldl' min (fromMaybe cycleStart (viaNonEmpty last pastBoundaries)) $ map (posixSecondsToUTCTime . fromIntegral . (.periodStart)) billed
       breakdownStart = min cycleStart thirtyDaysAgo
       fetchStart = min breakdownStart historyStart
   (totalRequests, totalBytes) <- Projects.getTotalUsage pid cycleStart
   allDaily <- Projects.getDailyUsageBreakdown pid fetchStart
   let breakdownDay = utctDay breakdownStart
       dailyUsage = filter ((>= breakdownDay) . (.day)) allDaily
-      -- Bucket prior cycles. pastBoundaries is newest-first; pair each cycle's
-      -- start with the next-newer boundary as its exclusive end.
-      pastCycles =
-        [ (utctDay cStart, utctDay cEnd, sum (map (.requests) inCycle), sum [u.eventBytes + u.metricBytes | u <- inCycle])
-        | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
-        , let s = utctDay cStart
-              e = utctDay cEnd
-              inCycle = filter (\u -> u.day >= s && u.day < e) allDaily
-        , not (null inCycle)
-        ]
+      usageIn s e = let rows = filter (\u -> u.day >= s && u.day < e) allDaily in (sum (map (.requests) rows), sum [u.eventBytes + u.metricBytes | u <- rows], not (null rows))
+      -- Stripe's invoice periods define the cycles when we have them: an estimate
+      -- computed over a window Stripe never billed is a number the customer's
+      -- invoice will never match. Otherwise pair each locally-derived cycle's
+      -- start with the next-newer boundary (pastBoundaries is newest-first).
+      pastCycles = case stripeM of
+        Just _ ->
+          [ BillingCycle{start, end, requests, bytes, invoice = Just inv}
+          | inv <- billed
+          , let start = epochDay inv.periodStart
+                end = epochDay inv.periodEnd
+                (requests, bytes, _) = usageIn start end
+          ]
+        Nothing ->
+          [ BillingCycle{start, end, requests, bytes, invoice = Nothing}
+          | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
+          , let start = utctDay cStart
+                end = utctDay cEnd
+                (requests, bytes, hasRows) = usageIn start end
+          , hasRows
+          ]
+      currentInvoice = find (\i -> i.status /= "void" && epochDay i.periodEnd > utctDay cycleStart) $ foldMap (.invoices) stripeM
   let lastReported = fmtDate "%b %-d" project.usageLastReported
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -1222,7 +1262,42 @@ manageBillingGetH pid = do
       -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
       -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
       provider = bool (Projects.projectProvider project) Projects.NoBillingProvider (Projects.isFreeTier project.paymentPlan)
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
+
+
+epochDay :: Int -> Day
+epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
+
+
+-- | Stripe's own view of a project's billing: the window it is currently billing
+-- and the invoices it has issued. Present only for a paid, Stripe-billed project
+-- whose subscription Stripe actually answered for — the billing page falls back
+-- to locally-derived cycles for everything else, so an outage degrades the page
+-- rather than failing it.
+data StripePeriods = StripePeriods
+  { periodStart :: UTCTime
+  , periodEnd :: UTCTime
+  , invoices :: [BJ.StripeInvoice]
+  }
+
+
+stripeBillingPeriods :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es (Maybe StripePeriods)
+stripeBillingPeriods envCfg project
+  | Projects.isFreeTier project.paymentPlan = pure Nothing
+  | Projects.projectProvider project /= Projects.StripeProvider = pure Nothing
+  | otherwise = case mfilter (not . T.null) project.subId of
+      Nothing -> pure Nothing
+      Just subId -> do
+        subM <- BJ.getStripeSubDetails envCfg.stripeSecretKey subId
+        case (,) <$> (subM >>= (.currentPeriodStart)) <*> (subM >>= (.currentPeriodEnd)) of
+          Nothing -> do
+            -- The cycle the customer is shown silently stops matching Stripe's, so
+            -- this can't be a quiet miss.
+            Log.logAttention "Billing page: Stripe period unavailable, falling back to local cycle" (project.id.toText, subId)
+            pure Nothing
+          Just (start, end) -> do
+            invoices <- BJ.getStripeInvoices envCfg.stripeSecretKey subId
+            pure $ Just StripePeriods{periodStart = posixSecondsToUTCTime (fromIntegral start), periodEnd = posixSecondsToUTCTime (fromIntegral end), invoices}
 
 
 billingPage :: BillingData -> Html ()
@@ -1237,7 +1312,12 @@ billingPage d = div_ [] do
       planPrice = show basePriceNum
       overageNum = overageReqs reqs
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
-      estCost = bool (usd (fromIntegral basePriceNum + overageCost)) "$0" isFree
+      -- Once Stripe has cut the invoice for this cycle, its total is the charge —
+      -- quote it instead of re-deriving a number that can only disagree.
+      estCost = case (isFree, d.currentInvoice) of
+        (True, _) -> "$0"
+        (_, Just inv) -> usdCents inv.total
+        _ -> usd (fromIntegral basePriceNum + overageCost)
       cycleStartText = fmtDate "%b %-d" d.cycleStart
   settingsSection_ do
     settingsH2_ "Billing"
@@ -1253,11 +1333,11 @@ billingPage d = div_ [] do
 
     -- Usage section
     div_ [class_ "border-t border-strokeWeak pt-6 space-y-4"] do
-      sectionLabel_ $ "Billing cycle (since " <> cycleStartText <> ")"
+      sectionLabel_ $ maybe ("Billing cycle (since " <> cycleStartText <> ")") (\e -> "Billing cycle (" <> cycleStartText <> " – " <> fmtDate "%b %-d" (addDays (-1) e) <> ")") d.cycleEnd
       -- Estimated cost as the primary stat; requests as supporting context
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
-        div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
+        div_ [class_ "text-sm text-textWeak mt-0.5"] $ maybe "Estimated this cycle" (const "Stripe's current invoice total") d.currentInvoice
         let bytesSuffix = bool "" (" · " <> formatBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
               if isFree || overageNum <= 0
@@ -1289,6 +1369,11 @@ billingPage d = div_ [] do
 
 usd :: Double -> Text
 usd n = "$" <> toText (printf "%.2f" n :: String)
+
+
+-- | Stripe reports money in the currency's minor unit.
+usdCents :: Int -> Text
+usdCents = usd . (/ 100) . fromIntegral
 
 
 -- | Requests past the 20M included in the paid plan (billed at $1 per 1M).
@@ -1399,12 +1484,14 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
 
 
--- | Past billing cycles, newest first. Estimated cost is computed from the
--- current plan's pricing (we don't snapshot the plan/price at cycle close), so
--- it's an approximation when the plan has changed.
-pastCyclesSection_ :: Bool -> Int64 -> [(Day, Day, Int64, Int64)] -> Html ()
+-- | Past billing cycles, newest first. A Stripe-billed cycle shows what Stripe
+-- actually charged, linked to the invoice. Without an invoice the cost is
+-- estimated from the /current/ plan's pricing (we don't snapshot the plan at
+-- cycle close), so it's an approximation when the plan has changed.
+pastCyclesSection_ :: Bool -> Int64 -> [BillingCycle] -> Html ()
 pastCyclesSection_ _ _ [] = mempty
 pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
+  let invoiced = any (isJust . (.invoice)) cycles
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Past cycles"
     span_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ let n = length cycles in show n <> " cycle" <> bool "s" "" (n == 1)
@@ -1415,21 +1502,30 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
           stickyTh_ "text-left" "Cycle"
           stickyTh_ "text-right" "Requests"
           stickyTh_ "text-right" "Volume"
-          stickyTh_ "text-right" "Est. cost"
+          stickyTh_ "text-right" $ bool "Est. cost" "Charged" invoiced
       tbody_ do
-        forM_ cycles \(cs, ce, reqs, bytes) -> do
-          -- ce is exclusive end; subtract 1 day for the human-facing label.
-          let endLabel = fmtDate "%b %-d" (addDays (-1) ce)
-              startLabel = fmtDate "%b %-d, %Y" cs
-              overage = overageReqs reqs
-              costText = bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000)) "—" isFree
+        forM_ cycles \c -> do
+          -- end is exclusive; subtract 1 day for the human-facing label.
+          let endLabel = fmtDate "%b %-d" (addDays (-1) c.end)
+              startLabel = fmtDate "%b %-d, %Y" c.start
+              overage = overageReqs c.requests
           tr_ [class_ "border-t border-strokeWeak"] do
             td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
-            td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (formatBytes bytes) (bytes > 0))
-            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml costText
+            td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF c.requests))
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (bool "—" (formatBytes c.bytes) (c.bytes > 0))
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] case c.invoice of
+              -- The amount is the link: an invoice the customer can open is the
+              -- only way to settle "why was I charged this".
+              Just inv ->
+                let amount = toHtml (usdCents inv.total)
+                 in maybe amount (\u -> a_ [class_ "link text-textBrand inline-flex items-center gap-1", href_ u, target_ "_blank", rel_ "noopener", title_ $ maybe "View this invoice on Stripe" ("Stripe invoice " <>) inv.number] $ amount <> faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3") inv.hostedUrl
+              Nothing -> toHtml $ bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000)) "—" isFree
   unless isFree
-    $ div_ [class_ "text-xs text-textWeak"] "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."
+    $ div_ [class_ "text-xs text-textWeak"]
+    $ bool
+      "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."
+      "Amounts and cycle dates come from Stripe. Requests and volume are what we recorded over each invoice's period."
+      invoiced
 
 
 ----------------------------------------------------------------------

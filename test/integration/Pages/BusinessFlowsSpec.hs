@@ -1,5 +1,6 @@
 module Pages.BusinessFlowsSpec (spec) where
 
+import BackgroundJobs qualified as BJ
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteArray qualified as BA
@@ -8,7 +9,7 @@ import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Data.Time (addUTCTime, getCurrentTime, getZonedTime)
+import Data.Time (Day, addUTCTime, fromGregorian, getCurrentTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -234,6 +235,37 @@ settingsTests = do
     result <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
     case result of
       (_, LemonSqueezy.BillingGet (PageCtx _ _)) -> pass
+
+  -- The cycle shown has to be the one Stripe bills, or every number on the page is
+  -- computed over a window the customer's invoice never covered. Past cycles come
+  -- from the invoices themselves, carrying what was actually charged and a link to it.
+  it "billing page uses Stripe's own cycle and links each invoice" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_test123") (Projects.SubItemId "si_test") (Projects.CustomerId "cus_test")
+    (_, LemonSqueezy.BillingGet (PageCtx _ d)) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
+    -- Stripe's item period, not calculateCycleStartDate over the project's created_at.
+    (d.cycleStart, d.cycleEnd) `shouldBe` (fromGregorian 2024 3 15, Just (fromGregorian 2024 4 15))
+    -- The draft invoice covers the cycle in flight: its total is the headline, and it
+    -- must not also be listed as a past cycle. Nor must the $0 zero-length invoice
+    -- Stripe issues at subscription start — it bills no window, and its exclusive-end
+    -- label would render backwards ("Jan 15, 2026 – Jan 14").
+    ((.total) <$> (d.currentInvoice :: Maybe BJ.StripeInvoice)) `shouldBe` Just (4150 :: Int)
+    map (\c -> (c.start, c.end, (.total) <$> c.invoice, (.hostedUrl) =<< c.invoice)) d.pastCycles
+      `shouldBe` ([ (fromGregorian 2024 2 15, fromGregorian 2024 3 15, Just 3400, Just "https://invoice.stripe.com/i/inv_two")
+                  , (fromGregorian 2024 1 15, fromGregorian 2024 2 15, Just 2900, Just "https://invoice.stripe.com/i/inv_one")
+                  ] :: [(Day, Day, Maybe Int, Maybe Text)])
+    let html = TL.toStrict $ renderText $ LemonSqueezy.billingPage d
+    html `shouldSatisfy` T.isInfixOf "https://invoice.stripe.com/i/inv_two"
+    html `shouldSatisfy` T.isInfixOf "$41.50"
+
+  -- A LemonSqueezy (or unbilled) project keeps the locally-derived cycle, with no
+  -- Stripe call made for it.
+  it "billing page keeps locally-derived cycles off Stripe" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test") V.empty
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ LemonSqueezy.manageBillingGetH testPid
+    filter (T.isInfixOf "stripe.com") (map fst reqs) `shouldBe` []
+    (_, LemonSqueezy.BillingGet (PageCtx _ d)) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
+    d.cycleEnd `shouldBe` Nothing
+    d.currentInvoice `shouldBe` Nothing
 
   it "should load delete project page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     (_, _result) <- testServant tr $ CreateProject.deleteProjectGetH testPid

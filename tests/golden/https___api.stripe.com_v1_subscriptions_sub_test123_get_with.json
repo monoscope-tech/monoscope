@@ -1,0 +1,13 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"id\": \"sub_test123\", \"object\": \"subscription\", \"status\": \"active\", \"trial_end\": null, \"current_period_start\": null, \"current_period_end\": null, \"items\": {\"object\": \"list\", \"data\": [{\"id\": \"si_test\", \"object\": \"subscription_item\", \"price\": {\"id\": \"price_graduated\"}, \"current_period_start\": 1710498600, \"current_period_end\": 1713177000}]}}",
+  "responseHeaders": [
+    [
+      "Content-Type",
+      "application/json"
+    ]
+  ],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}

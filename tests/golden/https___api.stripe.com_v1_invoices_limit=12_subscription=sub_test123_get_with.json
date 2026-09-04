@@ -1,0 +1,13 @@
+{
+  "statusCode": 200,
+  "statusMessage": "OK",
+  "respBody": "{\"object\": \"list\", \"data\": [{\"object\": \"invoice\", \"number\": null, \"status\": \"draft\", \"total\": 4150, \"amount_paid\": 0, \"period_start\": 1710498600, \"period_end\": 1713177000, \"hosted_invoice_url\": null, \"lines\": {\"data\": [{\"description\": \"1 x Graduated\", \"period\": {\"start\": 1710498600, \"end\": 1713177000}}]}}, {\"object\": \"invoice\", \"number\": \"MONO-0002\", \"status\": \"paid\", \"total\": 3400, \"amount_paid\": 3400, \"period_start\": 1707993000, \"period_end\": 1710498600, \"hosted_invoice_url\": \"https://invoice.stripe.com/i/inv_two\", \"lines\": {\"data\": [{\"description\": \"1 x Graduated\", \"period\": {\"start\": 1707993000, \"end\": 1710498600}}]}}, {\"object\": \"invoice\", \"number\": \"MONO-0001\", \"status\": \"paid\", \"total\": 2900, \"amount_paid\": 2900, \"period_start\": 1705314600, \"period_end\": 1707993000, \"hosted_invoice_url\": \"https://invoice.stripe.com/i/inv_one\", \"lines\": {\"data\": [{\"description\": \"1 x Graduated\", \"period\": {\"start\": 1705314600, \"end\": 1707993000}}]}}, {\"object\": \"invoice\", \"number\": \"MONO-0000\", \"status\": \"paid\", \"total\": 0, \"amount_paid\": 0, \"period_start\": 1705314600, \"period_end\": 1705314600, \"hosted_invoice_url\": \"https://invoice.stripe.com/i/inv_zero\", \"lines\": {\"data\": [{\"description\": \"Trial start\", \"period\": {\"start\": 1705314600, \"end\": 1705314600}}]}}]}",
+  "responseHeaders": [
+    [
+      "Content-Type",
+      "application/json"
+    ]
+  ],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}
