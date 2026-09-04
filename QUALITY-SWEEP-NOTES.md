@@ -1419,3 +1419,45 @@ hand-written `tabSlug`. The hand-written slug is *justified* — the wire spelli
 capitalised (`?filter=Acknowledged`) and `encodeEnumSC` snake-cases — but I named it
 `tabSlug` where the established convention is `tabParam`. Same pattern, gratuitously
 different name. Worth aligning if either is touched again.
+
+## `servicePicker_` — the clearest instance of the uniformity complaint
+
+Two pages render a control for the same user action ("filter this page to one service"),
+and they do not look or behave alike:
+
+| | `Pages/RealUserMonitoring.hs:696` | `Pages/Telemetry.hs:666` |
+|---|---|---|
+| signature | `RumData -> Html ()` | `ProjectId -> Text -> Html ()` |
+| control | native `<form>` + `<select>`, `onchange="this.form.requestSubmit()"` | `<button>` + popover `<div class="dropdown">` |
+| search | none | yes, an `<input>` inside the panel |
+| empty state | renders anyway — *"that is exactly when the user needs the control that got them there in order to get back out"* | n/a |
+| label | "All services" | "All Services" |
+
+Even the default option's capitalisation differs. This is what "the platform is not uniform
+anymore" looks like concretely: not duplicated code — they share almost no text — but two
+answers to one interaction question.
+
+Note which is *better* by the escalation ladder: RUM's is tier 2 (native select + form
+submit, no JavaScript), Telemetry's is a custom popover widget. The ladder prefers RUM's —
+but Telemetry's has search, which matters once a project reports many services. So the
+consolidation is a real design decision ("native select below N services, searchable
+popover above"), not a mechanical merge, and it needs a browser to verify. Recorded, not
+attempted.
+
+## Name-collision triage — complete
+
+14 function names are defined in more than one module. Full triage so nobody re-derives it:
+
+- **Genuine reimplementation (1):** `parseStackTrace` — see the stack-trace section.
+- **Genuine uniformity defect (1):** `servicePicker_` — above.
+- **Coincidental, correctly separate (12):** `runServer` (gRPC vs HTTP), `count` (metric
+  instrument vs a field), `issueTypeBadge` (HTML vs email — different output media),
+  `truncateText` (two deliberate truncation *policies*; MCP's marker is documented as
+  intentionally not-JSON), `toolError` (`Text` message vs `AE.Value` tool result),
+  `parseInstallState` (two different OAuth state encodings: `pid__x` vs `pid:dest`),
+  `renderTable` (`Widget`'s is a thin delegate to `renderTableShell`), `selectFrom`,
+  `parseTab`, `nonBlank`, `plainCell`, `renderNameCol`.
+
+**The lesson about the method:** the clone scan reported zero duplication at six lines and
+missed both real findings, because neither is copy-paste. Name collision found both. When
+looking for "we reinvented something we already had", grep for *names*, not *text*.
