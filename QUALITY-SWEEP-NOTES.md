@@ -2253,3 +2253,48 @@ hand in the handler. Duplication detectors do not find that class of defect, bec
 two copies do not look alike; they look like two different pieces of code that happen to
 mean the same thing. Reading by *concept* — "who else answers this question?" — found
 every one of them, and it is the only lens that kept paying all night.
+
+## The onboarding race had three more copies — and the fix that "shared one implementation" missed them
+
+`b30d874f` earlier tonight made `completeOnboardingStep` atomic and claimed to "share one
+implementation". Re-running the Models-vs-Pages lens found **three more read-modify-write
+sites still live**:
+
+```
+Onboarding.hs:258   insertIfNotExist "Info"    project.onboardingStepsCompleted
+Onboarding.hs:273   insertIfNotExist "Survey"  project.onboardingStepsCompleted
+Projects.hs:1407    insertIfNotExist "Pricing" project.onboardingStepsCompleted
+```
+
+The first two are **in the same file as `markStepCompleted`**, whose haddock says in so
+many words that the read-modify-write form "could lose one". The earlier fix converted the
+call sites it happened to be editing and never grepped for the rest.
+
+**The lesson is about how the first fix was scoped.** It searched for the *SQL* it was
+replacing. These three don't contain that SQL — they contain `insertIfNotExist`, a Utils
+helper whose entire purpose is to compute the appended array in Haskell. The right query
+was "who computes a new value for this column?", not "who writes this statement". Grepping
+the *helper that embodies the bad pattern* would have found all four at once.
+
+**Why the parameter went away instead of becoming atomic.** `updateProjectPricing` took
+`V.Vector Text` and wrote it to `onboarding_steps_completed`, so the defect was in the
+Models layer, not just its caller. Making that write atomic in place would have kept a
+parameter whose only correct use is a value the caller cannot compute safely. Removing it
+deletes the whole class of misuse: there is now no way to express the bug. The three
+`pricingUpdateH` branches were untouched because the local `updatePricing` absorbed the
+extra call.
+
+`insertIfNotExist` then had no callers anywhere and came out of `Utils`.
+
+**No test covered onboarding step completion at all** — `b30d874f` shipped without a
+regression guard, which is exactly why this survived. The guard now exists and was
+confirmed to fail first:
+
+```
+["Pricing"] does not contain ["explored_logs"]
+```
+
+It is deterministic rather than concurrent: instead of racing two requests, it records a
+step through the atomic path and *then* performs the write whose snapshot predates it —
+the interleaving the race produces, made explicit. A genuinely concurrent test here would
+be flaky in the dangerous direction (passing while the bug is present).
