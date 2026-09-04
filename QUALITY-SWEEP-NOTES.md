@@ -1630,3 +1630,39 @@ cabal build lib:monoscope-shared \
 ```
 
 Directory **and** registration, and rebuild with the *watcher's* flags, not the defaults.
+
+## `Containers` and `Infrastructure` — three small divergences
+
+`Infrastructure.hs` (1006 lines) already imports `Pages.Containers` (374), so these are not
+independent modules — Infrastructure builds on Containers. They share exactly one
+top-level name, but three things have drifted:
+
+**1. `plainCell` is defined in both, and they differ.**
+
+```haskell
+-- Containers:      maybe emDash_ (span_ [class_ "whitespace-nowrap text-textStrong tabular-nums"] . toHtml)
+-- Infrastructure:  maybe (span_ [class_ "text-textWeak"] "—")
+--                    (\v -> span_ [class_ "block truncate whitespace-nowrap …", data-tippy-content=v] …)
+```
+
+So "a plain table cell" truncates with a tooltip on one page and not on the other. Not
+mergeable without choosing which behaviour is right — a design call, like `servicePicker_`.
+
+**2. `emDash_` is private to `Containers` (6 uses); `Infrastructure` inlines its body**
+(`span_ [class_ "text-textWeak"] "—"`) byte-identically. Exporting it is a zero-risk
+one-liner, since the markup is the same.
+
+**3. Kubernetes readiness renders two ways.**
+
+| | Infrastructure | Containers |
+|---|---|---|
+| model | `KubeStatus = KubeReady \| KubeNotReady \| KubeUnknown` | `ready :: Maybe Int` |
+| ready / not ready | `badge-success` "Ready" / `badge-error` "Not ready" | identical |
+| unknown | `badge-ghost` **"Unknown"** | **em-dash** |
+
+Same labels and badge classes, different unknown handling — one shows a badge, the other
+shows nothing. Merging needs the `Maybe Int` mapped onto `KubeStatus`, which is a modelling
+decision, not a rename.
+
+None is a defect; all three are the "platform is not uniform" complaint at small scale,
+in two files that already depend on each other.
