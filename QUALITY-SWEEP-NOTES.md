@@ -1701,6 +1701,12 @@ four, and do not read a zero from one as an answer from all.
 | **Literal grep** — take a type's wire strings, grep the tree | per enum, after the type exists | `allChannels`; the nav's hardcoded tab strings; the sort dropdown | operations that share no literal |
 | **SQL by (operation, table)** — group every query by what it touches | regex over `[sql\| …\|]` | the onboarding lost-update race; three disagreeing archive paths | anything not expressed as SQL |
 
+**Route surface: clean.** 279 route declarations in `Web/Routes.hs`; **zero** share both a
+path and a verb. The 23 paths declared more than once are all correct REST — `Get`/`Put`/
+`Patch`/`Delete` on the same resource. No redundant endpoints to remove; the surface is
+large because the product is (log explorer, traces, dashboards, monitors, issues,
+endpoints, RUM, infra, settings, bots, API v1, MCP), not because it is duplicated.
+
 **A fifth lens that does *not* work: grouping by type signature.** Tried it — 28 identical
 one-argument signatures shared across modules by differently-named functions. Precision is
 near zero: `Text -> Text` covers escaping, KQL quoting, colour lookup and timestamp
