@@ -170,6 +170,9 @@ extra-source-files:
     static/migrations/0139_git_sync_announced_revision.sql
     static/migrations/0140_query_monitor_not_null_flags.sql
     static/migrations/0141_otel_http_route_column.sql
+    static/migrations/0142_error_patterns_shape_hash.sql
+    static/migrations/0143_error_group_reviews.sql
+    static/migrations/0144_learned_error_masks.sql
 
 source-repository head
   type: git
@@ -630,7 +633,6 @@ test-suite integration-tests
       LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
@@ -914,7 +916,6 @@ test-suite test-dev
       LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
-      Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec

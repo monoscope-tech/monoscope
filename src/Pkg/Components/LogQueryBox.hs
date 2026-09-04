@@ -12,6 +12,7 @@ import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.LogPatterns (knownPatternFields)
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
@@ -220,7 +221,7 @@ logQueryBox_ config = do
               , Aria.label_ "Sort sessions by"
               , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
               ]
-              $ options_ Nothing [("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")]
+              $ options_ Nothing [(LogQueries.sessionSortParam s, LogQueries.sessionSortLabel s) | s <- [minBound .. maxBound]]
             script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
             let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
