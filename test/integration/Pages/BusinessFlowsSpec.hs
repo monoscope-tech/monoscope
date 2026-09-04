@@ -260,7 +260,7 @@ settingsTests = do
   -- A LemonSqueezy (or unbilled) project keeps the locally-derived cycle, with no
   -- Stripe call made for it.
   it "billing page keeps locally-derived cycles off Stripe" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test") V.empty
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test")
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ LemonSqueezy.manageBillingGetH testPid
     filter (T.isInfixOf "stripe.com") (map fst reqs) `shouldBe` []
     (_, LemonSqueezy.BillingGet (PageCtx _ d)) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
