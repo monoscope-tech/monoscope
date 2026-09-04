@@ -1195,3 +1195,33 @@ worth typing are the *domain* records:
 - `GroupReview.verdict` in two modules — see above.
 
 None are defects today; all are seams where the next silent divergence will come from.
+
+## ~90 pending examples every run — mostly legitimate, one dead file
+
+Every suite run reports 84–90 *pending*. Pending reads as green, so it is worth knowing
+what is actually being skipped. Across the log:
+
+| skips | reason |
+|---|---|
+| 865 | `monoscope exe not built — set MONOSCOPE_BIN or run cabal build all first` |
+| 308 | `Set MONOSCOPE_API_KEY …` — hits the live API, correctly skipped locally |
+| 42 | CLI binary not built |
+| 27 | **no reason given** |
+| 24 | documented (`no fixture reaches the backend: unknown fields are rejected at parse time`) |
+
+The exe/CLI skips are structural: the dev loop runs `cabal repl`, so `exe:monoscope` is
+never built and those tests never execute locally. They are not broken — but nobody should
+read a local green run as covering them.
+
+**`test/integration/Opentelemetry/OtlpServerSpec.hs` is dead and should be deleted.** All
+42 lines of it: one `it "should process a request" $ const pending` that asserts nothing,
+plus 30 lines of commented-out tests written against `runM . evalState mockDB . runReader
+…` — a `freer-simple`-style stack this codebase abandoned for `effectful`. They cannot be
+uncommented as written.
+
+No coverage is lost. OTLP ingestion is exercised by `GrpcIngestionSpec` (865 lines, 41
+examples), `TimefusionWriteFailureSpec` (414 lines, 15), and `StandardOtelSpansSpec` (145
+lines, 7). `OtlpServerSpec`'s only `processList` mentions are inside the dead comments.
+
+Deleting it needs `hpack` afterwards — `monoscope.cabal` lists the module in
+`other-modules` even though `hspec-discover` finds specs automatically.
