@@ -704,6 +704,58 @@ this one needs the query looked at rather than the window. `build.log` shows thi
 exact statement timing out and being retried by `retryTransientEff`, so it is
 already visible in production telemetry.
 
+## 11. `/impeccable critique` — 23/40, and what it changed
+
+Full snapshot: `.impeccable/critique/2026-09-04T07-57-46Z__src-pages-anomalies-hs.md`.
+Run dual-agent (independent design review + deterministic detector/browser
+evidence). Verdict: **not AI slop — the chrome is 3s and the content semantics
+are 1s and 2s.** Deterministic scan came back genuinely clean: 3 findings, all
+one rule, all false positives traced to a line-level heuristic tripping on a
+focus-ring radius. Accessibility measured better than expected — 0 unnamed
+buttons or links, no positive `tabindex`, and 0 duplicate `class_` attributes.
+
+Shipped from the backlog (`028550d95`, `8bd69ac47`, `fcf9a0396`):
+
+- **P0 — an optional lookup took the whole page down.** The session-id query
+  behind Session Replay was unguarded, so a transient TF error returned a bare
+  500 for the entire issue — failing exactly when TF is degraded, which is when
+  someone is reading about an incident. All three enrichment lookups now degrade
+  and log. *Observed twice live before it was fixed.*
+- **P1 — issue state was invisible here.** `issueStateBadge_` (REGRESSED /
+  RESOLVED / REOPENED / ACK EXPIRED) was rendered only by the list card.
+  **This corrects §9A, which claimed `issueStatusStrip_` already owned state —
+  it does not**, it guards `archivedAt`/`acknowledgedUntil` and nothing else. The
+  strip also short-circuited, so an archived+acknowledged issue showed one banner
+  while the action bar offered to un-acknowledge a state the page never mentioned.
+- **P1 — the heading outline was inverted.** `h1` was the breadcrumb number, the
+  issue title an `h3`, and on three of four types the only `h2` was an
+  empty-state string — a screen reader heard "No stack trace in this event"
+  outrank the incident. Now `h1` (shell) → `h2` (issue) → `h3` (evidence), and
+  every `detailCard_` title has a heading role it never had.
+- **P1 — the count was the smallest thing in its row**, contradicting the very
+  research this page was built from. Now a labelled `EVENTS` figure at headline
+  weight, Datadog-style.
+- **P2 — red was decoration.** Verified: the query-alert series fell through to
+  `colors[hashString(name) % n]`, the *same* hash as an error-volume chart, so
+  healthy checkout throughput rendered in error-red. Lone aggregates now use the
+  brand colour; grouped series keep the hash, which is what the hash is for.
+
+Guarded by a new spec (27 examples, 0 failures) asserting the outline, the fact
+row, and the events figure.
+
+**Also relabelled** the log-pattern chip to "N all time", because an unqualified
+"14 occurrences" beside a chart reading "No data in this time range" reads as the
+page contradicting itself rather than as two true numbers at different scopes.
+
+### Still open after this pass
+
+- **F9** — a log-pattern issue referencing a hash no telemetry carries (data).
+- **F11** — the Logs tab hangs on "Loading events…" when the result is empty.
+- **F12** — the trace-scoped logs query costs ~47s and fires on every page load.
+- The critique's own open questions, which I think are the strongest remaining
+  design leads: whether a QueryAlert belongs on this page at all, and why the AI
+  is still a hidden chat drawer when §3b recorded the opposite as Datadog's win.
+
 ### What I want reviewed before building
 
 1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
