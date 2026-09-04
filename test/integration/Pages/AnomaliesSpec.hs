@@ -541,6 +541,14 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` not . T.isInfixOf "Show 1 runtime frames"
       -- ...and the original text stays one disclosure away.
       html `shouldSatisfy` T.isInfixOf "Raw"
+      -- Source context: /code_context resolves file+line to real source through the
+      -- project's Git integration and had never been called from anywhere. Each frame
+      -- with a file and line now asks for it, lazily — `intersect once` inside a closed
+      -- <details>, so a page with 40 frames issues no GitHub reads until one is opened.
+      html `shouldSatisfy` T.isInfixOf "/code_context?file="
+      html `shouldSatisfy` T.isInfixOf "MyClass.java"
+      html `shouldSatisfy` T.isInfixOf "line=25"
+      html `shouldSatisfy` T.isInfixOf "intersect once"
 
     -- Regression: a query alert used to render its KQL string and nothing else — not
     -- the threshold, not the value that crossed it, no chart, no monitor link. Below

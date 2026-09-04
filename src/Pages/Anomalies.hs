@@ -357,8 +357,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
 -- Falls back to the raw block when the parser recognises nothing, and keeps the
 -- original text one disclosure away regardless: a reader chasing a stack trace should
 -- never be forced to trust our parse of it.
-stackTrace_ :: Maybe Text -> Text -> Html ()
-stackTrace_ runtimeM raw = case EF.parseStackTrace (EF.parseRuntime $ fromMaybe "" runtimeM) raw of
+stackTrace_ :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text -> Html ()
+stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime $ fromMaybe "" runtimeM) raw of
   [] -> rawBlock
   frames -> do
     let systemCount = length $ filter (not . (.isInApp)) frames
@@ -368,15 +368,33 @@ stackTrace_ runtimeM raw = case EF.parseStackTrace (EF.parseRuntime $ fromMaybe 
         -- order is the call path, and resequencing it to tidy the list would misreport
         -- what called what.
         div_ [class_ $ "px-4 py-2 text-sm " <> bool "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" "" f.isInApp] do
-          div_ [class_ "flex flex-wrap items-baseline gap-x-2"] do
-            span_ [class_ $ "font-mono " <> bool "text-textWeak" "text-textStrong font-medium" f.isInApp] $ toHtml f.functionName
-            whenJust (mfilter (not . T.null) $ Just f.filePath) \fp ->
-              span_ [class_ "font-mono text-xs text-textWeak break-all"]
-                $ toHtml
-                $ fp
-                <> foldMap (\l -> ":" <> show l) f.lineNumber
-          -- Source context is the thing that makes a Sentry frame readable. No SDK we
-          -- ingest sends it yet, so this renders only when one starts to.
+          let frameLabel = div_ [class_ "flex flex-wrap items-baseline gap-x-2"] do
+                span_ [class_ $ "font-mono " <> bool "text-textWeak" "text-textStrong font-medium" f.isInApp] $ toHtml f.functionName
+                whenJust (mfilter (not . T.null) $ Just f.filePath) \fp ->
+                  span_ [class_ "font-mono text-xs text-textWeak break-all"]
+                    $ toHtml
+                    $ fp
+                    <> foldMap (\l -> ":" <> show l) f.lineNumber
+          -- Source context is what makes a Sentry frame readable, and we already had the
+          -- machinery: /code_context resolves file+line to real source through the
+          -- project's Git integration, cached, and nothing had ever called it. Loaded per
+          -- frame on `intersect once` *inside* a closed <details>, so it fires when the
+          -- reader opens that frame and never before — one GitHub read on demand rather
+          -- than one per frame per page load.
+          case (mfilter (not . T.null) (Just f.filePath), f.lineNumber) of
+            (Just fp, Just ln) -> details_ [class_ "group/frame"] do
+              summary_ [class_ "cursor-pointer list-none [&::-webkit-details-marker]:hidden"] frameLabel
+              div_
+                [ class_ "mt-1"
+                , hxGet_ $ "/p/" <> pid.toText <> "/code_context?file=" <> toUriStr fp <> "&line=" <> show ln <> foldMap (\sv -> "&service=" <> toUriStr sv) serviceM
+                , hxTrigger_ "intersect once"
+                , hxSwap_ "innerHTML"
+                ]
+                $ div_ [class_ "px-2 py-1"]
+                $ loadingIndicator_ LdSM LdDots
+            _ -> frameLabel
+          -- An SDK that ships context inline is rendered directly; nothing we ingest does
+          -- yet, but the field is in the parser and costs one line to honour.
           whenJust f.contextLine
             $ pre_ [class_ "mt-1 text-xs font-mono text-textStrong bg-fillWeaker rounded px-2 py-1 overflow-x-auto"]
             . toHtml
@@ -906,7 +924,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
                     pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml exceptionData.errorMessage
                   if hasStack
-                    then stackTrace_ (errM >>= (.base.errorData.runtime)) trimmedStack
+                    then stackTrace_ pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) (errM >>= (.base.errorData.runtime)) trimmedStack
                     else
                       -- Every runtime exception in the demo project (151 of 151) lands
                       -- here: OTel's exception event carries `message` and `type` but no
