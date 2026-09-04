@@ -1,4 +1,4 @@
-module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), CatalogBulkAction (..)) where
+module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -10,7 +10,6 @@ import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
-import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
@@ -20,9 +19,9 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
 import PyF qualified
 import Relude hiding (ask, asks)
-import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
@@ -74,8 +73,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
       -- request_type and let the handler resolve direction per row.
       bulkActionItem =
         if showArchived
-          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/unarchive"}
-          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive?request_type=" <> currentTab}
+          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAUnarchive}
+          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAArchive <> "?request_type=" <> currentTab}
       hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
       cols = catalogColumns pid baseUrl periodT
       hostRowId = Just \(vm :: HostEventsVM) -> vm.events.host
@@ -425,8 +424,24 @@ instance ToHtml CatalogBulkAction where
   toHtmlRaw = toHtml
 
 
+-- | The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: HostBulkAction]
+-- ["archive","unarchive"]
+data HostBulkAction = BAArchive | BAUnarchive
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" HostBulkAction
+
+
+-- | Past-tense verb for the success toast. Was built as @action <> "d"@, which only
+-- worked because both slugs happen to end in @e@.
+actionPast :: HostBulkAction -> Text
+actionPast BAArchive = "Archived"
+actionPast BAUnarchive = "Unarchived"
+
+
 apiCatalogBulkActionH
-  :: Projects.ProjectId -> Text -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
+  :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
 apiCatalogBulkActionH pid action currentTabM items = do
   -- TODO: emit a host-activity log entry per item once the activity feed
   -- accepts non-issue events (mirrors anomalyBulkActionsPostH's per-item
@@ -436,25 +451,24 @@ apiCatalogBulkActionH pid action currentTabM items = do
   -- Archived tab) means apply to whichever direction the host carries.
   let outgoingM = directionOf =<< currentTabM
       requested = length items.itemId
-      logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= action, "requested_count" AE..= requested] <> extra
+      logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= bulkActionSlug action, "requested_count" AE..= requested] <> extra
   if requested == 0
     then addErrorToast "No hosts selected" Nothing
     else do
-      op <- case action of
-        "archive" -> pure $ Endpoints.ArchiveBy sess.user.id
-        "unarchive" -> pure Endpoints.Unarchive
-        _ -> throwError err400{errBody = "unhandled api_catalog bulk action: " <> encodeUtf8 action}
+      let op = case action of
+            BAArchive -> Endpoints.ArchiveBy sess.user.id
+            BAUnarchive -> Endpoints.Unarchive
       affected <- Endpoints.setHostsArchived pid outgoingM op items.itemId
       let touched = fromIntegral affected :: Int
           noun = bool "hosts" "host" (requested == 1)
       if touched == 0
         then do
           logAttention "api_catalog bulk action affected 0 rows" $ logCtx ["outgoing" AE..= outgoingM]
-          addErrorToast ("Could not " <> action <> " " <> noun) (Just "Already in that state, or rows were removed")
+          addErrorToast ("Could not " <> bulkActionSlug action <> " " <> noun) (Just "Already in that state, or rows were removed")
         else do
           when (touched < requested)
             $ logAttention "api_catalog bulk action partially applied"
             $ logCtx ["affected_count" AE..= touched]
-          addSuccessToast (action <> "d " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
+          addSuccessToast (actionPast action <> " " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
           addTriggerEvent "apiCatalogChanged" AE.Null
   addRespHeaders CatalogBulkDone

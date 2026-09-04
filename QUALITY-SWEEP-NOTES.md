@@ -2069,3 +2069,52 @@ whatever this codebase's problems are, accumulated dead functions is not one of 
 CLI renders its summaries through `renderSummaryItems`/`renderSummaryCell` instead. Deleted
 with its private helper `sparklineBlocks`. Verified via the doctest suite, since `build.log`
 cannot see edits under `shared/` — the watcher builds that package before its repl starts.
+
+## The last four `Capture "action" Text` routes
+
+Tonight's `MonitorBulkAction` conversion left four bulk-action routes still capturing a
+bare `Text`. Three are live and are now typed; the fourth turns out to be unreachable.
+
+| Route | Was | Now |
+| --- | --- | --- |
+| `dashboards/bulk_action/:action` | `Text` | `DashboardBulkAction` (`BADelete`, `BAAddTeams`) |
+| `api_catalog/bulk_action/:action` | `Text` | `HostBulkAction` (`BAArchive`, `BAUnarchive`) |
+| `issues/bulk_actions/:action` | `Text` | `IssueBulkAction` (4 constructors) |
+| `manage_teams/bulk_action/:action` | `Text` | **left alone — see below** |
+
+What each conversion actually bought, beyond tidiness:
+
+- **Dashboards** was the only one that failed *silently*. An unrecognised action fell
+  through to `_ -> addErrorToast "Invalid action"` and still answered `200 NoContent`, so
+  a typo'd link looked like a no-op rather than an error. That arm is now unrepresentable;
+  the route rejects the value before the handler runs.
+- **ApiCatalog** built its success toast as `action <> "d "`, which produced "archived" and
+  "unarchived" only because both slugs happen to end in `e`. Any third action beginning
+  with a consonant-final verb would have emitted broken English. Replaced with an explicit
+  `actionPast`, which also fixes the toast starting lowercase ("archived 3 hosts" →
+  "Archived 3 hosts") — consistent with the sentence-case pass earlier tonight.
+- **Anomalies** already 400'd correctly, so nothing was broken; the win is that the
+  `case` is now exhaustive over four constructors and the `_ -> throwError err400` arm is
+  gone, which is what makes adding a fifth action a compile error instead of a runtime one.
+
+Both `throwError`/`err400` fall-throughs were the only users of their imports in those two
+modules, so `Effectful.Error.Static` and `Servant (err400, errBody)` came out with them.
+
+**The URL and the parser are now one source of truth.** Every one of these slugs was
+previously written by hand at the link site *and* matched by hand in the handler — two
+copies, in the same module, free to drift. Both sides now go through `bulkActionSlug` and
+the matching `WrappedEnumSC` instance. That helper moved to `Pkg.DeriveUtils`, so
+`Pages.Monitors` dropped its local copy rather than this change adding two more; it is one
+function shared by four modules. Note it is now polymorphic (`Show a => a -> Text`), so the
+`[minBound .. maxBound]` doctests need an explicit `:: T` annotation — the monomorphic
+local version had been pinning that for free.
+
+### `manage_teams/bulk_action/:action` is unreachable
+
+Nothing in the codebase builds that URL — no Haskell link, no template, no web component.
+The handler accepts exactly one action (`"delete"`) and its only other arm is
+`"Invalid action"`. It appears to be surface left over from a teams bulk-select UI that
+was never wired up. **Not deleted**: an authenticated HTML route can't be proven unused
+from inside the repo, and the instruction is that features shouldn't be lost. Typing it
+would be churn on a path nobody calls, so it is recorded here for a human to either wire
+up or remove — that decision needs someone who knows whether the UI is planned.

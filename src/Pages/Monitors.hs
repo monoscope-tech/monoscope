@@ -61,7 +61,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -210,7 +210,7 @@ alertUpsertPostH pid form = do
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
     $ void
-    $ void (Projects.completeOnboardingStep pid "created_monitor")
+    $ Projects.completeOnboardingStep pid "created_monitor"
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 
@@ -399,15 +399,11 @@ teamAlertsGetH pid teamId = do
 --
 -- The slugs are the existing wire spellings, so live URLs are unchanged:
 --
--- >>> map bulkActionSlug [minBound .. maxBound]
+-- >>> map bulkActionSlug [minBound .. maxBound :: MonitorBulkAction]
 -- ["deactivate","reactivate","mute","unmute","resolve","delete"]
 data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
-
-
-bulkActionSlug :: MonitorBulkAction -> Text
-bulkActionSlug = toText . encodeEnumSC @"BA"
 
 
 -- | Which tab to land on after a bulk action — deactivating moves the monitors to

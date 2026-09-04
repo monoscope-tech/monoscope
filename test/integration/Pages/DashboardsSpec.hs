@@ -1,6 +1,5 @@
 module Pages.DashboardsSpec (spec) where
 
-import "cryptonite" Crypto.Hash qualified as Crypto
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -27,6 +26,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import Test.Hspec
+import "cryptonite" Crypto.Hash qualified as Crypto
 
 
 filters :: Dashboards.DashboardFilters
@@ -311,7 +311,7 @@ spec = sequential $ aroundAll withTestResources do
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let dIds = V.toList $ V.map (.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
               let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds}
-              _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "add_teams" bulkActionForm
+              _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BAAddTeams bulkActionForm
               (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
               case pg' of
                 Dashboards.DashboardsGet (PageCtx _ dd) -> do
@@ -337,7 +337,7 @@ spec = sequential $ aroundAll withTestResources do
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dIds = V.toList $ V.map (.id) d.dashboards
           let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamIds = []}
-          _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "delete" bulkActionForm
+          _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid Dashboards.BADelete bulkActionForm
           (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
           case pg' of
             Dashboards.DashboardsGet (PageCtx _ dd) -> do

@@ -1,6 +1,7 @@
 module Pages.Anomalies (
   anomalyListGetH,
   anomalyBulkActionsPostH,
+  IssueBulkAction (..),
   acknowledgeAnomalyGetH,
   archiveAnomalyGetH,
   anomalyDetailGetH,
@@ -51,7 +52,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
-import Effectful.Error.Static (throwError)
 import Effectful.Exception (trySync)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -85,17 +85,17 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), assetUrl)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
-import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData)
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -164,7 +164,16 @@ instance ToHtml AnomalyAction where
 
 -- | Bulk lifecycle transitions, triggering a toast and list reload. @duration@
 -- (minutes) applies to @acknowledge@ only; absent acknowledges indefinitely.
-anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> Maybe Int -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
+-- | The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: IssueBulkAction]
+-- ["acknowledge","unacknowledge","archive","unarchive"]
+data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction
+
+
+anomalyBulkActionsPostH :: Projects.ProjectId -> IssueBulkAction -> Maybe Int -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
 anomalyBulkActionsPostH pid action durationM items = do
   (sess, _) <- Projects.sessionAndProject pid
   if null items.itemId
@@ -178,20 +187,19 @@ anomalyBulkActionsPostH pid action durationM items = do
           window = maybe Issues.AckIndefinite Issues.AckFor durationM
           until' = Issues.ackUntil now window
       (eventType, msg) <- case action of
-        "acknowledge" -> do
+        BAAcknowledge -> do
           ths <- Anomalies.acknowledgeAnomalies pid sess.user.id until' vIds
           void $ Anomalies.acknowlegeCascade pid sess.user.id until' (V.fromList ths)
           pure (Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
-        "unacknowledge" -> do
+        BAUnacknowledge -> do
           void $ Issues.setAckState pid issueIds Nothing
           pure (Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
-        "archive" -> do
+        BAArchive -> do
           void $ Anomalies.archiveAnomaliesAndIssues pid vIds
           pure (Issues.IEArchived, "Archived \x2014 notifications stopped")
-        "unarchive" -> do
+        BAUnarchive -> do
           void $ Issues.setArchiveState pid issueIds Nothing
           pure (Issues.IEUnarchived, "Restored to the Inbox")
-        _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
       forM_ issueIds \u -> Issues.logIssueActivity u eventType (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
@@ -1793,11 +1801,11 @@ tabBlurb = \case
 -- state you're looking at.
 issueBulkActions :: Projects.ProjectId -> IssueTab -> [BulkAction]
 issueBulkActions pid tab =
-  [ BulkAction{icon = Just i, title = t, uri = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> a}
+  [ BulkAction{icon = Just i, title = t, uri = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> bulkActionSlug a}
   | (i, t, a) <- case tab of
-      TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", "unacknowledge"), ("archive", "Archive", "archive")]
-      TabArchived -> [("arrow-rotate-left", "Unarchive", "unarchive")]
-      TabInbox -> [("check", "Acknowledge", "acknowledge"), ("archive", "Archive", "archive")]
+      TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge), ("archive", "Archive", BAArchive)]
+      TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive)]
+      TabInbox -> [("check", "Acknowledge", BAAcknowledge), ("archive", "Archive", BAArchive)]
   ]
 
 

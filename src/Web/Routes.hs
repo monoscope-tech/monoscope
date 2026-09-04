@@ -476,7 +476,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Widget alert routes
     widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
   , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> Delete '[HTML] (RespHeaders (Html ()))
-  , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
+  , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
@@ -496,7 +496,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
-  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" Text :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
+  , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
@@ -593,7 +593,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowledge" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" AnomalyList.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
