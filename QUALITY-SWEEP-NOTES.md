@@ -1891,7 +1891,7 @@ and six diverge:
 
 | location | current | should be |
 |---|---|---|
-| `Pages/Settings.hs:264` | "Created API Key Successfully" | "Created API key successfully" |
+| `Pages/Settings.hs:264` | "Created API Key Successfully" | "Created API Key successfully" |
 | `Pages/Projects.hs:1364` | "Deleted Project Successfully" | "Deleted project successfully" |
 | `Pages/Projects.hs:1472` | "Updated Project Successfully" | "Updated project successfully" |
 | `Pages/Projects.hs:354` | "Updated Notification Channels Successfully" | "Updated notification channels successfully" |
@@ -1899,6 +1899,17 @@ and six diverge:
 | `Pages/LogExplorer/Log.hs:793` | "Error Parsing Query" | "Error parsing query" |
 
 Not outliers: "Connect GitHub first" and "Removed S3 bucket" — proper nouns, correct as-is.
+
+**Refined after reading them in context.** Only the trailing adverb is unambiguous:
+`"Successfully"` capitalised mid-sentence, against 46 messages that write it lowercase.
+The *noun* capitalisation is a judgement call and should be left alone — there is
+precedent for capitalising named features mid-sentence (`"Saved to Query Library
+successfully"`), so `"API Key"` and `"Notification Channels"` may well be deliberate
+product terms. `"Deleted Project Successfully"` is the one where the noun looks wrong too
+(`project` is a common noun here), but that is a copy decision, not a correctness one.
+
+So the safe change is four `Successfully` -> `successfully`, plus `"Error Parsing Query"`
+-> `"Error parsing query"` (an error toast in Title Case, with no proper noun in it).
 
 Also worth a look: "No hosts selected" (`Pages/Infrastructure.hs`) vs "No items selected"
 (`Pages/Anomalies.hs`) — the same condition (nothing selected for a bulk action) worded two
