@@ -18,6 +18,8 @@ module Models.Apis.LogQueries (
   fetchSessions,
   SessionSort (..),
   sessionSortColumn,
+  sessionSortParam,
+  sessionSortLabel,
   ExpandKind (..),
   fetchEventExamples,
   selectChildSpansAndLogs,
@@ -723,7 +725,7 @@ sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attribu
 -- >>> parseUrlPiece "alphabetical" :: Either Text SessionSort
 -- Left "Invalid Sort value: alphabetical"
 data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | SortEvents
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   -- ToJSON is for the trace line below: it logs the *parsed* ordering, so an
   -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
   deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
@@ -740,6 +742,28 @@ sessionSortColumn = \case
   SortDuration -> "duration_ns"
   SortErrors -> "error_count"
   SortEvents -> "event_count"
+
+
+-- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
+-- 'Pages.RealUserMonitoring.tabParam' and the tab functions.
+--
+-- >>> map sessionSortParam [minBound .. maxBound]
+-- ["last_seen","first_seen","duration","errors","events"]
+sessionSortParam :: SessionSort -> Text
+sessionSortParam = toText . encodeEnumSC @"Sort"
+
+
+-- | The dropdown's visible label.
+--
+-- >>> map sessionSortLabel [minBound .. maxBound]
+-- ["Last seen","First seen","Duration","Errors","Events"]
+sessionSortLabel :: SessionSort -> Text
+sessionSortLabel = \case
+  SortLastSeen -> "Last seen"
+  SortFirstSeen -> "First seen"
+  SortDuration -> "Duration"
+  SortErrors -> "Errors"
+  SortEvents -> "Events"
 
 
 fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])

@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, showFFloat') where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, showFFloat', emDash_) where
 
 import Data.Default (def)
 import Data.Text qualified as T
