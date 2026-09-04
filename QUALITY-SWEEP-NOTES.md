@@ -1721,3 +1721,27 @@ and the Pages layer open-codes a variant that has quietly diverged — onboardin
 the inline `UPDATE projects.projects` in `Log.hs`/`Monitors.hs`. Grepping for *the table a
 handler writes to* finds these; grepping for *the helper's name* does not, because the
 whole problem is that the helper's name is absent.
+
+## Layering: exactly three tables are written by both Pages and Models
+
+Ran the write-side of the SQL lens across every `INSERT`/`UPDATE`/`DELETE`, asking which
+are issued from a `Pages/` module. Ten are. They split cleanly:
+
+**Both layers write it — this is where divergence happens (3 tables, all now analysed):**
+
+| table | Pages writer | status |
+|---|---|---|
+| `projects.projects` | `Pages/Onboarding` | onboarding-step race **fixed** (`b30d874f`); `:256`/`:271` fold step+title into one UPDATE, recorded |
+| `apis.issues` | `Pages/Anomalies:143` | archive divergence recorded — open-codes `Issues.setArchiveState` |
+| `apis.anomalies` | `Pages/Anomalies:144` | same finding, the cascade half |
+
+**Only Pages writes it — self-contained features, no divergence risk (7):**
+`apis.command_palette_recents` (insert/delete), `projects.replay_sessions`
+(insert/update/delete), `apis.notification_test_history` (insert), `users.users` (update).
+Not ideal layering, but there is no second implementation to drift from. Worth moving only
+if one of these grows a Models-layer counterpart.
+
+**This bounds the problem.** Every divergence of the "Models has a helper, Pages open-codes
+a variant" kind must involve a table in the first table above, because that is the complete
+list of tables both layers write. All three are accounted for. A future occurrence will
+show up by re-running this scan, not by reading code.
