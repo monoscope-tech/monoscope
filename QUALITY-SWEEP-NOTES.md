@@ -1796,3 +1796,42 @@ behaviour establishing `display Critical == "critical"` for that deriving, so
 Generalisable: **when a change depends on a derived encoding, look for another type using
 the identical deriving whose output is already pinned by a test or by working behaviour.**
 That converts "I reasoned about `quietSnake`" into evidence, at no cost.
+
+## Deactivated members disappear instead of showing as deactivated
+
+A real user-visible bug, found by looking for near-duplicate function bodies within a
+module (`selectActiveProjectMembers` ~ `selectAllProjectMembers`, 91% similar).
+
+The chain sits inside one function, `Pages/Projects.hs`:
+
+```haskell
+:710  when (Projects.isFreeTier project.paymentPlan) $ deactivateNonOwnerMembers pid
+:717  projMembersLatest <- ProjectMembers.selectAllProjectMembers pid
+```
+
+- `deactivateNonOwnerMembers` sets `active = FALSE` and **leaves `deleted_at` NULL** — this
+  is the free-tier downgrade path, distinct from `removeMember`, which sets both.
+- `selectAllProjectMembers` filters `WHERE pm.deleted_at IS NULL AND pm.active = TRUE`, so
+  it excludes exactly the rows just created.
+
+**Everything downstream is therefore dead.** `ProjectMemberWithStatusVM` carries an
+`active :: Bool` field that is always `True`. `memberRowWithStatus` (a renderer literally
+named "with status") computes `isDisabled = not prM.active && not isOwner`, which is always
+`False`, so its `opacity-60` row styling and its warning badge can never render.
+
+The intended behaviour is legible from the code: a function named *All* returning a
+*WithStatus* type, feeding a renderer with disabled-state styling. A downgraded project
+should show its deactivated members greyed out and badged. Instead they silently vanish
+from the members list.
+
+**Fix:** drop `AND pm.active = TRUE` from `selectAllProjectMembers` (keep
+`deleted_at IS NULL`). One line, and it activates three pieces of existing UI.
+
+**Not applied here** because it changes what the members page displays, and "should
+deactivated members be visible on the free tier?" is a product question — the current
+behaviour might be a deliberate (if undocumented) choice to hide them. The code says
+otherwise, but a browser and a decision beat my inference.
+
+Also noted: `countActiveForUser` / `countActiveForProject` in `Pkg/LiveTail.hs` differ only
+by `AND user_id = #{uid}`. One function taking `Maybe UserId` and composing the predicate
+fragment would cover both — the codebase already composes `HI.Sql` fragments elsewhere.
