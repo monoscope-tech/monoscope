@@ -58,9 +58,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
       fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   hostsAndEvents <- case statsMode of
     Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
-    Endpoints.WithStats ->
-      liftIO (Cache.lookup appCtx.hostStatsCache cacheKey)
-        >>= maybe (fetch Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.hostStatsCache cacheKey fresh)) pure
+    Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ -> fetch Endpoints.WithStats
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
@@ -294,9 +292,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       fetchStats mode = Endpoints.endpointRequestStatsByProject mode useTf pid endpointQuery
       fetchStatsCached = case statsMode of
         Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
-        Endpoints.WithStats ->
-          liftIO (Cache.lookup appCtx.endpointStatsCache cacheKey)
-            >>= maybe (fetchStats Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.endpointStatsCache cacheKey fresh)) pure
+        Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ -> fetchStats Endpoints.WithStats
   (endpointStats, totalCount) <-
     concurrently
       fetchStatsCached

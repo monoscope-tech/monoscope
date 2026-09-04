@@ -2160,3 +2160,51 @@ The tab still enters the cache key as `tabParam tab` text, leaving `HostStatsKey
 `directionOf` is now total over the three constructors instead of a `lookup` returning
 `Nothing` for both "Archived" and any typo, and its `Data.List (lookup)` import came out
 with it.
+
+## The read-through cache we wrote twice, and the leak I nearly shipped
+
+`endpointListGetH` carries the comment *"Same shell/deferred/memoise dance as
+apiCatalogH"* — self-documented duplication, so I went to extract it. Both sites were
+byte-identical modulo the cache and key:
+
+```haskell
+liftIO (Cache.lookup c k)
+  >>= maybe (fetch >>= \fresh -> fresh <$ liftIO (Cache.insert c k fresh)) pure
+```
+
+Four sites use this idiom in total; the other two (`RealUserMonitoring`, `Containers`)
+add an explicit TTL and a "is this result worth caching" predicate (`not . V.null`,
+`cacheableRumResult`), so the obvious move was one helper taking
+`Maybe TimeSpec -> (v -> Bool)` and covering all four.
+
+**That helper would have introduced an unbounded memory leak.** From `cache-0.1.3.0`:
+
+```haskell
+insert' c Nothing k a = atomically $ insertSTM k a c Nothing   -- never expires
+insert  c             = insert' c (defaultExpiration c)        -- cache's default TTL
+```
+
+The haddock is explicit: with `Nothing`, *"the item will never expire. The default
+expiration value of the cache is ignored."* The two Endpoints sites call plain `insert`,
+and `hostStatsCache` is built with `newCache (Just (TimeSpec 300 0))` — a 5-minute TTL.
+Threading them through a `Maybe TimeSpec` helper as `Nothing` reads like "no TTL
+override, use the default" and in fact means "never expire". These caches are keyed on
+user-supplied host and search text, so that is unbounded growth, not a slow leak.
+
+**The actual fix was to delete our version, not to generalise it.** `Data.Cache` already
+exports `fetchWithCache`, whose body is exactly the idiom above and which calls `insert`
+— so the default TTL is preserved by construction:
+
+```haskell
+Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ -> fetch Endpoints.WithStats
+```
+
+`RealUserMonitoring` and `Containers` genuinely need conditional caching with an explicit
+TTL and stay hand-rolled; `fetchWithCache` has no predicate. Two of four is the right
+answer here — forcing the other two through a shared helper is what would have created
+the `Maybe TimeSpec` parameter that caused the bug.
+
+Generalises to: **before extracting a helper over a library call, read that library
+call's semantics for the argument you are about to make configurable.** The duplication
+was real and the instinct was right; the default-vs-absent distinction in the API was the
+part that had to be checked first, and "the library already has this function" beat both.
