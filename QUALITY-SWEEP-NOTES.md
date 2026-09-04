@@ -1696,3 +1696,28 @@ part that is unambiguously worth folding in once those are settled.
 
 Same shape as the onboarding-step find in `b30d874f`: a canonical helper exists in the
 Models layer, and the Pages layer open-codes a variant of it that has quietly diverged.
+
+## Four lenses for "we reinvented something we already had" — and what each misses
+
+Tonight used four different scans to look for duplication. They found disjoint sets, which
+is the point: **each is blind to what the others catch.** If you repeat this sweep, run all
+four, and do not read a zero from one as an answer from all.
+
+| lens | how | found | blind to |
+|---|---|---|---|
+| **Clone detection** — normalised N-line windows, identifiers and literals replaced | `dup3.py`-style hashing | **nothing** (0 duplicated 6-line blocks in 77k lines) | anything reimplemented rather than copied |
+| **Name collision** — same function name in >1 module | grep `^name ::` | the two stack-trace parsers; `servicePicker_` | reimplementations that were renamed |
+| **Literal grep** — take a type's wire strings, grep the tree | per enum, after the type exists | `allChannels`; the nav's hardcoded tab strings; the sort dropdown | operations that share no literal |
+| **SQL by (operation, table)** — group every query by what it touches | regex over `[sql\| …\|]` | the onboarding lost-update race; three disagreeing archive paths | anything not expressed as SQL |
+
+The SQL lens was the most productive and the least obvious. `UPDATE projects.projects`
+appearing 20 times across 4 modules — three of them `Pages` — is what pointed at both the
+layering problem and the race. Neither clone detection nor exact-SQL comparison saw it:
+each site is a single long line, and the literals differ.
+
+**The recurring shape, seen three times:** a canonical helper exists in the Models layer,
+and the Pages layer open-codes a variant that has quietly diverged — onboarding steps
+(read-modify-write vs atomic), archiving (`updated_at` bumped or not, cascade or not), and
+the inline `UPDATE projects.projects` in `Log.hs`/`Monitors.hs`. Grepping for *the table a
+handler writes to* finds these; grepping for *the helper's name* does not, because the
+whole problem is that the helper's name is absent.
