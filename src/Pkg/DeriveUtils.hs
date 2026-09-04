@@ -25,6 +25,7 @@ module Pkg.DeriveUtils (
   stripAssetHash,
   assetHash,
   viteAssetFile,
+  bulkActionSlug,
   showPGFloatArray,
   mkHasqlPool,
   rawSql,
@@ -208,6 +209,14 @@ instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) whe
 
 instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC qualType prefix a) where
   toField (WrappedEnumSC a) = toField $ encodeEnumSC @prefix a
+
+
+-- | Wire slug for a bulk-action enum — the @BA@-prefixed sum types behind the
+-- @bulk_action\/:action@ routes. Both sides of each route go through this: the URL is
+-- built with it and the capture is parsed by the matching 'WrappedEnumSC' instance, so
+-- a link and its handler cannot drift apart.
+bulkActionSlug :: Show a => a -> Text
+bulkActionSlug = toText . encodeEnumSC @"BA"
 
 
 instance (KnownSymbol prefix, Read a, Typeable a, Typeable qualType) => FromField (WrappedEnumSC qualType prefix a) where

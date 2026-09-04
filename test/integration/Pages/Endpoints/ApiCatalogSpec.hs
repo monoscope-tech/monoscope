@@ -419,14 +419,14 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
               $ ApiCatalog.apiCatalogBulkActionH testPid action Nothing (ApiCatalog.HostBulk{itemId = hosts})
 
       it "archives an incoming host and surfaces it under the Archived tab" \(tr, testPid) -> do
-        _ <- bulk tr testPid "archive" "Incoming" ["172.31.29.11"]
+        _ <- bulk tr testPid ApiCatalog.BAArchive "Incoming" ["172.31.29.11"]
         active <- listHosts tr testPid "Incoming" Nothing
         archived <- listHosts tr testPid "Incoming" (Just "Archived")
         active `shouldBe` ["api.test.com"]
         archived `shouldBe` ["172.31.29.11"]
 
       it "unarchive restores the host to the Active list" \(tr, testPid) -> do
-        _ <- bulk tr testPid "unarchive" "Incoming" ["172.31.29.11"]
+        _ <- bulk tr testPid ApiCatalog.BAUnarchive "Incoming" ["172.31.29.11"]
         active <- listHosts tr testPid "Incoming" Nothing
         archived <- listHosts tr testPid "Incoming" (Just "Archived")
         sort active `shouldBe` ["172.31.29.11", "api.test.com"]
@@ -442,7 +442,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                 , Endpoints.outgoing = True
                 }
         runQueryEffect tr $ Endpoints.bulkInsertHosts (V.singleton outEp)
-        _ <- bulk tr testPid "archive" "Outgoing" ["api.upstream.example"]
+        _ <- bulk tr testPid ApiCatalog.BAArchive "Outgoing" ["api.upstream.example"]
         outActive <- listHosts tr testPid "Outgoing" Nothing
         outArchived <- listHosts tr testPid "Outgoing" (Just "Archived")
         outActive `shouldBe` []
@@ -455,18 +455,18 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         -- Production path: user clicks Unarchive while on the Archived tab,
         -- where the form posts no request_type. The handler must apply across
         -- both directions (mirror of setHostsArchived pid Nothing in the model).
-        _ <- bulk tr testPid "archive" "Incoming" ["172.31.29.11"]
-        _ <- bulk tr testPid "archive" "Outgoing" ["api.upstream.example"]
+        _ <- bulk tr testPid ApiCatalog.BAArchive "Incoming" ["172.31.29.11"]
+        _ <- bulk tr testPid ApiCatalog.BAArchive "Outgoing" ["api.upstream.example"]
         archivedAny <- listHosts tr testPid "Incoming" (Just "Archived")
         archivedAny `shouldSatisfy` (not . null)
-        _ <- bulkAny tr testPid "unarchive" ["172.31.29.11", "api.upstream.example"]
+        _ <- bulkAny tr testPid ApiCatalog.BAUnarchive ["172.31.29.11", "api.upstream.example"]
         inActive <- listHosts tr testPid "Incoming" Nothing
         outActive <- listHosts tr testPid "Outgoing" Nothing
         sort inActive `shouldBe` ["172.31.29.11", "api.test.com"]
         outActive `shouldBe` ["api.upstream.example"]
 
       it "ignores empty host selections without error" \(tr, testPid) -> do
-        (_, resp) <- bulk tr testPid "archive" "Incoming" []
+        (_, resp) <- bulk tr testPid ApiCatalog.BAArchive "Incoming" []
         case resp of
           ApiCatalog.CatalogBulkDone -> pass
         active <- listHosts tr testPid "Incoming" Nothing

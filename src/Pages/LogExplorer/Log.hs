@@ -36,7 +36,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -49,7 +48,6 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -790,7 +788,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
   let queryInput = maybeToMonoid queryM'
-      parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
+      parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error parsing query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
     Left err -> parseError err
     Right ast
@@ -876,7 +874,7 @@ recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [
 recordExploration pid uid stepsDone queryAST = do
   unless (V.elem "explored_logs" stepsDone)
     $ void
-    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = #{pid} AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |]
+    $ void (Projects.completeOnboardingStep pid "explored_logs")
   Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
 
 

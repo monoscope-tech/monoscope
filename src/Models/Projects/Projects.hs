@@ -33,6 +33,7 @@ module Models.Projects.Projects (
   deleteProject,
   updateProjectPricing,
   updateProjectBilling,
+  completeOnboardingStep,
   PlanName (..),
   SubId (..),
   SubItemId (..),
@@ -68,6 +69,7 @@ module Models.Projects.Projects (
   parsePlan,
   isPaidPlan,
   isFreeTier,
+  isByosPlan,
   isOnboarding,
   LemonSub (..),
   LemonSubId (..),
@@ -671,6 +673,21 @@ updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)} where id=#{pid};|]
 
 
+-- | Mark an onboarding step complete, idempotently and atomically.
+--
+-- The append and the "already there?" check happen in one statement, so two requests
+-- completing *different* steps concurrently cannot lose one. The read-modify-write this
+-- replaces (read @onboarding_steps_completed@, append in Haskell, write the whole array
+-- back) had exactly that lost-update race, and the same operation was additionally
+-- open-coded in two Pages modules.
+completeOnboardingStep :: DB es => ProjectId -> Text -> Eff es Int64
+completeOnboardingStep pid step =
+  EHasql.interpExecute
+    [HI.sql| UPDATE projects.projects
+             SET onboarding_steps_completed = array_append(onboarding_steps_completed, #{step})
+             WHERE id = #{pid} AND NOT (#{step} = ANY(onboarding_steps_completed)) |]
+
+
 updateProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
@@ -1088,6 +1105,18 @@ isFreeTier = (== "free") . T.toLower
 -- [True,True,False]
 isOnboarding :: Text -> Bool
 isOnboarding = (== "onboarding") . T.toLower
+
+
+-- | Bring-your-own-storage: a paid tier, so 'parsePlan' folds it to 'Paid' and cannot
+-- answer this. The name is a provider contract (see 'PlanName'), so the check stays on
+-- the open 'Text' — but it belongs beside its siblings rather than being spelled out at
+-- each call site, which is how the two existing checks ended up case-sensitive while
+-- 'isFreeTier' next to them was not.
+--
+-- >>> map isByosPlan ["Bring your own storage", "BRING YOUR OWN STORAGE", "Startup", "Free"]
+-- [True,True,False,False]
+isByosPlan :: Text -> Bool
+isByosPlan = (== "bring your own storage") . T.toLower
 
 
 -- | Payment provider for a project. Stored authoritatively in the

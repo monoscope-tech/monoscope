@@ -125,8 +125,10 @@ spec = sequential $ aroundAll withTestResources do
                   ON CONFLICT (id) DO NOTHING |]
             (otherMonId, otherPid.unwrap)
 
-      -- Acting as testPid, aim every bulk action at the other project's monitor.
-      for_ ["deactivate", "mute", "resolve", "delete"] \action ->
+      -- Acting as testPid, aim every bulk action at the other project's monitor. Ranging
+      -- over [minBound .. maxBound] rather than a hand-written list means a newly added
+      -- action is covered by this guard without anyone remembering to add it here.
+      for_ [minBound .. maxBound] \action ->
         void $ testServant tr $ Alerts.alertBulkActionH testPid action (Projects.TBulkActionForm [otherMonId])
 
       victims <- runQueryEffect tr $ queryMonitorsAll otherPid
