@@ -1232,7 +1232,7 @@ billingPage d = div_ [] do
       basePriceNum =
         if
           | isFree -> 0
-          | d.paymentPlan == "Bring your own storage" -> 199
+          | Projects.isByosPlan d.paymentPlan -> 199
           | otherwise -> 29 :: Int64
       planPrice = show basePriceNum
       overageNum = overageReqs reqs

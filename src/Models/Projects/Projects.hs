@@ -68,6 +68,7 @@ module Models.Projects.Projects (
   parsePlan,
   isPaidPlan,
   isFreeTier,
+  isByosPlan,
   isOnboarding,
   LemonSub (..),
   LemonSubId (..),
@@ -1088,6 +1089,18 @@ isFreeTier = (== "free") . T.toLower
 -- [True,True,False]
 isOnboarding :: Text -> Bool
 isOnboarding = (== "onboarding") . T.toLower
+
+
+-- | Bring-your-own-storage: a paid tier, so 'parsePlan' folds it to 'Paid' and cannot
+-- answer this. The name is a provider contract (see 'PlanName'), so the check stays on
+-- the open 'Text' — but it belongs beside its siblings rather than being spelled out at
+-- each call site, which is how the two existing checks ended up case-sensitive while
+-- 'isFreeTier' next to them was not.
+--
+-- >>> map isByosPlan ["Bring your own storage", "BRING YOUR OWN STORAGE", "Startup", "Free"]
+-- [True,True,False,False]
+isByosPlan :: Text -> Bool
+isByosPlan = (== "bring your own storage") . T.toLower
 
 
 -- | Payment provider for a project. Stored authoritatively in the
