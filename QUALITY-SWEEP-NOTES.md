@@ -1297,3 +1297,32 @@ Operational notes for the next person:
   minutes.
 - Stop the `live-test-dev` watcher first (`kill` the `make` pid). `cabal test doctests`
   builds the 197-module test-dev target into the directory that watcher owns.
+
+## Doctest gaps in pure branching code — a prioritised backlog
+
+Found by inverting the search: instead of hunting suspicious code, look for **pure
+functions with real branching logic and no doctest**. That inversion is what surfaced the
+two bugs in `42374bec` (`truncateMiddle` breaking its own "at most n chars" contract, and
+`deleteParam`'s unanchored regex) — both look fine on inspection; the defects only appear
+when you compare what each promises against what it does at the edges.
+
+190 such functions. The ones worth doing, largest and most edge-case-dense first:
+
+| lines | function | why |
+|---|---|---|
+| 58 | `ErrorFingerprint.parseJsFrame` | pure parser, three documented formats, none pinned; feeds error grouping. The module has 47 doctests but not this one |
+| 46 | `OtlpServer.migrateHttpSemanticConventions` | old→new OTel attribute mapping, pure, silent if wrong |
+| 40 | `Telemetry.buildSpanTree` | orphans, missing parents, cycles — the waterfall depends on it |
+| 39 | `ProcessMessage.httpKeyOf` | ingestion hot path |
+| 143 | `OtlpServer.convertSpanToOtelLog` | large, but mostly field mapping |
+
+Note the ones to *skip*: `buildTitlePrompt`/`buildDescriptionPrompt` (LLM prompt text —
+asserting on prose is churn), `apiKeyColumns` (table config), `widgetToECharts` (a large
+JSON literal; a golden test suits it better than a doctest).
+
+**Method warning — a fifth measurement bug.** The scan that produced this list was wrong
+on its first run: a function's *definition* line sits at column 0 just like its signature,
+so "top-level declaration" splits the two and every candidate measured as 1 line, with the
+"has real logic" regex examining only the signature. Merging each signature with its
+following same-named definition fixed it. (The earlier largest-functions table was
+unaffected — it picked up the definition entries, which do span the body.)
