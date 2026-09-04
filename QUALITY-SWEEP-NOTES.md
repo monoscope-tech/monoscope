@@ -1155,3 +1155,43 @@ compile error, but the marginal safety is small against touching the ingestion p
 
 Recording the pattern rather than fixing it: this is a real class, the instances are all
 currently correct, and none of them is worth an unverifiable change tonight.
+
+## Next up: `GroupVerdict` is round-tripped through `Text` (not yet done)
+
+Same shape as the `IssueSeverity` fix in `5134a124`, with a DB boundary in the middle:
+
+- `data GroupVerdict = Param | Routes | Mixed` derives `Display` via `WrappedEnumSC` but
+  **not** `FromField`/`ToField`.
+- It is written with `display v`, stored as text, read back as `verdict :: Text`
+  (`Models/Apis/PatternMerge.hs:230`, `Models/Apis/Endpoints.hs:662`), then compared
+  `r.verdict == "param"` at `BackgroundJobs.hs:3900` and `:5358`.
+
+A typo or rename in either comparison silently means "no groups confirmed" — the merge
+pipeline quietly does nothing, which is the same failure class as the monitors bulk
+action. The fix is the one CLAUDE.md prescribes and `IssueSeverity` already uses: add
+`FromField, ToField, HI.DecodeValue, HI.EncodeValue` to the `deriving ... via
+WrappedEnumSC` line, type both record fields as `GroupVerdict`, and compare against
+`Param`.
+
+One risk to check first: a stored row whose verdict is not one of the three would now fail
+to *decode* rather than silently compare false. Both writers go through `display v`, so
+only the three values can be stored — but confirm before changing, because a decode
+failure in a background pipeline is louder than a silent false.
+
+Deliberately not done tonight: I had seven unexecuted doctests and a repeatedly-truncated
+suite run outstanding. Adding more unverified changes on top of unverified changes is how
+the false-green problems earlier in this file happened. Verification first.
+
+## Enum-ish record fields still typed `Text`: 35
+
+Scanned for record fields named `status|kind|state|mode|severity|direction|action|level|
+verdict|source|paymentPlan|…` typed `Text`. Most are legitimately at a boundary — form
+inputs (`AlertUpsertForm`) take raw posted values, `Web/ApiTypes` are wire types. The ones
+worth typing are the *domain* records:
+
+- `Monitors.QueryMonitor.severity` / `.visualizationType` — DB-persisted domain rows.
+- `Projects.paymentPlan` — appears as `Text` in five records while a `PlanName` newtype
+  already exists.
+- `GroupReview.verdict` in two modules — see above.
+
+None are defects today; all are seams where the next silent divergence will come from.
