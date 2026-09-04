@@ -1326,3 +1326,48 @@ so "top-level declaration" splits the two and every candidate measured as 1 line
 "has real logic" regex examining only the signature. Merging each signature with its
 following same-named definition fixed it. (The earlier largest-functions table was
 unaffected — it picked up the definition entries, which do span the body.)
+
+## Two stack-trace parsers — the one real duplicate subsystem
+
+The largest genuine duplication in the codebase, and the closest thing found to the
+"reinvent patterns we had equivalent versions of" complaint:
+
+| | `Pkg/StackTrace.hs` (272 lines) | `Pkg/ErrorFingerprint.hs` (parsers, ~250 lines) |
+|---|---|---|
+| type | `Frame` | `StackFrame` |
+| entry | `parseStackTrace :: Text -> [Frame]` | `parseStackTrace :: Runtime -> Text -> [StackFrame]` |
+| strategy | format-sniffing (`asum [pyFile, atFrame, php, ruby, bareLocation]`) | runtime-dispatched (7 per-language parsers) |
+| languages | JS, Python, Java, Ruby, Go, PHP | JS, Python, Java, Go, PHP, .NET, generic |
+| consumers | `Pages/LogItem`, `Pages/Components` — display | `BackgroundJobs`, `PatternMerge`, `Telemetry` — fingerprinting |
+
+**Two exported functions share the name `parseStackTrace` with different signatures.** Both
+parse the same frame formats; neither shares a line with the other. Both are doctested.
+
+**Do not merge them without treating it as a data migration.** The fingerprint path runs
+`parseStackTrace -> normalizeStackTrace -> modulePart|funcPart|contextPart -> hash`, so any
+change in parsing *moves error-grouping hashes* and existing issues regroup. The sweep
+already has a precedent for how much that matters: the hex-shatter fix moved 1486 distinct
+hashes to 783. A parser unification is worth doing — roughly 200 lines — but it needs the
+same measured before/after that fix had, not a refactor commit.
+
+The display side is the safe half: `Pages` could move onto the fingerprint parser (or vice
+versa) without touching a hash, if one of the two types absorbed the other's fields.
+
+### A harmless wart found while reading it (reasoned, not executed)
+
+`parseJsFrame`'s parenthesised branch does `T.breakOn " (" txt`, giving
+`rest = " (/app/src/x.js:12:5)"`, then `T.dropAround (`elem` "()")`. The **leading character
+is a space**, so `dropAround` stops immediately and only the trailing `)` is removed —
+leaving `filePath = " (/app/src/x.js"`.
+
+It is invisible to every consumer, which is why it has survived: `moduleName` goes through
+`moduleFromPath`, which takes the *basename* (`splitOn "/"` then `last`), so the `" ("`
+lands in a discarded segment; `isInApp` uses `isInfixOf`; and `StackFrame.filePath` is
+never read outside the module. The existing doctest
+`normalizeStackTrace RNodejs … → "server|handleRequest"` passes for exactly this reason.
+
+Worth fixing only if anyone starts *using* `filePath` — e.g. rendering a file link, which
+would show `" (/app/..."`. Confirm first with a doctest projecting `.filePath` on a
+parenthesised frame; the existing ones project only `.functionName`, `.isInApp` and
+`length`, which is why it has never been caught. **This is a reading of the code, not an
+executed result.**
