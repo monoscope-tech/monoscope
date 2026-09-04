@@ -898,3 +898,45 @@ Verification note: the offsets were checked against the IANA database independen
 (Auckland is UTC+13 on both dates; NZDT runs to 2026-04-05) rather than asserted from
 memory. The doctest itself has not executed yet — `cabal test doctests` cannot run while
 the test-dev watcher holds the build directory, so it lands on the next doctests pass.
+
+## CORRECTION: the +1811 figure conflated code with documentation
+
+Earlier in this file I reported the sweep as **net +1811 lines in `src/`** and concluded the
+size-reduction goal had not been met. That number counted comment lines as code. Split
+properly (`git diff 44c38b1c..HEAD -- src web-components/src`):
+
+```
+added    6525 =  4362 code +  1739 comment +  424 blank
+removed  4385 =  3951 code +   259 comment +  175 blank
+NET     +2140 =  +411 code + +1480 comment + +249 blank
+```
+
+**Net code growth is +411 lines** across ~130 commits that shipped the error-grouping
+pipeline, LLM group review, ingest-time masks, and the issues redesign. The other +1480 is
+Haddock, doctests, and explanatory comments — which this repo's conventions actively
+require (doctests *are* the unit tests here; comments are mandated where the reasoning is
+non-obvious).
+
+For scale, `src/` overall is **77,107 lines = 53,536 code (69%) + 14,166 comment (18%) +
+9,405 blank**, with ~1,871 doctest lines inside that comment total. Roughly a fifth of the
+tree is documentation by design.
+
+The same correction applies to my own work tonight. I reported the four type/test commits
+as "+140 lines against the size goal". Actually:
+
+| commit | +total | code | comment | removed |
+|---|---|---|---|---|
+| `SessionSort` | 46 | 18 | 24 | −10 |
+| `IssueTab` | 63 | 35 | 20 | −23 |
+| `MonitorTab` | 33 | 19 | 8 | −10 |
+| `reportDayLabels` | 25 | 6 | 17 | −4 |
+| **total** | **167** | **78** | **69** | **−47** |
+
+**Net +31 lines of code** for four compile-time guarantees and one extracted, doctested
+pure function — not +140. I overstated the cost against myself by ~4.5x.
+
+Methodological note: my function-size script measured `::` to `::`, which charges each
+function for the *next* one's Haddock. It reported `getAlertStatusColor` as 102 lines; it
+is 4, followed by 98 lines of `replaceAllFormats` doctests. Any "largest function" figure
+in this file taken from that script is inflated the same way unless separately verified
+(`backfillSessionSql` was checked directly and is genuinely mostly SQL).
