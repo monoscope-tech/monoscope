@@ -599,6 +599,59 @@ banner, but not a chart anyone waits for either. The width table
 where the query alert already sat. That is the second time today the fix for
 this page came from measuring rather than reasoning about it.
 
+## 10. Second critique pass — the pages as they now stand
+
+Re-screenshotted all four after A/B/C, because critiquing the versions I started
+from would be critiquing work already replaced.
+
+The header zone is now doing its job: `CRITICAL · Log Pattern · ERROR · 14
+occurrences` then `First seen · Last seen · Service`, identical in shape across
+types. That part is settled. What the screenshots surface is a different problem,
+and it is the same one as F1b wearing a new hat.
+
+### F10 — the page reserves space for evidence it does not have. *Severity: high.*
+
+Log pattern #112128, full height, contains **three separate "nothing here" boxes
+and ~900px of void**:
+
+| region | says | height |
+|---|---|---|
+| Pattern Volume | "No data in this time range" | ~150px |
+| Activity | "No activity yet." | ~150px |
+| Investigation → Logs | "No events match in the selected time range" | `lg:h-[70vh]` |
+| …and its details pane | nothing at all | 50% width, blank |
+
+The header asserts `14 occurrences` directly above a chart that says none. That
+contradiction is F9's data bug, but the *layout* amplifies it: a reader scrolls
+a full screen of apologies to confirm the page has nothing to tell them.
+
+**The details pane is a straightforward divergence, not a judgement call.** The
+log explorer's own panel starts collapsed — `w-0 max-w-0 overflow-hidden`,
+expanding when content arrives (`Log.hs:1797`). The issue page copied the panel
+and hardcoded `lg:w-1/2`, so it permanently reserves half the Investigation area
+for a detail nobody has selected yet. Same component, one call site kept the
+behaviour and one dropped it — the same class of thing as the count in §8.
+
+Options:
+
+1. **Collapse the details pane to match the explorer, and let the Investigation
+   panel size to its content instead of `lg:h-[70vh]`.** Fixes the void without
+   deciding anything about empty states. Smallest, most obviously correct.
+2. **Additionally, suppress the whole Investigation panel when the issue has
+   neither a trace nor any matching logs.** Stronger, but it needs a *count*
+   before render to know it is empty, and that is the expensive hash query
+   again — exactly what B just measured at 48s. Rejected on cost.
+3. **Collapse the three empty states into one honest statement** ("No telemetry
+   found for this pattern in this window") with the one useful action (widen the
+   range / open in Explorer). Better writing, and the product register asks empty
+   states to teach rather than announce — but it is a bigger change and partly
+   duplicates what F9 should fix at the source.
+
+**Leaning to 1 now, and 3 written up as a follow-up.** 1 is a CSS-level fix
+restoring behaviour that already exists one module over; 2 costs a timeout; 3 is
+real work that I would rather do after F9 is understood, because if the data
+were there none of those boxes would be empty in the first place.
+
 ### What I want reviewed before building
 
 1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
