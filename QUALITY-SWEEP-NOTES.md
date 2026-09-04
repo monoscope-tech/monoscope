@@ -7,63 +7,54 @@ billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
 ## Read this first — session summary (2026-09-04, overnight)
 
-**Verified state:** integration suite `808 examples, 0 failures`; doctests
-`1470 Tried, 0 Failures`; both compile targets green. Everything below is pushed.
+**Verified:** doctests `1482 Tried, 0 Failures`; integration suite `808 examples, 0
+failures`; both compile targets green. Everything below is pushed. 76 commits.
 
-**The premise, measured.** The sweep was asked to fix "so much verbosity and no code
-reuse". Neither survives measurement:
+### The premise, measured
+
+The sweep was asked to fix "so much verbosity and no code reuse". Neither survives
+measurement:
 
 - **Zero** duplicated blocks of 6+ lines anywhere in `src/` + `web-components/src`, with
-  identifiers and literals normalised so renamed copies still match. The scan is sound
-  because it decreases monotonically: 7 blocks at 4 lines, 3 at 5, **0 at 6**.
-- The sweep's growth is **+411 lines of code**, not the +1811 first reported — that figure
-  counted comments. The other +1480 is Haddock and doctests.
-- `src/` is 69% code, 18% comment, 12% blank. The long functions are long because markup
-  and SQL are verbose: `dashboardPage_` is 325 lines containing *one* repeated 4-line block.
+  identifiers and literals normalised. Sound because monotonic: 7 blocks at 4 lines, 3 at
+  5, **0 at 6**.
+- Net growth is **+411 lines of code**, not the +1811 first reported — that figure counted
+  comments. `src/` is 69% code, 18% comment, 12% blank.
+- The long functions are long because markup and SQL are verbose. `dashboardPage_` is 325
+  lines containing *one* repeated 4-line block.
 
-**Where the real defects were: types, not size.** Each fix is a value carried as `Text`
-where a sum type existed or belonged.
+**But duplication was the wrong thing to measure.** Clone detection found nothing and
+missed every real finding, because none of them is copy-paste. See "Four lenses" below.
 
-| commit | what it fixed |
+### Fixed
+
+| commit | what |
 |---|---|
-| `a0be8e67` | `SessionSort` — sort silently fell through to `last_seen` |
-| `1652d04b` | `IssueTab` — four independent matches, four separate fall-throughs |
-| `7810598b` | `MonitorTab` — three sources of the same two literals |
-| `6b60a3b6` | tab options derived from the enum (a merge had re-added the literals) |
-| `7058d5c7` | `MonitorBulkAction` — **unknown action returned 200 and did nothing** |
-| `5134a124` | `IssueSeverity` round-tripped through `Text` at five call sites |
-| `3fc7c94c` | `isByosPlan` — two ad-hoc case-sensitive checks beside a case-folding sibling |
-| `4d1cf27f` | deleted the dead `OtlpServerSpec`; verdict compared to a literal |
-| `79182b4c` | group-review reply parsed twice behind a no-op `seq` |
-| `4940a9f7`, `bb2f23fc` | `reportDayLabels` extracted and its doctests made to actually run |
+| `b30d874f` | **a lost-update race** — onboarding steps did read-modify-write in one path and atomic append in two others |
+| `7058d5c7` | `MonitorBulkAction` — an unknown bulk action returned 200 and did nothing; also revealed a cross-tenant test covering only 4 of 6 actions |
+| `a0be8e67`, `1652d04b`, `7810598b`, `5134a124` | `SessionSort`, `IssueTab`, `MonitorTab`, `IssueSeverity` — stringly values with silent fall-throughs |
+| `91bf6807`, `ce93ca3e`, `6b60a3b6` | lists derived from their enums (`allChannels`, the sort dropdown, tab options) |
+| `42374bec` | `truncateMiddle` broke its own "at most n chars" contract; `deleteParam`'s unanchored regex documented |
+| `4d1cf27f`, `79182b4c` | dead `OtlpServerSpec` deleted; LLM reply parsed twice behind a no-op `seq` |
 
-`7058d5c7` is the one to read. Typing a single route parameter surfaced a third consumer
-the compiler found (`action == "deactivate"`), which in turn revealed that
-`bulkAction_doesNotTouchAnotherProjectsMonitors` iterated a hand-written list of four
-actions — **`reactivate` and `unmute` had never been checked for cross-tenant access.**
+### Not fixed, with the blocker stated
 
-**Consolidations deliberately NOT done**, each argued in its own section: the two
-group-review pipelines (same shape, different control flow), the four remaining
-bulk-action handlers (they fail *visibly*; only monitors was silent), `Endpoints.hs:240`
-(a boolean projection, not a fall-through), `getErrorPatternById` (scoping it would delete
-a cross-tenant signal), `writeTargetFor` (already doctested, uniform call sites),
-`PlanName` (its spelling is a provider contract), and typing `GroupVerdict`'s field (would
-turn a legacy row into a decode failure inside a background job). **Shape similarity
-justifies consolidation only when the substance matches.**
+The two stack-trace parsers (merging **moves error-grouping hashes** — a data migration);
+three disagreeing archive paths (`updated_at` bumped by API but not UI); `servicePicker_`
+rendered as a native select on one page and a popover on another; `statusBadge_`'s five
+dead cases and one unhandled live value; the ack-vs-spike-detector paging question.
 
-**Needs a human:** the ack-vs-spike-detector question (paging behaviour, both readings
-defensible); two remaining guard gaps with the test that would close each; four
-client-tier demotions that need a browser to verify; and the ghcid fd leak in the sibling
-`monoscope/` checkout (~250 MB per reload, ~1.3 GB held when last checked — restart that
-watcher).
+### Bounded
 
-**Method warnings that each cost real time and produced a confident wrong answer:**
-`git diff` emits no `+` lines under this repo's external diff driver (use `--no-ext-diff`);
-doctests live in `src/`, so "no `test/` change" does not mean "no guard";
-`cabal test doctests` builds the 197-module test-dev target and corrupts a running watcher;
-a break-test must assert on the failure *reason*, never the count; a doctest count that
-does not *rise* means the examples were never extracted; and four successive attempts to
-measure function size by regex each looked plausible and were each wrong.
+**Exactly three tables are written by both `Pages` and `Models`** — `projects.projects`,
+`apis.issues`, `apis.anomalies` — which is the complete surface for the "Models has a
+helper, Pages open-codes a variant" bug class. All three are accounted for.
+
+### For the morning
+
+The ghcid fd leak in the sibling `monoscope/` checkout; four client-tier demotions needing
+a browser; two guard gaps with the test that closes each; and `Pages/Tabs.hs` to let the
+nav share the tab enums (see "My tab consolidation was module-local").
 
 ## Verification rules (learned the hard way)
 
