@@ -1083,3 +1083,27 @@ calls, and turns a rename into a compile error.
 `issueStateBadge_` (`:2013`) is the same shape on `Maybe IssueEvent` — six events badged,
 the rest silently unbadged. Lower value (the events genuinely are a long tail and most
 should not badge), but it is the same trade if anyone touches it.
+
+## Boolean blindness survey — 14 signatures, none urgent
+
+Scanned `src/` for two adjacent `Bool` parameters (the classic silently-swappable
+argument pair). Several hits are false positives (`isDemoAndNotSudo`, `isTrue`,
+`monitorStatus`, `errorGroupEvidenceMet` — argument plus `Bool` *return*).
+
+The genuine ones cluster in two places:
+
+- **Pricing UI** — `paymentPlanPicker` and `popularPricing` take *three* adjacent `Bool`s;
+  `pricingCta_`, `systemsPricing`, `pricingPage`, `notifChannelsWithUrls` take two. A swap
+  renders the wrong pricing state silently. Worth a record type if anyone touches these.
+- **`Telemetry.writeTargetFor :: Bool -> Bool -> Maybe Text -> WriteTarget`** — routes
+  writes between Postgres and TimeFusion, so a swap would send telemetry to the wrong
+  store.
+
+`writeTargetFor` is **already defended and needs no change**: four doctests pin every flag
+combination and both DLQ failure markers, and all seven call sites read
+`writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites`
+— the field names make the order checkable at a glance. Newtypes would upgrade that to a
+compile error, but the marginal safety is small against touching the ingestion path.
+
+Recording the pattern rather than fixing it: this is a real class, the instances are all
+currently correct, and none of them is worth an unverifiable change tonight.
