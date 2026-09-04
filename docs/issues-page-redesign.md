@@ -821,6 +821,36 @@ artefacts and Sentry resolves against them. We have the field (`contextLine`) an
 nothing populates it. That is an SDK-and-artefact-pipeline problem, not a
 rendering one, and it is the one place Sentry's stack trace is still ahead.
 
+### F14 — `dashboard-widget-types` e2e is flaky at roughly 50%, and it gates every deploy. *OPEN, not this page.*
+
+Two of four deploys of this work failed on the *same* test —
+`dashboard-widget-types.spec.ts:158 › a failed chart shows a local error and a
+successful refresh clears it` — and the proof it is not a code defect is exact:
+
+| run | code | result |
+|---|---|---|
+| `8c9501325` | includes both chart-colour commits | ✅ |
+| `d8c87c4fb` | + one Lucid-only commit (no TS) | ❌ |
+| `e361d766f` | stack frames | ❌ |
+| `b66d526a1` | **identical code, +36 lines of markdown** | ✅ |
+
+Identical code, opposite outcomes, so it is intermittent rather than caused by
+any of it.
+
+**Likely mechanism**, from reading the test against `widgets.ts`: the test
+installs its `**/chart_data?**` failure route *after* `openDashboard`, but a
+widget prefetches its data on load (`chartDataPrefetch` / `takePrefetched`). If
+the mocked request is superseded, `showChartError` is skipped — it is guarded by
+`if (!isStale())` — so the banner never appears and `toBeVisible` fails exactly
+as observed. Waiting for the initial load to settle (`networkidle`, or awaiting
+the first successful `chart_data`) before installing the route should make it
+deterministic.
+
+Not fixed here: an e2e fix cannot be verified locally (`scripts/e2e.sh` builds
+nothing — a stale binary has invalidated bisects before), and blind-patching
+another team's test is worse than handing over the diagnosis. But at ~50% on a
+gate that blocks deploys, it is worth someone's morning.
+
 ### Still open after this pass
 
 - **F9** — a log-pattern issue referencing a hash no telemetry carries (data).
