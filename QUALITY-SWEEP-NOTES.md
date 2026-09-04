@@ -7,10 +7,18 @@ billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
 ## Read this first — session summary (2026-09-04, overnight)
 
-**Verified, fully.** Doctests `1482 Tried, 0 Failures`. Integration suite `807 examples, 0
-failures, 89 pending` — a complete run covering every source commit below (807 rather than
+**Verified, fully.** Doctests `1485 Tried, 0 Failures`. Integration suite `807 examples, 0
+failures, 89 pending` — complete runs covering every source commit below (807 rather than
 the earlier 808 because the dead `OtlpServerSpec` was deleted, removing one pending
-example). Both compile targets green. Everything is pushed.
+example). The library build is `All good (128 modules)` with **no warnings**. Everything
+is pushed.
+
+The doctest count is worth reading as a ledger, since it moved four times and each step
+was checked: `1482` → `1479` (deleted `sparklineBar`'s three examples) → `1482` (three
+`bulkActionSlug` slug guards) → `1485` (three `CatalogTab` parse/round-trip guards). A
+count that lands where predicted is the evidence that a new doctest is actually running —
+doctest-parallel silently ignores examples outside a Haddock block, so "it passed" alone
+proves nothing.
 
 ### The premise, measured
 
@@ -41,6 +49,12 @@ missed every real finding, because none of them is copy-paste. See "Four lenses"
 | `4940a9f7`, `bb2f23fc`, `800d8796` | `reportDayLabels` extracted from a 14-parameter function so its timezone behaviour could be doctested — plus two rounds of making those doctests actually execute |
 | `3fc7c94c` | `isByosPlan` — two ad-hoc case-sensitive checks beside a case-folding sibling |
 | `6ac599e5`, `b2e563bc` | `Containers.emDash_` reused instead of inlined; tab->wire functions renamed `tabParam` to match the existing convention |
+| `42c5d176` | toast copy: mid-sentence Title Case (`"Deleted Project Successfully"`) lowered, named features left capitalised |
+| `f2c80ffc` | weeder rooted at `Start.startApp` (89 hits → 20, all noise); the one real dead binding deleted; `CLAUDE.md`'s "delete what weeder reports" corrected before it costs someone live code |
+| `6473f8d5` | the last three `Capture "action" Text` bulk-action routes typed — dashboards was answering 200 on an unknown action |
+| `45f8b50f` | `CatalogTab` — `api_catalog` validated the shared tab parameter and `endpoints` did not |
+| `78d8cf66` | our read-through cache replaced by `Data.Cache.fetchWithCache`; see the note on the TTL leak the "obvious" shared helper would have introduced |
+| `0aa5893f` | four imports my own `b30d874f` orphaned — the build is now warning-free |
 
 ### Not fixed, with the blocker stated
 
