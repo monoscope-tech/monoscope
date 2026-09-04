@@ -772,10 +772,15 @@ Fixed exactly where it can be: when the recent trace *is* the first trace (the
 common case, and true here), `created_at` is the timestamp that genuinely goes
 with it. When they differ, the old timestamp is kept — no worse than before.
 
-**Still open:** there is no `recent_trace_at` column, so a genuinely-different
-recent trace still gets an approximate window. The real fix is to record the
-timestamp when `recent_trace_id` is written. That is a migration plus a writer
-change in the error-pattern path, deliberately out of scope for a page pass.
+**Closed (`a22e26fe9`).** Root cause: `recent_trace_id` is deliberately throttled
+to at most one write per five minutes per pattern (rewriting it per occurrence
+breaks HOT and bloats heap/TOAST on the hottest path in the product), while
+`updated_at` is written on every occurrence — so the pair drifts apart *by
+design*, and no reader could have paired them correctly. Migration 0145 adds
+`recent_trace_at`, written in the same CASE branch as the id so they cannot
+diverge again; nullable with no backfill, since the value is only knowable at
+write time. Read via a dedicated scalar rather than widening `ErrorPattern`,
+which is decoded positionally from explicit column lists in several queries.
 
 ### F12 — fixed (`356968f5e`)
 
@@ -815,11 +820,19 @@ raw text one disclosure away, and a `<pre>` fallback when the parser recognises
 nothing. No demo error has a stack trace, so a spec with a real Java trace is the
 only thing exercising it.
 
-**What remains genuinely un-closable by this page:** source context. Sentry shows
-the erroring line and its neighbours because SDKs upload source maps and release
-artefacts and Sentry resolves against them. We have the field (`contextLine`) and
-nothing populates it. That is an SDK-and-artefact-pipeline problem, not a
-rendering one, and it is the one place Sentry's stack trace is still ahead.
+**And source context turned out to be ours too (`9db18970a`).** I twice called it
+un-closable — "SDKs upload source maps and we have nothing to resolve against".
+`Pages.CodeContext` exists, is documented as *"the source behind one stack
+frame"*, resolves file+line to real source through the project's Git integration,
+caches the blobs, and is wired to `GET /p/:pid/code_context`. Nothing had ever
+called it but the route table. Each frame with a file and line now requests it
+lazily — `intersect once` on a div inside a *closed* `<details>`, so a 40-frame
+trace issues no reads until a frame is opened.
+
+**That is the fifth instance of the pattern**, after the widget value slot, the
+trace fragment's span id, the details-pane collapse, and the frame parser itself.
+The lesson is now unambiguous: on this page, "we can't do that" has been wrong
+five times out of five, and each time the capability was already in the repo.
 
 ### F14 — `dashboard-widget-types` e2e is flaky at roughly 50%, and it gates every deploy. *OPEN, not this page.*
 
