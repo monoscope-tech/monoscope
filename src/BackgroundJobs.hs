@@ -3897,7 +3897,7 @@ confirmedGroups reviews keyed =
   [ (r, gkey, prefix, pos, kids)
   | (gkey, _, n, prefix, pos, kids) <- keyed
   , Just r <- [HM.lookup gkey byKey]
-  , r.verdict == "param"
+  , r.verdict == display PatternMerge.Param
   , mergeEvidenceMet r.confirmations r.firstMemberCount (fromIntegral n) kids
   ]
   where
@@ -5304,18 +5304,18 @@ reviewErrorGroups pid = do
               case reply of
                 Left err -> Log.logAttention "Error group review: LLM call failed" (pid, err)
                 Right txt -> do
-                  let verdicts = HM.fromList [(k, v) | (k, v, sh) <- PatternMerge.parseGroupReview txt, sh `seq` True]
-                      shapes = HM.fromList [(k, sh) | (k, _, sh) <- PatternMerge.parseGroupReview txt]
+                  -- One pass, verdict and shape together — as the endpoint sibling does.
+                  let verdicts = HM.fromList [(k, (v, sh)) | (k, v, sh) <- PatternMerge.parseGroupReview txt]
                       rows =
-                        [ (gkey, mhash, g.memberCount, display v, fromMaybe "" $ HM.lookup gkey shapes)
+                        [ (gkey, mhash, g.memberCount, display v, sh)
                         | (gkey, mhash, g, _) <- members
-                        , Just v <- [HM.lookup gkey verdicts]
+                        , Just (v, sh) <- [HM.lookup gkey verdicts]
                         ]
                   PatternMergeDB.recordErrorGroupReviews pid rows
                   -- Refute only what was proposed as one bug. Asking about the
                   -- "routes" verdicts would spend a call to be told what we already
                   -- decided to do, which is nothing.
-                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, HM.lookup gkey verdicts == Just PatternMerge.Param]
+                  let proposed = [(gkey, g, msgs) | (gkey, _, g, msgs) <- members, (fst <$> HM.lookup gkey verdicts) == Just PatternMerge.Param]
                   unless (null proposed) $ refuteErrorGroups pid ctx proposed
                   Log.logInfo
                     "Error group review complete"
@@ -5355,7 +5355,7 @@ applyConfirmedErrorGroups pid = do
         [ (r.groupKey, g)
         | r <- reviews
         , isNothing r.appliedAt
-        , r.verdict == "param"
+        , r.verdict == display PatternMerge.Param
         , errorGroupEvidenceMet r.confirmations r.firstMemberCount r.memberCount r.survivedRefute
         , Just g <- [HM.lookup r.groupKey byKey]
         ]
