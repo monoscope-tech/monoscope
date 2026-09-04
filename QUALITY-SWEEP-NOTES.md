@@ -1756,3 +1756,22 @@ the page that owns them.
 
 So the SQL lens is closed on both sides: **writes** gave the onboarding race and the
 archive divergence; **reads** gave nothing.
+
+### Self-review of the onboarding fix: the NULL case, and why it is unreachable
+
+Worth writing down because the fix *looks* like it has a hole. `completeOnboardingStep`
+guards with `NOT (#{step} = ANY(onboarding_steps_completed))`. If that column were NULL,
+`x = ANY(NULL)` is NULL, `NOT NULL` is NULL, the row would not match, and **the step would
+silently never be recorded** — a regression versus the read-modify-write it replaced, which
+would have handled NULL fine.
+
+The column is `TEXT[] DEFAULT ARRAY[]::TEXT[]` (migration 0001) and is **not** declared
+`NOT NULL`, so SQL alone does not rule it out.
+
+It is nevertheless unreachable: `Project.onboardingStepsCompleted :: V.Vector Text` is not
+`Maybe`, so a NULL would fail to decode and make that project unreadable everywhere, not
+just here. A NULL row is therefore already impossible in any working system.
+
+No `COALESCE` added — that would be error handling for a state the type system already
+excludes, which is exactly what CLAUDE.md tells you not to write. Recorded instead, since
+the next reader will have the same doubt.
