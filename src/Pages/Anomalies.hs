@@ -991,6 +991,12 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     -- #error-details-container's group: no JS, and the choice
                     -- survives the htmx morphs this card does on every filter.
                     tabBtn (marker, lbl, isActive) = detailTab_ "err-tabs" marker "max-md:px-2 err-tab font-medium" isActive $ toHtml (lbl :: Text)
+                -- Labelled, because "First | Recent" sitting beside "Trace | Logs" with only a
+                -- 1px rule between them reads as four peers. They are not: one picks *which
+                -- occurrence* you are looking at, the other picks *how* you look at it. Sentry
+                -- and Datadog both name this control ("First | Last | Recommended", "Error
+                -- sample") rather than leaving the reader to infer the grouping.
+                span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mr-1 max-md:hidden"] "Occurrence"
                 forM_ ([(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured", "First"), (aUrl, not isFirst, "Show recent trace the error occured", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
                 span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
                 forM_ ([("err-tab-trace", "Trace", not isLogPatternIssue), ("err-tab-logs", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
@@ -1051,8 +1057,23 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                       ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
                       , around lastSeen
                       )
-              div_ [class_ "grow-1 min-w-0 h-full"]
-                $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
+              div_ [class_ "grow-1 min-w-0 h-full flex flex-col"] do
+                -- The way out. Every persona walkthrough ended the same way: the page runs
+                -- out of answers — routinely, since three of four types render at least one
+                -- empty state — and there was no route onward carrying what the reader
+                -- already knows. This hands the Explorer the exact query and window this tab
+                -- is showing, which is Sentry's "All Events" and Datadog's "View All Errors".
+                div_ [class_ "shrink-0 flex justify-end px-1 pb-1"]
+                  $ a_
+                    [ href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr logsQuery <> logsParams
+                    , class_ "text-2xs text-textBrand hover:underline flex items-center gap-1"
+                    , term "data-tippy-content" "Open these logs in the Explorer, with this issue's filter and window applied"
+                    ]
+                    do
+                      "Open in Explorer"
+                      faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5 shrink-0"
+                div_ [class_ "grow min-w-0 min-h-0"]
+                  $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
               -- Starts hidden alongside the collapsed pane; the swap handler below reveals
               -- both together, and closeDetailPanel puts them back.
               div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
@@ -1983,16 +2004,19 @@ highlightJsHead_ = do
       document.getElementById('hljs-dark').disabled = !dark;
     }
     function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
-    document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
+    document.addEventListener('DOMContentLoaded', () => {
+      setHljsTheme();
+      highlightSnippets(document);
+      // The theme is a data-theme attribute on body, written by the toggle, the cookie
+      // restore and the OS-preference listener alike. Observing the attribute keeps the
+      // stylesheet in step with all three; setHljsTheme used to run once at load, so
+      // toggling the theme afterwards left the wrong sheet enabled.
+      new MutationObserver(setHljsTheme).observe(document.body, { attributeFilter: ['data-theme'] });
+    });
     // htmx 4's native event detail has no `elt` (see the comment on the chat container's
     // hx-on::after:swap), so `e.detail.elt` was undefined and highlighting never re-ran
     // after a swap.
     document.addEventListener('htmx:after:swap', e => highlightSnippets(e.target));
-    // The theme is a data-theme attribute on body, written by the toggle, the cookie
-    // restore and the OS-preference listener alike. Observing the attribute keeps the
-    // stylesheet in step with all three; setHljsTheme used to run once at load, so
-    // toggling the theme afterwards left the wrong sheet enabled.
-    new MutationObserver(setHljsTheme).observe(document.body, { attributeFilter: ['data-theme'] });
     """
 
 
