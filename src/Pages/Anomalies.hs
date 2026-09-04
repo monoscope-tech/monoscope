@@ -289,13 +289,24 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
         -- recoverable when the recent trace *is* the first one — which is the common case,
         -- and is exact. When they genuinely differ the old timestamp is kept: still
         -- approximate, but no worse than before. See F13.
-        Just (Issues.RuntimeExceptionP _) ->
-          pure $ errorM >>= \errL ->
+        Just (Issues.RuntimeExceptionP _) -> case errorM of
+          Nothing -> pure Nothing
+          Just errL -> do
             let base = errL.base
                 createdU = zonedTimeToUTC base.createdAt
-             in if isFirst
-                  then (,createdU) <$> base.firstTraceId
-                  else (,bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId)) <$> base.recentTraceId
+            if isFirst
+              then pure $ (,createdU) <$> base.firstTraceId
+              else do
+                -- `recent_trace_at` (migration 0145) is written in the same throttled
+                -- branch as `recent_trace_id`, so it is the timestamp that genuinely goes
+                -- with that id. `updated_at` is not: it moves on every occurrence while
+                -- the id moves at most every five minutes, which is how the pair came to
+                -- aim +/-5min lookups at a window the trace was not in. Rows that have not
+                -- recurred since the migration have no value yet, so the old approximation
+                -- stays as the fallback.
+                recentAt <- enriching "recent_trace_at" Nothing $ ErrorPatterns.selectRecentTraceAt pid issue.targetHash
+                let fallback = bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId)
+                pure $ (,fromMaybe fallback recentAt) <$> base.recentTraceId
         Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
         Just (Issues.QueryAlertP _) -> pure Nothing
         Just (Issues.LogPatternP _) -> pure Nothing

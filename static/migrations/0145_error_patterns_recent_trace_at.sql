@@ -1,0 +1,20 @@
+-- The timestamp that goes with recent_trace_id.
+--
+-- Every trace lookup on the issue page pins a +/-5min window to a timestamp taken
+-- alongside the trace id, so the two have to move together. They did not:
+-- `recent_trace_id` is refreshed at most once every five minutes per pattern (a
+-- deliberate throttle — rewriting it per occurrence breaks HOT and bloats the heap
+-- and TOAST relation on the hottest path in the product), while `updated_at` is
+-- written on *every* occurrence. The pair therefore drifts apart by design.
+--
+-- Observed on a demo issue: recent_trace_id pointed at a trace from 2026-09-02
+-- 08:04 while updated_at read 2026-09-04 00:15, and no row for that trace exists
+-- anywhere near the later time. The waterfall — the page's primary evidence when
+-- an exception carries no stack trace — was looking in a window the trace is not
+-- in, and reported "couldn't load this trace" for a trace that is present and
+-- readable.
+--
+-- Nullable with no backfill: the value is only knowable at write time, so existing
+-- rows acquire one the next time their pattern recurs. Readers fall back to the
+-- old approximation until then.
+ALTER TABLE apis.error_patterns ADD COLUMN IF NOT EXISTS recent_trace_at TIMESTAMPTZ;

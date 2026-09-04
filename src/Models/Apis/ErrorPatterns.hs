@@ -12,6 +12,7 @@ module Models.Apis.ErrorPatterns (
   propagateMergedCountsBatch,
   updateErrorPatternState,
   getErrorPatternLByHash,
+  selectRecentTraceAt,
   bulkCalculateAndUpdateBaselines,
   UpsertOutcome (..),
   batchUpsertErrorPatterns,
@@ -188,6 +189,22 @@ getErrorPatternById eid = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| 
 
 getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPattern)
 getErrorPatternByHash pid eHash = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND hash = #{eHash} |])
+
+
+-- | When the recent trace was captured, for pairing with @recent_trace_id@.
+--
+-- Read on its own rather than added to 'ErrorPattern': that record is decoded
+-- positionally from explicit column lists in several queries, so widening it means
+-- touching all of them on the error-ingest hot path to serve one page.
+--
+-- Nullable until the pattern next recurs (migration 0145 backfills nothing — the
+-- value is only knowable at write time), so callers keep their old approximation
+-- as a fallback.
+selectRecentTraceAt :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe UTCTime)
+selectRecentTraceAt pid h =
+  join
+    <$> Hasql.interpOne
+      [HI.sql| SELECT recent_trace_at FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{h} LIMIT 1 |]
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
@@ -447,11 +464,11 @@ batchUpsertErrorPatterns pid errors now =
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
             environment, service, runtime, error_data,
-            first_trace_id, recent_trace_id,
+            first_trace_id, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data,
-                 u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
+                 u.trace_id, u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN #{now} END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
                        unnest(#{stacktraces}::text[]) AS stacktrace, unnest(#{hashes}::text[]) AS hash,
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
@@ -480,6 +497,17 @@ batchUpsertErrorPatterns pid errors now =
                 AND apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
                 THEN EXCLUDED.recent_trace_id
               ELSE apis.error_patterns.recent_trace_id
+            END,
+            -- Moves in lockstep with recent_trace_id, under the identical condition.
+            -- Readers pin a +/-5min window to this, so a timestamp that advanced while
+            -- the id stood still (which is what updated_at does — it is written every
+            -- occurrence, the id at most every five minutes) aims the lookup at a window
+            -- the trace is not in. Same CASE, or the pair drifts again.
+            recent_trace_at = CASE
+              WHEN EXCLUDED.recent_trace_id IS NOT NULL
+                AND apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
+                THEN #{now}
+              ELSE apis.error_patterns.recent_trace_at
             END,
             first_trace_id = COALESCE(apis.error_patterns.first_trace_id, EXCLUDED.first_trace_id),
             is_framework = EXCLUDED.is_framework,
