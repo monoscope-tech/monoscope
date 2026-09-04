@@ -1666,3 +1666,33 @@ decision, not a rename.
 
 None is a defect; all three are the "platform is not uniform" complaint at small scale,
 in two files that already depend on each other.
+
+## Archiving an issue has three implementations that disagree
+
+Found by grouping SQL by `(operation, table)`: `UPDATE apis.issues` appears 18 times across
+5 modules. Three of them archive an issue:
+
+| path | `updated_at` | cascades to `apis.anomalies` |
+|---|---|---|
+| API — `ApiHandlers` → `Issues.setArchiveState` | **bumped** (`COALESCE(#{mTs}, updated_at)`) | no |
+| UI bulk — `Anomalies.archiveAnomaliesAndIssues` | not touched | yes |
+| UI single — open-coded at `Pages/Anomalies.hs:143` | not touched | yes |
+
+**The `updated_at` split is user-visible.** `selectIssues` can order by `updated_at`, so
+archiving through the API moves an issue to the top of that sort and archiving through the
+UI does not. Same operation, different result depending on which client you used.
+
+**The cascade split is benign — and reveals dead work.** `apis.anomalies.archived_at` is
+written by both UI paths and never by the API. It is also **never read**: the only two
+readers of `apis.anomalies` filter on `created_at` (`Projects.hs:556`, an activity check)
+and on `project_id`/`target_hash` (`Endpoints.hs:961`, merge logic). So the column is
+written by two paths, skipped by a third, and consulted by none.
+
+Not fixed, because unifying requires deciding two things a refactor cannot: whether
+archiving should bump `updated_at` (it changes list ordering either way), and whether the
+`apis.anomalies` write should continue at all now that nothing reads it. The single-issue
+handler at `Pages/Anomalies.hs:143` open-coding what `setArchiveState` already does is the
+part that is unambiguously worth folding in once those are settled.
+
+Same shape as the onboarding-step find in `b30d874f`: a canonical helper exists in the
+Models layer, and the Pages layer open-codes a variant of it that has quietly diverged.
