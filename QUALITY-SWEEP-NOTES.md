@@ -1589,3 +1589,44 @@ a monitor stores `triggerLessThan :: Bool`. Typing the form field would need a
 cross-module dependency plus a `FromHttpApiData` instance, to remove three literals that
 sit in one file 150 lines apart. Worth doing only if the form gains a third direction or
 the monitor starts storing the direction rather than a Bool.
+
+## `monoscope-shared` is built by three consumers with three flag sets
+
+I broke the build tonight and the root cause is worth knowing, because it is a property of
+the dev loop rather than a one-off mistake.
+
+`monoscope-shared` is compiled by:
+
+| consumer | flags |
+|---|---|
+| `make live-reload` (`cabal repl monoscope`) | `-j10 -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds` |
+| `make live-test-dev` (`cabal repl …test-dev`) | `-j10 -fobject-code -osuf dyn_o -hisuf dyn_hi -O0` |
+| `cabal test doctests` / `cabal build` | defaults |
+
+Whichever ran last wins, and the losers see mismatched artifacts. The symptom is
+`Dynamic hash doesn't match for 'Pkg.CLIFormat'` — the `.hi` and `.dyn_hi` disagree. My
+notes already said "stop the test-dev watcher before running doctests"; that is
+insufficient, because the **library** watcher uses the same shared package.
+
+**Then two repair attempts each made it worse:**
+
+1. `rm -rf …/monoscope-shared-0.1.0.0/build` removes the artifacts but leaves the package
+   **registered**, so cabal reports *"There are files missing in the
+   'monoscope-shared-0.1.0.0' package"* instead of rebuilding.
+2. Rebuilding with plain `cabal build lib:monoscope-shared` uses *default* flags. `cabal
+   repl` then wants `-O0` and must relink, which fails on macOS aarch64 with
+   `ld: invalid use of ADRP/imm12 in '' to '_stg_upd_frame_info'` — mixed objects.
+
+**The repair that works**, narrow and without `cabal clean` (which CLAUDE.md forbids and
+which would cost an hour of dependency rebuilds):
+
+```sh
+kill <make-pid>   # both watchers
+rm -rf dist-newstyle/build/aarch64-osx/ghc-9.12.2/monoscope-shared-0.1.0.0 \
+       dist-newstyle/packagedb/ghc-9.12.2/monoscope-shared-0.1.0.0-inplace.conf
+cabal build lib:monoscope-shared \
+  --ghc-options="-j10 -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds"
+# then restart live-reload, wait for "All good", then live-test-dev
+```
+
+Directory **and** registration, and rebuild with the *watcher's* flags, not the defaults.
