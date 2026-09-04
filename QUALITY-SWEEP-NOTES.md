@@ -1225,3 +1225,33 @@ lines, 7). `OtlpServerSpec`'s only `processList` mentions are inside the dead co
 
 Deleting it needs `hpack` afterwards — `monoscope.cabal` lists the module in
 `other-modules` even though `hspec-discover` finds specs automatically.
+
+## Doctests verified — and three defects behind one three-line example
+
+`Examples: 1470  Tried: 1470  Errors: 0  Failures: 0`. Tonight's eleven new doctests now
+provably execute. **The count matters as much as the pass**: the suite reported 1434
+before, so a green run still showing 1434 would have meant the new examples were never
+extracted — the exact failure that could not be ruled out when neither `LogQueries` nor
+`Endpoints` had a `$setup` chunk. 1434 → 1467 → 1470 is what made "they run" a fact.
+
+Getting `reportDayLabels` green took three iterations, each defect hidden by the previous:
+
+1. **`read` is not in scope** — Relude hides partial `read`, so
+   `read "2026-03-01 20:00:00 UTC"` could never compile. The timezone arithmetic had been
+   verified independently against the IANA database and was correct; that verified the
+   wrong thing entirely.
+2. **Prose after a `>>>` is parsed as expected output.** The `$setup` explanation sat
+   below `>>> let marchUTC ...`, so doctest compared the prose against the `let`'s result.
+   Prose must come *before* the examples in a chunk.
+3. **An orphaned Haddock block**, surfaced only because fixing (2) meant reading the
+   region. `reportDayLabels` (`4940a9f7`) had been inserted *between* `renderWeeklyEmail`'s
+   doc comment and `renderWeeklyEmail` itself. It compiled cleanly and no test could ever
+   have caught it.
+
+Operational notes for the next person:
+- `cabal test doctests --test-options="src/Foo.hs"` **does not narrow the run** — the
+  runner already discovers every module, so passing a path yields
+  `module 'Pages.Foo' is defined in multiple files`. Verification is all-or-nothing, ~14
+  minutes.
+- Stop the `live-test-dev` watcher first (`kill` the `make` pid). `cabal test doctests`
+  builds the 197-module test-dev target into the directory that watcher owns.
