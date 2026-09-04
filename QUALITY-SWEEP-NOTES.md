@@ -1371,3 +1371,51 @@ would show `" (/app/..."`. Confirm first with a doctest projecting `.filePath` o
 parenthesised frame; the existing ones project only `.functionName`, `.isInApp` and
 `length`, which is why it has never been caught. **This is a reading of the code, not an
 executed result.**
+
+## Finding reimplementation, not copy-paste
+
+The clone scan found **zero** duplicated 6-line blocks — but it found the two stack-trace
+parsers not at all, because they share no text. **Clone detection finds copy-paste; it
+cannot find reimplementation.** A better signal for this codebase: the *same function name
+defined in more than one module*. That is how `parseStackTrace` surfaced.
+
+14 such collisions exist. Triaged:
+
+**Genuine reimplementation (recorded above):** `parseStackTrace` — `Pkg/StackTrace.hs` vs
+`Pkg/ErrorFingerprint.hs`.
+
+**Coincidental, correctly separate:** `runServer` (gRPC vs HTTP), `count` (metric counter
+vs a field), `issueTypeBadge` (HTML vs email rendering — different output media),
+`nonBlank`, `plainCell`, `renderNameCol` (module-local table helpers).
+
+**Worth a look if anyone is in the area:** `truncateText` (`EmailTemplates` vs `Web/MCP`),
+`toolError` (`Pkg/AI` vs `Web/MCP`), `servicePicker_` (`RealUserMonitoring` vs
+`Pages/Telemetry`), `parseInstallState` (`Bots/Utils` vs `GitSync`), `renderTable`
+(`Components/Table` vs `Components/Widget`).
+
+### `PrometheusScrapeConfigs.selectFrom` — hand-rolls what `GenericEntity` derives
+
+`selectFrom :: HI.Sql` and a hand-written `selectCols` list, where every sibling model uses
+`deriving (Entity) via (GenericEntity '[Schema …, TableName …, PrimaryKey "id",
+FieldModifiers '[CamelToSnake]] T)` and `DeriveUtils.selectFrom @T`. The hand-written list
+is character-for-character what `CamelToSnake` over the record fields would produce.
+
+**Not changed, and the reason matters:** the apparent risk is drift — add a field to the
+record, forget the list, get a `DecodeRow` mismatch at runtime. But `PrometheusSpec`
+exercises both paths (`configsByProjectId` via `selectFrom`, `claimDueConfigs` via
+`RETURNING selectCols`), so that drift fails a test rather than reaching production. It is
+a consistency nit, not a latent bug, and not worth touching query generation for.
+
+If someone does adopt it: `selectCols` must stay for the `RETURNING` clause, which needs
+bare column names — so the *complete* fix also wants a `columnsOf @e` helper in
+`DeriveUtils` (it currently imports only `_select` from pg-entity). Half-doing it leaves
+the same hand-maintained list behind.
+
+### A note on my own work tonight
+
+`Pages/RealUserMonitoring` already had `parseTab`/`tabParam` built on
+`decodeEnumSC`/`encodeEnumSC`. My `IssueTab` work added a second `parseTab` with a
+hand-written `tabSlug`. The hand-written slug is *justified* — the wire spellings are
+capitalised (`?filter=Acknowledged`) and `encodeEnumSC` snake-cases — but I named it
+`tabSlug` where the established convention is `tabParam`. Same pattern, gratuitously
+different name. Worth aligning if either is touched again.
