@@ -445,6 +445,46 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "&amp;from="
       html `shouldSatisfy` T.isInfixOf "&amp;to="
 
+    -- Regression: the /impeccable critique found the heading outline inverted — h1 was
+    -- the breadcrumb number, the issue title an h3, and on three of four types the only
+    -- h2 was an empty-state string, so a screen reader heard "No stack trace in this
+    -- event" outrank the incident. Also guards the shared fact row and the promoted
+    -- EVENTS figure, neither of which had coverage.
+    it "issue detail has one h1 and puts the incident above its evidence sections" \tr -> do
+      errHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn ->
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, issue_data, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'heading order issue', ?, 'checkout', 'staging', ?::jsonb, ?, ?) RETURNING id |]
+            ( testPid
+            , errHash
+            , AE.encode
+                [aesonQQ|{ "error_type": "TypeError", "error_message": "boom", "stack_trace": ""
+                         , "occurrence_count": 1, "first_seen": #{frozenTime}, "last_seen": #{frozenTime} }|]
+            , frozenTime
+            , frozenTime
+            )
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = renderPage page
+          headings = [T.toLower t | t <- ["H1", "H2", "H3"], ("<" <> t) `T.isInfixOf` T.toUpper html]
+      -- Exactly one h1, and it is not the issue title (the page shell owns it).
+      T.count "<h1" html `shouldBe` 1
+      headings `shouldBe` ["h1", "h2", "h3"]
+      -- The issue title is the h2; evidence sections are h3 and now have a heading role
+      -- at all, which they lacked entirely when detailCard_ titles were spans.
+      html `shouldSatisfy` T.isInfixOf "heading order issue"
+      -- An empty state announces a condition; it must not open a section.
+      html `shouldSatisfy` not . T.isInfixOf "<h2 class=\"text-2xl"
+      -- The shared fact row carries service and environment for every type.
+      html `shouldSatisfy` T.isInfixOf "Service:"
+      html `shouldSatisfy` T.isInfixOf "staging"
+      -- The range total is labelled and rendered at headline weight, not as a grey pill.
+      html `shouldSatisfy` T.isInfixOf "Events"
+      html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
+
     -- Regression: a query alert used to render its KQL string and nothing else — not
     -- the threshold, not the value that crossed it, no chart, no monitor link. Below
     -- that, the Investigation panel reserved lg:h-[70vh] to say "No trace data

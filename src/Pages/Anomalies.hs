@@ -714,7 +714,11 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
           -- first/last seen are common to every issue and live in the fact row below.
           Just (Issues.LogPatternP d) -> do
             logLevelChip_ d.logLevel d.logPattern
-            metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
+            -- "all time", explicitly: the chart header now carries an EVENTS figure
+            -- scoped to the selected range, and an unqualified "14 occurrences" beside a
+            -- chart reading "No data in this time range" is read as the page
+            -- contradicting itself rather than as two different, both-true numbers.
+            metadataChip_ "tally" $ show d.occurrenceCount <> " all time"
           Just (Issues.LogPatternRateChangeP d) -> do
             logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "arrow-trend-up" $ display d.changeDirection
