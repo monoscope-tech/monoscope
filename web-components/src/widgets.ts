@@ -310,10 +310,16 @@ export const createSeriesConfig = (widgetData: WidGetData, name: string, i: numb
   // if a "good when high" or latency-SLO stat ever needs a non-red threshold.
   // Otherwise generic stat columns use the brand color; named series use their mapping.
   const isErrorStat = widgetData.widgetType === 'timeseries_stat' && widgetData.alertThreshold != null;
-  const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
-    (name === 'value' || name.startsWith('count') || name === '' || !name);
+  // A lone aggregate column has no identity to encode, whatever the widget type.
+  // getSeriesColor hashes the series *name*, which is what gives a service a stable
+  // colour everywhere — but hashing the literal string "count(*)" yields an arbitrary
+  // hue that reads as signal when it carries none. It rendered healthy checkout
+  // throughput in the same red as an error-volume chart, on a page whose first design
+  // principle is "colour is signal, not decoration". Grouped series are named by their
+  // group value (service, status, ...) and still hash, which is the case the hash is for.
+  const isGenericAggregate = name === 'value' || name.startsWith('count') || !name;
   const styles = getChartStyles(); // one getComputedStyle read per series, not three
-  const paletteColor = isErrorStat ? styles.errorColor : isGenericStatColumn ? styles.brandColor : getSeriesColor(name);
+  const paletteColor = isErrorStat ? styles.errorColor : isGenericAggregate ? styles.brandColor : getSeriesColor(name);
 
   const gradientColor = (opacity: number) => new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: window.echarts.color.modifyAlpha(paletteColor, opacity) },
