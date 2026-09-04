@@ -123,6 +123,18 @@ onboardingTests =
             functionality `shouldMatchList` ["logs", "analytics"]
           _ -> fail "Expected SurveyStep"
 
+      -- The survey writes the same `questions` blob the info step filled in, so the
+      -- earlier answers have to survive it. Pins the merge itself, which moved from a
+      -- Haskell read-modify-write into a jsonb `||` in the statement.
+      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      case afterSurvey of
+        Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
+          Onboarding.InfoStep{..} -> do
+            companyName `shouldBe` "ACME Corp"
+            companySize `shouldBe` "11 - 25"
+            foundUsFrom `shouldBe` "google"
+          _ -> fail "Expected InfoStep"
+
       let notifForm =
             Onboarding.NotifChannelForm
               { phoneNumber = "+1234567890"

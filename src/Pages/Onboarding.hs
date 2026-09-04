@@ -19,7 +19,6 @@ module Pages.Onboarding (
 
 import Control.Lens qualified as L
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
@@ -246,32 +245,28 @@ checkIntegrationGet pid languageM = do
 
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
-  let jsonBytes =
-        mergeQuestions
-          project.questions
-          [ ("companyName", AE.toJSON form.companyName)
-          , ("companySize", AE.toJSON form.companySize)
-          , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
-          ]
+  (sess, _project) <- Projects.sessionAndProject pid
+  let answers =
+        HI.AsJsonb
+          $ AE.object
+            [ ("companyName", AE.toJSON form.companyName)
+            , ("companySize", AE.toJSON form.companySize)
+            , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
+            ]
       userId = sess.user.id
-  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName}, questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid "Info"
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
 
--- | Merge new answers into a project's existing questions blob; new answers win on conflict.
-mergeQuestions :: Maybe AE.Value -> [(AE.Key, AE.Value)] -> HI.AsJsonb AE.Value
-mergeQuestions old kvs = HI.AsJsonb $ AE.Object $ KM.fromList kvs <> foldMap (\case AE.Object o -> o; _ -> mempty) old
-
-
 onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
 onboardingConfPostH pid form = do
-  (_, project) <- Projects.sessionAndProject pid
-  let jsonBytes = mergeQuestions project.questions [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
-  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes} where id=#{pid} |]
+  -- Kept for the membership check it performs, not for the project it returns.
+  _ <- Projects.sessionAndProject pid
+  let answers = HI.AsJsonb $ AE.object [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid "Survey"
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
