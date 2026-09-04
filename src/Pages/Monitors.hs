@@ -436,7 +436,7 @@ alertBulkActionH pid action form = do
       BAResolve -> void $ Monitors.monitorResolveByIds pid monitorIds
       BADelete -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
-  unifiedMonitorsGetH pid (Just $ monitorTabSlug $ tabAfter action) Nothing
+  unifiedMonitorsGetH pid (Just $ monitorTabParam $ tabAfter action) Nothing
 
 
 unifiedMonitorsGetH
@@ -449,7 +449,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
   currTime <- Time.currentTime
 
   let tab = parseMonitorTab filterTM
-      filterType = monitorTabSlug tab
+      filterType = monitorTabParam tab
 
   allAlerts <- Monitors.queryMonitorsAll pid
   teamMap <- buildTeamMap pid
@@ -505,8 +505,8 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                   { current = filterType
                   , currentURL
                   , options =
-                      [ TabFilterOpt{name = monitorTabSlug TabActive, count = Just $ length activeAlerts}
-                      , TabFilterOpt{name = monitorTabSlug TabInactive, count = Just $ length inactiveAlerts}
+                      [ TabFilterOpt{name = monitorTabParam TabActive, count = Just $ length activeAlerts}
+                      , TabFilterOpt{name = monitorTabParam TabInactive, count = Just $ length inactiveAlerts}
                       ]
                   }
           }
@@ -569,9 +569,9 @@ statusInfo = \case
 
 -- | Which monitors tab is being viewed. Was 'Text' compared against @"Active"@ in two
 -- places with a silent fall-through; the wire spelling stays capitalised because live
--- @?filter=Active@ URLs carry it. 'monitorTabSlug' is the single source of it.
+-- @?filter=Active@ URLs carry it. 'monitorTabParam' is the single source of it.
 --
--- >>> map monitorTabSlug [minBound .. maxBound]
+-- >>> map monitorTabParam [minBound .. maxBound]
 -- ["Active","Inactive"]
 -- >>> map parseMonitorTab [Just "Inactive", Just "nonsense", Nothing]
 -- [TabInactive,TabActive,TabActive]
@@ -579,14 +579,14 @@ data MonitorTab = TabActive | TabInactive
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
-monitorTabSlug :: MonitorTab -> Text
-monitorTabSlug = \case
+monitorTabParam :: MonitorTab -> Text
+monitorTabParam = \case
   TabActive -> "Active"
   TabInactive -> "Inactive"
 
 
 parseMonitorTab :: Maybe Text -> MonitorTab
-parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabSlug =<<)
+parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabParam =<<)
 
 
 bulkActionsFor :: MonitorTab -> Projects.ProjectId -> [BulkAction]

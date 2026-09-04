@@ -1634,7 +1634,7 @@ anomalyListGetH
 anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (_, project, bw) <- mkPageCtx pid
   let tab = parseTab filterTM
-      currentFilterTab = tabSlug tab
+      currentFilterTab = tabParam tab
       tabFilters = tabIssueFilters tab
       filterV = fromMaybe "14d" timeFilter
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
@@ -1725,7 +1725,7 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , options = [TabFilterOpt (tabSlug t) Nothing | t <- [minBound .. maxBound]]
+                  , options = [TabFilterOpt (tabParam t) Nothing | t <- [minBound .. maxBound]]
                   }
               -- Each tab differs only in how long the silence lasts and whether
               -- the issue can come back; saying so is what stops "acknowledged"
@@ -1749,17 +1749,17 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
 -- working, and nothing failed anywhere. Parsing once here makes all four exhaustive.
 --
 -- The wire spelling is capitalised because that is what live issue URLs and bookmarks
--- already carry (@?filter=Acknowledged@); 'tabSlug' is the single source of it.
+-- already carry (@?filter=Acknowledged@); 'tabParam' is the single source of it.
 --
--- >>> map tabSlug [minBound .. maxBound]
+-- >>> map tabParam [minBound .. maxBound]
 -- ["Inbox","Acknowledged","Archived"]
 data IssueTab = TabInbox | TabAcknowledged | TabArchived
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
 -- | The tab's wire spelling, used for both the URL and the visible label.
-tabSlug :: IssueTab -> Text
-tabSlug = \case
+tabParam :: IssueTab -> Text
+tabParam = \case
   TabInbox -> "Inbox"
   TabAcknowledged -> "Acknowledged"
   TabArchived -> "Archived"
@@ -1771,7 +1771,7 @@ tabSlug = \case
 -- >>> map parseTab [Just "Archived", Just "Acknowledged", Just "nonsense", Nothing]
 -- [TabArchived,TabAcknowledged,TabInbox,TabInbox]
 parseTab :: Maybe Text -> IssueTab
-parseTab = fromMaybe TabInbox . (inverseMap tabSlug =<<)
+parseTab = fromMaybe TabInbox . (inverseMap tabParam =<<)
 
 
 -- | Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
@@ -1810,7 +1810,7 @@ issueZeroState pid = \case
   TabInbox ->
     ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides")
   where
-    inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabSlug TabInbox
+    inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabParam TabInbox
 
 
 data AnomalyListGet
