@@ -147,7 +147,7 @@ spec = sequential $ aroundAll withTestResources do
       acknowledged <- listAnomalies tr (Just "Acknowledged")
       let acknowledgedIds = [issue.base.id.toText | AnomalyList.IssueVM _ _ issue <- V.toList acknowledged]
       unless (null acknowledgedIds) do
-        void $ testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "unacknowledge" Nothing AnomalyList.AnomalyBulk{itemId = acknowledgedIds}
+        void $ testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAUnacknowledge Nothing AnomalyList.AnomalyBulk{itemId = acknowledgedIds}
 
       let load page perPage services types = do
             (_, response) <- testServant tr $ AnomalyList.anomalyListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
@@ -206,7 +206,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAAcknowledge Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
@@ -228,7 +228,7 @@ spec = sequential $ aroundAll withTestResources do
       inboxBefore <- listAnomalies tr Nothing
       containsIssue inboxBefore `shouldBe` True
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAArchive Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       inboxAfter <- listAnomalies tr Nothing
       containsIssue inboxAfter `shouldBe` False

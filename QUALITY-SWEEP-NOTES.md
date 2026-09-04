@@ -5,6 +5,76 @@ All three skills (`/hs-distill`, `/hs-lob-review`, `/hs-evasion-review`) applied
 feature groups: log explorer, service map, replay, bots, monitors, issues, endpoints,
 billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
+## Read this first — session summary (2026-09-04, overnight)
+
+**Verified, fully.** Doctests `1485 Tried, 0 Failures`. Integration suite `807 examples, 0
+failures, 89 pending` — complete runs covering every source commit below (807 rather than
+the earlier 808 because the dead `OtlpServerSpec` was deleted, removing one pending
+example). The library build is `All good (128 modules)` with **no warnings**. Everything
+is pushed.
+
+The doctest count is worth reading as a ledger, since it moved four times and each step
+was checked: `1482` → `1479` (deleted `sparklineBar`'s three examples) → `1482` (three
+`bulkActionSlug` slug guards) → `1485` (three `CatalogTab` parse/round-trip guards). A
+count that lands where predicted is the evidence that a new doctest is actually running —
+doctest-parallel silently ignores examples outside a Haddock block, so "it passed" alone
+proves nothing.
+
+### The premise, measured
+
+The sweep was asked to fix "so much verbosity and no code reuse". Neither survives
+measurement:
+
+- **Zero** duplicated blocks of 6+ lines anywhere in `src/` + `web-components/src`, with
+  identifiers and literals normalised. Sound because monotonic: 7 blocks at 4 lines, 3 at
+  5, **0 at 6**.
+- Net growth is **+411 lines of code**, not the +1811 first reported — that figure counted
+  comments. `src/` is 69% code, 18% comment, 12% blank.
+- The long functions are long because markup and SQL are verbose. `dashboardPage_` is 325
+  lines containing *one* repeated 4-line block.
+
+**But duplication was the wrong thing to measure.** Clone detection found nothing and
+missed every real finding, because none of them is copy-paste. See "Four lenses" below.
+
+### Fixed
+
+| commit | what |
+|---|---|
+| `b30d874f` | **a lost-update race** — onboarding steps did read-modify-write in one path and atomic append in two others |
+| `7058d5c7` | `MonitorBulkAction` — an unknown bulk action returned 200 and did nothing; also revealed a cross-tenant test covering only 4 of 6 actions |
+| `a0be8e67`, `1652d04b`, `7810598b`, `5134a124` | `SessionSort`, `IssueTab`, `MonitorTab`, `IssueSeverity` — stringly values with silent fall-throughs |
+| `91bf6807`, `ce93ca3e`, `6b60a3b6` | lists derived from their enums (`allChannels`, the sort dropdown, tab options) |
+| `42374bec` | `truncateMiddle` broke its own "at most n chars" contract; `deleteParam`'s unanchored regex documented |
+| `4d1cf27f`, `79182b4c` | dead `OtlpServerSpec` deleted; LLM reply parsed twice behind a no-op `seq` |
+| `4940a9f7`, `bb2f23fc`, `800d8796` | `reportDayLabels` extracted from a 14-parameter function so its timezone behaviour could be doctested — plus two rounds of making those doctests actually execute |
+| `3fc7c94c` | `isByosPlan` — two ad-hoc case-sensitive checks beside a case-folding sibling |
+| `6ac599e5`, `b2e563bc` | `Containers.emDash_` reused instead of inlined; tab->wire functions renamed `tabParam` to match the existing convention |
+| `42c5d176` | toast copy: mid-sentence Title Case (`"Deleted Project Successfully"`) lowered, named features left capitalised |
+| `f2c80ffc` | weeder rooted at `Start.startApp` (89 hits → 20, all noise); the one real dead binding deleted; `CLAUDE.md`'s "delete what weeder reports" corrected before it costs someone live code |
+| `6473f8d5` | the last three `Capture "action" Text` bulk-action routes typed — dashboards was answering 200 on an unknown action |
+| `45f8b50f` | `CatalogTab` — `api_catalog` validated the shared tab parameter and `endpoints` did not |
+| `78d8cf66` | our read-through cache replaced by `Data.Cache.fetchWithCache`; see the note on the TTL leak the "obvious" shared helper would have introduced |
+| `0aa5893f` | four imports my own `b30d874f` orphaned — the build is now warning-free |
+
+### Not fixed, with the blocker stated
+
+The two stack-trace parsers (merging **moves error-grouping hashes** — a data migration);
+three disagreeing archive paths (`updated_at` bumped by API but not UI); `servicePicker_`
+rendered as a native select on one page and a popover on another; `statusBadge_`'s five
+dead cases and one unhandled live value; the ack-vs-spike-detector paging question.
+
+### Bounded
+
+**Exactly three tables are written by both `Pages` and `Models`** — `projects.projects`,
+`apis.issues`, `apis.anomalies` — which is the complete surface for the "Models has a
+helper, Pages open-codes a variant" bug class. All three are accounted for.
+
+### For the morning
+
+The ghcid fd leak in the sibling `monoscope/` checkout; four client-tier demotions needing
+a browser; two guard gaps with the test that closes each; and `Pages/Tabs.hs` to let the
+nav share the tab enums (see "My tab consolidation was module-local").
+
 ## Verification rules (learned the hard way)
 
 - **Never run `cabal build`/`cabal test`.** A ghcid watcher owns the build; a second
@@ -733,6 +803,9 @@ in the other four was *multiple independent defaults drifting apart*; a single `
 against one literal cannot have that failure mode. Converting it would add a type and two
 functions to delete one comparison — the trade running backwards.
 
+Verified green after all four: `808 examples, 0 failures, 90 pending` (full run — a
+truncated run was rejected twice before accepting this one).
+
 Cost, honestly: `SessionSort` +37 lines, `IssueTab` +40, `MonitorTab` +23. All three trade
 size for a compile-time guarantee, against the size-reduction goal, knowingly. The trend
 down is deliberate — the rationale belongs in this file once, not re-argued in Haddock at
@@ -794,3 +867,1467 @@ trade. They are worth doing in a session with a browser open.
 Also confirmed healthy: 3 `htmx.ajax` calls total, and **zero** `dataset.wired` /
 `dataset.bound` manual-wiring guards — the pattern htmx attributes exist to remove is
 absent from this codebase.
+
+## Category 5 — "code that should have changed but didn't"
+
+The evasion lens the mechanical scans cannot reach. Three axes checked.
+
+**New fields vs their codecs — clean.** 124 record fields were added across the sweep.
+Cross-referenced against every type carrying a *hand-written* `ToJSON`/`FromJSON` (where a
+new field silently never serialises): no overlap. The only near-miss, `Replay.FetchSplit`,
+has no JSON instance at all — it is an internal classification record introduced to
+consolidate four repeated comprehensions.
+
+**New fields vs explicit SQL column lists — clean.** `Issues.hs` gained 13 fields and
+`Endpoints.hs` 27, but none landed on a persisted record: they are all on query-config and
+view types (`IssueFilters`, `MkIssueOpts`, listing filters). The persisted `Issue` record
+is unchanged, so `insertIssue`'s hand-written column list cannot have fallen behind.
+
+**Bug fixes without a regression guard — and a correction to how I checked.**
+
+My first pass flagged 19 `fix` commits as untested because they touched no `test/` file.
+**That heuristic is wrong in this repo: doctests live in `src/`.** The clearest example was
+`fix(errors): stop the fingerprint shattering on any hex run of an odd length`, which I
+called unguarded — its guard is a doctest on `Utils.replaceAllFormats` pinning both halves
+of the invariant (the two order ids reaching one group, *and* the below-floor case staying
+`{integer}`). Counting `+.*>>>` in `src/` as a guard drops the list from 19 to 14, and most
+of the remainder are CSS/JS/nav changes with no Haskell surface to test.
+
+`fix(timepicker): one label vocabulary` also needs no guard: it was fixed *structurally* —
+`timePickerItems = map (second snd) sinceWindows` — so the two lists can no longer
+disagree. Deriving beats asserting.
+
+Genuine remaining guard gaps, all Haskell-side:
+
+- `fix(dashboards): "% of Total" truncating to whole numbers` — the fix is a SQL cast
+  (`::numeric` → `::float::text`), so no doctest is possible. Closing it needs an
+  integration test seeding a known distribution and asserting a *fractional* `pct` comes
+  back, on both PG and TF.
+- `fix(reports): weekly emails dated in the server's timezone` — customer-visible, and
+  date logic is exactly what `TestClock` exists for.
+- `fix(errors): backfill shapes`, `fix(metrics): stale pagination cursor` — both
+  integration-testable.
+
+## The two group-review pipelines: a fork by shape, not by substance
+
+`BackgroundJobs.hs` carries two families ~1300 lines apart whose names invite consolidation:
+
+| Endpoints | Errors |
+|---|---|
+| `endpointGroupReviewBatch` | `errorGroupReviewBatch` |
+| `reviewResidualEndpointGroups` | `reviewErrorGroups` |
+| `applyConfirmedGroups` | `applyConfirmedErrorGroups` |
+| `recheckQuarantinedMerges` | `recheckQuarantinedErrorMerges` |
+| — | `refuteErrorGroups` |
+
+The skeleton does match: gate on a config flag + API key, key each group by a members-hash,
+filter to fresh, one LLM call, `PatternMerge.parseGroupReview`, record, auto-apply.
+
+**Do not unify them.** The control flow differs where it counts. Errors paginate by a
+cursor that restarts at the end of the corpus (deliberately — "a cursor that only ever
+moves forward is how a sweep quietly declares itself finished with work left"), require a
+minimum member count, and run a *second* refute pass over only the proposed merges.
+Endpoints take a biggest-first batch (also deliberate — one customer's group is 1,262
+endpoints against a median of three), honour `dueForReconfirm`, and promote id rules after
+applying. A shared config record would need ~12 fields, several of them domain-shaped
+functions plus a type parameter, to save ~20 lines — while coupling two LLM-calling,
+cost-incurring, DB-mutating pipelines whose invariants are documented separately and
+differ.
+
+Contrast `MergeConfig`/`embedAndMerge` in the same file, which *is* the right call: there
+the two families differ only by table and id column type, and the steps are identical.
+Shape similarity justifies consolidation only when the substance matches too.
+
+Reading them side by side did pay, though: `reviewErrorGroups` was calling
+`parseGroupReview` **twice** on the same response (once for verdicts, once for shapes)
+behind a `sh `seq` True` guard that always yields True and silences nothing —
+`-Wno-unused-matches` is already set. The endpoint sibling had it right in one pass.
+Fixed in `79182b4c`. That is the value a consolidation review actually produces here: not
+"merge these two", but "one of them proves the other is doing unnecessary work".
+
+## `7c225496` is mislabeled — git log is load-bearing here
+
+Its subject reads *"fix(reports): weekly emails were dated in the server's timezone, not
+the customer's"*. Its entire diff is `T.unwords` -> `unwords` in `src/Pkg/Mail.hs`. The
+real timezone change is in `364d728a`; this message is orphaned, presumably left by a
+squash or rebase.
+
+Consequence: my first guard-gap pass listed this as an unfixed bug on the strength of the
+message. It is fixed — `renderWeeklyEmail` uses `project.timeZone` through
+`utcToLocalTimeTZ` with a UTC fallback. **A commit message describing work that is not in
+its diff will mislead exactly as it misled me.** In a repo where the log carries this much
+reasoning, that is a real defect, not a cosmetic one.
+
+The behaviour *was* genuinely untested, and the reason was structural: `renderWeeklyEmail`
+takes 14 parameters, so no one was going to build that fixture. Fixed by extracting the
+pure core (`reportDayLabels`) so a two-line doctest holds it. That is the general move for
+the remaining guard gaps — **when something is untested because it is buried in a wide
+effectful function, extract the pure core rather than building a heroic fixture.**
+
+Verification note: the offsets were checked against the IANA database independently
+(Auckland is UTC+13 on both dates; NZDT runs to 2026-04-05) rather than asserted from
+memory. The doctest itself has not executed yet — `cabal test doctests` cannot run while
+the test-dev watcher holds the build directory, so it lands on the next doctests pass.
+
+## CORRECTION: the +1811 figure conflated code with documentation
+
+Earlier in this file I reported the sweep as **net +1811 lines in `src/`** and concluded the
+size-reduction goal had not been met. That number counted comment lines as code. Split
+properly (`git diff 44c38b1c..HEAD -- src web-components/src`):
+
+```
+added    6525 =  4362 code +  1739 comment +  424 blank
+removed  4385 =  3951 code +   259 comment +  175 blank
+NET     +2140 =  +411 code + +1480 comment + +249 blank
+```
+
+**Net code growth is +411 lines** across ~130 commits that shipped the error-grouping
+pipeline, LLM group review, ingest-time masks, and the issues redesign. The other +1480 is
+Haddock, doctests, and explanatory comments — which this repo's conventions actively
+require (doctests *are* the unit tests here; comments are mandated where the reasoning is
+non-obvious).
+
+For scale, `src/` overall is **77,107 lines = 53,536 code (69%) + 14,166 comment (18%) +
+9,405 blank**, with ~1,871 doctest lines inside that comment total. Roughly a fifth of the
+tree is documentation by design.
+
+The same correction applies to my own work tonight. I reported the four type/test commits
+as "+140 lines against the size goal". Actually:
+
+| commit | +total | code | comment | removed |
+|---|---|---|---|---|
+| `SessionSort` | 46 | 18 | 24 | −10 |
+| `IssueTab` | 63 | 35 | 20 | −23 |
+| `MonitorTab` | 33 | 19 | 8 | −10 |
+| `reportDayLabels` | 25 | 6 | 17 | −4 |
+| **total** | **167** | **78** | **69** | **−47** |
+
+**Net +31 lines of code** for four compile-time guarantees and one extracted, doctested
+pure function — not +140. I overstated the cost against myself by ~4.5x.
+
+Methodological note: my function-size script measured `::` to `::`, which charges each
+function for the *next* one's Haddock. It reported `getAlertStatusColor` as 102 lines; it
+is 4, followed by 98 lines of `replaceAllFormats` doctests. Any "largest function" figure
+in this file taken from that script is inflated the same way unless separately verified
+(`backfillSessionSql` was checked directly and is genuinely mostly SQL).
+
+## Largest functions, measured correctly
+
+My earlier size scripts were wrong twice. The first charged each function for the *next*
+one's Haddock (`getAlertStatusColor` reported as 102 lines; it is 4). The second ended a
+function's extent only at the next `^ident ::`, so an intervening `data` block was
+attributed to the preceding function (`otlpHttpH` reported as 440 lines; it is 3 — the
+rest was the `ApiV1Routes` record). Correct measure: extent ends at the next top-level
+declaration of *any* kind, counting non-comment lines only.
+
+| code lines | function |
+|---|---|
+| 326 | `dashboardPage_` |
+| 292 | `anomalyDetailPage` |
+| 291 | `tracePage` |
+| 288 | `replaceAllFormats` — single-pass scanner, algorithmic, justified |
+| 275 | `bodyWrapper` |
+| 229 | `apiLogsPage` |
+| 216 | `backfillSessionSql` — SQL literal, justified |
+
+**Corrected again (fourth attempt).** The measure above still under-detected: a signature
+whose name sits on its own line with `::` on the next (`containersInWindow\n  :: (DB es,
+...)`) was invisible, so its body counted against the *previous* function —
+`freshnessWindow` reported as 156 lines when it is 2, and `backfillSessionSql` as 216 when
+it absorbed a neighbour. Correct rule: a top-level declaration begins at **any non-comment,
+non-blank line at column 0**. Final figures:
+
+| code lines | function |
+|---|---|
+| 325 | `dashboardPage_` |
+| 291 | `anomalyDetailPage` |
+| 290 | `tracePage` |
+| 287 | `replaceAllFormats` — scanner, justified |
+| 274 | `bodyWrapper` |
+| 228 | `apiLogsPage` |
+| 211 | `logQueryBox_` |
+| 183 | `queryEditorInitializationCode`, `processEagerBatch` |
+| 151 | `containersInWindow` |
+
+The conclusion is unchanged — the outliers are Lucid page renderers, long because markup is
+verbose, with no duplication in them.
+
+**The meta-lesson is the real finding here.** Four separate attempts to measure function
+size by regex, each fixing a case the previous missed: (1) charging a function for the next
+one's Haddock, (2) not ending at a `data` block, (3) not matching multi-line signatures,
+(4) a `ps | sort -t= -k5` key that landed on the wrong field and hid a 2.4 GB process.
+**Ad-hoc structural parsing of Haskell with regex is unreliable, and every intermediate
+result looked plausible enough to quote.** Any figure in this file derived that way was
+checked against the source before being trusted; treat new ones the same way.
+| 212 | `logQueryBox_` |
+
+The page renderers are long but **not duplicated**: a 4-line normalised clone scan inside
+`dashboardPage_` finds exactly one repeated block in 326 lines. Lucid markup is verbose
+because markup is verbose; that is not the same as copy-paste.
+
+### The one real duplicate: two gridstack handlers that have drifted
+
+`Dashboards.hs:411` and `:482` are the same change-handler written twice — once for the
+top-level grid, once for nested grids — inside embedded JS. They have already diverged
+in three ways, and at least two look accidental:
+
+| | top-level (`:411`) | nested (`:482`) |
+|---|---|---|
+| mobile guard | `grid.getColumn() === 1` | `window.innerWidth < 768` |
+| collapse lookup | `gridEl.querySelector(...)` | `nestedEl.closest(...)` |
+| interaction events | `dragstart resizestart` | `dragstart resizestart removed` |
+
+Two different tests for "are we on mobile", and `querySelector` (descendant) versus
+`closest` (ancestor) is a semantic difference, not a rename. One shared
+`wireGridChange(inst, el, isMobile)` would remove ~8 lines and, more importantly, stop the
+next divergence.
+
+Not applied: this is drag/resize behaviour on the dashboard grid, unverifiable without a
+browser (a client change needs a Haskell content-change rebuild to re-fingerprint the Vite
+assets). Worth doing in a session with the app open — and worth doing *deliberately*,
+since deciding which of the two mobile guards is correct is a real question, not a merge.
+
+## The duplication question, answered empirically
+
+The premise this sweep started from was "no code reuse or code consolidation". Measured
+across all 77k lines of `src/` and `web-components/src`, with identifiers, string literals
+and numbers all normalised away (so renamed copies still match):
+
+| window | duplicated blocks | redundant copies |
+|---|---|---|
+| 3 lines | 7 | 12 |
+| 4 lines | 7 | 8 |
+| 5 lines | 3 | 3 |
+| **6 lines** | **0** | **0** |
+
+**There is no copy-paste duplication of six lines or more anywhere in this codebase** —
+not across files, not within them. The monotonic decrease is the sanity check that the
+scanner works; a broken scan returns zero at every window, and this one does not. (Two of
+my scans tonight *did* return false zeros — `git diff` emitting no `+` lines under the
+repo's external diff driver, and a doctest-guard grep that could not see `src/`. A zero
+result gets a sanity check before it gets believed.)
+
+The surviving 4-line hits are Servant route-type declarations (`Routes.hs:279/315` —
+repeated `QPT` chains) and one TypeScript block. Route boilerplate is inherent to the
+Servant API type; it is not consolidatable logic.
+
+The one duplicate worth acting on is smaller than the scan's floor: the two gridstack
+handlers in `Dashboards.hs` (see above), which matter because they have *drifted*, not
+because they are long.
+
+**Conclusion.** The long functions in this codebase are long because markup and SQL are
+verbose, not because anything is repeated. `dashboardPage_` is 326 lines with exactly one
+repeated 4-line block in it. Consolidating distinct markup does not reduce anything — it
+relocates it. Combined with the corrected size figures (+411 net code across the sweep,
+69% of `src/` is code, 18% documentation), the "verbosity and no reuse" premise does not
+survive measurement.
+
+## The five bulk-action handlers — one silent outlier, now fixed
+
+Five routes share the `Capture "action" Text` + `case action of` shape. Surveyed all of
+them for what happens on an unrecognised action:
+
+| handler | unknown action | verdict |
+|---|---|---|
+| `alertBulkActionH` (monitors) | `_ -> pass` — **200, fires `monitorsListChanged`, does nothing** | **defect, fixed in `7058d5c7`** |
+| `anomalyBulkActionsPostH` | `throwError err400` naming the action | correct |
+| `dashboardBulkActionPostH` | `addErrorToast "Invalid action"` | correct |
+| `apiCatalogBulkActionH` | `throwError err400` naming the action | correct |
+| `manageTeamBulkActionH` | `toastError "Invalid action"` | correct |
+
+Four of five fail visibly; one reported success while doing nothing. That is the
+uniformity problem in its clearest form — not five different designs, but one silent
+divergence from a norm the other four already hold.
+
+**The other four are deliberately left stringly-typed.** They are still producer/consumer
+literal pairs that could drift, but a drift is *visible* (400 or an error toast), so the
+marginal value of a sum type is much lower than it was for monitors, where drift was
+silent. Typing each would cost ~20 lines for a guarantee already enforced at runtime with
+a clear error. Revisit if one of them grows a third consumer, which is what made the
+monitors case worth it.
+
+Note for whoever does revisit: **they need four separate types, not one shared enum.** The
+vocabularies are disjoint (`deactivate|reactivate|mute|unmute|resolve|delete` vs
+`acknowledge|unacknowledge|archive|unarchive` vs `delete|add_teams` vs
+`archive|unarchive`). A shared `BulkAction` type would make `mute` representable on the
+dashboards route. A blind `sed` over `Capture "action" Text` hits all five — I did exactly
+that and caught it in the output before it landed.
+
+## Silent no-op fall-throughs, codebase-wide: 13, one worth fixing
+
+Scanned every `_ -> pass|pure ()|mempty|pure Nothing` arm in `src/`. Most are correct:
+`Config.hs:492` covers migration success (the failure arm `error`s loudly);
+`Settings.hs:1612` covers a normal non-trialing subscription, with the anomalous
+"trialing but no trial_end" case logged at attention on the line above; the `Discord.hs`
+arms are on Discord's own foreign enums.
+
+**`Anomalies.severityBadge_` is the one to fix.** All three callers hold a typed severity
+and throw the type away to call it:
+
+```haskell
+severityBadge_ (display issue.severity)   -- x3
+severityBadge_ :: Text -> Html ()
+severityBadge_ = \case
+  "critical" -> ...
+  "warning"  -> ...
+  _ -> pass
+```
+
+`data IssueSeverity = Critical | Warning | Info | Low`, so `Info` and `Low` render no
+badge. That is probably intended — but it is expressed as a fall-through on a
+round-trip through `Text`, which means a renamed constructor silently removes *both*
+badges rather than failing to compile. Taking `IssueSeverity` directly and spelling out
+`Info -> pass` / `Low -> pass` makes the omission a stated decision, drops three `display`
+calls, and turns a rename into a compile error.
+
+`issueStateBadge_` (`:2013`) is the same shape on `Maybe IssueEvent` — six events badged,
+the rest silently unbadged. Lower value (the events genuinely are a long tail and most
+should not badge), but it is the same trade if anyone touches it.
+
+## Boolean blindness survey — 14 signatures, none urgent
+
+Scanned `src/` for two adjacent `Bool` parameters (the classic silently-swappable
+argument pair). Several hits are false positives (`isDemoAndNotSudo`, `isTrue`,
+`monitorStatus`, `errorGroupEvidenceMet` — argument plus `Bool` *return*).
+
+The genuine ones cluster in two places:
+
+- **Pricing UI** — `paymentPlanPicker` and `popularPricing` take *three* adjacent `Bool`s;
+  `pricingCta_`, `systemsPricing`, `pricingPage`, `notifChannelsWithUrls` take two. A swap
+  renders the wrong pricing state silently. Worth a record type if anyone touches these.
+- **`Telemetry.writeTargetFor :: Bool -> Bool -> Maybe Text -> WriteTarget`** — routes
+  writes between Postgres and TimeFusion, so a swap would send telemetry to the wrong
+  store.
+
+`writeTargetFor` is **already defended and needs no change**: four doctests pin every flag
+combination and both DLQ failure markers, and all seven call sites read
+`writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites`
+— the field names make the order checkable at a glance. Newtypes would upgrade that to a
+compile error, but the marginal safety is small against touching the ingestion path.
+
+Recording the pattern rather than fixing it: this is a real class, the instances are all
+currently correct, and none of them is worth an unverifiable change tonight.
+
+## Next up: `GroupVerdict` is round-tripped through `Text` (not yet done)
+
+Same shape as the `IssueSeverity` fix in `5134a124`, with a DB boundary in the middle:
+
+- `data GroupVerdict = Param | Routes | Mixed` derives `Display` via `WrappedEnumSC` but
+  **not** `FromField`/`ToField`.
+- It is written with `display v`, stored as text, read back as `verdict :: Text`
+  (`Models/Apis/PatternMerge.hs:230`, `Models/Apis/Endpoints.hs:662`), then compared
+  `r.verdict == "param"` at `BackgroundJobs.hs:3900` and `:5358`.
+
+A typo or rename in either comparison silently means "no groups confirmed" — the merge
+pipeline quietly does nothing, which is the same failure class as the monitors bulk
+action. The fix is the one CLAUDE.md prescribes and `IssueSeverity` already uses: add
+`FromField, ToField, HI.DecodeValue, HI.EncodeValue` to the `deriving ... via
+WrappedEnumSC` line, type both record fields as `GroupVerdict`, and compare against
+`Param`.
+
+One risk to check first: a stored row whose verdict is not one of the three would now fail
+to *decode* rather than silently compare false. Both writers go through `display v`, so
+only the three values can be stored — but confirm before changing, because a decode
+failure in a background pipeline is louder than a silent false.
+
+Deliberately not done tonight: I had seven unexecuted doctests and a repeatedly-truncated
+suite run outstanding. Adding more unverified changes on top of unverified changes is how
+the false-green problems earlier in this file happened. Verification first.
+
+## Enum-ish record fields still typed `Text`: 35
+
+Scanned for record fields named `status|kind|state|mode|severity|direction|action|level|
+verdict|source|paymentPlan|…` typed `Text`. Most are legitimately at a boundary — form
+inputs (`AlertUpsertForm`) take raw posted values, `Web/ApiTypes` are wire types. The ones
+worth typing are the *domain* records:
+
+- `Monitors.QueryMonitor.severity` / `.visualizationType` — DB-persisted domain rows.
+- `Projects.paymentPlan` — appears as `Text` in five records while a `PlanName` newtype
+  already exists.
+- `GroupReview.verdict` in two modules — see above.
+
+None are defects today; all are seams where the next silent divergence will come from.
+
+## ~90 pending examples every run — mostly legitimate, one dead file
+
+Every suite run reports 84–90 *pending*. Pending reads as green, so it is worth knowing
+what is actually being skipped. Across the log:
+
+| skips | reason |
+|---|---|
+| 865 | `monoscope exe not built — set MONOSCOPE_BIN or run cabal build all first` |
+| 308 | `Set MONOSCOPE_API_KEY …` — hits the live API, correctly skipped locally |
+| 42 | CLI binary not built |
+| 27 | **no reason given** |
+| 24 | documented (`no fixture reaches the backend: unknown fields are rejected at parse time`) |
+
+The exe/CLI skips are structural: the dev loop runs `cabal repl`, so `exe:monoscope` is
+never built and those tests never execute locally. They are not broken — but nobody should
+read a local green run as covering them.
+
+**`test/integration/Opentelemetry/OtlpServerSpec.hs` is dead and should be deleted.** All
+42 lines of it: one `it "should process a request" $ const pending` that asserts nothing,
+plus 30 lines of commented-out tests written against `runM . evalState mockDB . runReader
+…` — a `freer-simple`-style stack this codebase abandoned for `effectful`. They cannot be
+uncommented as written.
+
+No coverage is lost. OTLP ingestion is exercised by `GrpcIngestionSpec` (865 lines, 41
+examples), `TimefusionWriteFailureSpec` (414 lines, 15), and `StandardOtelSpansSpec` (145
+lines, 7). `OtlpServerSpec`'s only `processList` mentions are inside the dead comments.
+
+Deleting it needs `hpack` afterwards — `monoscope.cabal` lists the module in
+`other-modules` even though `hspec-discover` finds specs automatically.
+
+## Doctests verified — and three defects behind one three-line example
+
+`Examples: 1470  Tried: 1470  Errors: 0  Failures: 0`. Tonight's eleven new doctests now
+provably execute. **The count matters as much as the pass**: the suite reported 1434
+before, so a green run still showing 1434 would have meant the new examples were never
+extracted — the exact failure that could not be ruled out when neither `LogQueries` nor
+`Endpoints` had a `$setup` chunk. 1434 → 1467 → 1470 is what made "they run" a fact.
+
+Getting `reportDayLabels` green took three iterations, each defect hidden by the previous:
+
+1. **`read` is not in scope** — Relude hides partial `read`, so
+   `read "2026-03-01 20:00:00 UTC"` could never compile. The timezone arithmetic had been
+   verified independently against the IANA database and was correct; that verified the
+   wrong thing entirely.
+2. **Prose after a `>>>` is parsed as expected output.** The `$setup` explanation sat
+   below `>>> let marchUTC ...`, so doctest compared the prose against the `let`'s result.
+   Prose must come *before* the examples in a chunk.
+3. **An orphaned Haddock block**, surfaced only because fixing (2) meant reading the
+   region. `reportDayLabels` (`4940a9f7`) had been inserted *between* `renderWeeklyEmail`'s
+   doc comment and `renderWeeklyEmail` itself. It compiled cleanly and no test could ever
+   have caught it.
+
+Operational notes for the next person:
+- `cabal test doctests --test-options="src/Foo.hs"` **does not narrow the run** — the
+  runner already discovers every module, so passing a path yields
+  `module 'Pages.Foo' is defined in multiple files`. Verification is all-or-nothing, ~14
+  minutes.
+- Stop the `live-test-dev` watcher first (`kill` the `make` pid). `cabal test doctests`
+  builds the 197-module test-dev target into the directory that watcher owns.
+
+## Doctest gaps in pure branching code — a prioritised backlog
+
+Found by inverting the search: instead of hunting suspicious code, look for **pure
+functions with real branching logic and no doctest**. That inversion is what surfaced the
+two bugs in `42374bec` (`truncateMiddle` breaking its own "at most n chars" contract, and
+`deleteParam`'s unanchored regex) — both look fine on inspection; the defects only appear
+when you compare what each promises against what it does at the edges.
+
+190 such functions. The ones worth doing, largest and most edge-case-dense first:
+
+| lines | function | why |
+|---|---|---|
+| 58 | `ErrorFingerprint.parseJsFrame` | pure parser, three documented formats, none pinned; feeds error grouping. The module has 47 doctests but not this one |
+| 46 | `OtlpServer.migrateHttpSemanticConventions` | old→new OTel attribute mapping, pure, silent if wrong |
+| 40 | `Telemetry.buildSpanTree` | orphans, missing parents, cycles — the waterfall depends on it |
+| 39 | `ProcessMessage.httpKeyOf` | ingestion hot path |
+| 143 | `OtlpServer.convertSpanToOtelLog` | large, but mostly field mapping |
+
+Note the ones to *skip*: `buildTitlePrompt`/`buildDescriptionPrompt` (LLM prompt text —
+asserting on prose is churn), `apiKeyColumns` (table config), `widgetToECharts` (a large
+JSON literal; a golden test suits it better than a doctest).
+
+**Method warning — a fifth measurement bug.** The scan that produced this list was wrong
+on its first run: a function's *definition* line sits at column 0 just like its signature,
+so "top-level declaration" splits the two and every candidate measured as 1 line, with the
+"has real logic" regex examining only the signature. Merging each signature with its
+following same-named definition fixed it. (The earlier largest-functions table was
+unaffected — it picked up the definition entries, which do span the body.)
+
+## Two stack-trace parsers — the one real duplicate subsystem
+
+The largest genuine duplication in the codebase, and the closest thing found to the
+"reinvent patterns we had equivalent versions of" complaint:
+
+| | `Pkg/StackTrace.hs` (272 lines) | `Pkg/ErrorFingerprint.hs` (parsers, ~250 lines) |
+|---|---|---|
+| type | `Frame` | `StackFrame` |
+| entry | `parseStackTrace :: Text -> [Frame]` | `parseStackTrace :: Runtime -> Text -> [StackFrame]` |
+| strategy | format-sniffing (`asum [pyFile, atFrame, php, ruby, bareLocation]`) | runtime-dispatched (7 per-language parsers) |
+| languages | JS, Python, Java, Ruby, Go, PHP | JS, Python, Java, Go, PHP, .NET, generic |
+| consumers | `Pages/LogItem`, `Pages/Components` — display | `BackgroundJobs`, `PatternMerge`, `Telemetry` — fingerprinting |
+
+**Two exported functions share the name `parseStackTrace` with different signatures.** Both
+parse the same frame formats; neither shares a line with the other. Both are doctested.
+
+**Do not merge them without treating it as a data migration.** The fingerprint path runs
+`parseStackTrace -> normalizeStackTrace -> modulePart|funcPart|contextPart -> hash`, so any
+change in parsing *moves error-grouping hashes* and existing issues regroup. The sweep
+already has a precedent for how much that matters: the hex-shatter fix moved 1486 distinct
+hashes to 783. A parser unification is worth doing — roughly 200 lines — but it needs the
+same measured before/after that fix had, not a refactor commit.
+
+The display side is the safe half: `Pages` could move onto the fingerprint parser (or vice
+versa) without touching a hash, if one of the two types absorbed the other's fields.
+
+### A harmless wart found while reading it (reasoned, not executed)
+
+`parseJsFrame`'s parenthesised branch does `T.breakOn " (" txt`, giving
+`rest = " (/app/src/x.js:12:5)"`, then `T.dropAround (`elem` "()")`. The **leading character
+is a space**, so `dropAround` stops immediately and only the trailing `)` is removed —
+leaving `filePath = " (/app/src/x.js"`.
+
+It is invisible to every consumer, which is why it has survived: `moduleName` goes through
+`moduleFromPath`, which takes the *basename* (`splitOn "/"` then `last`), so the `" ("`
+lands in a discarded segment; `isInApp` uses `isInfixOf`; and `StackFrame.filePath` is
+never read outside the module. The existing doctest
+`normalizeStackTrace RNodejs … → "server|handleRequest"` passes for exactly this reason.
+
+Worth fixing only if anyone starts *using* `filePath` — e.g. rendering a file link, which
+would show `" (/app/..."`. Confirm first with a doctest projecting `.filePath` on a
+parenthesised frame; the existing ones project only `.functionName`, `.isInApp` and
+`length`, which is why it has never been caught. **This is a reading of the code, not an
+executed result.**
+
+## Finding reimplementation, not copy-paste
+
+The clone scan found **zero** duplicated 6-line blocks — but it found the two stack-trace
+parsers not at all, because they share no text. **Clone detection finds copy-paste; it
+cannot find reimplementation.** A better signal for this codebase: the *same function name
+defined in more than one module*. That is how `parseStackTrace` surfaced.
+
+14 such collisions exist. Triaged:
+
+**Genuine reimplementation (recorded above):** `parseStackTrace` — `Pkg/StackTrace.hs` vs
+`Pkg/ErrorFingerprint.hs`.
+
+**Coincidental, correctly separate:** `runServer` (gRPC vs HTTP), `count` (metric counter
+vs a field), `issueTypeBadge` (HTML vs email rendering — different output media),
+`nonBlank`, `plainCell`, `renderNameCol` (module-local table helpers).
+
+**Worth a look if anyone is in the area:** `truncateText` (`EmailTemplates` vs `Web/MCP`),
+`toolError` (`Pkg/AI` vs `Web/MCP`), `servicePicker_` (`RealUserMonitoring` vs
+`Pages/Telemetry`), `parseInstallState` (`Bots/Utils` vs `GitSync`), `renderTable`
+(`Components/Table` vs `Components/Widget`).
+
+### `PrometheusScrapeConfigs.selectFrom` — hand-rolls what `GenericEntity` derives
+
+`selectFrom :: HI.Sql` and a hand-written `selectCols` list, where every sibling model uses
+`deriving (Entity) via (GenericEntity '[Schema …, TableName …, PrimaryKey "id",
+FieldModifiers '[CamelToSnake]] T)` and `DeriveUtils.selectFrom @T`. The hand-written list
+is character-for-character what `CamelToSnake` over the record fields would produce.
+
+**Not changed, and the reason matters:** the apparent risk is drift — add a field to the
+record, forget the list, get a `DecodeRow` mismatch at runtime. But `PrometheusSpec`
+exercises both paths (`configsByProjectId` via `selectFrom`, `claimDueConfigs` via
+`RETURNING selectCols`), so that drift fails a test rather than reaching production. It is
+a consistency nit, not a latent bug, and not worth touching query generation for.
+
+If someone does adopt it: `selectCols` must stay for the `RETURNING` clause, which needs
+bare column names — so the *complete* fix also wants a `columnsOf @e` helper in
+`DeriveUtils` (it currently imports only `_select` from pg-entity). Half-doing it leaves
+the same hand-maintained list behind.
+
+### A note on my own work tonight
+
+`Pages/RealUserMonitoring` already had `parseTab`/`tabParam` built on
+`decodeEnumSC`/`encodeEnumSC`. My `IssueTab` work added a second `parseTab` with a
+hand-written `tabSlug`. The hand-written slug is *justified* — the wire spellings are
+capitalised (`?filter=Acknowledged`) and `encodeEnumSC` snake-cases — but I named it
+`tabSlug` where the established convention is `tabParam`. Same pattern, gratuitously
+different name. Worth aligning if either is touched again.
+
+## `servicePicker_` — the clearest instance of the uniformity complaint
+
+Two pages render a control for the same user action ("filter this page to one service"),
+and they do not look or behave alike:
+
+| | `Pages/RealUserMonitoring.hs:696` | `Pages/Telemetry.hs:666` |
+|---|---|---|
+| signature | `RumData -> Html ()` | `ProjectId -> Text -> Html ()` |
+| control | native `<form>` + `<select>`, `onchange="this.form.requestSubmit()"` | `<button>` + popover `<div class="dropdown">` |
+| search | none | yes, an `<input>` inside the panel |
+| empty state | renders anyway — *"that is exactly when the user needs the control that got them there in order to get back out"* | n/a |
+| label | "All services" | "All Services" |
+
+Even the default option's capitalisation differs. This is what "the platform is not uniform
+anymore" looks like concretely: not duplicated code — they share almost no text — but two
+answers to one interaction question.
+
+Note which is *better* by the escalation ladder: RUM's is tier 2 (native select + form
+submit, no JavaScript), Telemetry's is a custom popover widget. The ladder prefers RUM's —
+but Telemetry's has search, which matters once a project reports many services. So the
+consolidation is a real design decision ("native select below N services, searchable
+popover above"), not a mechanical merge, and it needs a browser to verify. Recorded, not
+attempted.
+
+## Name-collision triage — complete
+
+14 function names are defined in more than one module. Full triage so nobody re-derives it:
+
+- **Genuine reimplementation (1):** `parseStackTrace` — see the stack-trace section.
+- **Genuine uniformity defect (1):** `servicePicker_` — above.
+- **Coincidental, correctly separate (12):** `runServer` (gRPC vs HTTP), `count` (metric
+  instrument vs a field), `issueTypeBadge` (HTML vs email — different output media),
+  `truncateText` (two deliberate truncation *policies*; MCP's marker is documented as
+  intentionally not-JSON), `toolError` (`Text` message vs `AE.Value` tool result),
+  `parseInstallState` (two different OAuth state encodings: `pid__x` vs `pid:dest`),
+  `renderTable` (`Widget`'s is a thin delegate to `renderTableShell`), `selectFrom`,
+  `parseTab`, `nonBlank`, `plainCell`, `renderNameCol`.
+
+**The lesson about the method:** the clone scan reported zero duplication at six lines and
+missed both real findings, because neither is copy-paste. Name collision found both. When
+looking for "we reinvented something we already had", grep for *names*, not *text*.
+
+## `statusBadge_` — five dead cases, and the one live value falls through
+
+`Pages/Monitors.hs:670`. Found by the near-name scan (`statusBadge_` in Monitors vs
+`statusBadge` in Infrastructure — those two are legitimately separate, but looking at them
+turned this up).
+
+`statusBadge_ :: Bool -> Text -> Html ()` matches eight status strings. Checked which are
+ever *produced* anywhere in `src`:
+
+| case | produced? |
+|---|---|
+| `Passing`, `Failing`, `Healthy`, `Pending`, `NoData` | **never — 0 occurrences** |
+| `Active` | only as a *tab* name (`monitorTabParam`), never as a status |
+| `Warning`, `Inactive` | yes, handled correctly |
+| `Alerting` | yes — not in the case list, but caught by the `isAlerting` guard |
+| **`Normal`** | **yes — and falls through to the default** |
+
+`statusInfo` is the only producer of these labels and emits `Alerting | Warning | Normal`.
+So five of eight explicit cases are dead, and the live value the list *omits* lands on
+`_ -> ("badge-ghost", "circle")`.
+
+**The visible consequence:** the same state is coloured twice, differently, in one module.
+
+```haskell
+statusInfo MSNormal = StatusInfo "bg-fillSuccess-strong" "Normal" …   -- dot: green
+statusBadge_ "Normal" → _ -> ("badge-ghost", "circle")                -- badge: grey
+```
+
+A healthy monitor shows a green dot and a grey badge on the detail page (`:781`, `:837`,
+`:848` pass `displayName`, which is `"Normal"` for a live, non-deactivated monitor). The
+list even contains three unused synonyms — `Passing`, `Healthy`, `Active` — that would
+each have rendered it green.
+
+**Recommended fix:** add `"Normal" -> ("badge-success", "circle-check")`, matching the
+`bg-fillSuccess-strong` that `statusInfo` already assigns to `MSNormal`. That is a visual
+change, so it wants a browser before it lands; the dead cases should be *mentioned* rather
+than deleted per the house rule on unrelated dead code.
+
+**The deeper cause is the round-trip**, the same one fixed for `IssueSeverity` in
+`5134a124`: a typed `MonitorStatus` is rendered to `Text` by `statusInfo`, then re-matched
+against string literals by `statusBadge_`. Taking `MonitorStatus` directly would have made
+the missing `Normal` case a compile error and the five dead cases unrepresentable.
+
+## My tab consolidation was module-local — the nav still hardcodes the same strings
+
+`Pages/BodyWrapper.hs:882 navFlyoutItems` hardcodes the wire spellings that `IssueTab` and
+`MonitorTab` now own:
+
+```haskell
+"Issues"   -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", …), ("Archived", …)]
+"Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", …)]
+```
+
+`1652d04b` collapsed three sources of `"Inbox"/"Acknowledged"/"Archived"` inside
+`Anomalies.hs`, and `7810598b` three sources of `"Active"/"Inactive"` inside
+`Monitors.hs`. Neither touched the nav, which holds a fourth and a third copy. They agree
+today; nothing enforces it. Rename a tab and the flyout links silently point at
+`?filter=OldName`, which `parseTab` folds back to Inbox — a dead link that looks like a
+working one.
+
+**Why it was not fixed here:** `Pages/Anomalies` and `Pages/Monitors` both *import*
+`Pages/BodyWrapper` (for `BWConfig`, `PageCtx`, `mkPageCtx`, `navTabAttrs`), so
+`BodyWrapper` cannot import them back. Closing this properly means moving `IssueTab` and
+`MonitorTab` into a module all three can see — a small `Pages/Tabs.hs` is the obvious
+home — and re-exporting from the pages. That is a multi-file move, not a one-liner.
+
+**The general lesson, and it applies to every type fix in this sweep:** consolidating the
+sources of a string *inside* one module does not find the copies in modules that cannot
+import it. The grep that finds them is for the *literal*, run across the whole tree, after
+the type exists — not for the type's name. I checked call sites of the functions I
+changed; I did not re-grep the literals afterwards, which is why this survived.
+
+## Two operational rules learned the hard way tonight
+
+**1. Stop a watcher by killing its `make` pid, never `pkill -f 'live-test-dev'`.**
+`pkill` matches the `make` wrapper but not the `ghcid` it spawned, so the ghcid survives
+with `ppid=1` — still watching files, still able to re-run the suite into a build directory
+another process is using, and holding ~3.5 GB. I did this to myself and then found it in a
+straggler sweep. `kill <make-pid>` takes the whole chain down; `ps -eo pid,ppid,command |
+grep test:test-dev` shows the chain to confirm.
+
+**2. Never anchor a code insertion on a function's *signature* line.** Doing so places the
+new code between the target's Haddock block and the function it documents. It compiles
+cleanly — Haskell does not care — and the only symptom is a doctest failure elsewhere,
+because expected output runs until a blank line and now continues into the inserted
+Haddock. This happened twice tonight (`reportDayLabels`, then `sessionSortParam`). Anchor
+on the *start of the Haddock block*, or insert after the target's definition.
+
+Corollary for reading such a failure: the diff is useless. It printed
+
+```
+expected: ["last_seen","duration_ns","error_count","event_count"]
+ but got: ["last_seen","duration_ns","error_count","event_count"]
+```
+
+— identical, because the difference was appended prose beyond the visible line. What
+located it was `sed` refusing the file with `RE error: illegal byte sequence` (an em-dash
+nearby). **When a diff shows two identical strings, stop reading the diff and dump bytes.**
+
+## Checking every `WrappedEnumSC` enum for hardcoded wire strings
+
+Generalised the literal-grep: for each of the 32 `WrappedEnumSC` enums, compute its wire
+slugs and look for them hardcoded outside the owning module. High false-positive rate —
+short slugs like `error`, `info`, `service`, `events` collide with route paths, CSS classes
+and field names — but two hits were the same concept:
+
+**Fixed (`91bf6807`): `allChannels`.** `Pages/Projects.hs` listed
+`["email","slack","discord","phone","pagerduty"]` while `NotificationChannel` derives
+exactly those. The code documented its own bug — *"If a new channel type is ever added, it
+must also be added to `allChannels` or it will silently be treated as enabled for every
+project"* — which is a comment doing a type's job. Now `map display [minBound .. maxBound]`,
+pinned by a doctest because those spellings are what the form posts and what
+`disabled_channels` stores.
+
+**Recorded, not fixed: `"above"`/`"below"` in `Pages/Monitors.hs`.** Three literals — the
+dropdown values (`:305`), its selected-value `bool` (`:305`), and
+`triggerLessThan = alertForm.direction == "below"` (`:156`). The failure mode is nasty: if
+the dropdown value ever changed case, the comparison silently yields `False` and **alerts
+fire in the wrong direction**.
+
+Left alone because the obvious fix is disproportionate and slightly wrong. `Monitors.hs`
+does not import `Models.Apis.Issues`, and `ThresholdDirection` belongs to a different
+domain — it describes a *fired alert's* direction (`QueryAlertData.thresholdType`), while
+a monitor stores `triggerLessThan :: Bool`. Typing the form field would need a
+cross-module dependency plus a `FromHttpApiData` instance, to remove three literals that
+sit in one file 150 lines apart. Worth doing only if the form gains a third direction or
+the monitor starts storing the direction rather than a Bool.
+
+## `monoscope-shared` is built by three consumers with three flag sets
+
+I broke the build tonight and the root cause is worth knowing, because it is a property of
+the dev loop rather than a one-off mistake.
+
+`monoscope-shared` is compiled by:
+
+| consumer | flags |
+|---|---|
+| `make live-reload` (`cabal repl monoscope`) | `-j10 -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds` |
+| `make live-test-dev` (`cabal repl …test-dev`) | `-j10 -fobject-code -osuf dyn_o -hisuf dyn_hi -O0` |
+| `cabal test doctests` / `cabal build` | defaults |
+
+Whichever ran last wins, and the losers see mismatched artifacts. The symptom is
+`Dynamic hash doesn't match for 'Pkg.CLIFormat'` — the `.hi` and `.dyn_hi` disagree. My
+notes already said "stop the test-dev watcher before running doctests"; that is
+insufficient, because the **library** watcher uses the same shared package.
+
+**Then two repair attempts each made it worse:**
+
+1. `rm -rf …/monoscope-shared-0.1.0.0/build` removes the artifacts but leaves the package
+   **registered**, so cabal reports *"There are files missing in the
+   'monoscope-shared-0.1.0.0' package"* instead of rebuilding.
+2. Rebuilding with plain `cabal build lib:monoscope-shared` uses *default* flags. `cabal
+   repl` then wants `-O0` and must relink, which fails on macOS aarch64 with
+   `ld: invalid use of ADRP/imm12 in '' to '_stg_upd_frame_info'` — mixed objects.
+
+**The repair that works**, narrow and without `cabal clean` (which CLAUDE.md forbids and
+which would cost an hour of dependency rebuilds):
+
+```sh
+kill <make-pid>   # both watchers
+rm -rf dist-newstyle/build/aarch64-osx/ghc-9.12.2/monoscope-shared-0.1.0.0 \
+       dist-newstyle/packagedb/ghc-9.12.2/monoscope-shared-0.1.0.0-inplace.conf
+cabal build lib:monoscope-shared \
+  --ghc-options="-j10 -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds"
+# then restart live-reload, wait for "All good", then live-test-dev
+```
+
+Directory **and** registration, and rebuild with the *watcher's* flags, not the defaults.
+
+## `Containers` and `Infrastructure` — three small divergences
+
+`Infrastructure.hs` (1006 lines) already imports `Pages.Containers` (374), so these are not
+independent modules — Infrastructure builds on Containers. They share exactly one
+top-level name, but three things have drifted:
+
+**1. `plainCell` is defined in both, and they differ.**
+
+```haskell
+-- Containers:      maybe emDash_ (span_ [class_ "whitespace-nowrap text-textStrong tabular-nums"] . toHtml)
+-- Infrastructure:  maybe (span_ [class_ "text-textWeak"] "—")
+--                    (\v -> span_ [class_ "block truncate whitespace-nowrap …", data-tippy-content=v] …)
+```
+
+So "a plain table cell" truncates with a tooltip on one page and not on the other. Not
+mergeable without choosing which behaviour is right — a design call, like `servicePicker_`.
+
+**2. `emDash_` is private to `Containers` (6 uses); `Infrastructure` inlines its body**
+(`span_ [class_ "text-textWeak"] "—"`) byte-identically. Exporting it is a zero-risk
+one-liner, since the markup is the same.
+
+**3. Kubernetes readiness renders two ways.**
+
+| | Infrastructure | Containers |
+|---|---|---|
+| model | `KubeStatus = KubeReady \| KubeNotReady \| KubeUnknown` | `ready :: Maybe Int` |
+| ready / not ready | `badge-success` "Ready" / `badge-error` "Not ready" | identical |
+| unknown | `badge-ghost` **"Unknown"** | **em-dash** |
+
+Same labels and badge classes, different unknown handling — one shows a badge, the other
+shows nothing. Merging needs the `Maybe Int` mapped onto `KubeStatus`, which is a modelling
+decision, not a rename.
+
+None is a defect; all three are the "platform is not uniform" complaint at small scale,
+in two files that already depend on each other.
+
+## Archiving an issue has three implementations that disagree
+
+Found by grouping SQL by `(operation, table)`: `UPDATE apis.issues` appears 18 times across
+5 modules. Three of them archive an issue:
+
+| path | `updated_at` | cascades to `apis.anomalies` |
+|---|---|---|
+| API — `ApiHandlers` → `Issues.setArchiveState` | **bumped** (`COALESCE(#{mTs}, updated_at)`) | no |
+| UI bulk — `Anomalies.archiveAnomaliesAndIssues` | not touched | yes |
+| UI single — open-coded at `Pages/Anomalies.hs:143` | not touched | yes |
+
+**The `updated_at` split is user-visible.** `selectIssues` can order by `updated_at`, so
+archiving through the API moves an issue to the top of that sort and archiving through the
+UI does not. Same operation, different result depending on which client you used.
+
+**The cascade split is benign — and reveals dead work.** `apis.anomalies.archived_at` is
+written by both UI paths and never by the API. It is also **never read**: the only two
+readers of `apis.anomalies` filter on `created_at` (`Projects.hs:556`, an activity check)
+and on `project_id`/`target_hash` (`Endpoints.hs:961`, merge logic). So the column is
+written by two paths, skipped by a third, and consulted by none.
+
+Not fixed, because unifying requires deciding two things a refactor cannot: whether
+archiving should bump `updated_at` (it changes list ordering either way), and whether the
+`apis.anomalies` write should continue at all now that nothing reads it. The single-issue
+handler at `Pages/Anomalies.hs:143` open-coding what `setArchiveState` already does is the
+part that is unambiguously worth folding in once those are settled.
+
+Same shape as the onboarding-step find in `b30d874f`: a canonical helper exists in the
+Models layer, and the Pages layer open-codes a variant of it that has quietly diverged.
+
+## Four lenses for "we reinvented something we already had" — and what each misses
+
+Tonight used four different scans to look for duplication. They found disjoint sets, which
+is the point: **each is blind to what the others catch.** If you repeat this sweep, run all
+four, and do not read a zero from one as an answer from all.
+
+| lens | how | found | blind to |
+|---|---|---|---|
+| **Clone detection** — normalised N-line windows, identifiers and literals replaced | `dup3.py`-style hashing | **nothing** (0 duplicated 6-line blocks in 77k lines) | anything reimplemented rather than copied |
+| **Name collision** — same function name in >1 module | grep `^name ::` | the two stack-trace parsers; `servicePicker_` | reimplementations that were renamed |
+| **Literal grep** — take a type's wire strings, grep the tree | per enum, after the type exists | `allChannels`; the nav's hardcoded tab strings; the sort dropdown | operations that share no literal |
+| **SQL by (operation, table)** — group every query by what it touches | regex over `[sql\| …\|]` | the onboarding lost-update race; three disagreeing archive paths | anything not expressed as SQL |
+
+**Two more dead ends, same cause as the type-signature lens.** *Grouping constants by
+value*: 15 values are bound to differently-named constants in different modules, all
+coincidental — `= 3` is simultaneously an alert-family minimum, a batch size, a resolver
+hop limit, an envelope version, a mask affix length and a widget width. *Inline numeric
+thresholds*: 106 occurrences of 42 distinct values, all self-documenting — `200`/`400`/
+`500` are HTTP statuses in a colour mapper, `60`/`3600`/`86400` are time-unit conversions,
+`768` is the Tailwind `md` breakpoint. Same failure as matching on type: **a value is not a
+concept.** Both scans do incidentally confirm good practice — thresholds here are named
+constants or self-evident literals, not scattered magic numbers.
+
+**Route surface: clean.** 279 route declarations in `Web/Routes.hs`; **zero** share both a
+path and a verb. The 23 paths declared more than once are all correct REST — `Get`/`Put`/
+`Patch`/`Delete` on the same resource. No redundant endpoints to remove; the surface is
+large because the product is (log explorer, traces, dashboards, monitors, issues,
+endpoints, RUM, infra, settings, bots, API v1, MCP), not because it is duplicated.
+
+**A fifth lens that does *not* work: grouping by type signature.** Tried it — 28 identical
+one-argument signatures shared across modules by differently-named functions. Precision is
+near zero: `Text -> Text` covers escaping, KQL quoting, colour lookup and timestamp
+display; `Double -> Text` covers `pct1` (already a percentage, 1dp, no suffix) and
+`pctText` (a fraction, x100, 0dp, `%` suffix) — same shape, opposite contracts. A type
+says what a function *accepts*, not what it *means*. Don't bother.
+
+The SQL lens was the most productive and the least obvious. `UPDATE projects.projects`
+appearing 20 times across 4 modules — three of them `Pages` — is what pointed at both the
+layering problem and the race. Neither clone detection nor exact-SQL comparison saw it:
+each site is a single long line, and the literals differ.
+
+**The recurring shape, seen three times:** a canonical helper exists in the Models layer,
+and the Pages layer open-codes a variant that has quietly diverged — onboarding steps
+(read-modify-write vs atomic), archiving (`updated_at` bumped or not, cascade or not), and
+the inline `UPDATE projects.projects` in `Log.hs`/`Monitors.hs`. Grepping for *the table a
+handler writes to* finds these; grepping for *the helper's name* does not, because the
+whole problem is that the helper's name is absent.
+
+## Layering: exactly three tables are written by both Pages and Models
+
+Ran the write-side of the SQL lens across every `INSERT`/`UPDATE`/`DELETE`, asking which
+are issued from a `Pages/` module. Ten are. They split cleanly:
+
+**Both layers write it — this is where divergence happens (3 tables, all now analysed):**
+
+| table | Pages writer | status |
+|---|---|---|
+| `projects.projects` | `Pages/Onboarding` | onboarding-step race **fixed** (`b30d874f`); `:256`/`:271` fold step+title into one UPDATE, recorded |
+| `apis.issues` | `Pages/Anomalies:143` | archive divergence recorded — open-codes `Issues.setArchiveState` |
+| `apis.anomalies` | `Pages/Anomalies:144` | same finding, the cascade half |
+
+**Only Pages writes it — self-contained features, no divergence risk (7):**
+`apis.command_palette_recents` (insert/delete), `projects.replay_sessions`
+(insert/update/delete), `apis.notification_test_history` (insert), `users.users` (update).
+Not ideal layering, but there is no second implementation to drift from. Worth moving only
+if one of these grows a Models-layer counterpart.
+
+**This bounds the problem.** Every divergence of the "Models has a helper, Pages open-codes
+a variant" kind must involve a table in the first table above, because that is the complete
+list of tables both layers write. All three are accounted for. A future occurrence will
+show up by re-running this scan, not by reading code.
+
+**Read side, for completeness.** Eight tables are `SELECT`ed from `Pages/`. Five are also
+read by Models, but none is duplication: `Pages/CommandPalette.hs` deliberately issues
+narrow projections (`SELECT id, title … LIMIT 50`) for a picker list, where calling the
+Models functions would fetch whole records to display two columns. That is the right call,
+not a layering slip. All three are correctly `project_id`-scoped (checked, given the
+cross-tenant findings earlier in this file). The remaining three tables are read only by
+the page that owns them.
+
+So the SQL lens is closed on both sides: **writes** gave the onboarding race and the
+archive divergence; **reads** gave nothing.
+
+### Self-review of the onboarding fix: the NULL case, and why it is unreachable
+
+Worth writing down because the fix *looks* like it has a hole. `completeOnboardingStep`
+guards with `NOT (#{step} = ANY(onboarding_steps_completed))`. If that column were NULL,
+`x = ANY(NULL)` is NULL, `NOT NULL` is NULL, the row would not match, and **the step would
+silently never be recorded** — a regression versus the read-modify-write it replaced, which
+would have handled NULL fine.
+
+The column is `TEXT[] DEFAULT ARRAY[]::TEXT[]` (migration 0001) and is **not** declared
+`NOT NULL`, so SQL alone does not rule it out.
+
+It is nevertheless unreachable: `Project.onboardingStepsCompleted :: V.Vector Text` is not
+`Maybe`, so a NULL would fail to decode and make that project unreadable everywhere, not
+just here. A NULL row is therefore already impossible in any working system.
+
+No `COALESCE` added — that would be error handling for a state the type system already
+excludes, which is exactly what CLAUDE.md tells you not to write. Recorded instead, since
+the next reader will have the same doubt.
+
+### Verifying an encoding without running it
+
+The `GroupVerdict` change (`r.verdict == display Param` replacing `== "param"`) is
+high-stakes in a quiet way: if `display Param` were not exactly `"param"`, **no error group
+would ever be confirmed** and the merge pipeline would silently do nothing.
+
+It is verifiable without a run, using another type as the witness. `GroupVerdict` and
+`IssueSeverity` both derive `Display` via **the same instance** —
+`WrappedEnumSC 'Nothing ""`. Before `5134a124`, `severityBadge_ (display issue.severity)`
+matched the literal `"critical"` and rendered correctly in production. That is observed
+behaviour establishing `display Critical == "critical"` for that deriving, so
+`display Param == "param"` follows.
+
+Generalisable: **when a change depends on a derived encoding, look for another type using
+the identical deriving whose output is already pinned by a test or by working behaviour.**
+That converts "I reasoned about `quietSnake`" into evidence, at no cost.
+
+## Deactivated members disappear instead of showing as deactivated
+
+A real user-visible bug, found by looking for near-duplicate function bodies within a
+module (`selectActiveProjectMembers` ~ `selectAllProjectMembers`, 91% similar).
+
+The chain sits inside one function, `Pages/Projects.hs`:
+
+```haskell
+:710  when (Projects.isFreeTier project.paymentPlan) $ deactivateNonOwnerMembers pid
+:717  projMembersLatest <- ProjectMembers.selectAllProjectMembers pid
+```
+
+- `deactivateNonOwnerMembers` sets `active = FALSE` and **leaves `deleted_at` NULL** — this
+  is the free-tier downgrade path, distinct from `removeMember`, which sets both.
+- `selectAllProjectMembers` filters `WHERE pm.deleted_at IS NULL AND pm.active = TRUE`, so
+  it excludes exactly the rows just created.
+
+**Everything downstream is therefore dead.** `ProjectMemberWithStatusVM` carries an
+`active :: Bool` field that is always `True`. `memberRowWithStatus` (a renderer literally
+named "with status") computes `isDisabled = not prM.active && not isOwner`, which is always
+`False`, so its `opacity-60` row styling and its warning badge can never render.
+
+The intended behaviour is legible from the code: a function named *All* returning a
+*WithStatus* type, feeding a renderer with disabled-state styling. A downgraded project
+should show its deactivated members greyed out and badged. Instead they silently vanish
+from the members list.
+
+**Fix:** drop `AND pm.active = TRUE` from `selectAllProjectMembers` (keep
+`deleted_at IS NULL`). One line, and it activates three pieces of existing UI.
+
+**Not applied here** because it changes what the members page displays, and "should
+deactivated members be visible on the free tier?" is a product question — the current
+behaviour might be a deliberate (if undocumented) choice to hide them. The code says
+otherwise, but a browser and a decision beat my inference.
+
+Also noted: `countActiveForUser` / `countActiveForProject` in `Pkg/LiveTail.hs` differ only
+by `AND user_id = #{uid}`. One function taking `Maybe UserId` and composing the predicate
+fragment would cover both — the codebase already composes `HI.Sql` fragments elsewhere.
+
+## The definitive duplication measurement
+
+Body-similarity comparison over **1161 functions** (7–40 lines each, comments stripped),
+using `difflib` on the normalised body text — this catches reimplementation that shares no
+identifiers, which every text-based clone scan misses.
+
+**Cross-module, >78% similar: exactly one pair.** `Endpoints.revertGroupApply` ~
+`PatternMerge.revertErrorGroupApply`, and it is justified — parallel operations on
+different tables (`endpoint_group_reviews`/`apis.endpoints` vs
+`error_group_reviews`/`apis.error_patterns`), clearing different columns, with an extra
+`AND hash <> canonical_hash` guard on the endpoint side that the error side does not need
+(a canonical pattern has `canonical_id IS NULL`, so it is excluded naturally). Merging
+costs `HI.Sql` fragment composition to save ~8 lines.
+
+**Within-module, >80% similar: 12 pairs**, all triaged:
+- 4 are the `PatternMerge` error/log families — differ by table and id type (`uuid[]` vs
+  `bigint[]`), recorded earlier as not worth `HI.Sql` surgery.
+- 3 are the OTLP gRPC handlers, which are **already correctly factored** — each is a thin
+  protobuf-specific adapter over a shared `mkOtlpRpcHandler`; the similarity is the call
+  shape, and the differing parts are lens accessors on different message types that cannot
+  be shared.
+- `atAuthToBase` / `atAuthToBaseTest` — the prod/test interpreter pair CLAUDE.md mandates.
+  Factoring the four shared lines needs a rank-2 type; not worth it.
+- `hostsGetH` / `hostMapGetH` — four lines of shared page setup, then a table vs a map.
+- `sessionSortColumn` / `sessionSortLabel` — a false positive; two `\case`s over the same
+  enum, structurally alike and semantically unrelated.
+- **`selectActiveProjectMembers` / `selectAllProjectMembers` — the one that mattered.** Not
+  duplication at all: reading *why* they differed exposed the deactivated-members bug
+  above.
+
+**Conclusion.** There is no meaningful duplication in this codebase at any granularity
+measured: 0 clones at 6 normalised lines, 1 exact-duplicate SQL block (test setup), 1
+justified cross-module near-duplicate in 1161 functions, 0 duplicate route endpoints. The
+"no code reuse" premise does not hold. The defects that do exist are **divergence** — the
+same operation implemented twice and drifting — which is a different problem needing
+different instruments.
+
+## Toast capitalisation: 46 sentence case, 6 Title Case
+
+The uniformity complaint at its most visible layer. Of 57 distinct
+`addSuccessToast`/`addErrorToast` strings, **46 are sentence case** — the clear convention —
+and six diverge:
+
+| location | current | should be |
+|---|---|---|
+| `Pages/Settings.hs:264` | "Created API Key Successfully" | "Created API Key successfully" |
+| `Pages/Projects.hs:1364` | "Deleted Project Successfully" | "Deleted project successfully" |
+| `Pages/Projects.hs:1472` | "Updated Project Successfully" | "Updated project successfully" |
+| `Pages/Projects.hs:354` | "Updated Notification Channels Successfully" | "Updated notification channels successfully" |
+| `Pages/Reports.hs:324` | "Report notifications updated Successfully" | "…updated successfully" (stray capital) |
+| `Pages/LogExplorer/Log.hs:793` | "Error Parsing Query" | "Error parsing query" |
+
+Not outliers: "Connect GitHub first" and "Removed S3 bucket" — proper nouns, correct as-is.
+
+**Refined after reading them in context.** Only the trailing adverb is unambiguous:
+`"Successfully"` capitalised mid-sentence, against 46 messages that write it lowercase.
+The *noun* capitalisation is a judgement call and should be left alone — there is
+precedent for capitalising named features mid-sentence (`"Saved to Query Library
+successfully"`), so `"API Key"` and `"Notification Channels"` may well be deliberate
+product terms. `"Deleted Project Successfully"` is the one where the noun looks wrong too
+(`project` is a common noun here), but that is a copy decision, not a correctness one.
+
+So the safe change is four `Successfully` -> `successfully`, plus `"Error Parsing Query"`
+-> `"Error parsing query"` (an error toast in Title Case, with no proper noun in it).
+
+Also worth a look: "No hosts selected" (`Pages/Infrastructure.hs`) vs "No items selected"
+(`Pages/Anomalies.hs`) — the same condition (nothing selected for a bulk action) worded two
+ways.
+
+Zero logic risk; six string edits. Deferred only because the integration suite was
+mid-run and a source edit restarts it.
+
+## Where drift happens, and why — a predictor
+
+Two aggregate comparisons, opposite results:
+
+- **Table column headers: 47 distinct, zero case inconsistencies**, one wording split
+  (`"Last Modified"` in Dashboards vs `"Modified"` in Projects; `"Container"` vs
+  `"Containers"` is correct — one table's rows *are* containers, the other counts them per
+  host).
+- **Toast messages: 57 distinct, six diverging from the sentence-case norm**, including a
+  stray mid-sentence capital.
+
+The difference is not care; it is **whether the author sees the set while writing**. Column
+headers are authored in a list — `[col "Name" …, col "Status" …, col "Memory" …]` — so an
+inconsistent one looks wrong immediately. Toasts are written one at a time, scattered across
+handlers, and nobody ever sees them together.
+
+That predicts where uniformity will decay next: **anywhere a user-visible string is authored
+alone rather than in a list.** Toasts, page titles, empty-state copy, aria-labels. And it
+suggests the cheap defence — periodically collect each class and read it as a set, which is
+exactly how both of these were measured.
+
+**Tested immediately, and it failed.** Aria-labels are authored individually and never
+viewed together, so the predictor says they should have drifted. They have not: **96
+distinct labels, zero case duplicates, 79 sentence case**, and all seven apparent outliers
+are justified proper nouns or feature names ("AI", "YAML", "AI Assistant", "Real User
+Monitoring", "Open Documentation").
+
+So "authored alone" is *not* sufficient to cause drift. The likelier difference is that
+aria-labels are usually derived from adjacent visible text — `Aria.label_ "Close YAML
+editor"` sits next to the button it labels — so they inherit consistency from copy the
+author is already looking at. Toast messages are free-form sentences with no neighbour to
+match.
+
+Refined, and stated as a hypothesis rather than a rule: **drift needs both isolation and
+the absence of a nearby exemplar.** That still predicts toasts (isolated, free-form), and
+correctly predicts that headers and aria-labels are safe. It is one data point away from
+being wrong again, so treat the aggregate scan as the reliable tool and the theory as
+scaffolding.
+
+It also explains why the earlier structural findings clustered where they did.
+`servicePicker_`, `plainCell` and the Kubernetes readiness badge all render *one* thing in
+*one* place; nothing ever displays them side by side, so divergence is invisible until
+someone diffs the modules.
+
+## Empty states: 15 of them, one small inconsistency
+
+Aggregate scan of `emptyState_` / `ZeroState` copy. Mostly consistent. The one drift is
+**trailing periods on titles**: `"No activity yet."` (`Anomalies.hs:2197`) and
+`"No usage recorded yet this cycle."` (`Settings.hs:1320`) end with a full stop; the other
+thirteen do not (`"No members yet"`, `"No teams yet"`, `"Nothing archived"`, …). Body text
+mostly *does* end with a period, except `"Test your integrations to see results here"`
+(`Settings.hs:988`).
+
+Same class as the toast capitalisation split, and the same fix: pick the convention (titles
+without, bodies with) and make the three outliers match.
+
+**A note on the scan, not the code.** It initially reported `Share.hs:194` as having a URL
+in the title position — apparently a swapped-argument bug. It is not: the real code is
+`blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn
+about Monoscope"}`, and my regex grabbed the first two quoted strings after `emptyState_`,
+which belong to the `ESLink` action rather than the title/body. The call sites
+(`blank "clock" "Link expired" "…"`) are correct.
+
+Worth recording because it is the same failure mode as the earlier measurement bugs:
+**a regex that matches position rather than structure will confidently report a defect that
+is not there.** Every hit from these aggregate scans needs the source read before it is
+believed.
+
+## The user-visible copy cluster — one actionable task
+
+Three aggregate scans found the same class of drift. Together they are one small, zero-risk
+piece of work:
+
+| class | scanned | convention | outliers |
+|---|---|---|---|
+| toast messages | 57 | sentence case (46) | **6** — see the table above |
+| empty-state copy | 15 | titles without a full stop, bodies with | **3** |
+| page titles | 27 | Title Case for multi-word (9) | **4** sentence case |
+
+The page-title split nearly has a rule — nav destinations Title Case ("API Catalog",
+"Service Map", "Live Tail"), transient/status pages sentence case ("Discord app installed",
+"Shared event"). But **"Team details" and "Monitor Overview" are the same kind of page with
+different casing**, so it is drift rather than a convention someone chose.
+
+~~Also: `"Endpoints for"` reads like a title with its suffix lost.~~ **Checked — not a
+bug.** The code is `pageTitle = "Endpoints for " <> host`; my scan captured only the string
+literal and missed that it is one operand of a concatenation. Third false positive of the
+night from the same cause: **a regex matching a string literal cannot see the expression the
+literal sits in.**
+
+None of this is a defect; all of it is what "the platform is not uniform anymore" looks like
+where users actually see it. Roughly a dozen string edits, no logic touched. Deferred here
+only because the integration suite was mid-run and source edits restart it.
+
+## Weeder: 81 hits, 1 real — and the config fix that gets there
+
+`CLAUDE.md` says to run weeder regularly and delete what it reports. Run as configured, it
+emitted **89 hits (81 unique file+symbol)**.
+
+Adding one missing root (below) drops that to **20 hits, 11 unique** — and those 11 I checked
+one at a time against the source, which is the only classification here I'll stand behind:
+
+| Symbol(s) | Verdict |
+| --- | --- |
+| `sparklineBlocks`, `sparklineBar` | **genuinely dead** — deleted |
+| `assetManifestFingerprint`, `viteAssetFile` | TH: `$(viteAssetFile "index.html")`, `BodyWrapper.hs:298` |
+| `ensureUrlParams`, `dynSegmentLabel`, `isUrlIdLike`, `tokenizeUrlPath`, `defPid`, `defaultFeaturesAreInert` | doctest-only reference |
+| `updateTreeWithLog` | used at `test/unit/Pkg/DrainSpec.hs:190` |
+| `OtlpServerSpec.spec` | stale `.hie`; I deleted that file earlier tonight |
+
+So **1 real find in 11**, and the documented workflow followed literally would have deleted
+live code — including
+`viteAssetFile` (used as `$(viteAssetFile "index.html")` in `BodyWrapper.hs:298`) and the
+pure URL helpers in `ProcessMessage.hs` whose only callers are their own doctests. Deleting
+those breaks the doctest suite rather than the build, which is the slow way to find out.
+
+**Root cause of the bulk of it: a missing root.** 79 of the 89 hits came from the `test-dev`
+unit, which has no `Main.main`. Weeder therefore treats the entire transitive closure of the
+executable — `startApp`, `runServer`, every middleware and background fiber — as unreachable.
+Adding `^Start\.startApp$` to `roots` cuts **89 → 20** with no loss of real signal.
+
+The remaining 20 are the irreducible blind spots (doctests, TH, stale `.hie`), now written
+into the `CLAUDE.md` weeder section along with the operational rule that actually matters:
+**grep the whole repo before deleting — including `shared/` and `cli/`.** I needed that rule
+myself: my first pass grepped only `src cli app test`, concluded `sparklineBar` was
+referenced nowhere, and missed that the file lives at `shared/src/Pkg/CLIFormat.hs`. It
+happened to be dead anyway; the method was still wrong.
+
+Two further method notes, both mine:
+
+- My first classifier scored `mkOtlpRpcHandler` and `optionsMiddleware` as dead. Both are
+  used — in *multi-line* function applications, where the symbol sits alone on its own line
+  and is textually identical to an export-list entry, which I was filtering out. A
+  line-oriented reference counter cannot distinguish those two without parsing.
+- `weeder` reads `.hie`, not source, so a deletion does not leave the report until the
+  owning package recompiles. Right after deleting the sparklines the count was still 20.
+  Don't read that as the edit failing.
+
+**Net yield of this lens: 21 lines deleted, one config fix, and the audit result that the
+repo has essentially no dead top-level bindings.** That last part is the useful finding —
+whatever this codebase's problems are, accumulated dead functions is not one of them.
+
+`sparklineBar` was exported from `Pkg.CLIFormat` with three doctests and zero callers; the
+CLI renders its summaries through `renderSummaryItems`/`renderSummaryCell` instead. Deleted
+with its private helper `sparklineBlocks`. Verified via the doctest suite, since `build.log`
+cannot see edits under `shared/` — the watcher builds that package before its repl starts.
+
+## The last four `Capture "action" Text` routes
+
+Tonight's `MonitorBulkAction` conversion left four bulk-action routes still capturing a
+bare `Text`. Three are live and are now typed; the fourth turns out to be unreachable.
+
+| Route | Was | Now |
+| --- | --- | --- |
+| `dashboards/bulk_action/:action` | `Text` | `DashboardBulkAction` (`BADelete`, `BAAddTeams`) |
+| `api_catalog/bulk_action/:action` | `Text` | `HostBulkAction` (`BAArchive`, `BAUnarchive`) |
+| `issues/bulk_actions/:action` | `Text` | `IssueBulkAction` (4 constructors) |
+| `manage_teams/bulk_action/:action` | `Text` | **left alone — see below** |
+
+What each conversion actually bought, beyond tidiness:
+
+- **Dashboards** was the only one that failed *silently*. An unrecognised action fell
+  through to `_ -> addErrorToast "Invalid action"` and still answered `200 NoContent`, so
+  a typo'd link looked like a no-op rather than an error. That arm is now unrepresentable;
+  the route rejects the value before the handler runs.
+- **ApiCatalog** built its success toast as `action <> "d "`, which produced "archived" and
+  "unarchived" only because both slugs happen to end in `e`. Any third action beginning
+  with a consonant-final verb would have emitted broken English. Replaced with an explicit
+  `actionPast`, which also fixes the toast starting lowercase ("archived 3 hosts" →
+  "Archived 3 hosts") — consistent with the sentence-case pass earlier tonight.
+- **Anomalies** already 400'd correctly, so nothing was broken; the win is that the
+  `case` is now exhaustive over four constructors and the `_ -> throwError err400` arm is
+  gone, which is what makes adding a fifth action a compile error instead of a runtime one.
+
+Both `throwError`/`err400` fall-throughs were the only users of their imports in those two
+modules, so `Effectful.Error.Static` and `Servant (err400, errBody)` came out with them.
+
+**The URL and the parser are now one source of truth.** Every one of these slugs was
+previously written by hand at the link site *and* matched by hand in the handler — two
+copies, in the same module, free to drift. Both sides now go through `bulkActionSlug` and
+the matching `WrappedEnumSC` instance. That helper moved to `Pkg.DeriveUtils`, so
+`Pages.Monitors` dropped its local copy rather than this change adding two more; it is one
+function shared by four modules. Note it is now polymorphic (`Show a => a -> Text`), so the
+`[minBound .. maxBound]` doctests need an explicit `:: T` annotation — the monomorphic
+local version had been pinning that for free.
+
+### `manage_teams/bulk_action/:action` is unreachable
+
+Nothing in the codebase builds that URL — no Haskell link, no template, no web component.
+The handler accepts exactly one action (`"delete"`) and its only other arm is
+`"Invalid action"`. It appears to be surface left over from a teams bulk-select UI that
+was never wired up. **Not deleted**: an authenticated HTML route can't be proven unused
+from inside the repo, and the instruction is that features shouldn't be lost. Typing it
+would be churn on a path nobody calls, so it is recorded here for a human to either wire
+up or remove — that decision needs someone who knows whether the UI is planned.
+
+## `CatalogTab`: two handlers disagreed about the same query parameter
+
+`api_catalog` and `endpoints` both take a `request_type`/`filter` tab spelled
+`Incoming` / `Outgoing` / `Archived`. Tracing it turned up the interesting part — the two
+handlers did not treat it the same way:
+
+- `apiCatalogH` validated it: `normTab = guarded (elem ["Incoming","Outgoing","Archived"])`,
+  falling back to `Incoming`, and tried `filter=` before the legacy `request_type=`.
+- `endpointListGetH` did **no validation at all** — a bare `fromMaybe "Incoming"`. An
+  arbitrary string flowed straight into its cache key, into `?request_type=` in the
+  rendered `baseUrl`, and into `renderEndpointMainCol`'s `currentTab == "Outgoing"` test.
+
+Nothing catastrophic falls out of that (the cache is already keyed on user-supplied host
+and search text by design, so tab cardinality was not the weak link), but the two pages
+genuinely disagreed on what a bad tab meant, which is exactly the drift this sweep is for.
+Both now go through one `parseTab`.
+
+**Why this is the `IssueTab` shape and not the `BA` shape.** The three bulk-action enums
+committed just before this derive their wire form via `WrappedEnumSC`, which snake-cases
+to `incoming`. These tabs are capitalised on the wire and live shared links carry that
+spelling, so `tabParam` is hand-written and `parseTabM = inverseMap tabParam` inverts it —
+the same construction `IssueTab` and `MonitorTab` already use. Reaching for the pattern I
+had just used three times in a row would have silently changed every catalog URL. Worth
+recording as a general hazard: *a pattern that fit the last three cases is not evidence
+about the fourth,* and the wire format is the thing to check first.
+
+Two parses rather than one, because absence and unrecognised-value are not the same thing
+here:
+
+- `parseTab :: Maybe Text -> CatalogTab` — tolerant, defaults to `TabIncoming`. Page
+  handlers keep rendering a stale shared link instead of 400ing, which is why these stay
+  `QueryParam Text` rather than becoming typed captures.
+- `parseTabM :: Text -> Maybe CatalogTab` — strict. `apiCatalogBulkActionH` needs it: an
+  absent `request_type` means "apply to both directions", so defaulting it to `Incoming`
+  would have quietly narrowed the archive action to one direction.
+
+The tab still enters the cache key as `tabParam tab` text, leaving `HostStatsKey` and
+`EndpointStatsKey` in `System.Config` untouched — the enum stops at the handler boundary.
+`directionOf` is now total over the three constructors instead of a `lookup` returning
+`Nothing` for both "Archived" and any typo, and its `Data.List (lookup)` import came out
+with it.
+
+## The read-through cache we wrote twice, and the leak I nearly shipped
+
+`endpointListGetH` carries the comment *"Same shell/deferred/memoise dance as
+apiCatalogH"* — self-documented duplication, so I went to extract it. Both sites were
+byte-identical modulo the cache and key:
+
+```haskell
+liftIO (Cache.lookup c k)
+  >>= maybe (fetch >>= \fresh -> fresh <$ liftIO (Cache.insert c k fresh)) pure
+```
+
+Four sites use this idiom in total; the other two (`RealUserMonitoring`, `Containers`)
+add an explicit TTL and a "is this result worth caching" predicate (`not . V.null`,
+`cacheableRumResult`), so the obvious move was one helper taking
+`Maybe TimeSpec -> (v -> Bool)` and covering all four.
+
+**That helper would have introduced an unbounded memory leak.** From `cache-0.1.3.0`:
+
+```haskell
+insert' c Nothing k a = atomically $ insertSTM k a c Nothing   -- never expires
+insert  c             = insert' c (defaultExpiration c)        -- cache's default TTL
+```
+
+The haddock is explicit: with `Nothing`, *"the item will never expire. The default
+expiration value of the cache is ignored."* The two Endpoints sites call plain `insert`,
+and `hostStatsCache` is built with `newCache (Just (TimeSpec 300 0))` — a 5-minute TTL.
+Threading them through a `Maybe TimeSpec` helper as `Nothing` reads like "no TTL
+override, use the default" and in fact means "never expire". These caches are keyed on
+user-supplied host and search text, so that is unbounded growth, not a slow leak.
+
+**The actual fix was to delete our version, not to generalise it.** `Data.Cache` already
+exports `fetchWithCache`, whose body is exactly the idiom above and which calls `insert`
+— so the default TTL is preserved by construction:
+
+```haskell
+Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ -> fetch Endpoints.WithStats
+```
+
+`RealUserMonitoring` and `Containers` genuinely need conditional caching with an explicit
+TTL and stay hand-rolled; `fetchWithCache` has no predicate. Two of four is the right
+answer here — forcing the other two through a shared helper is what would have created
+the `Maybe TimeSpec` parameter that caused the bug.
+
+Generalises to: **before extracting a helper over a library call, read that library
+call's semantics for the argument you are about to make configurable.** The duplication
+was real and the instinct was right; the default-vs-absent distinction in the API was the
+part that had to be checked first, and "the library already has this function" beat both.
+
+## Where the lenses stopped paying, and what that says about the codebase
+
+By this point most of the mechanical lenses return clean. Recording that plainly, because
+"I looked and found nothing" is a result and the next person should not re-run these:
+
+| Lens | Result |
+| --- | --- |
+| Clone detection (6+ normalised lines) | 0 in 77k lines |
+| Near-duplicate function bodies | 1 justified cross-module pair in 1161 functions |
+| Duplicate route endpoints | 0 in 279 |
+| Dead top-level bindings (weeder, after the root fix) | 1 real pair in 11 reported |
+| Tab/enum literals in tab UIs | 2 left repo-wide, and both collapse to a `Bool` |
+| Hand-rolled reimplementations of library functions in `Utils.hs` | none — the helpers are already thin wrappers over `mfilter`, `AE.encode`, base's `showFFloat`, `fmt`'s `commaizeF` |
+| Repeated Tailwind class strings across modules | all generic utility combos, no extractable component |
+
+That last row is worth a caution. Grouping identical `class_` strings by how many modules
+use them surfaces things like `flex items-center gap-1.5` in 8 files — which looks like a
+missing component and is not one. A shared class string is not shared markup; those
+elements are unrelated. Extracting a component keyed on a utility-class combination is
+precisely what `CLAUDE.md` forbids, so the lens is worse than useless here.
+
+**The honest summary of the night's diff:** the wins were not where "verbose, no reuse,
+poor quality" predicted. There was very little dead code and almost no copy-paste. What
+there *was*, repeatedly, is **the same concept spelled two different ways in two places** —
+`apiCatalogH` validating a tab that `endpointListGetH` did not, three archive paths
+disagreeing, two stack-trace parsers, a slug written by hand at the link and matched by
+hand in the handler. Duplication detectors do not find that class of defect, because the
+two copies do not look alike; they look like two different pieces of code that happen to
+mean the same thing. Reading by *concept* — "who else answers this question?" — found
+every one of them, and it is the only lens that kept paying all night.
+
+## The onboarding race had three more copies — and the fix that "shared one implementation" missed them
+
+`b30d874f` earlier tonight made `completeOnboardingStep` atomic and claimed to "share one
+implementation". Re-running the Models-vs-Pages lens found **three more read-modify-write
+sites still live**:
+
+```
+Onboarding.hs:258   insertIfNotExist "Info"    project.onboardingStepsCompleted
+Onboarding.hs:273   insertIfNotExist "Survey"  project.onboardingStepsCompleted
+Projects.hs:1407    insertIfNotExist "Pricing" project.onboardingStepsCompleted
+```
+
+The first two are **in the same file as `markStepCompleted`**, whose haddock says in so
+many words that the read-modify-write form "could lose one". The earlier fix converted the
+call sites it happened to be editing and never grepped for the rest.
+
+**The lesson is about how the first fix was scoped.** It searched for the *SQL* it was
+replacing. These three don't contain that SQL — they contain `insertIfNotExist`, a Utils
+helper whose entire purpose is to compute the appended array in Haskell. The right query
+was "who computes a new value for this column?", not "who writes this statement". Grepping
+the *helper that embodies the bad pattern* would have found all four at once.
+
+**Why the parameter went away instead of becoming atomic.** `updateProjectPricing` took
+`V.Vector Text` and wrote it to `onboarding_steps_completed`, so the defect was in the
+Models layer, not just its caller. Making that write atomic in place would have kept a
+parameter whose only correct use is a value the caller cannot compute safely. Removing it
+deletes the whole class of misuse: there is now no way to express the bug. The three
+`pricingUpdateH` branches were untouched because the local `updatePricing` absorbed the
+extra call.
+
+`insertIfNotExist` then had no callers anywhere and came out of `Utils`.
+
+**No test covered onboarding step completion at all** — `b30d874f` shipped without a
+regression guard, which is exactly why this survived. The guard now exists and was
+confirmed to fail first:
+
+```
+["Pricing"] does not contain ["explored_logs"]
+```
+
+It is deterministic rather than concurrent: instead of racing two requests, it records a
+step through the atomic path and *then* performs the write whose snapshot predates it —
+the interleaving the race produces, made explicit. A genuinely concurrent test here would
+be flaky in the dangerous direction (passing while the bug is present).
+
+### The same shape, one column over
+
+Having found the steps race by asking "who computes a new value for this column?", the
+same question against its immediate neighbour answered itself: `questions` was written the
+same way — read the blob, merge in Haskell (`mergeQuestions`), write the whole thing back.
+
+Postgres already has that operation. `jsonb ||` merges with the right operand winning,
+which is exactly what `mergeQuestions` meant by "new answers win", so both handlers became
+
+```sql
+questions = COALESCE(questions, '{}'::jsonb) || #{answers}
+```
+
+and the helper is gone. This one is **narrower than the steps race and I could not
+reproduce it deterministically**: `sessionAndProject` re-reads instead of trusting the
+session cache while a project is still onboarding, so losing an answer requires two
+genuinely concurrent submissions rather than a stale snapshot. Recorded as hardening
+rather than claimed as a bug fix — and tested for what the change actually risks, which is
+the merge semantics, not the race. The onboarding walkthrough never asserted that the
+survey write preserves the info step's answers; it does now.
+
+Two smaller things worth keeping:
+
+- `mergeQuestions` folded a non-object `questions` value to `mempty`. The jsonb form does
+  not. Only these two statements ever write that column and both write an object, so that
+  branch defended against a state nothing can produce — the case `CLAUDE.md` says to
+  delete rather than preserve.
+- Removing the read nearly removed the **authorization** with it. `onboardingConfPostH`
+  called `sessionAndProject` for `project.questions`, but that call is also the membership
+  check. Dropping it because its *value* became unused would have made the handler
+  writable by any authenticated user. It stays, with a comment saying why. General form:
+  **before deleting a call whose result you stopped using, ask what else it was doing.**
