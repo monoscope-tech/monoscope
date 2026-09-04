@@ -7,12 +7,10 @@ billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
 ## Read this first — session summary (2026-09-04, overnight)
 
-**Verification state, precisely.** Doctests `1482 Tried, 0 Failures` — current, covers
-every source change below. Both compile targets green — current. The integration suite's
-last *completed* full run was `808 examples, 0 failures`, but that predates six later
-source commits (`5134a124`, `4d1cf27f`, `ce93ca3e`, `91bf6807`, `6ac599e5`, `b30d874f`); a
-fresh full run was in flight when this was written. Those six are covered by the compiler
-and by doctests, not yet by the integration suite. Everything is pushed.
+**Verified, fully.** Doctests `1482 Tried, 0 Failures`. Integration suite `807 examples, 0
+failures, 89 pending` — a complete run covering every source commit below (807 rather than
+the earlier 808 because the dead `OtlpServerSpec` was deleted, removing one pending
+example). Both compile targets green. Everything is pushed.
 
 ### The premise, measured
 
