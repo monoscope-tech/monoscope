@@ -261,7 +261,7 @@ apiPostH pid apiKeyForm = do
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
     $ Just
     $ AE.object ["key_title" AE..= apiKeyForm.title]
-  addSuccessToast "Created API Key Successfully" Nothing
+  addSuccessToast "Created API Key successfully" Nothing
   addTriggerEvent "closeModal" ""
   let newKey = Just (pApiKey, encryptedKeyB64)
   addRespHeaders $ maybe (ApiPost pid apiKeys newKey) (const $ ApiPostCopy newKey True) apiKeyForm.from

@@ -321,7 +321,7 @@ reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHead
 reportsPostH pid t = do
   _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
-  addSuccessToast "Report notifications updated Successfully" Nothing
+  addSuccessToast "Report notifications updated successfully" Nothing
   addRespHeaders $ ReportsPost "updated"
 
 

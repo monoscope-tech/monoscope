@@ -351,7 +351,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
 
         unless (null unreachable)
           $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
-      addSuccessToast "Updated Notification Channels Successfully" Nothing
+      addSuccessToast "Updated Notification Channels successfully" Nothing
   integrationsSettingsGetH pid
 
 
@@ -1361,7 +1361,7 @@ deleteProjectGetH pid = do
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
       Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
-      addSuccessToast "Deleted Project Successfully" Nothing
+      addSuccessToast "Deleted Project successfully" Nothing
       redirectCS "/"
   addRespHeaders $ PostNoContent ""
 
@@ -1469,7 +1469,7 @@ processProjectPostForm cpRaw pid = do
     else do
       _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
       Projects.logAuditS pid Projects.AEProjectUpdated sess Nothing
-      addSuccessToast "Updated Project Successfully" Nothing
+      addSuccessToast "Updated Project successfully" Nothing
   addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 

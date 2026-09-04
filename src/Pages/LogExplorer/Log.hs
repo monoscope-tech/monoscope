@@ -790,7 +790,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
   let queryInput = maybeToMonoid queryM'
-      parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
+      parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error parsing query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
     Left err -> parseError err
     Right ast
