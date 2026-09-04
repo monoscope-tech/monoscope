@@ -874,3 +874,27 @@ behind a `sh `seq` True` guard that always yields True and silences nothing —
 `-Wno-unused-matches` is already set. The endpoint sibling had it right in one pass.
 Fixed in `79182b4c`. That is the value a consolidation review actually produces here: not
 "merge these two", but "one of them proves the other is doing unnecessary work".
+
+## `7c225496` is mislabeled — git log is load-bearing here
+
+Its subject reads *"fix(reports): weekly emails were dated in the server's timezone, not
+the customer's"*. Its entire diff is `T.unwords` -> `unwords` in `src/Pkg/Mail.hs`. The
+real timezone change is in `364d728a`; this message is orphaned, presumably left by a
+squash or rebase.
+
+Consequence: my first guard-gap pass listed this as an unfixed bug on the strength of the
+message. It is fixed — `renderWeeklyEmail` uses `project.timeZone` through
+`utcToLocalTimeTZ` with a UTC fallback. **A commit message describing work that is not in
+its diff will mislead exactly as it misled me.** In a repo where the log carries this much
+reasoning, that is a real defect, not a cosmetic one.
+
+The behaviour *was* genuinely untested, and the reason was structural: `renderWeeklyEmail`
+takes 14 parameters, so no one was going to build that fixture. Fixed by extracting the
+pure core (`reportDayLabels`) so a two-line doctest holds it. That is the general move for
+the remaining guard gaps — **when something is untested because it is buried in a wide
+effectful function, extract the pure core rather than building a heroic fixture.**
+
+Verification note: the offsets were checked against the IANA database independently
+(Auckland is UTC+13 on both dates; NZDT runs to 2026-04-05) rather than asserted from
+memory. The doctest itself has not executed yet — `cabal test doctests` cannot run while
+the test-dev watcher holds the build directory, so it lands on the next doctests pass.
