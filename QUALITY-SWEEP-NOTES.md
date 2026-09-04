@@ -1745,3 +1745,14 @@ if one of these grows a Models-layer counterpart.
 a variant" kind must involve a table in the first table above, because that is the complete
 list of tables both layers write. All three are accounted for. A future occurrence will
 show up by re-running this scan, not by reading code.
+
+**Read side, for completeness.** Eight tables are `SELECT`ed from `Pages/`. Five are also
+read by Models, but none is duplication: `Pages/CommandPalette.hs` deliberately issues
+narrow projections (`SELECT id, title … LIMIT 50`) for a picker list, where calling the
+Models functions would fetch whole records to display two columns. That is the right call,
+not a layering slip. All three are correctly `project_id`-scoped (checked, given the
+cross-tenant findings earlier in this file). The remaining three tables are read only by
+the page that owns them.
+
+So the SQL lens is closed on both sides: **writes** gave the onboarding race and the
+archive divergence; **reads** gave nothing.
