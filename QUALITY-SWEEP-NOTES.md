@@ -1461,3 +1461,46 @@ attempted.
 **The lesson about the method:** the clone scan reported zero duplication at six lines and
 missed both real findings, because neither is copy-paste. Name collision found both. When
 looking for "we reinvented something we already had", grep for *names*, not *text*.
+
+## `statusBadge_` — five dead cases, and the one live value falls through
+
+`Pages/Monitors.hs:670`. Found by the near-name scan (`statusBadge_` in Monitors vs
+`statusBadge` in Infrastructure — those two are legitimately separate, but looking at them
+turned this up).
+
+`statusBadge_ :: Bool -> Text -> Html ()` matches eight status strings. Checked which are
+ever *produced* anywhere in `src`:
+
+| case | produced? |
+|---|---|
+| `Passing`, `Failing`, `Healthy`, `Pending`, `NoData` | **никогда — 0 occurrences** |
+| `Active` | only as a *tab* name (`monitorTabParam`), never as a status |
+| `Warning`, `Inactive` | yes, handled correctly |
+| `Alerting` | yes — not in the case list, but caught by the `isAlerting` guard |
+| **`Normal`** | **yes — and falls through to the default** |
+
+`statusInfo` is the only producer of these labels and emits `Alerting | Warning | Normal`.
+So five of eight explicit cases are dead, and the live value the list *omits* lands on
+`_ -> ("badge-ghost", "circle")`.
+
+**The visible consequence:** the same state is coloured twice, differently, in one module.
+
+```haskell
+statusInfo MSNormal = StatusInfo "bg-fillSuccess-strong" "Normal" …   -- dot: green
+statusBadge_ "Normal" → _ -> ("badge-ghost", "circle")                -- badge: grey
+```
+
+A healthy monitor shows a green dot and a grey badge on the detail page (`:781`, `:837`,
+`:848` pass `displayName`, which is `"Normal"` for a live, non-deactivated monitor). The
+list even contains three unused synonyms — `Passing`, `Healthy`, `Active` — that would
+each have rendered it green.
+
+**Recommended fix:** add `"Normal" -> ("badge-success", "circle-check")`, matching the
+`bg-fillSuccess-strong` that `statusInfo` already assigns to `MSNormal`. That is a visual
+change, so it wants a browser before it lands; the dead cases should be *mentioned* rather
+than deleted per the house rule on unrelated dead code.
+
+**The deeper cause is the round-trip**, the same one fixed for `IssueSeverity` in
+`5134a124`: a typed `MonitorStatus` is rendered to `Text` by `statusInfo`, then re-matched
+against string literals by `statusBadge_`. Taking `MonitorStatus` directly would have made
+the missing `Normal` case a compile error and the five dead cases unrepresentable.
