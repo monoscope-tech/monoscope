@@ -1701,6 +1701,13 @@ four, and do not read a zero from one as an answer from all.
 | **Literal grep** — take a type's wire strings, grep the tree | per enum, after the type exists | `allChannels`; the nav's hardcoded tab strings; the sort dropdown | operations that share no literal |
 | **SQL by (operation, table)** — group every query by what it touches | regex over `[sql\| …\|]` | the onboarding lost-update race; three disagreeing archive paths | anything not expressed as SQL |
 
+**A fifth lens that does *not* work: grouping by type signature.** Tried it — 28 identical
+one-argument signatures shared across modules by differently-named functions. Precision is
+near zero: `Text -> Text` covers escaping, KQL quoting, colour lookup and timestamp
+display; `Double -> Text` covers `pct1` (already a percentage, 1dp, no suffix) and
+`pctText` (a fraction, x100, 0dp, `%` suffix) — same shape, opposite contracts. A type
+says what a function *accepts*, not what it *means*. Don't bother.
+
 The SQL lens was the most productive and the least obvious. `UPDATE projects.projects`
 appearing 20 times across 4 modules — three of them `Pages` — is what pointed at both the
 layering problem and the race. Neither clone detection nor exact-SQL comparison saw it:
