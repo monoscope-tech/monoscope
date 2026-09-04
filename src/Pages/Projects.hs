@@ -286,8 +286,18 @@ data NotifListForm = NotifListForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
+-- | Every notification channel, in wire form. Derived from the type rather than listed,
+-- so a new constructor cannot be forgotten here — the handler writes
+-- @disabled_channels = allChannels \\ enabledChannels@, and a channel missing from this
+-- list is silently treated as enabled for every project.
+--
+-- Pinned, because the wire spellings are what the form posts and what
+-- @disabled_channels@ stores: a change here silently re-enables a channel everywhere.
+--
+-- >>> allChannels
+-- ["email","slack","discord","phone","pagerduty"]
 allChannels :: [Text]
-allChannels = ["email", "slack", "discord", "phone", "pagerduty"]
+allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationChannel]
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -464,10 +474,10 @@ integrationsBody IntegrationsConfig{..} = do
       a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
       " team."
 
-    -- Form posts `enabledChannels` (the set of channel types whose toggles are checked).
-    -- The handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
-    -- If a new channel type is ever added, it must also be added to `allChannels`
-    -- or it will silently be treated as "enabled" for every project.
+    -- Form posts `enabledChannels` (the set of channel types whose toggles are checked);
+    -- the handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
+    -- `allChannels` is derived from 'NotificationChannel', so adding a constructor is
+    -- enough — see the note there.
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
         let ems = encodeText $ V.toList emails
