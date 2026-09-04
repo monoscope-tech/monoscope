@@ -673,7 +673,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
               (renderSample . div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] . V.mapM_ (summaryToken_ True))
               (mfilter (not . V.null) sampleOverride)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
-        severityBadge_ (display issue.severity)
+        severityBadge_ issue.severity
         issueTypeLabel issue.issueType issue.critical
         case Issues.issuePayload issue of
           -- Only what is peculiar to the type belongs here. Service, environment and
@@ -1838,12 +1838,17 @@ issueRowId (IssueVM _ _ issue) = issue.base.id.toText
 
 
 -- | (icon, colorClass, tooltip) — uses shape+color so status isn't color-only
-anomalyStatusIndicator :: Bool -> Bool -> Text -> (Text, Text, Text)
+-- | Archived and acknowledged outrank severity; below them, Critical and Warning get
+-- their own icon and everything else reads as plain Active. Severity was 'Text' here for
+-- the same reason it was in 'severityBadge_' — callers 'display'ed a typed value to have
+-- it re-matched.
+anomalyStatusIndicator :: Bool -> Bool -> Issues.IssueSeverity -> (Text, Text, Text)
 anomalyStatusIndicator _ True _ = ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
 anomalyStatusIndicator True False _ = ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
-anomalyStatusIndicator False False "critical" = ("octagon-exclamation", "text-fillError-strong", "Critical")
-anomalyStatusIndicator False False "warning" = ("triangle-alert", "text-fillWarning-strong", "Warning")
-anomalyStatusIndicator False False _ = ("circle-alert", "text-textWeak", "Active")
+anomalyStatusIndicator False False Issues.Critical = ("octagon-exclamation", "text-fillError-strong", "Critical")
+anomalyStatusIndicator False False Issues.Warning = ("triangle-alert", "text-fillWarning-strong", "Warning")
+anomalyStatusIndicator False False Issues.Info = ("circle-alert", "text-textWeak", "Active")
+anomalyStatusIndicator False False Issues.Low = ("circle-alert", "text-textWeak", "Active")
 
 
 data IssueVM = IssueVM UTCTime Text Issues.IssueL
@@ -1943,10 +1948,10 @@ renderIssueMainCol pid (IssueVM currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt
-      (icon, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived (display b.severity)
+      (icon, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived b.severity
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
       stateBadges = do
-        severityBadge_ (display b.severity)
+        severityBadge_ b.severity
         issueStateBadge_ issue.latestStateEvent
         ackBadge_ currTime b
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
@@ -1983,23 +1988,30 @@ renderIssueMainCol pid (IssueVM currTime period issue) = do
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let b = issue.base
-      (icon, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) (display b.severity)
+      (icon, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) b.severity
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon "regular" "w-3.5 h-3.5"
       span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show b.seqNum
       span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
-      severityBadge_ (display b.severity)
+      severityBadge_ b.severity
       span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now $ zonedTimeToUTC b.createdAt
     issuePreview_ issue
 
 
-severityBadge_ :: Text -> Html ()
+-- | Only Critical and Warning carry a badge; Info and Low are deliberately unbadged.
+--
+-- Took 'Text' and matched @"critical"@/@"warning"@ with a fall-through, while all three
+-- callers held an 'Issues.IssueSeverity' and 'display'ed it just to be re-matched. That
+-- round-trip meant renaming a constructor would silently drop *both* badges instead of
+-- failing to compile. Spelling the two silent cases out makes the omission a decision.
+severityBadge_ :: Issues.IssueSeverity -> Html ()
 severityBadge_ = \case
-  "critical" -> span_ [class_ "badge badge-sm bg-fillError-weak text-fillError-strong border border-strokeError-strong"] "CRITICAL"
-  "warning" -> span_ [class_ "badge badge-sm bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak"] "WARNING"
-  _ -> pass
+  Issues.Critical -> span_ [class_ "badge badge-sm bg-fillError-weak text-fillError-strong border border-strokeError-strong"] "CRITICAL"
+  Issues.Warning -> span_ [class_ "badge badge-sm bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak"] "WARNING"
+  Issues.Info -> pass
+  Issues.Low -> pass
 
 
 issueStateBadge_ :: Maybe Issues.IssueEvent -> Html ()
