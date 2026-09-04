@@ -40,6 +40,9 @@ missed every real finding, because none of them is copy-paste. See "Four lenses"
 | `91bf6807`, `ce93ca3e`, `6b60a3b6` | lists derived from their enums (`allChannels`, the sort dropdown, tab options) |
 | `42374bec` | `truncateMiddle` broke its own "at most n chars" contract; `deleteParam`'s unanchored regex documented |
 | `4d1cf27f`, `79182b4c` | dead `OtlpServerSpec` deleted; LLM reply parsed twice behind a no-op `seq` |
+| `4940a9f7`, `bb2f23fc`, `800d8796` | `reportDayLabels` extracted from a 14-parameter function so its timezone behaviour could be doctested — plus two rounds of making those doctests actually execute |
+| `3fc7c94c` | `isByosPlan` — two ad-hoc case-sensitive checks beside a case-folding sibling |
+| `6ac599e5`, `b2e563bc` | `Containers.emDash_` reused instead of inlined; tab->wire functions renamed `tabParam` to match the existing convention |
 
 ### Not fixed, with the blocker stated
 
