@@ -1504,3 +1504,32 @@ than deleted per the house rule on unrelated dead code.
 `5134a124`: a typed `MonitorStatus` is rendered to `Text` by `statusInfo`, then re-matched
 against string literals by `statusBadge_`. Taking `MonitorStatus` directly would have made
 the missing `Normal` case a compile error and the five dead cases unrepresentable.
+
+## My tab consolidation was module-local — the nav still hardcodes the same strings
+
+`Pages/BodyWrapper.hs:882 navFlyoutItems` hardcodes the wire spellings that `IssueTab` and
+`MonitorTab` now own:
+
+```haskell
+"Issues"   -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", …), ("Archived", …)]
+"Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", …)]
+```
+
+`1652d04b` collapsed three sources of `"Inbox"/"Acknowledged"/"Archived"` inside
+`Anomalies.hs`, and `7810598b` three sources of `"Active"/"Inactive"` inside
+`Monitors.hs`. Neither touched the nav, which holds a fourth and a third copy. They agree
+today; nothing enforces it. Rename a tab and the flyout links silently point at
+`?filter=OldName`, which `parseTab` folds back to Inbox — a dead link that looks like a
+working one.
+
+**Why it was not fixed here:** `Pages/Anomalies` and `Pages/Monitors` both *import*
+`Pages/BodyWrapper` (for `BWConfig`, `PageCtx`, `mkPageCtx`, `navTabAttrs`), so
+`BodyWrapper` cannot import them back. Closing this properly means moving `IssueTab` and
+`MonitorTab` into a module all three can see — a small `Pages/Tabs.hs` is the obvious
+home — and re-exporting from the pages. That is a multi-file move, not a one-liner.
+
+**The general lesson, and it applies to every type fix in this sweep:** consolidating the
+sources of a string *inside* one module does not find the copies in modules that cannot
+import it. The grep that finds them is for the *literal*, run across the whole tree, after
+the type exists — not for the type's name. I checked call sites of the functions I
+changed; I did not re-grep the literals afterwards, which is why this survived.
