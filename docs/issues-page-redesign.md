@@ -652,6 +652,58 @@ restoring behaviour that already exists one module over; 2 costs a timeout; 3 is
 real work that I would rather do after F9 is understood, because if the data
 were there none of those boxes would be empty in the first place.
 
+### F10 outcome — shipped as option 1 (`edfa0271a`)
+
+The details pane now starts at inline `width:0` and the resizer hidden, matching
+what the log explorer's own panel does and what the web component already
+expects: `toggleLogRow` opens the pane with `if (width < 50) sideView.style.width
+= '550px'` and removes exactly `hidden`, `opacity-0`, `pointer-events-none`. The
+call site was the odd one out, not the component.
+
+`lg:h-[70vh]` deliberately stays. `virtualTable` renders `<log-list>` with
+`h-full`, so an auto-height parent collapses it to zero — that trade turns half a
+blank pane into a wholly blank tab. Option 3 (merging the three empty states)
+stays deferred behind F9, because if the data were there none of them would be
+empty.
+
+**The pattern, now three for three.** This page has taken a shared component and
+dropped a behaviour it already had, three times: the widget's value slot (§8),
+the trace fragment's span id (§9 C), and now the details pane's collapsed initial
+state. Each looked like a missing feature and was actually a missing line at one
+call site. That is the argument for the CLAUDE.md rule, and it is where to look
+for the fourth instance.
+
+### F11 — the Logs tab hangs on "Loading events…" when the result is empty. *Severity: high. OPEN, not ours.*
+
+Found while verifying F10, and **A/B tested against my own change first**: with
+the collapse disabled the symptom is identical, so it is not F10's doing.
+
+Evidence:
+- The endpoint is healthy — `count: 0`, `hasMore: false`, well-formed, **0.52s**.
+- The same `<log-list>` component renders **107 rows fine in the log explorer**,
+  so the component is not broken in general.
+- The issue page's tab with **0 rows** sits on "Loading events…" indefinitely
+  (still there at a 40s virtual-time budget) instead of falling through to the
+  "No events match in the selected time range" state it used to show.
+
+So the empty-result path specifically fails to resolve its loading state. This
+lives in `web-components/src/log-list.ts` (and possibly the recent `Log.hs` /
+`LogQueries.hs` changes), which another session is actively editing — flagged
+rather than fixed.
+
+### F12 — the runtime-exception Logs tab costs ~47s. *Severity: high. OPEN.*
+
+The trace-scoped query `kind=="log" AND context___trace_id=="…"` over the page's
+window returns 14 rows in **46.7s**. `virtualTable` fetches on connect via
+`initialFetchUrl`, not on tab activation, so **every** runtime-exception page load
+fires this in the background even though Trace is the default tab.
+
+Same family as F8 (an unindexed predicate whose cost tracks the window) and the
+same shape of fix — but the earlier `+/-5min` narrowing already applies here, so
+this one needs the query looked at rather than the window. `build.log` shows this
+exact statement timing out and being retried by `retryTransientEff`, so it is
+already visible in production telemetry.
+
 ### What I want reviewed before building
 
 1. Is B's cost concern sufficient reason to measure-then-maybe-defer, or is there
