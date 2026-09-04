@@ -5,6 +5,54 @@ All three skills (`/hs-distill`, `/hs-lob-review`, `/hs-evasion-review`) applied
 feature groups: log explorer, service map, replay, bots, monitors, issues, endpoints,
 billing, auth/server/MCP, the pattern/AI pipeline, and the shared UI components.
 
+## Read this first — session summary (2026-09-04, overnight)
+
+**The premise, measured.** The sweep was asked to fix "so much verbosity and no code reuse".
+Neither survives measurement:
+
+- **Zero** duplicated blocks of 6+ lines anywhere in `src/` + `web-components/src`, with
+  identifiers and literals normalised (so renamed copies still match). Verified by a
+  monotonic scan: 7 blocks at 4 lines, 3 at 5, 0 at 6.
+- The sweep's growth is **+411 lines of code**, not the +1811 first reported — that figure
+  counted comments. The other +1480 is Haddock and doctests.
+- `src/` is 69% code, 18% comment, 12% blank. The long functions are long because markup
+  and SQL are verbose: `dashboardPage_` is 326 lines with *one* repeated 4-line block.
+
+**Where the real defects were: types, not size.** Every fix below is a value that was
+`Text` when a sum type existed or belonged:
+
+| commit | what it fixed |
+|---|---|
+| `a0be8e67` | `SessionSort` — sort fell through to `last_seen` |
+| `1652d04b` | `IssueTab` — four independent matches, four separate fall-throughs |
+| `7810598b` | `MonitorTab` — three sources of the same two literals |
+| `6b60a3b6` | tab options list derived from the enum (a merge had re-added the literals) |
+| `7058d5c7` | `MonitorBulkAction` — **unknown action returned 200 and did nothing** |
+| `4940a9f7` | `reportDayLabels` — extracted the pure core so the timezone could be doctested |
+| `79182b4c` | group-review reply parsed twice behind a no-op `seq` |
+
+`7058d5c7` is the one to read: typing one route parameter surfaced a third consumer the
+compiler found (`action == "deactivate"`), then revealed that
+`bulkAction_doesNotTouchAnotherProjectsMonitors` covered only four of six actions — two
+bulk actions had **never** been checked for cross-tenant access.
+
+**Consolidations deliberately NOT done** (each with reasoning in its own section below):
+the two group-review pipelines (same shape, different control flow), the four remaining
+bulk-action handlers (they fail *visibly*; only monitors was silent), `Endpoints.hs:240`
+(a boolean projection, not a fall-through), `getErrorPatternById` (scoping it would delete
+a cross-tenant signal), and `writeTargetFor` (already doctested, uniform call sites).
+Shape similarity justifies consolidation only when the substance matches.
+
+**Needs a human:** the ack-vs-spike-detector question (paging behaviour, both readings
+defensible), three guard gaps with the test that would close each, and four client-tier
+demotions that need a browser to verify.
+
+**Method warnings that cost real time tonight:** `git diff` emits no `+` lines under this
+repo's external diff driver (use `--no-ext-diff`); doctests live in `src/`, so "no `test/`
+change" does not mean "no guard"; `cabal test doctests` builds the 197-module test-dev
+target and corrupts a running watcher; a break-test must assert on the failure *reason*,
+never the count. Every one of these produced a confident wrong answer before it was caught.
+
 ## Verification rules (learned the hard way)
 
 - **Never run `cabal build`/`cabal test`.** A ghcid watcher owns the build; a second
