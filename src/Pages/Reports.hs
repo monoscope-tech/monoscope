@@ -181,10 +181,15 @@ computeDurationChanges current prev = V.map compute current
        in (h, m, u, dur, change dur (fst <$> pv), req, change req (snd <$> pv))
 
 
--- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email.
--- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
--- row so both the request handlers and the weekly-report background job render the same email;
--- @reportUrl@ is host-relative.
+-- $setup
+-- Relude hides partial @read@, so the examples below cannot build a 'UTCTime' from a
+-- string literal. @marchUTC d@ is 20:00 UTC on 2026-03-0/d/.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+-- >>> :set -XOverloadedStrings
+-- >>> let marchUTC d = UTCTime (fromGregorian 2026 3 d) (secondsToDiffTime 72000)
+
+
 -- | The report window's start and end day, rendered in the *project's* timezone rather
 -- than the server's. An unknown or empty zone falls back to UTC.
 --
@@ -192,15 +197,15 @@ computeDurationChanges current prev = V.map compute current
 -- must label differently either side of a zone's midnight, or a customer in Auckland gets
 -- an email dated a day behind the week it covers.
 --
--- >>> reportDayLabels "Pacific/Auckland" (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")
+-- >>> reportDayLabels "Pacific/Auckland" (marchUTC 1) (marchUTC 8)
 -- ("2026-03-02","2026-03-09")
 --
--- >>> reportDayLabels "UTC" (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")
+-- >>> reportDayLabels "UTC" (marchUTC 1) (marchUTC 8)
 -- ("2026-03-01","2026-03-08")
 --
 -- Empty and unrecognised zones both fall back to UTC rather than failing:
 --
--- >>> map (\z -> fst $ reportDayLabels z (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")) ["", "Not/AZone"]
+-- >>> map (\z -> fst $ reportDayLabels z (marchUTC 1) (marchUTC 8)) ["", "Not/AZone"]
 -- ["2026-03-01","2026-03-01"]
 reportDayLabels :: Text -> UTCTime -> UTCTime -> (Text, Text)
 reportDayLabels zone startTime endTime =
@@ -209,6 +214,10 @@ reportDayLabels zone startTime endTime =
    in (label startTime, label endTime)
 
 
+-- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email.
+-- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
+-- row so both the request handlers and the weekly-report background job render the same email;
+-- @reportUrl@ is host-relative.
 renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Eff es (Text, Text, Text)
 renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
