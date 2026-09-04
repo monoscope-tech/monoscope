@@ -2118,3 +2118,45 @@ was never wired up. **Not deleted**: an authenticated HTML route can't be proven
 from inside the repo, and the instruction is that features shouldn't be lost. Typing it
 would be churn on a path nobody calls, so it is recorded here for a human to either wire
 up or remove — that decision needs someone who knows whether the UI is planned.
+
+## `CatalogTab`: two handlers disagreed about the same query parameter
+
+`api_catalog` and `endpoints` both take a `request_type`/`filter` tab spelled
+`Incoming` / `Outgoing` / `Archived`. Tracing it turned up the interesting part — the two
+handlers did not treat it the same way:
+
+- `apiCatalogH` validated it: `normTab = guarded (elem ["Incoming","Outgoing","Archived"])`,
+  falling back to `Incoming`, and tried `filter=` before the legacy `request_type=`.
+- `endpointListGetH` did **no validation at all** — a bare `fromMaybe "Incoming"`. An
+  arbitrary string flowed straight into its cache key, into `?request_type=` in the
+  rendered `baseUrl`, and into `renderEndpointMainCol`'s `currentTab == "Outgoing"` test.
+
+Nothing catastrophic falls out of that (the cache is already keyed on user-supplied host
+and search text by design, so tab cardinality was not the weak link), but the two pages
+genuinely disagreed on what a bad tab meant, which is exactly the drift this sweep is for.
+Both now go through one `parseTab`.
+
+**Why this is the `IssueTab` shape and not the `BA` shape.** The three bulk-action enums
+committed just before this derive their wire form via `WrappedEnumSC`, which snake-cases
+to `incoming`. These tabs are capitalised on the wire and live shared links carry that
+spelling, so `tabParam` is hand-written and `parseTabM = inverseMap tabParam` inverts it —
+the same construction `IssueTab` and `MonitorTab` already use. Reaching for the pattern I
+had just used three times in a row would have silently changed every catalog URL. Worth
+recording as a general hazard: *a pattern that fit the last three cases is not evidence
+about the fourth,* and the wire format is the thing to check first.
+
+Two parses rather than one, because absence and unrecognised-value are not the same thing
+here:
+
+- `parseTab :: Maybe Text -> CatalogTab` — tolerant, defaults to `TabIncoming`. Page
+  handlers keep rendering a stale shared link instead of 400ing, which is why these stay
+  `QueryParam Text` rather than becoming typed captures.
+- `parseTabM :: Text -> Maybe CatalogTab` — strict. `apiCatalogBulkActionH` needs it: an
+  absent `request_type` means "apply to both directions", so defaulting it to `Incoming`
+  would have quietly narrowed the archive action to one direction.
+
+The tab still enters the cache key as `tabParam tab` text, leaving `HostStatsKey` and
+`EndpointStatsKey` in `System.Config` untouched — the enum stops at the handler boundary.
+`directionOf` is now total over the three constructors instead of a `lookup` returning
+`Nothing` for both "Archived" and any typo, and its `Data.List (lookup)` import came out
+with it.
