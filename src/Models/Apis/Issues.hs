@@ -101,6 +101,7 @@ module Models.Apis.Issues (
   IssueEvent (..),
   IssueActivity (..),
   logIssueActivity,
+  selectLatestStateEvent,
   selectIssueActivity,
 
   -- * Issue Summary (for reports/emails)
@@ -1346,6 +1347,26 @@ data IssueActivity = IssueActivity
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
+
+
+-- | The issue's most recent state-changing event, for the detail page's badge.
+--
+-- The list view derives the same thing as a LATERAL inside its paged query
+-- ('selectIssues'); pulling that out into a shared helper would turn one join
+-- into an N+1 across the page, so the single-issue case gets its own scalar. The
+-- event set is the one that matters — the two must agree on *which* events count
+-- as a state change, or the list and the detail page will disagree about whether
+-- an issue has regressed.
+selectLatestStateEvent :: DB es => IssueId -> Eff es (Maybe IssueEvent)
+selectLatestStateEvent iid =
+  -- Decoded as Text then parsed, the same way 'parseIssueType' handles its column:
+  -- IssueEvent derives DecodeValue but not DecodeRow, so it cannot be a row on its own.
+  (rightToMaybe . parseUrlPiece =<<)
+    . listToMaybe @Text
+    <$> Hasql.interp
+      [HI.sql| SELECT a.event FROM apis.issue_activity_log a
+               WHERE a.issue_id = #{iid} AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
+               ORDER BY a.created_at DESC LIMIT 1 |]
 
 
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()

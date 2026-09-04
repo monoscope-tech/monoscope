@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -614,9 +614,15 @@ displayUnit = \case
 -- header around a @naked@ chart shows the same number the widget would have,
 -- rather than computing a second total that could disagree with the chart.
 widgetValueSlot_ :: Text -> Text -> Maybe Text -> Html ()
-widgetValueSlot_ extraCls wid valueM =
+widgetValueSlot_ extraCls = widgetValueSlotAs_ ("bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak whitespace-nowrap " <> extraCls)
+
+
+-- | 'widgetValueSlot_' with the styling chosen by the caller, for headers that want
+-- the number to read as the headline rather than as a badge beside the title.
+widgetValueSlotAs_ :: Text -> Text -> Maybe Text -> Html ()
+widgetValueSlotAs_ cls wid valueM =
   span_
-    [ class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak whitespace-nowrap " <> extraCls <> bool " hidden" "" (isJust valueM)
+    [ class_ $ cls <> bool " hidden" "" (isJust valueM)
     , id_ $ wid <> "Value"
     ]
     $ whenJust valueM toHtml

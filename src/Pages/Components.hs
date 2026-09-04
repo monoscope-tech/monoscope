@@ -49,7 +49,11 @@ emptyState_ cfg title subTxt =
   section_ [class_ $ sectionCls <> " mx-auto text-center flex flex-col gap-3 empty-state"] do
     div_ [] $ faSprite_ (fromMaybe "empty" cfg.icon) "regular" iconCls
     div_ [class_ "flex flex-col gap-1.5"] do
-      h2_ [class_ titleCls] $ toHtml title
+      -- p, not h2: an empty state announces a condition, it does not open a document
+      -- section. As an h2 it outranked the page's own subject heading in the outline
+      -- (a screen reader heard "No stack trace in this event" before the issue title).
+      -- titleCls is unchanged, so nothing moves visually.
+      p_ [class_ titleCls] $ toHtml title
       unless (T.null subTxt) $ p_ [class_ "text-sm text-textWeak max-w-md mx-auto"] $ toHtml subTxt
       case cfg.action of
         ESNone -> pass

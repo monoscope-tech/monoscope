@@ -252,6 +252,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
             _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
             _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
           (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
+      stateEvent <- enriching "latest_state_event" Nothing $ Issues.selectLatestStateEvent issue.id
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
         Nothing -> pure False
@@ -288,7 +289,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       -- 504'd the whole issue. The Investigation panel now pulls it as its own
       -- HTMX fragment, and the only thing this page still needs from the trace is
       -- the session id for the replay section — one scalar, not 1300 rows.
-      tracedSession <- flip foldMapM mTraceRef \(tId, tTs) ->
+      tracedSession <- enriching "replay_session_id" Nothing $ flip foldMapM mTraceRef \(tId, tTs) ->
         Hasql.withHasqlTimefusion useTf
           $ listToMaybe @Text
           <$> Hasql.interp
@@ -304,26 +305,45 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       -- only once a recording exists. A non-UUID session key (backend SDKs
       -- without setSession, where the session is derived from user identity)
       -- can never have one, so it never reaches the lookup.
-      replaySession <- flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
+      replaySession <- enriching "replay_recording" Nothing $ flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
       sampleOverride <-
-        if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
-          then do
-            let pidTxt = pid.toText
-                patHash = "pat:" <> issue.targetHash
-                from = fromMaybe (addUTCTime (-3600) now) rangeStart
-                to = fromMaybe now rangeEnd
-            listToMaybe @(V.Vector Text)
-              <$> Hasql.interp
-                [HI.sql| SELECT summary FROM otel_logs_and_spans
+        enriching "log_pattern_sample" Nothing
+          $ if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
+            then do
+              let pidTxt = pid.toText
+                  patHash = "pat:" <> issue.targetHash
+                  from = fromMaybe (addUTCTime (-3600) now) rangeStart
+                  to = fromMaybe now rangeEnd
+              listToMaybe @(V.Vector Text)
+                <$> Hasql.interp
+                  [HI.sql| SELECT summary FROM otel_logs_and_spans
                           WHERE project_id = #{pidTxt}
                             AND timestamp BETWEEN #{from} AND #{to}
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
-          else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp sampleOverride
+            else pure Nothing
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp sampleOverride stateEvent
+
+
+-- | Run a lookup that only decides whether an *optional* panel renders, degrading
+-- to @fallback@ if it throws rather than taking the page with it.
+--
+-- All three call sites read TimeFusion or the replay table to enrich the issue
+-- page; none of them is the page. A transient TF connection error used to
+-- propagate out of the session-id lookup and return a bare 500 for the whole
+-- issue — a failure that lands precisely when TF is degraded, which is when
+-- someone is most likely reading about an incident. @anomalyDetailCore@ already
+-- states the principle in its own comments ("the trace is supporting evidence,
+-- not the page"); this makes it true of the queries as well as the rendering.
+enriching :: Text -> a -> ATAuthCtx a -> ATAuthCtx a
+enriching what fallback act =
+  trySync act
+    >>= either
+      (\e -> fallback <$ Log.logAttention "ISSUE_DETAIL_OPTIONAL_LOOKUP_FAILED" (AE.object ["lookup" AE..= what, "error" AE..= show @Text e]))
+      pure
 
 
 -- | Recover a monitor id from @QueryAlertData.queryId@.
@@ -592,7 +612,10 @@ detailCard_ :: Maybe Text -> CardCfg -> Text -> Html () -> Html ()
 detailCard_ iconM cfg title body = div_ ([class_ $ "surface-raised rounded-2xl overflow-hidden " <> fromMaybe "" cfg.wrapCls] <> cfg.attrs) do
   div_ [class_ $ fromMaybe "px-4 py-3 border-b border-strokeWeak flex items-center gap-2" cfg.headCls] do
     whenJust iconM \ic -> faSprite_ ic "regular" "w-3.5 h-3.5 text-textWeak"
-    span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml title
+    -- h3, not span: Stack Trace / Threshold Breach / Log Pattern / Sample Message are
+    -- the page's evidence sections, and had no heading role at all, so none of them was
+    -- reachable by heading navigation. The classes are unchanged, so nothing moves.
+    h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml title
     sequence_ cfg.trailing
   maybe body (\c -> div_ [class_ c] body) cfg.bodyCls
 
@@ -629,24 +652,29 @@ issueFactRow_ now issue (firstSeen, lastSeen) =
 -- notifications. The whole point of the ack window is that a reader never has
 -- to guess whether alerts are still coming.
 issueStatusStrip_ :: UTCTime -> Issues.Issue -> Html ()
-issueStatusStrip_ now issue = whenJust banner \(icon, cls, msg) ->
+issueStatusStrip_ now issue = forM_ banners \(icon, cls, msg) ->
   div_ [class_ $ "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm " <> cls] do
     faSprite_ icon "regular" "w-4 h-4 shrink-0"
     span_ [] $ toHtml msg
   where
-    banner
-      | isJust issue.archivedAt = Just ("archive", "border-strokeWeak bg-fillWeaker text-textWeak", "Archived — hidden from the Inbox and never notified. Unarchive to bring it back." :: Text)
-      | Just until' <- zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt =
-          Just ("bell-slash", "border-strokeSuccess-weak bg-fillSuccess-weak text-textSuccess", untilLabel "Acknowledged" now until' <> " \x2014 notifications are paused. This issue returns to the Inbox when the window ends or it regresses.")
-      | otherwise = Nothing
+    -- Archived and acknowledged are independent, and an issue can be both. This used
+    -- to short-circuit on archived, so a both-states issue showed only the archive
+    -- banner while the action bar still offered "Unacknowledge" for a state the page
+    -- never mentioned. Each true clause now renders.
+    ackUntil = zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt
+    banners =
+      catMaybes
+        [ ("archive", "border-strokeWeak bg-fillWeaker text-textWeak", "Archived — hidden from the Inbox and never notified. Unarchive to bring it back." :: Text) <$ issue.archivedAt
+        , ackUntil <&> \until' -> ("bell-slash", "border-strokeSuccess-weak bg-fillSuccess-weak text-textSuccess", untilLabel "Acknowledged" now until' <> " \x2014 notifications are paused. This issue returns to the Inbox when the window ends or it regresses.")
+        ]
 
 
 -- | @traceRef@ is the (trace id, when-it-happened) the Investigation panel loads
 -- its waterfall from — the panel fetches it itself, so a slow trace can't hold up
 -- this page. @replaySession@ is the one value the page still needs out of that
 -- trace, resolved by a scalar lookup rather than by reading every span.
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
-anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOverride = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Maybe Issues.IssueEvent -> Html ()
+anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOverride stateEvent = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
@@ -654,7 +682,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
     div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
       -- Header: title
       issueStatusStrip_ now issue
-      h3_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+      -- h2: the page shell's breadcrumb already owns h1. This was an h3 sitting
+      -- \*below* empty-state h2s, so a screen reader heard "No stack trace in this
+      -- event" outrank the incident it was reporting.
+      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
       unless (Issues.isBoilerplateAction issue.recommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
@@ -675,6 +706,9 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge_ (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
+        -- "This was fixed and came back" is the most consequential thing an on-call
+        -- reader can learn, and it used to survive only in the list they came from.
+        issueStateBadge_ stateEvent
         case Issues.issuePayload issue of
           -- Only what is peculiar to the type belongs here. Service, environment and
           -- first/last seen are common to every issue and live in the fact row below.
@@ -723,11 +757,17 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 -- because `naked` suppresses the widget's. Same number as the chart
                 -- by construction — there is no second query to disagree with it.
                 picker = div_ [class_ "flex items-center gap-2"] do
-                  Widget.widgetValueSlot_ "" chartId Nothing
                   TimePicker.timepicker_ (Just refreshId) currentRange Nothing
                   TimePicker.refreshButton_
+                -- Sentry and Datadog both make this the largest number on the page; it
+                -- shipped as a grey pill smaller than the time picker beside it. It sits
+                -- at the header's left edge now, labelled, so "how bad is this" is
+                -- answered before the reader reaches the chart.
+                total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
+                  span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
+                  Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
             div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
-            detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-strokeWeak", trailing = Just picker} chartTitle
+            detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto"] picker)} chartTitle
               $ div_ [class_ heightCls]
               $ Widget.widget_
                 (def :: Widget.Widget)
