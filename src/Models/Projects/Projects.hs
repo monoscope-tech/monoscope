@@ -666,11 +666,15 @@ newtype CustomerId = CustomerId {unCustomerId :: Text}
   deriving newtype (Eq, HI.EncodeValue, Show)
 
 
-updateProjectPricing :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> V.Vector Text -> Eff es Int64
--- billing_provider inferred from the sub_id shape (same source as the webhooks/backfill):
+-- | billing_provider inferred from the sub_id shape (same source as the webhooks/backfill):
 -- this shared onboarding path carries a real LemonSqueezy sub_id (numeric) for paid plans and "" for Free/Open Source.
-updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)} where id=#{pid};|]
+--
+-- Does /not/ touch @onboarding_steps_completed@: it used to take the caller's already-read
+-- vector and write the whole array back, which lost any step recorded in between. Callers
+-- that also complete a step call 'completeOnboardingStep' alongside this.
+updateProjectPricing :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
+updateProjectPricing pid paymentPlan subId firstSubItemId orderId =
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)} where id=#{pid};|]
 
 
 -- | Mark an onboarding step complete, idempotently and atomically.

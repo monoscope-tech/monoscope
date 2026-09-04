@@ -101,7 +101,7 @@ import Servant.Server (err302, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
-import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
+import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1404,8 +1404,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
-      newStepsComp = insertIfNotExist "Pricing" project.onboardingStepsCompleted
-      updatePricing name sid fid oid = Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid) newStepsComp
+      updatePricing name sid fid oid = do
+        n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
+        n <$ Projects.completeOnboardingStep pid "Pricing"
       handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName

@@ -47,7 +47,7 @@ import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -255,7 +255,8 @@ onboardingInfoPostH pid form = do
           , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
           ]
       userId = sess.user.id
-  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes},onboarding_steps_completed=#{insertIfNotExist "Info" project.onboardingStepsCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName},questions=#{jsonBytes} where id=#{pid} |]
+  markStepCompleted pid "Info"
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
@@ -270,7 +271,8 @@ onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (Re
 onboardingConfPostH pid form = do
   (_, project) <- Projects.sessionAndProject pid
   let jsonBytes = mergeQuestions project.questions [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
-  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{insertIfNotExist "Survey" project.onboardingStepsCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes} where id=#{pid} |]
+  markStepCompleted pid "Survey"
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 

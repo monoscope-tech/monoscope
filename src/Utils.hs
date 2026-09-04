@@ -23,7 +23,6 @@ module Utils (
   formatUTCMicros,
   fmtDate,
   encodeText,
-  insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
   lookupVecNonEmptyText,
@@ -860,12 +859,6 @@ parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
         t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
         disp = fmtDate "%F %T"
      in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
-
-
-insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
-insertIfNotExist x vec
-  | x `V.elem` vec = vec
-  | otherwise = V.snoc vec x
 
 
 -- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,

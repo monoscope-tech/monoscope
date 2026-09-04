@@ -274,9 +274,23 @@ stripeBillingTests = do
     map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_test123"]
 
   it "deleteProject cancels the project's LemonSqueezy subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test") V.empty
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test")
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
     map fst reqs `shouldContain` ["https://api.lemonsqueezy.com/v1/subscriptions/987654"]
+
+  -- Regression: onboarding steps were recorded by reading the project's array, appending
+  -- the new step in Haskell, and writing the whole array back. A step completed between
+  -- that read and that write was silently discarded. 'completeOnboardingStep' appends in
+  -- a single statement; no caller may hand a snapshot back.
+  it "a pricing update keeps an onboarding step recorded after it read the project" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    -- pricingUpdateH reads the project first, so its snapshot is the steps as of here
+    -- (empty). Another path completes a step before the pricing write lands.
+    _ <- runQueryEffect tr $ Projects.completeOnboardingStep testPid "explored_logs"
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "Free") (Projects.SubId "") (Projects.SubItemId "") (Projects.OrderId "")
+    _ <- runQueryEffect tr $ Projects.completeOnboardingStep testPid "Pricing"
+    steps <- runQueryEffect tr $ maybe [] (V.toList . (.onboardingStepsCompleted)) <$> Projects.projectById testPid
+    steps `shouldContain` ["Pricing"]
+    steps `shouldContain` ["explored_logs"]
 
   it "deleteProject issues no cancellation for an unbilled project" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
