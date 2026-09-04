@@ -185,15 +185,36 @@ computeDurationChanges current prev = V.map compute current
 -- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
 -- row so both the request handlers and the weekly-report background job render the same email;
 -- @reportUrl@ is host-relative.
+-- | The report window's start and end day, rendered in the *project's* timezone rather
+-- than the server's. An unknown or empty zone falls back to UTC.
+--
+-- Extracted from 'renderWeeklyEmail' so the invariant can be pinned: the same UTC instant
+-- must label differently either side of a zone's midnight, or a customer in Auckland gets
+-- an email dated a day behind the week it covers.
+--
+-- >>> reportDayLabels "Pacific/Auckland" (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")
+-- ("2026-03-02","2026-03-09")
+--
+-- >>> reportDayLabels "UTC" (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")
+-- ("2026-03-01","2026-03-08")
+--
+-- Empty and unrecognised zones both fall back to UTC rather than failing:
+--
+-- >>> map (\z -> fst $ reportDayLabels z (read "2026-03-01 20:00:00 UTC") (read "2026-03-08 20:00:00 UTC")) ["", "Not/AZone"]
+-- ["2026-03-01","2026-03-01"]
+reportDayLabels :: Text -> UTCTime -> UTCTime -> (Text, Text)
+reportDayLabels zone startTime endTime =
+  let tz = fromMaybe utcTZ $ TZ.tzByName $ encodeUtf8 $ if T.null zone then "UTC" else zone
+      label = show . localDay . utcToLocalTimeTZ tz
+   in (label startTime, label endTime)
+
+
 renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Eff es (Text, Text, Text)
 renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
   let pid = project.id
-      tzName = if T.null project.timeZone then "UTC" else project.timeZone
-      tz = fromMaybe utcTZ $ TZ.tzByName (encodeUtf8 tzName)
       reportUrl' = hostPath ctx.env.hostUrl reportUrl
-      dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
-      dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
+      (dayStart, dayEnd) = reportDayLabels project.timeZone startTime endTime
       stmTxt = formatUTCMicros startTime
       endTxt = formatUTCMicros endTime
       (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
