@@ -661,7 +661,7 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Alerts.Alert)
-  , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
+  , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Testing.MonitorBulkAction :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   }
   deriving stock (Generic)
 

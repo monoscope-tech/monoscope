@@ -16,6 +16,7 @@ module Pages.Monitors (
   unifiedMonitorOverviewH,
   teamAlertsGetH,
   alertBulkActionH,
+  MonitorBulkAction (..),
   alertMuteH,
   alertUnmuteH,
   alertResolveH,
@@ -60,6 +61,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -69,6 +71,7 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -386,21 +389,54 @@ teamAlertsGetH pid teamId = do
   addRespHeaders $ TableRows [] alerts' False Nothing Nothing Nothing
 
 
-alertBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
+-- | A bulk action on the monitors list.
+--
+-- This was 'Text', matched against six string literals with a @_ -> pass@ fall-through —
+-- so an unknown action returned 200 and fired the list-refresh event while doing nothing,
+-- and the UI reported success. The action URLs are *generated* by 'bulkActionsFor', so
+-- producer and consumer were two literal lists that had to agree by hand. Capturing this
+-- in the route makes Servant reject an unknown action and the dispatch exhaustive.
+--
+-- The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound]
+-- ["deactivate","reactivate","mute","unmute","resolve","delete"]
+data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
+
+
+bulkActionSlug :: MonitorBulkAction -> Text
+bulkActionSlug = toText . encodeEnumSC @"BA"
+
+
+-- | Which tab to land on after a bulk action — deactivating moves the monitors to
+-- Inactive, everything else leaves them on Active. Spelled out rather than defaulted so a
+-- new action has to state where the user ends up instead of silently landing on Active.
+tabAfter :: MonitorBulkAction -> MonitorTab
+tabAfter = \case
+  BADeactivate -> TabInactive
+  BAReactivate -> TabActive
+  BAMute -> TabActive
+  BAUnmute -> TabActive
+  BAResolve -> TabActive
+  BADelete -> TabActive
+
+
+alertBulkActionH :: Projects.ProjectId -> MonitorBulkAction -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 alertBulkActionH pid action form = do
   _ <- Projects.sessionAndProject pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
     case action of
-      "deactivate" -> void $ Monitors.monitorDeactivateByIds pid monitorIds
-      "reactivate" -> void $ Monitors.monitorReactivateByIds pid monitorIds
-      "mute" -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
-      "unmute" -> void $ Monitors.monitorUnmuteByIds pid monitorIds
-      "resolve" -> void $ Monitors.monitorResolveByIds pid monitorIds
-      "delete" -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
-      _ -> pass
+      BADeactivate -> void $ Monitors.monitorDeactivateByIds pid monitorIds
+      BAReactivate -> void $ Monitors.monitorReactivateByIds pid monitorIds
+      BAMute -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
+      BAUnmute -> void $ Monitors.monitorUnmuteByIds pid monitorIds
+      BAResolve -> void $ Monitors.monitorResolveByIds pid monitorIds
+      BADelete -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
-  unifiedMonitorsGetH pid (Just $ bool "Active" "Inactive" (action == "deactivate")) Nothing
+  unifiedMonitorsGetH pid (Just $ monitorTabSlug $ tabAfter action) Nothing
 
 
 unifiedMonitorsGetH
@@ -558,15 +594,15 @@ bulkActionsFor tab pid =
   let bulkBase = "/p/" <> pid.toText <> "/monitors/alerts/bulk_action/"
    in case tab of
         TabActive ->
-          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> "deactivate")
-          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> "mute")
-          , BulkAction (Just "bell") "Unmute" (bulkBase <> "unmute")
-          , BulkAction (Just "check") "Resolve" (bulkBase <> "resolve")
-          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
+          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> bulkActionSlug BADeactivate)
+          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> bulkActionSlug BAMute)
+          , BulkAction (Just "bell") "Unmute" (bulkBase <> bulkActionSlug BAUnmute)
+          , BulkAction (Just "check") "Resolve" (bulkBase <> bulkActionSlug BAResolve)
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
           ]
         TabInactive ->
-          [ BulkAction (Just "play") "Reactivate" (bulkBase <> "reactivate")
-          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
+          [ BulkAction (Just "play") "Reactivate" (bulkBase <> bulkActionSlug BAReactivate)
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
           ]
 
 
