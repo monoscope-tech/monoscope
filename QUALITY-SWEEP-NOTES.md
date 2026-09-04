@@ -1701,6 +1701,16 @@ four, and do not read a zero from one as an answer from all.
 | **Literal grep** — take a type's wire strings, grep the tree | per enum, after the type exists | `allChannels`; the nav's hardcoded tab strings; the sort dropdown | operations that share no literal |
 | **SQL by (operation, table)** — group every query by what it touches | regex over `[sql\| …\|]` | the onboarding lost-update race; three disagreeing archive paths | anything not expressed as SQL |
 
+**Two more dead ends, same cause as the type-signature lens.** *Grouping constants by
+value*: 15 values are bound to differently-named constants in different modules, all
+coincidental — `= 3` is simultaneously an alert-family minimum, a batch size, a resolver
+hop limit, an envelope version, a mask affix length and a widget width. *Inline numeric
+thresholds*: 106 occurrences of 42 distinct values, all self-documenting — `200`/`400`/
+`500` are HTTP statuses in a colour mapper, `60`/`3600`/`86400` are time-unit conversions,
+`768` is the Tailwind `md` breakpoint. Same failure as matching on type: **a value is not a
+concept.** Both scans do incidentally confirm good practice — thresholds here are named
+constants or self-evident literals, not scattered magic numbers.
+
 **Route surface: clean.** 279 route declarations in `Web/Routes.hs`; **zero** share both a
 path and a verb. The 23 paths declared more than once are all correct REST — `Get`/`Put`/
 `Patch`/`Delete` on the same resource. No redundant endpoints to remove; the surface is
