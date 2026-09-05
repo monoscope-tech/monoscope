@@ -69,6 +69,7 @@ module Models.Telemetry.Telemetry (
   mintOtelLogIds,
   getMetricChartListData,
   getMetricCatalogPage,
+  getMetricGroups,
   MetricCatalogPage (..),
   getTraceShapes,
   getMetricServiceNames,
@@ -1209,29 +1210,55 @@ data MetricCatalogRow = MetricCatalogRow
 
 -- @withInactive@ is False for scroll-in pages: the inactive list is only rendered on the
 -- first page, so later pages must not carry it back.
-getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogPage
-getMetricCatalogPage pid sourceM prefixM cutoff limit offset withInactive = do
+getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogPage
+getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive = do
+  -- Select names before expanding labels. Scroll requests only aggregate labels for
+  -- their own page, rather than every metric in the project.
   rows <-
     Hasql.interp
-      $ metricCatalogAggSql pid sourceM prefixM
-      <> [HI.sql|,
-      act AS (SELECT * FROM catalog WHERE last_seen >= #{cutoff}),
-      tot AS (SELECT COUNT(*)::int8 AS n FROM act)
-      -- The page and the inactive tail come back in one result set, tagged, rather than as
-      -- two queries that would each pay for the aggregate again.
-      SELECT metric_name, metric_type, metric_unit, metric_description, last_seen, labs, TRUE, (SELECT n FROM tot)
-      FROM (SELECT * FROM act ORDER BY metric_name LIMIT #{limit} OFFSET #{offset}) p
-      UNION ALL
-      SELECT metric_name, metric_type, metric_unit, metric_description, last_seen, labs, FALSE, (SELECT n FROM tot)
-      FROM catalog WHERE #{withInactive} AND last_seen < #{cutoff} |]
+      $ [HI.sql| WITH scoped AS NOT MATERIALIZED (
+      SELECT * FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
+      <> maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
+      <> maybe mempty (\prefix -> [HI.sql| AND starts_with(metric_name, #{prefix})|]) (selected prefixM)
+      <> maybe mempty (\query -> [HI.sql| AND strpos(lower(metric_name), lower(#{query})) > 0 |]) (mfilter (not . T.null) $ T.strip <$> queryM)
+      <> [HI.sql| ), meta AS (
+      SELECT metric_name, MAX(metric_type) AS metric_type, MAX(metric_unit) AS metric_unit,
+        MAX(metric_description) AS metric_description, MAX(last_seen_at) AS last_seen
+      FROM scoped GROUP BY metric_name
+    ), act AS (SELECT * FROM meta WHERE last_seen >= #{cutoff}),
+    page AS (SELECT * FROM act ORDER BY metric_name LIMIT #{limit} OFFSET #{offset}),
+    labels AS (
+      SELECT metric_name, ARRAY_AGG(DISTINCT label ORDER BY label) FILTER (WHERE label IS NOT NULL) AS labs
+      FROM scoped JOIN (SELECT metric_name FROM page UNION ALL SELECT metric_name FROM meta WHERE #{withInactive} AND last_seen < #{cutoff}) selected USING (metric_name)
+      LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE GROUP BY metric_name
+    )
+    SELECT page.metric_name, metric_type, metric_unit, metric_description, last_seen,
+      COALESCE(labs, '{}'::text[]), TRUE, (SELECT COUNT(*)::int8 FROM act)
+    FROM page LEFT JOIN labels USING (metric_name)
+    UNION ALL
+    SELECT metric_name, metric_type, metric_unit, metric_description, last_seen,
+      COALESCE(labs, '{}'::text[]), FALSE, (SELECT COUNT(*)::int8 FROM act)
+    FROM meta LEFT JOIN labels USING (metric_name) WHERE #{withInactive} AND last_seen < #{cutoff}
+    ORDER BY 7 DESC, 1 |]
   let metric :: MetricCatalogRow -> MetricChartListData
       metric r = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
   pure
     MetricCatalogPage
       { active = V.fromList $ metric <$> filter (.isActive) rows
-      , inactive = V.fromList $ sortOn (.metricName) $ metric <$> filter (not . (.isActive)) rows
+      , inactive = V.fromList $ metric <$> filter (not . (.isActive)) rows
       , activeTotal = maybe 0 (fromIntegral . (.activeTotal)) $ viaNonEmpty head rows
       }
+  where
+    selected = mfilter (`notElem` ["", "all"])
+
+
+-- Groups come from the catalog, independently of the currently displayed page.
+getMetricGroups :: DB es => Projects.ProjectId -> Eff es [Text]
+getMetricGroups pid =
+  Hasql.interp
+    [HI.sql|
+  SELECT DISTINCT COALESCE(substring(metric_name from '^[^._]+[._]'), metric_name) AS prefix
+  FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} ORDER BY prefix |]
 
 
 -- | Service names for the metric-source picker, filtered and capped server-side. A project

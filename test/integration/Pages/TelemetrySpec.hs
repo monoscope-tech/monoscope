@@ -10,7 +10,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Lucid qualified
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Numeric (showHex)
@@ -46,9 +46,9 @@ spec = do
       ingestMetric tr apiKey [] [] "datapoint.stale" 1 (addUTCTime (-7200) frozenTime)
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
 
-      (_, overview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, overview) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case overview of
-        Trace.MetricsOVDataPointMain (PageCtx _ (_, datapoints, _, countUrl, page, pageUrl)) -> do
+        Trace.MetricsOVDataPointMain (PageCtx _ (_, datapoints, _, countUrl, page, pageUrl, _)) -> do
           countUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics/datapoints/counts?since=1H"
           page `shouldBe` 0
           pageUrl `shouldBe` "/p/" <> testPid.toText <> "/metrics?tab=datapoints&since=1H"
@@ -57,7 +57,7 @@ spec = do
           Map.lookup "datapoint.stale" counts `shouldBe` Just Nothing
         _ -> expectationFailure "expected the datapoints overview"
 
-      (_, expanded) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing
+      (_, expanded) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing (Just "datapoint.current") Nothing Nothing Nothing
       let overviewHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml overview
           drawerMarkup = T.take 200 $ snd $ T.breakOn "id=\"global-data-drawer\"" $ LT.toStrict $ Lucid.renderText $ Lucid.toHtml expanded
       T.count "placeholder=\"Search metrics\"" overviewHtml `shouldBe` 1
@@ -86,7 +86,7 @@ spec = do
                 (testPid, svc :: Text)
       for_ ["source-1", "source-2", "source-3", "source-4"] seedSvc
 
-      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       for_ ["source-1", "source-2", "source-3", "View 1 more source in details", metricDetailUrl testPid "source.overflow" "all" Nothing] \text -> pageHtml `shouldSatisfy` T.isInfixOf text
       pageHtml `shouldSatisfy` not . T.isInfixOf "source-4"
@@ -105,7 +105,7 @@ spec = do
                 (testPid, "page.metric." <> show n :: Text)
       for_ ([1 .. 30] :: [Int]) seed
 
-      (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, firstPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let firstHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml firstPage
       firstHtml `shouldSatisfy` not . T.isInfixOf "page.metric.30"
       -- `&amp;`, not `&`: this is the pager's rendered href, and Lucid escapes the
@@ -113,7 +113,7 @@ spec = do
       -- the per-row `…&cursor=0&expand=…` hrefs.
       firstHtml `shouldSatisfy` T.isInfixOf "&amp;cursor=1\""
 
-      (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing
+      (_, secondPage) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml secondPage) `shouldSatisfy` T.isInfixOf "page.metric.30"
 
   around withTestResources $ describe "metric details" do
@@ -294,17 +294,62 @@ spec = do
       forM_ ["z.old.one", "z.old.two"] (`seedAt` stale)
 
       -- Page 1: two of five active, the full active count, and every inactive metric.
-      p1 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing cutoff 2 0 True
+      p1 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 0 True
       map (.metricName) (V.toList p1.active) `shouldBe` ["a.five", "a.four"]
       p1.activeTotal `shouldBe` 5
       map (.metricName) (V.toList p1.inactive) `shouldBe` ["z.old.one", "z.old.two"]
 
       -- Page 2 continues the same ordering and reports the same total...
-      p2 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing cutoff 2 2 False
+      p2 <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing Nothing cutoff 2 2 False
       map (.metricName) (V.toList p2.active) `shouldBe` ["a.one", "a.three"]
       p2.activeTotal `shouldBe` 5
       -- ...but must NOT drag the inactive tail along on every scroll request.
       map (.metricName) (V.toList p2.inactive) `shouldBe` []
+
+    it "searchesBeforePagination_andTreatsSearchCharactersLiterally" \tr -> do
+      let seed name service labels =
+            withPool tr.trPool
+              $ void
+              $ DBT.execute
+                [sql| INSERT INTO otel_metrics_meta
+              (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,
+               metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
+              VALUES (?,?,'GAUGE','1','search fixture',?,'test',?,now(),now(),now(),now()) |]
+                (testPid, name :: Text, service :: Text, PGArray (labels :: [Text]))
+          cutoff = addUTCTime (-(7 * 24 * 3600)) frozenTime
+      seed "a.unrelated" "billing" []
+      seed "runtime.one" "checkout" ["attributes.region"]
+      seed "runtime.two" "checkout" ["attributes.zone"]
+      seed "runtime.two" "billing" ["attributes.other"]
+      seed "literal%_&+" "checkout" []
+      firstMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 0 False
+      secondMatch <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid (Just "checkout") Nothing (Just "RUNTIME") cutoff 1 1 False
+      firstMatch.activeTotal `shouldBe` 2
+      map (.metricName) (V.toList firstMatch.active) `shouldBe` ["runtime.one"]
+      map (.metricName) (V.toList secondMatch.active) `shouldBe` ["runtime.two"]
+      map (.metricLabels) (V.toList secondMatch.active) `shouldBe` [V.singleton "attributes.zone"]
+      literal <- runTestBg frozenTime tr $ Telemetry.getMetricCatalogPage testPid Nothing Nothing (Just "%_&+") cutoff 12 0 False
+      map (.metricName) (V.toList literal.active) `shouldBe` ["literal%_&+"]
+      groups <- runTestBg frozenTime tr $ Telemetry.getMetricGroups testPid
+      groups `shouldContain` ["runtime."]
+      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing (Just "6H") Nothing Nothing Nothing Nothing Nothing (Just "%_&+") Nothing
+      let markup = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      markup `shouldSatisfy` T.isInfixOf "q=%25_%26%2B"
+      markup `shouldSatisfy` not . T.isInfixOf "a.unrelated"
+
+    it "metricCharts_preserveServiceScope_andDoNotSumDistributionMeans" \tr -> do
+      withPool tr.trPool
+        $ void
+        $ DBT.execute
+          [sql| INSERT INTO otel_metrics_meta
+          (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,
+           metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
+          VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test',ARRAY['attributes.region'],now(),now(),now(),now()) |]
+          (Only testPid)
+      (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" Nothing (Just "checkout")
+      let markup = LT.toStrict $ Lucid.renderText card
+      for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count > 0", "resource.service.name", "checkout", "hideValue: true", "All values"] \text ->
+        markup `shouldSatisfy` T.isInfixOf text
 
     -- The service filter used to render every service as an <option> (2.3k of them, ~117KB
     -- of HTML, on the demo project). It is now searched and capped server-side.
@@ -336,7 +381,7 @@ spec = do
       optsHtml `shouldSatisfy` T.isInfixOf "All Services"
 
       -- The page itself ships the picker, not the services.
-      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Trace.metricsOverViewGetH testPid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let pageHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       pageHtml `shouldSatisfy` T.isInfixOf "/metrics/services"
       pageHtml `shouldSatisfy` T.isInfixOf "gap-x-4 gap-y-5 pb-4"

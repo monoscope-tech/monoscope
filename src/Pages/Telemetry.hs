@@ -69,15 +69,40 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
+-- Shared URL/form state: search is applied before pagination in both views.
+data MetricFilters = MetricFilters
+  { source :: Text
+  , prefix :: Text
+  , query :: Text
+  , timeParams :: [(Text, Text)]
+  , groups :: [Text]
+  }
+
+
+metricPageUrl :: Projects.ProjectId -> Text -> MetricFilters -> Text
+metricPageUrl pid tab filters =
+  "/p/"
+    <> pid.toText
+    <> "/metrics?tab="
+    <> tab
+    <> foldMap
+      (\(k, v) -> "&" <> k <> "=" <> toUriStr v)
+      (filters.timeParams <> [(k, v) | (k, v) <- [("metric_source", filters.source), ("metric_prefix", filters.prefix)], v /= "all", not $ T.null v] <> [("q", filters.query) | not $ T.null filters.query])
+
+
+hasMetricFilters :: MetricFilters -> Bool
+hasMetricFilters filters = filters.source /= "all" || filters.prefix /= "all" || not (T.null filters.query)
+
+
 data MetricsOverViewGet
-  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int), Text, Int, Text))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, Text, Text, Int, Maybe Text))
+  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int), Text, Int, Text, MetricFilters))
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, MetricFilters, Int, Maybe Text))
   | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
-  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts, countsUrl, page, pageUrl))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts countsUrl page pageUrl
-  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, source, prefix, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive source prefix activeCount nextUrl
+  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts, countsUrl, page, pageUrl, filters))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts countsUrl page pageUrl filters
+  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, filters, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive filters activeCount nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, labels, source, nextUrl)) = toHtml $ chartList pid labels source mList nextUrl
   toHtmlRaw = toHtml
 
@@ -264,9 +289,8 @@ instance ToHtml TraceDetailsGet where
 
 
 -- Metrics handlers
-metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricsOverViewGet)
-metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM labelM = do
-  ctx <- Reader.ask @AuthContext
+metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> ATAuthCtx (RespHeaders MetricsOverViewGet)
+metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM labelM queryM appendM = do
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let dataPointsTab = any (/= "charts") tabM
@@ -287,11 +311,28 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
           }
+  groups <- if appendM == Just True then pure [] else Telemetry.getMetricGroups pid
+  let filters =
+        MetricFilters
+          (fromMaybe "all" sourceM)
+          (fromMaybe "all" prefixM)
+          (T.strip $ fromMaybe "" queryM)
+          [(k, v) | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)]]
+          groups
   if dataPointsTab
     then do
       -- Catalogue only: a page load must not wait on a COUNT over otel_metrics. The counts
       -- arrive from 'dataPointCountsGetH' once the table is on screen.
-      dataPoints <- Telemetry.getDataPointsData Telemetry.CatalogOnly pid
+      catalog <- Telemetry.getDataPointsData Telemetry.CatalogOnly pid
+      let dataPoints =
+            filter
+              ( \m ->
+                  (filters.source == "all" || filters.source `V.elem` m.serviceNames)
+                    && (filters.prefix == "all" || filters.prefix `T.isPrefixOf` m.metricName)
+                    && T.toCaseFold filters.query
+                    `T.isInfixOf` T.toCaseFold m.metricName
+              )
+              catalog
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
       monitors <- Monitors.queryMonitorsAll pid
       drawerM <- forM expandM \metricName -> do
@@ -301,35 +342,33 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
           page = max 0 $ fromMaybe 0 cursorM
           countParams = T.intercalate "&" [k <> "=" <> v | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)] :: [(Text, Maybe Text)]]
-          pageUrl = "/p/" <> pid.toText <> "/metrics?tab=datapoints&" <> countParams
+          pageUrl = metricPageUrl pid "datapoints" filters
           countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> countParams
           bwconf' = bwconf{globalDrawerContent = join drawerM}
-      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, page, pageUrl)
+      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, page, pageUrl, filters)
     else do
-      let cursor = fromMaybe 0 cursorM
+      let cursor = max 0 $ fromMaybe 0 cursorM
           cutoff = addUTCTime (-(7 * 24 * 3600)) now
           pageSize = 12
       -- Only the requested page comes back, not the whole catalogue. The inactive tail rides
       -- along in the same result set because it falls out of the same aggregate.
-      page <- Telemetry.getMetricCatalogPage pid sourceM prefixM cutoff pageSize cursor (cursor == 0)
+      page <- Telemetry.getMetricCatalogPage pid sourceM prefixM queryM cutoff pageSize cursor (cursor == 0)
       let metricList = page.active
-          params = foldMap (\(k, v) -> foldMap (("&" <> k <> "=") <>) v) ([("metric_source", sourceM), ("from", fromM), ("to", toM), ("since", sinceM), ("metric_prefix", prefixM)] :: [(Text, Maybe Text)])
           nextFetchUrl = do
             guard $ cursor + pageSize < page.activeTotal
-            pure $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> params <> "&cursor=" <> show (cursor + pageSize)
+            pure $ metricPageUrl pid "charts" filters <> "&cursor=" <> show (cursor + pageSize)
       let labels = Map.fromList $ (\metric -> (metric.metricName, metric.metricLabels)) <$> V.toList metricList
-      if cursor == 0
+      if appendM /= Just True
         then do
-          dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
-          monitors <- Monitors.queryMonitorsAll pid
-          -- The full catalogue and the service list are only needed to render an open
-          -- drawer, so they are read inside the `forM` rather than on every page load.
+          -- References are only needed by the drawer, not the chart catalog.
           drawerM <- forM expandM \metricName -> do
+            dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+            monitors <- Monitors.queryMonitorsAll pid
             metricM <- Telemetry.getMetricData pid metricName
             pure $ metricM <&> \metric ->
               metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, page.inactive, fromMaybe "all" sourceM, fromMaybe "all" prefixM, page.activeTotal, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, page.inactive, filters, page.activeTotal, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, labels, fromMaybe "all" sourceM, nextFetchUrl)
 
@@ -354,7 +393,7 @@ metricServicesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCt
 metricServicesGetH pid searchM currentM = do
   void $ Projects.sessionAndProject pid
   services <- Telemetry.getMetricServiceNames pid searchM serviceOptionsLimit
-  addRespHeaders $ serviceOptions_ (fromMaybe "all" currentM) services
+  addRespHeaders $ div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ (fromMaybe "all" currentM) services
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -530,7 +569,7 @@ relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = d
     ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
       div_ [class_ "h-40 rounded-xl border border-strokeWeak p-1"]
         $ toHtml
-        $ (metricWidget pid m.metricName m.metricType m.metricUnit Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
+        $ (metricWidget pid m.metricName m.metricType m.metricUnit service Nothing (Just m.metricName) (Just $ "rel_" <> T.replace "." "_" m.metricName) Nothing)
           { Widget.timeFrom = Just $ formatUTC lo
           , Widget.timeTo = Just $ formatUTC hi
           , Widget.highlightFrom = Just $ formatUTC subLo
@@ -615,48 +654,43 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
 
 
 -- Metrics UI components
-overViewTabs :: Projects.ProjectId -> Text -> Html ()
-overViewTabs pid tab =
+overViewTabs :: Projects.ProjectId -> MetricFilters -> Text -> Html ()
+overViewTabs pid filters tab =
   div_ [class_ "flex items-center gap-2 shrink-0"] do
     span_ [class_ "text-xs font-medium text-textWeak"] "View"
     div_ [class_ "tabs tabs-box tabs-outline", role_ "tablist", Aria.label_ "Metric view"] do
       let viewTab label view =
-            a_
-              ( [ href_ $ "/p/" <> pid.toText <> "/metrics?tab=" <> view
-                , role_ "tab"
-                , Aria.selected_ $ bool "false" "true" (tab == view)
-                , class_ $ "tab h-8 min-h-8 px-3 text-xs " <> bool "" "tab-active" (tab == view)
-                ]
-                  <> navTabAttrs
-              )
-              label
+            a_ ([href_ $ metricPageUrl pid view filters, role_ "tab", Aria.selected_ $ bool "false" "true" (tab == view), class_ $ "tab h-8 min-h-8 px-3 text-xs " <> bool "" "tab-active" (tab == view)] <> navTabAttrs) label
       viewTab "Charts" "charts"
       viewTab "Table" "datapoints"
 
 
-metricSearch_ :: Text -> Text -> Html ()
-metricSearch_ matchingClass containerId =
-  label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-8 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
-    faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
-    input_
-      [ class_ "grow"
-      , type_ "text"
-      , placeholder_ "Search metrics"
-      , Aria.label_ "Search metrics"
-      , id_ "search-input"
-      , term "_" $ "on input show ." <> matchingClass <> " in #" <> containerId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"
+metricsToolbar_ :: Projects.ProjectId -> Text -> MetricFilters -> Html () -> Html ()
+metricsToolbar_ pid tab filters status =
+  div_ [id_ "metrics-toolbar", class_ "sticky top-0 z-20 bg-bgBase py-2 border-b border-strokeWeak flex flex-wrap items-center gap-3"] do
+    overViewTabs pid filters tab
+    form_
+      [ id_ "metric-filters"
+      , action_ $ "/p/" <> pid.toText <> "/metrics"
+      , method_ "get"
+      , hxGet_ $ "/p/" <> pid.toText <> "/metrics"
+      , hxTarget_ "#main-content"
+      , hxSelect_ "#main-content"
+      , hxSwap_ "outerHTML settle:0 show:top"
+      , hxPushUrl_ "true"
+      , term "hx-sync" "this:replace"
+      , class_ "flex flex-wrap items-center gap-2 grow"
       ]
-
-
-metricsToolbar_ :: Projects.ProjectId -> Text -> Maybe (Html ()) -> Html () -> Text -> Text -> Html ()
-metricsToolbar_ pid tab filters status matchingClass containerId =
-  div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-8 py-1 border-b border-strokeWeak"] do
-    overViewTabs pid tab
-    div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-    whenJust filters \scopeFilters -> do
-      scopeFilters
-      div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-    metricSearch_ matchingClass containerId
+      do
+        input_ [type_ "hidden", name_ "tab", value_ tab]
+        forM_ filters.timeParams \(key, value) -> input_ [type_ "hidden", name_ key, value_ value]
+        servicePicker_ pid filters.source
+        select_ [name_ "metric_prefix", Aria.label_ "Filter by metric group", class_ "select select-sm bg-bgBase max-w-48"] do
+          option_ ([value_ "all"] <> [selected_ "selected" | filters.prefix == "all"]) "All metric groups"
+          forM_ filters.groups \groupPrefix -> option_ ([value_ groupPrefix] <> [selected_ "selected" | filters.prefix == groupPrefix]) $ toHtml $ T.dropWhileEnd (`elem` ['.', '_']) groupPrefix
+        input_ [type_ "search", name_ "q", id_ "search-input", value_ filters.query, placeholder_ "Search metrics", Aria.label_ "Search metrics", class_ "input input-sm grow min-w-32 bg-bgBase"]
+        button_ [type_ "submit", class_ "btn btn-sm"] "Search"
+        when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab filters{source = "all", prefix = "all", query = ""}, class_ "text-sm link"] <> navTabAttrs) "Clear filters"
     status
 
 
@@ -664,111 +698,76 @@ metricsToolbar_ pid tab filters status matchingClass containerId =
 -- the list is searched server-side and capped rather than rendered up front — the options
 -- only exist once the popover is opened, and only the matching ones.
 servicePicker_ :: Projects.ProjectId -> Text -> Html ()
-servicePicker_ pid current = do
-  button_
-    ( [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-8 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus flex items-center"
-      , type_ "button"
-      , Aria.label_ "Filter by service"
-      ]
-        <> popoverTrigger_ "metric-service-picker"
-    )
-    $ span_ [class_ "truncate"]
-    $ toHtml
-    $ if current == "all" then "All Services" else current
-  div_ ([class_ "dropdown bg-bgRaised border border-strokeWeak rounded-lg shadow-lg w-72 p-0"] <> popoverPanel_ "metric-service-picker") do
-    input_
-      [ class_ "input input-sm w-full border-0 border-b border-strokeWeak rounded-none focus:outline-hidden"
-      , type_ "search"
-      , placeholder_ "Search services"
-      , Aria.label_ "Search services"
-      , hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
-      , hxTrigger_ "input changed delay:200ms, load"
-      , hxTarget_ "#metric-service-options"
-      , name_ "q"
-      ]
-    div_ [class_ "max-h-72 overflow-y-auto c-scroll", id_ "metric-service-options"] pass
+servicePicker_ pid current =
+  details_ [class_ "relative", id_ "metric-service-picker"] do
+    summary_ [class_ "btn btn-sm min-w-36", Aria.label_ "Filter by service"] $ toHtml $ if current == "all" then "All Services" else current
+    div_ [class_ "absolute left-0 top-full z-30 w-72 bg-bgRaised border border-strokeWeak rounded-lg shadow-lg p-2"] do
+      input_
+        [ class_ "input input-sm w-full"
+        , type_ "search"
+        , placeholder_ "Search services"
+        , Aria.label_ "Search services"
+        , hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
+        , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
+        , hxTarget_ "#metric-service-options"
+        , hxSwap_ "outerHTML"
+        , hxInclude_ "closest form"
+        , hxSelect_ "#metric-service-options"
+        , hxPushUrl_ "false"
+        , name_ "service_search"
+        ]
+      div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ current (if current == "all" then [] else [current])
+      p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
 
 
 -- | Options for 'servicePicker_'. Rendered by the server so the picker ships no markup
 -- until it is opened.
 serviceOptions_ :: Text -> [Text] -> Html ()
 serviceOptions_ current services = do
-  forM_ ("all" : services) \s ->
-    button_
-      [ class_ $ "w-full text-left px-3 py-1.5 text-sm hover:bg-fillWeak cursor-pointer truncate" <> bool "" " bg-fillWeak font-medium" (s == current)
-      , type_ "button"
-      , onpointerdown_ $ "window.setQueryParamAndReload('metric_source', '" <> s <> "')"
-      ]
-      $ toHtml
-      $ if s == "all" then "All Services" else s
-  when (null services)
-    $ div_ [class_ "px-3 py-4 text-xs text-textWeak"] "No matching services."
-  -- The list is capped; say so rather than silently showing a prefix of the truth.
-  when (length services >= serviceOptionsLimit)
-    $ div_ [class_ "px-3 py-2 text-2xs text-textWeak border-t border-strokeWeak"]
-    $ toHtml
-    $ "Showing the first "
-    <> show @Text serviceOptionsLimit
-    <> " — type to narrow."
+  forM_ (ordNub $ "all" : [current | current /= "all"] <> services) \service ->
+    label_ [class_ "flex items-center gap-2 px-2 py-2 text-sm cursor-pointer hover:bg-fillWeak"] do
+      input_ ([type_ "radio", name_ "metric_source", value_ service, class_ "radio radio-xs"] <> [checked_ | service == current])
+      span_ [class_ "truncate"] $ toHtml $ if service == "all" then "All Services" else service
+  when (null services) $ p_ [class_ "text-xs text-textWeak p-2"] "No matching services."
+  when (length services >= serviceOptionsLimit) $ p_ [class_ "text-xs text-textWeak p-2"] "Showing the first 50 services — type to narrow."
 
 
 serviceOptionsLimit :: Int
 serviceOptionsLimit = 50
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> Text -> Text -> Int -> Maybe Text -> Html ()
-chartsPage pid metricList labels inactive source mFilter activeCount nextUrl =
-  div_
-    [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload:inherited" "false"]
-    do
-      div_ [class_ "w-full"] do
-        let metricNames =
-              ordNub
-                $ ( \x ->
-                      let sep = if "." `T.isInfixOf` x.metricName then "." else "_"
-                       in fst (T.breakOn sep x.metricName) <> sep
-                  )
-                <$> V.toList metricList
-            stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
-            filters =
-              div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
-                span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
-                div_ [class_ "join max-md:w-full"] do
-                  servicePicker_ pid source
-                  select_
-                    [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-8 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
-                    , Aria.label_ "Filter by metric group"
-                    , onchange_ "window.setQueryParamAndReload('metric_prefix', this.value)"
-                    ]
-                    do
-                      option_ ([selected_ "all" | mFilter == "all"] ++ [value_ "all"]) "All metric groups"
-                      forM_ metricNames \o -> option_ ([selected_ o | o == mFilter] ++ [value_ o]) $ toHtml $ stripTrailing o
-        metricsToolbar_
-          pid
-          "charts"
-          (Just filters)
-          (span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d")
-          "metric_filterble"
-          "metric_list_container"
-      if V.null metricList && V.null inactive
-        then
-          div_ [class_ "w-full flex items-center justify-center h-96"]
-            $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
-        else do
-          when (V.null metricList && not (V.null inactive))
-            $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
-          unless (V.null metricList)
-            $ div_ [class_ "w-full grid grid-cols-1 gap-x-4 gap-y-5 pb-4 md:grid-cols-2 lg:grid-cols-3", id_ "metric_list_container"]
-            $ chartList pid labels source metricList nextUrl
-          unless (V.null inactive) $ inactiveMetricsList pid source inactive
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> MetricFilters -> Int -> Maybe Text -> Html ()
+chartsPage pid metricList labels inactive filters activeCount nextUrl =
+  div_ [class_ "flex flex-col gap-4 px-4 pb-4", term "hx-preload:inherited" "false"] do
+    metricsToolbar_ pid "charts" filters
+      $ span_ [class_ "text-xs text-textWeak tabular-nums", role_ "status"]
+      $ toHtml
+      $ show activeCount
+      <> " matching metrics · seen in 7d"
+    if V.null metricList && V.null inactive
+      then
+        if hasMetricFilters filters
+          then div_ [class_ "py-12 text-center"] do
+            p_ [class_ "font-medium"] "No metrics match these filters"
+            a_ ([class_ "link", href_ $ metricPageUrl pid "charts" filters{source = "all", prefix = "all", query = ""}] <> navTabAttrs) "Clear filters"
+          else
+            div_ [class_ "w-full flex items-center justify-center h-96"]
+              $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
+      else do
+        when (V.null metricList && not (V.null inactive))
+          $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
+        unless (V.null inactive) $ inactiveMetricsList pid filters.source inactive
+        unless (V.null metricList)
+          $ div_ [class_ "w-full grid grid-cols-1 gap-x-4 gap-y-5 pb-4 md:grid-cols-2 lg:grid-cols-3", id_ "metric_list_container"]
+          $ chartList pid labels filters.source metricList nextUrl
 
 
 metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricDetailUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?metric_source=" <> source <> maybe "" ("&label=" <>) labelM
+metricDetailUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?metric_source=" <> toUriStr source <> maybe "" (("&label=" <>) . toUriStr) labelM
 
 
 metricExpandUrl :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text
-metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?tab=charts&metric_source=" <> source <> "&expand=" <> metricName <> maybe "" ("&label=" <>) labelM
+metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?tab=charts&metric_source=" <> toUriStr source <> "&expand=" <> toUriStr metricName <> maybe "" (("&label=" <>) . toUriStr) labelM
 
 
 -- | htmx wiring shared by every control that re-renders the metric details drawer.
@@ -800,15 +799,16 @@ spanDetailAttrs_ loading pidT spanUuid ts =
 
 -- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@
 -- carry the per-callsite differences between the chart-list card and the details page.
-metricWidget :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
-metricWidget pid metricName metricType metricUnit mLabel mTitle mId mExpandBtn =
+metricWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
+metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpandBtn =
   def
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = if isDistributionMetricType metricType then (<> " · mean") <$> mTitle else mTitle
-    , Widget.query = Just $ metricQuery metricName metricType mLabel
+    , Widget.query = Just $ metricQuery metricName metricType source mLabel
     , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.eager = Just True
+    , Widget.hideValue = Just True
     , Widget.hideSubtitle = Just True
     , Widget._projectId = Just pid
     , Widget.id = mId
@@ -820,11 +820,11 @@ isDistributionMetricType :: Text -> Bool
 isDistributionMetricType = (`elem` ["HISTOGRAM", "EXPONENTIAL_HISTOGRAM", "SUMMARY"])
 
 
-metricQuery :: Text -> Text -> Maybe Text -> Text
-metricQuery metricName metricType mLabel =
-  "metrics | where metric_name == \""
-    <> metricName
-    <> "\""
+metricQuery :: Text -> Text -> Text -> Maybe Text -> Text
+metricQuery metricName metricType source mLabel =
+  "metrics | where metric_name == "
+    <> encodeText metricName
+    <> (if source == "all" || T.null source then "" else " and resource.service.name == " <> encodeText source)
     <> bool "" " and distribution_count > 0 and distribution_sum != null" isDistribution
     <> " | summarize "
     <> bool "avg(value)" "sum(distribution_sum) / sum(distribution_count)" isDistribution
@@ -838,31 +838,36 @@ chartList :: Projects.ProjectId -> Map Text (V.Vector Text) -> Text -> V.Vector 
 chartList pid labels source metricList nextUrl = do
   forM_ metricList \metric ->
     metricCard pid source metric.metricName metric.metricType metric.metricUnit (fromMaybe V.empty $ Map.lookup metric.metricName labels) Nothing
-  whenJust nextUrl \url ->
-    a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
+  case nextUrl of
+    Nothing -> p_ [class_ "col-span-full py-4 text-center text-xs text-textWeak", role_ "status"] "All matching metrics loaded."
+    Just url ->
+      div_ [id_ "metric-pagination", class_ "col-span-full relative min-h-20 flex items-center justify-center"] do
+        span_ [class_ "absolute -top-96 h-96 w-px pointer-events-none", Aria.hidden_ "true", hxTrigger_ "intersect once", hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop"] pass
+        a_ [href_ url, hxGet_ $ url <> "&append=true", hxTarget_ "#metric-pagination", hxSwap_ "outerHTML", hxIndicator_ "#metric-pagination", term "hx-sync" "#metric-filters:drop", class_ "btn btn-sm [.htmx-request_&]:hidden"] "Load more metrics"
+        span_ [class_ "hidden [.htmx-request_&]:inline-flex text-sm text-textWeak", role_ "status"] "Loading more metrics…"
 
 
-metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-metricCardGetH pid metricName labelM = do
+metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricCardGetH pid metricName labelM sourceM = do
   metricM <- Telemetry.getMetricData pid metricName
   addRespHeaders $ flip foldMap metricM \metric ->
     let selected = mfilter (\l -> l == "all" || l `elem` metric.metricLabels) labelM
-     in metricCard pid "all" metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
+     in metricCard pid (fromMaybe "all" sourceM) metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
 
 
 metricCard :: Projects.ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
 metricCard pid source metricName metricType metricUnit labels selectedM = do
-  let selected = if selectedM == Just "all" then Nothing else selectedM <|> labels V.!? 0
+  let selected = mfilter (/= "all") selectedM
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source selected
   div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
     $ div_ [class_ "h-60"]
     $ toHtml
-    $ (metricWidget pid metricName metricType metricUnit selected (Just metricName) Nothing (Just detailUrl))
+    $ (metricWidget pid metricName metricType metricUnit source selected (Just metricName) Nothing (Just detailUrl))
       { Widget.expandPushUrl = Just $ metricExpandUrl pid metricName source selected
       , Widget.groupByOptions = V.toList labels <$ guard (not $ V.null labels)
-      , Widget.groupBySelected = selectedM <|> selected
-      , Widget.groupByUrl = Just $ "/p/" <> pid.toText <> "/metrics/card/" <> metricName
+      , Widget.groupBySelected = Just $ fromMaybe "all" selected
+      , Widget.groupByUrl = Just $ "/p/" <> pid.toText <> "/metrics/card/" <> toUriStr metricName <> "?metric_source=" <> toUriStr source
       , Widget.groupByTarget = Just $ "#" <> cardId
       }
 
@@ -879,8 +884,8 @@ inactiveMetricsList pid source metrics = do
     div_ [class_ "collapse-content"] do
       div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
         forM_ metrics $ \metric ->
-          div_
-            (class_ "flex items-center justify-between py-2 px-2 cursor-pointer hover:bg-fillWeak rounded" : drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing))
+          a_
+            ([class_ "flex items-center justify-between py-2 px-2 hover:bg-fillWeak rounded focus-visible:outline focus-visible:outline-strokeFocus", href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing))
             do
               div_ [class_ "flex items-center gap-2"] do
                 faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
@@ -888,8 +893,8 @@ inactiveMetricsList pid source metrics = do
               span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
 
 
-dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> Html ()
-dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
+dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
+dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
   let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
       allRows = flattenMetricTree dataMap tree 0 []
@@ -898,20 +903,14 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
       -- any project with fewer metrics than one page — crashed the tab with
       -- "invalid slice (0,25,3)".
       rows = V.take dataPointPageSize $ V.drop (page * dataPointPageSize) allRows
-      metricPageUrl path = pageUrl <> "&cursor=" <> show page <> "&expand=" <> path
-  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] do
+      metricRowUrl path = pageUrl <> "&cursor=" <> show page <> "&expand=" <> toUriStr path
+  div_ [class_ "flex flex-col gap-4 px-4"] do
     -- Four icons, once each, instead of once per row: this table renders ~540 rows and the
     -- per-row copies were 886 KB of the 5.1 MB document.
     faSymbolDefs_ [("chevron-right", "regular"), ("grid", "regular"), ("chart-line", "regular"), ("bell", "regular")]
-    div_ [class_ "w-full"] do
-      metricsToolbar_
-        pid
-        "datapoints"
-        Nothing
-        (span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full"] "Calculating datapoint counts…")
-        "itemsListItem"
-        "dataPointsTable_page"
-      div_ [hxGet_ countsUrl, hxTrigger_ "load", hxSwap_ "none"] pass
+    metricsToolbar_ pid "datapoints" filters
+      $ span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "text-xs text-textWeak"] "Calculating datapoint counts…"
+    div_ [hxGet_ countsUrl, hxTrigger_ "load", hxSwap_ "none"] pass
     toHtml
       Table
         { config = def{Table.elemID = "dataPointsTable", Table.showHeader = True, Table.renderAsTable = True, Table.noDividers = True}
@@ -940,7 +939,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
                           ( [ class_ "cursor-pointer font-medium text-textStrong hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
                             , -- Carries the cursor, so a middle-click or reload from a deep
                               -- page lands back on that page rather than at the top.
-                              href_ $ metricPageUrl r.fullPath
+                              href_ $ metricRowUrl r.fullPath
                             , -- A real href, so middle-click and ⌘-click open a tab and the
                               -- keyboard activates it like any anchor. A plain click is ours:
                               -- the drawer loads over the current page, and pushState puts the
@@ -993,7 +992,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl = do
             def
               { Table.search = Nothing
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", action = Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" filters{source = "all", prefix = "all", query = ""}) "Clear filters" else Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
               }
         }
     dataPointPager_ page pageUrl $ V.length allRows
@@ -1233,7 +1232,7 @@ metricDetailChart pid metric source selected chartId =
   -- draws a diamond per representative trace over the series.
   div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"]
     $ toHtml
-    $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit selected Nothing (Just chartId) Nothing)
+    $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit source selected Nothing (Just chartId) Nothing)
       { Widget.groupByOptions = V.toList metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
       , Widget.groupBySelected = selected
       , Widget.groupByUrl = Just $ metricDetailUrl pid metric.metricName source Nothing

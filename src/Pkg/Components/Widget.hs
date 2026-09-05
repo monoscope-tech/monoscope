@@ -960,7 +960,7 @@ renderChart widget = do
                                 , name_ "label"
                                 , value_ value
                                 , hxTarget_ $ fromMaybe "" widget.groupByTarget
-                                , hxSwap_ "outerHTML"
+                                , hxSwap_ "outerHTML settle:0"
                                 ]
                               $ toHtml label
                       item "all" "All values"

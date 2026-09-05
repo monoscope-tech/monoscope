@@ -159,7 +159,7 @@ spec = sequential $ aroundAll withTestResources do
       catalogLabels `shouldSatisfy` (any (\(Only labels) -> "resource.service.name" `isInfixOf` toString labels) . toList)
       -- Regression: metric cards must query the native scalar column in
       -- otel_metrics, not the removed telemetry.metrics JSON payload.
-      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
       (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH mpid "cpu.usage" (Just "resource.service.name")
       toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
@@ -182,7 +182,7 @@ spec = sequential $ aroundAll withTestResources do
       let relatedHtml = toString $ Lucid.renderText related
       relatedHtml `shouldContain` "cpu.limit"
       relatedHtml `shouldContain` "Same cpu namespace"
-      (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH mpid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let dataPointsHtml = toString $ Lucid.renderText $ Lucid.toHtml dataPoints
       -- The link carries the cursor as well as the metric, so a reload from a deep page
       -- comes back to that page: `…&tab=datapoints&…&cursor=N&expand=<metric>`.
@@ -307,7 +307,7 @@ spec = sequential $ aroundAll withTestResources do
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "request.duration.full" Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText details) `shouldContain` "sum(distribution_sum) / sum(distribution_count)"
-      (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing
+      (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing Nothing
       toString (Lucid.renderText card) `shouldContain` "request.duration.full · mean"
       let (timeFrom, timeTo) = testTimeRange
       chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") Nothing []
