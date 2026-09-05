@@ -11,6 +11,7 @@ import Control.Monad.Trans.Reader (runReaderT)
 import Control.Monad.Trans.State.Strict (runStateT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
+import Data.ByteString qualified as BS
 import Data.Default
 import Data.Effectful.Hasql (runHasqlPool)
 import Data.Map.Strict qualified as M
@@ -21,7 +22,7 @@ import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.LibPQ qualified as PQ
-import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, query_)
+import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), query_)
 import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
@@ -517,6 +518,15 @@ convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1
       _ -> row
 
 
+-- Only generated SELECTs use this retry classification. Empty SQLSTATE is
+-- libpq's connection-loss result; server planning and conversion errors retain
+-- their own types/codes and are not retried.
+isChartConnectionError :: SomePostgreSqlException -> Bool
+isChartConnectionError err = case fromException @SqlError (toException err) of
+  Just failure -> BS.null failure.sqlState || "08" `BS.isPrefixOf` failure.sqlState || failure.sqlState `elem` ["57P01", "57P02", "57P03"]
+  Nothing -> False
+
+
 -- | Receive one libpq result at a time, keeping the existing typed row decoders.
 -- The caller owns the connection exclusively for the duration of the stream.
 -- On abandonment, cancel the server query and let withResource discard the connection.
@@ -595,10 +605,15 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     (start, end) = cfg'.dateRange
                     key = QC.generateCacheKey pid source ast' cfg'
                     fixed = QC.rewriteBinAutoToFixed key.binInterval ast'
+                    readMetrics callback statement lower upper = liftIO do
+                      let attempt = fetchMetricsDataWithProgress callback actual statement now lower upper authCtx dbSource
+                      attempt >>= \case
+                        Left err | isChartConnectionError err -> attempt
+                        result -> pure result
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
                           (chunkFrom, chunkTo) = chunkCfg.dateRange
-                      result <- liftIO $ fetchMetricsDataWithProgress (Just $ const $ pure ()) actual (maybeToMonoid chunkParts.finalSummarizeQuery) now chunkFrom chunkTo authCtx dbSource
+                      result <- readMetrics (Just $ const $ pure ()) (maybeToMonoid chunkParts.finalSummarizeQuery) chunkFrom chunkTo
                       either throwIO pure result
                 case (actual, chunkableChart ast', start, end) of
                   (DTMetric, True, Just a, Just b) | QC.chunkIntervalSupported key.binInterval && b > addUTCTime 86400 a -> do
@@ -614,7 +629,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                         (QC.chartChunks key.binInterval (a, b))
                     pure result{from = floor . utcTimeToPOSIXSeconds <$> Just a, to = floor . utcTimeToPOSIXSeconds <$> Just b}
                   _ -> do
-                    result <- liftIO $ fetchMetricsDataWithProgress progress actual (maybeToMonoid parts.finalSummarizeQuery) now start end authCtx dbSource
+                    result <- readMetrics progress (maybeToMonoid parts.finalSummarizeQuery) start end
                     either throwIO pure result
           result <- tryAny $ case raw of
             Just _ -> fetchMetricsDataWithProgress (Just $ emit . convert) actual sql now fromD toD authCtx dbSource >>= either throwIO pure

@@ -52,6 +52,15 @@ spec = do
       bucketStart "1w" (mkTime 700000) `shouldBe` mkTime 604800
       bucketStart "700ms" (mkTime 1) `shouldBe` posixSecondsToUTCTime 0.7
 
+    it "keeps internal boundaries on whole buckets for widths that do not divide a day" do
+      forM_ ["5h", "7h"] \interval -> do
+        let chunks = chartChunks interval (mkTime 17, mkTime 864000)
+        forM_ chunks \(lower, upper, _) -> do
+          when (lower /= mkTime 17) $ bucketStart interval lower `shouldBe` lower
+          when (upper /= mkTime 864000) $ bucketStart interval upper `shouldBe` upper
+        map (\(lower, _, _) -> lower) (take (length chunks - 1) chunks)
+          `shouldBe` map (\(_, upper, _) -> upper) (drop 1 chunks)
+
   describe "hasSummarizeWithBin" do
     it "detects bin(timestamp, interval)" do
       let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]

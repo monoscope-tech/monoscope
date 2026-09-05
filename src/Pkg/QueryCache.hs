@@ -198,18 +198,18 @@ replaceTimeseriesRange cached fresh start end =
   mergeTimeseriesData (filterByTimestamp (\ts -> ts < toPosix start || ts >= toPosix end) cached) fresh
 
 
--- | Recent buckets first. Grow from one bucket to at most a day of work per
+-- | Recent buckets first. Grow to six hours of work, or one wider bucket, per
 -- query. Adjacent chunks have exclusive upper bounds, so boundary events occur
 -- exactly once. The original request keeps its inclusive final endpoint.
 chartChunks :: Text -> (UTCTime, UTCTime) -> [(UTCTime, UTCTime, RangeEnd)]
 chartChunks interval (start, end) = go 1 end InclusiveEnd
   where
-    width = fromIntegral $ max 1 $ parseBinIntervalToSeconds interval
+    width = max 1 $ parseBinIntervalToSeconds interval
     go buckets upper endMode
       | upper <= start = []
       | otherwise =
-          let lower = max start $ addUTCTime (negate $ width * buckets) $ bucketStart interval upper
-              next = min (max 1 $ 86400 / width) (buckets * 4)
+          let lower = max start $ addUTCTime (negate $ fromIntegral $ width * buckets) $ bucketStart interval upper
+              next = min (max 1 $ 21600 `div` width) (buckets * 4)
            in (lower, upper, endMode) : go next lower ExclusiveEnd
 
 

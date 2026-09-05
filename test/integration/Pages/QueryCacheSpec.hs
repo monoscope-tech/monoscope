@@ -4,7 +4,7 @@ import Control.Exception qualified as E
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
-import Data.Pool (withResource)
+import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -22,6 +22,7 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Servant.Types.SourceT qualified as Source
+import System.Config (AuthContext (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 
@@ -122,6 +123,26 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 spec :: Spec
 spec = around withTestResources do
   describe "Streaming cache and chunk boundaries" do
+    it "retries a generated chart read after its pooled connection closes" $ \tr -> do
+      clearAllTestData tr
+      key <- createTestAPIKey tr pid "closed-chart-connection"
+      ingestLog tr key "one event" (addUTCTime 3600 baseTime)
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 1
+      E.bracket createPool destroyAllResources \pool -> do
+        withResource pool \conn -> do
+          [PG.Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [PG.Only Int]
+          withResource tr.trPool $ \control -> void (PG.query control "SELECT pg_terminate_backend(?, 5000)" (PG.Only backend) :: IO [PG.Only Bool])
+        let resources = tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
+        response <- runQueryEffect resources $ Charts.queryMetricsStream (Just "timefusion") (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []
+        frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+        case viaNonEmpty last frames of
+          Just (AE.Object obj) -> do
+            KM.lookup "type" obj `shouldBe` Just (AE.String "complete")
+            let count = KM.lookup "data" obj >>= \case AE.Object fields -> KM.lookup "rows_count" fields; _ -> Nothing
+            count `shouldBe` Just (AE.Number 1)
+          _ -> fail "missing complete chart frame"
+
     it "keeps a slow query's response active until completion" $ \tr -> do
       let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just pid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
