@@ -163,12 +163,15 @@ test.describe("every widget type on a dashboard canvas", () => {
     expect(chartId).toBeTruthy();
     const banner = page.locator(`[id="${chartId}_error"]`);
 
-    await page.route("**/chart_data?**", route => route.fulfill({ json: { error: "deterministic backend failure" } }));
+    await page.route("**/chart_data/stream?**", route => route.fulfill({
+      contentType: "application/x-ndjson",
+      body: JSON.stringify({ type: "error", error: "deterministic backend failure" }) + "\n",
+    }));
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("deterministic backend failure");
 
-    await page.unroute("**/chart_data?**");
+    await page.unroute("**/chart_data/stream?**");
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
     await expect(banner).toBeHidden();
   });
