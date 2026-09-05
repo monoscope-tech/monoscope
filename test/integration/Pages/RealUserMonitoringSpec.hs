@@ -3,7 +3,7 @@ module Pages.RealUserMonitoringSpec (spec) where
 import Data.Cache qualified as Cache
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
@@ -35,8 +35,12 @@ sessionId = UUID.toText replayUuid
 
 
 browserSpan :: Text -> Text -> Text -> [(Text, Text)] -> Text -> Text -> Maybe Text -> Text -> TestResources -> IO ()
-browserSpan apiKey trId spId extras name sid parentM service tr =
-  ingestSpanReq tr $ mkSpanRequest trId spId parentM name [] Nothing (map (uncurry mkAttr) $ ("session.id", sid) : extras) (mkResource apiKey [mkAttr "telemetry.sdk.language" "webjs", mkAttr "service.name" service]) frozenTime
+browserSpan apiKey trId spId extras name sid parentM service = browserSpanAt apiKey trId spId extras name sid parentM service frozenTime
+
+
+browserSpanAt :: Text -> Text -> Text -> [(Text, Text)] -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TestResources -> IO ()
+browserSpanAt apiKey trId spId extras name sid parentM service at tr =
+  ingestSpanReq tr $ mkSpanRequest trId spId parentM name [] Nothing (map (uncurry mkAttr) $ ("session.id", sid) : extras) (mkResource apiKey [mkAttr "telemetry.sdk.language" "webjs", mkAttr "service.name" service]) at
 
 
 -- | A page load exactly as the OpenTelemetry browser SDK sends it, which is what production
@@ -67,7 +71,7 @@ renderPage tr tab query sessionFilterM selected = renderScoped tr tab query sess
 -- than about which request delivered it.
 renderScoped :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderScoped tr tab query sessionFilterM selected service =
-  fmap fold . forM ["services", "pulse", "trend", "pages", "vitals", "errors", "sessions"] $ \panel ->
+  fmap fold . forM ["services", "pulse", "pages", "vitals", "errors", "sessions", "audience"] $ \panel ->
     renderPanel tr tab query sessionFilterM selected service (Just panel)
 
 
@@ -197,3 +201,51 @@ spec = sequential $ aroundAll withTestResources do
       scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "checkout-web")
       scoped `shouldContainAll` ["Every panel below is scoped to checkout-web.", "https://shop.example/cart"]
       T.isInfixOf "/admin/users" scoped `shouldBe` False
+
+    it "sessionLastPage_isTheLatestPageView_notALexicographicResourceUrl" \tr -> do
+      -- MAX(path) over every browser span used to pick the alphabetically largest URL: on
+      -- real traffic that is a third-party font fetched by the page, shown as the page.
+      Cache.purge tr.trATCtx.rumCache
+      apiKey <- createTestAPIKey tr testPid "rum-lastpage-key"
+      browserSpanAt apiKey "50000000000000000000000000000005" "5000000000000001" [("url.path", "/alpha")] "Pageview · /alpha" "session-lastpage" Nothing "storefront" (addUTCTime (-120) frozenTime) tr
+      browserSpanAt apiKey "50000000000000000000000000000005" "5000000000000002" [("url.full", "https://zzz-fonts.example/css2")] "HTTP GET" "session-lastpage" Nothing "storefront" (addUTCTime (-60) frozenTime) tr
+      browserSpanAt apiKey "50000000000000000000000000000005" "5000000000000003" [("url.path", "/beta")] "Pageview · /beta" "session-lastpage" Nothing "storefront" (addUTCTime (-30) frozenTime) tr
+      row <- renderPanel tr (Just "sessions") (Just "session-lastpage") Nothing Nothing Nothing (Just "sessions")
+      row `shouldContainAll` ["/beta"]
+      T.isInfixOf "zzz-fonts.example" row `shouldBe` False
+      T.isInfixOf "/alpha" row `shouldBe` False
+
+    it "replayOnlySessions_sayWhatTheyAre_insteadOfUnknownPageAndZeroCounts" \tr -> do
+      -- A recording whose session id never appears on a span is a real session; stacking
+      -- "Unknown page" over "0 views · 0 events" reads as broken data, not as what it is.
+      Cache.purge tr.trATCtx.rumCache
+      let replayOnlyUuid = [uuid|00000000-0000-0000-0000-000000000045|]
+      withResource tr.trPool \conn ->
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 1, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at" (replayOnlyUuid, testPid, frozenTime, addUTCTime 45 frozenTime, "Replay only user" :: Text)
+      rows <- renderPanel tr (Just "sessions") (Just "Replay only user") Nothing Nothing Nothing (Just "sessions")
+      rows `shouldContainAll` ["Replay only user", "Recording only — no telemetry events"]
+      T.isInfixOf "Unknown page" rows `shouldBe` False
+      T.isInfixOf "0 views" rows `shouldBe` False
+
+    it "browserErrors_groupBySignature_withOccurrenceAndSessionCounts" \tr -> do
+      -- Twenty copies of the loudest error used to fill the whole panel; issues with masked
+      -- identifiers keep every distinct failure visible with its blast radius.
+      Cache.purge tr.trATCtx.rumCache
+      apiKey <- createTestAPIKey tr testPid "rum-errors-key"
+      browserSpan apiKey "60000000000000000000000000000006" "6000000000000001" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 123")] "TypeError" "session-err-a" Nothing "storefront" tr
+      browserSpan apiKey "60000000000000000000000000000006" "6000000000000002" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 456")] "TypeError" "session-err-b" Nothing "storefront" tr
+      panel <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "errors")
+      panel `shouldContainAll` ["TypeError", "×2", "2 sessions", "Latest occurrence"]
+      -- Grouped, not listed: the message renders once for the pair.
+      T.count "Cannot read cart item" panel `shouldBe` 1
+
+    it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
+      Cache.purge tr.trATCtx.rumCache
+      apiKey <- createTestAPIKey tr testPid "rum-audience-key"
+      let chromeUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+          iphoneUa = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+      browserSpan apiKey "70000000000000000000000000000007" "7000000000000001" [("url.path", "/a"), ("user_agent.original", chromeUa)] "Pageview · /a" "session-ua-1" Nothing "storefront" tr
+      browserSpan apiKey "70000000000000000000000000000007" "7000000000000002" [("url.path", "/a"), ("user_agent.original", chromeUa)] "Pageview · /a" "session-ua-2" Nothing "storefront" tr
+      browserSpan apiKey "70000000000000000000000000000007" "7000000000000003" [("url.path", "/b"), ("user_agent.original", iphoneUa)] "Pageview · /b" "session-ua-3" Nothing "storefront" tr
+      panel <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "audience")
+      panel `shouldContainAll` ["Audience", "Chrome", "Windows", "Safari", "iOS", "Mobile", "Desktop", "2 sessions"]

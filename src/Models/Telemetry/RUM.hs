@@ -4,9 +4,12 @@ module Models.Telemetry.RUM (
   RumTrend (..),
   RumPage (..),
   RumError (..),
+  RumBreakdown (..),
   ReplaySession (..),
   RumSession (..),
   VitalSample (..),
+  VitalTrendPoint (..),
+  PageVitalPoint (..),
   RumQueryResult (..),
   RumQuery (..),
   RumCacheKey (..),
@@ -65,6 +68,18 @@ data RumError = RumError
   deriving anyclass (HI.DecodeRow)
 
 
+-- | One user agent's traffic. The user agent string is classified into browser, OS and
+-- device family in the page layer; the query only groups and counts.
+data RumBreakdown = RumBreakdown
+  { userAgent :: Text
+  , sessions :: Int64
+  , views :: Int64
+  , errors :: Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
 data ReplaySession = ReplaySession
   { id :: UUID.UUID
   , startedAt :: UTCTime
@@ -95,6 +110,25 @@ data RumSession = RumSession
   deriving anyclass (HI.DecodeRow)
 
 
+data VitalTrendPoint = VitalTrendPoint
+  { bucket :: UTCTime
+  , metricName :: Text
+  , p75 :: Double
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data PageVitalPoint = PageVitalPoint
+  { page :: Text
+  , metricName :: Text
+  , p75 :: Double
+  , samples :: Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
 data VitalSample = VitalSample
   { metricName :: Text
   , value :: Double
@@ -105,25 +139,29 @@ data VitalSample = VitalSample
 
 
 data RumQueryResult
-  = SummaryResult RumSummary
-  | TrendResult [RumTrend]
+  = PulseResult RumSummary [RumTrend]
   | PagesResult [RumPage]
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]
   | ReplaySessionsResult [ReplaySession]
   | VitalSamplesResult [VitalSample]
+  | VitalTrendResult [VitalTrendPoint]
+  | PageVitalsResult [PageVitalPoint]
   | ServicesResult [Text]
+  | BreakdownResult [RumBreakdown]
 
 
 data RumQuery
-  = SummaryQuery
-  | TrendQuery RumBucket
+  = PulseQuery RumBucket
   | PagesQuery
   | ErrorsQuery
   | SessionsQuery
   | ReplaySessionsQuery
   | VitalSamplesQuery
+  | VitalTrendQuery RumBucket
+  | PageVitalsQuery
   | ServicesQuery
+  | BreakdownQuery
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
 
