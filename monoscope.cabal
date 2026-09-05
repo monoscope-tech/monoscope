@@ -173,6 +173,7 @@ extra-source-files:
     static/migrations/0142_error_patterns_shape_hash.sql
     static/migrations/0143_error_group_reviews.sql
     static/migrations/0144_learned_error_masks.sql
+    static/migrations/0145_error_patterns_recent_trace_at.sql
 
 source-repository head
   type: git

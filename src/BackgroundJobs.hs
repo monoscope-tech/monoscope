@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -3554,6 +3554,120 @@ notifyDiscoveredEndpoints pid = do
     ]
 
 
+-- | Requests that must reach an endpoint /after/ its issue was raised before the
+-- issue self-acknowledges, and how many distinct hours they must span.
+--
+-- The hour spread is the load-bearing half. A scanner sweeping a host emits
+-- hundreds of requests inside one minute, and that traffic is precisely what a
+-- new-endpoint warning exists to surface — counting requests alone would ack the
+-- very case the warning is for. Traffic that recurs across hours is a service
+-- serving a route.
+provenEndpointMinRequests, provenEndpointMinHours :: Int64
+provenEndpointMinRequests = 20
+provenEndpointMinHours = 2
+
+
+-- | How far back the evidence query reads. An endpoint live for longer than this
+-- is proven by recent traffic just as well as by its whole history, and the bound
+-- is what keeps this off TimeFusion's unbounded-aggregate failure mode.
+provenEndpointWindow :: NominalDiffTime
+provenEndpointWindow = (-7) * 86400
+
+
+-- | Acknowledge @api_change@ issues the service has since proven real.
+--
+-- A new-endpoint warning asks "is this a route, or noise?" — a scan, a typo, an
+-- id we failed to templatise. Sustained successful traffic answers it, and an
+-- answered question should not sit in an inbox. Same for the additive half of
+-- shape changes: a field that keeps arriving on served requests is part of the
+-- API now.
+--
+-- Deliberately NOT applied to @critical@ issues. Those are the breaking shape
+-- changes (deleted or retyped fields), and continued traffic is no argument that
+-- a break is fine — it is often how the break is being discovered.
+--
+-- The @last_notified_at@/24h gate keeps this from acking an issue out from under
+-- its own alert: 'sendNewEndpointAlerts' declines to claim an acked issue, so a
+-- sweep that ran first would silently delete the notification. The 24h arm
+-- covers projects with @endpointAlerts@ off, which never stamp
+-- @last_notified_at@ and whose inboxes are where this noise actually collects.
+autoAckProvenEndpoints :: Projects.ProjectId -> ATBackgroundCtx ()
+autoAckProvenEndpoints pid = do
+  now <- Time.currentTime
+  authCtx <- ask @Config.AuthContext
+  candidates :: [(Issues.IssueId, Text, UTCTime)] <-
+    Hasql.interp
+      [HI.sql| SELECT i.id, i.endpoint_hash, i.created_at
+             FROM apis.issues i
+             WHERE i.project_id = #{pid}
+               AND i.issue_type = 'api_change'
+               AND i.acknowledged_at IS NULL AND i.archived_at IS NULL
+               AND NOT i.critical
+               AND i.endpoint_hash <> ''
+               AND (i.last_notified_at IS NOT NULL OR i.created_at < #{now}::timestamptz - INTERVAL '24 hours')
+             ORDER BY i.created_at ASC
+             LIMIT 200 |]
+  unless (null candidates) do
+    let windowStart = addUTCTime provenEndpointWindow now
+        hashes = V.fromList $ ordNub [h | (_, h, _) <- candidates]
+    -- Endpoint hashes are stamped onto every span at ingest, so the evidence is
+    -- an array-overlap on the stamped hash rather than a route/path match —
+    -- telemetry carries concrete paths while apis.endpoints stores templates,
+    -- and reconciling those two is the very thing discovery exists to do.
+    -- Follows the deployment's authoritative store, as the endpoints page does.
+    -- It matters which: the Postgres mirror of this table is being retired and
+    -- reads empty where TimeFusion is on, so pinning this to PG would make every
+    -- endpoint look unproven forever and quietly disable the whole sweep.
+    buckets :: [(Text, Int64, Int64)] <-
+      Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+        $ Hasql.interp
+          [HI.sql|
+            WITH served AS (
+              SELECT unnest(hashes) AS hash,
+                     floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
+              FROM otel_logs_and_spans
+              WHERE project_id = #{pid}::text
+                AND timestamp >= ^{Endpoints.tsLit windowStart}
+                AND attributes___http___request___method IS NOT NULL
+                AND attributes___http___response___status_code < 400
+                AND hashes && #{hashes}::text[]
+            )
+            SELECT hash, hour_bucket, count(*)::bigint AS cnt
+            FROM served GROUP BY hash, hour_bucket |]
+    let byHash = Map.fromListWith (<>) [(h, [(b, c)]) | (h, b, c) <- buckets]
+        -- Traffic from the issue's own hour onwards: the endpoint having been
+        -- hit before we noticed it is not evidence that it is real. Whole hours,
+        -- so up to the creating hour's leading minutes can slip in — immaterial
+        -- against a 20-request floor, and the alternative (strictly later hours)
+        -- would throw away most of a real endpoint's first hour of traffic.
+        issueHour createdAt = floor (utcTimeToPOSIXSeconds createdAt) `div` 3600
+        provenSince createdAt h =
+          let after = [c | (b, c) <- Map.findWithDefault [] h byHash, b >= issueHour createdAt]
+           in (sum after, fromIntegral (length after))
+        proven =
+          [ (iid, total, hrs)
+          | (iid, h, createdAt) <- candidates
+          , let (total, hrs) = provenSince createdAt h
+          , total >= provenEndpointMinRequests
+          , hrs >= provenEndpointMinHours
+          ]
+    unless (null proven) do
+      -- Indefinite, not timed: the endpoint does not stop being real. A genuine
+      -- change to it raises its own issue rather than resurfacing this one.
+      let ackedIds = V.fromList [iid | (iid, _, _) <- proven]
+      Hasql.interpExecute_
+        [HI.sql| UPDATE apis.issues
+               SET acknowledged_at = #{now}, acknowledged_by = NULL, acknowledged_until = #{Issues.indefiniteUntil}
+               WHERE id = ANY(#{ackedIds}::uuid[]) AND acknowledged_at IS NULL AND archived_at IS NULL |]
+      -- Without the trail a system ack reads as a bug the first time someone
+      -- opens the issue and finds nobody acked it.
+      forM_ proven \(iid, total, hrs) ->
+        Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
+          $ Just
+          $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
+      Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", length proven, "candidates", length candidates)
+
+
 -- | Group anomalies by endpoint hash
 -- | Groups are non-empty by construction ('groupBy' never yields an empty run),
 -- so the invariant travels in the type instead of a @V.head@ downstream.
@@ -3822,6 +3936,9 @@ endpointTemplateDiscovery pid = do
   -- which of them collapse, the survivors are genuinely new routes and can be
   -- announced.
   notifyDiscoveredEndpoints pid
+  -- Ordered after the announcement on purpose: an issue must get its chance to
+  -- notify before it can be acked out of the inbox.
+  autoAckProvenEndpoints pid
   reviewResidualEndpointGroups pid
   recheckQuarantinedMerges pid
 

@@ -2,6 +2,8 @@ module EndpointDiscoverySpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -12,7 +14,9 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
+import System.Config (AuthContext (..), EnvConfig (..))
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Text.Printf (printf)
 import Utils (toXXHash)
 
 
@@ -23,11 +27,13 @@ pid = UUIDId UUID.nil
 -- | Insert test endpoints directly into DB, bypassing message ingestion.
 insertTestEndpoints :: TestResources -> [(Text, Text, Text)] -> IO ()
 insertTestEndpoints tr endpoints = forM_ endpoints \(method, host, path) ->
-  void $ withPool tr.trPool $ DBT.execute
-    [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
+  void
+    $ withPool tr.trPool
+    $ DBT.execute
+      [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (hash) DO NOTHING |]
-    (pid, path, AE.object [], method, host, toXXHash (pid.toText <> host <> method <> path), False :: Bool)
+      (pid, path, AE.object [], method, host, toXXHash (pid.toText <> host <> method <> path), False :: Bool)
 
 
 -- | An open api_change issue pinned to one endpoint hash. Four of these across
@@ -35,57 +41,134 @@ insertTestEndpoints tr endpoints = forM_ endpoints \(method, host, path) ->
 -- @idx_issues_project_target_type_open@.
 insertOpenIssue :: TestResources -> Text -> IO ()
 insertOpenIssue tr endpointHash =
-  void $ withPool tr.trPool $ DBT.execute
-    [sql| INSERT INTO apis.issues (project_id, issue_type, endpoint_hash, target_hash, title)
+  void
+    $ withPool tr.trPool
+    $ DBT.execute
+      [sql| INSERT INTO apis.issues (project_id, issue_type, endpoint_hash, target_hash, title)
           VALUES (?, 'api_change', ?, ?, 'test issue') |]
-    (pid, endpointHash, endpointHash)
+      (pid, endpointHash, endpointHash)
+
+
+-- | Pin the api_change issue discovery already raised for this endpoint onto the
+-- frozen clock, and choose whether it counts as notified.
+--
+-- Discovery creates the issue itself, so the test works with the real row rather
+-- than a synthetic one. created_at has to move because it otherwise defaults to
+-- the DB wall clock: evidence only counts from the issue's own hour onwards, so a
+-- real-time issue would sit ~20 months after frozenTime-based traffic and no
+-- endpoint could ever look proven. The sweep also only considers notified issues
+-- (or ones over 24h old), so acking cannot delete an alert
+-- 'sendNewEndpointAlerts' has not sent yet — which is what @notified@ selects.
+pinIssueAtFrozen :: TestResources -> Text -> Bool -> IO ()
+pinIssueAtFrozen tr endpointHash notified = do
+  n <-
+    withPool tr.trPool
+      $ DBT.execute
+        [sql| UPDATE apis.issues SET created_at = ?, last_notified_at = ?
+            WHERE project_id = ? AND endpoint_hash = ? AND issue_type = 'api_change' |]
+        (frozenTime, if notified then Just frozenTime else Nothing, pid, endpointHash)
+  when (n == 0) $ fail $ "discovery raised no api_change issue for " <> toString endpointHash
+
+
+-- | The hash ingest derived for this path, failing loudly if no endpoint was
+-- created — a silent Nothing here would turn every assertion below vacuous.
+endpointHashFor :: TestResources -> Text -> IO Text
+endpointHashFor tr path = do
+  r <-
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT hash FROM apis.endpoints WHERE project_id = ? AND url_path = ? |]
+        (pid, path)
+      :: IO (V.Vector (Only Text))
+  maybe (fail $ "no endpoint derived for " <> toString path) (\(Only h) -> pure h) (r V.!? 0)
+
+
+-- | Is the issue for this endpoint acknowledged?
+queryIssueAcked :: TestResources -> Text -> IO Bool
+queryIssueAcked tr endpointHash = do
+  r <-
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT (acknowledged_at IS NOT NULL AND acknowledged_until IS NOT NULL)
+          FROM apis.issues WHERE project_id = ? AND endpoint_hash = ? |]
+        (pid, endpointHash)
+      :: IO (V.Vector (Only Bool))
+  pure $ maybe False (\(Only b) -> b) (r V.!? 0)
+
+
+-- | The @reason@ recorded on each acknowledgement activity row for this endpoint.
+queryAckReasons :: TestResources -> Text -> IO [Text]
+queryAckReasons tr endpointHash =
+  V.toList
+    . V.map (\(Only t) -> t)
+    <$> withPool
+      tr.trPool
+      ( DBT.query
+          [sql| SELECT a.metadata->>'reason'
+          FROM apis.issue_activity_log a JOIN apis.issues i ON i.id = a.issue_id
+          WHERE i.project_id = ? AND i.endpoint_hash = ? AND a.event = 'acknowledged' |]
+          (pid, endpointHash)
+      )
 
 
 -- | Which open issues have been notified, and which are still deferred.
 queryNotifiedSplit :: TestResources -> IO (Int, Int)
 queryNotifiedSplit tr = do
-  r <- withPool tr.trPool $ DBT.query
-    [sql| SELECT count(*) FILTER (WHERE last_notified_at IS NOT NULL)::int,
+  r <-
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT count(*) FILTER (WHERE last_notified_at IS NOT NULL)::int,
                  count(*) FILTER (WHERE last_notified_at IS NULL)::int
           FROM apis.issues WHERE project_id = ? AND archived_at IS NULL |]
-    (Only pid) :: IO (V.Vector (Int, Int))
+        (Only pid)
+      :: IO (V.Vector (Int, Int))
   pure $ fromMaybe (0, 0) (r V.!? 0)
 
 
 -- | target_hash of every open issue for this project.
 queryOpenIssueTargets :: TestResources -> IO (V.Vector Text)
 queryOpenIssueTargets tr =
-  V.map (\(Only t) -> t) <$> withPool tr.trPool (DBT.query
-    [sql| SELECT target_hash FROM apis.issues
+  V.map (\(Only t) -> t)
+    <$> withPool
+      tr.trPool
+      ( DBT.query
+          [sql| SELECT target_hash FROM apis.issues
           WHERE project_id = ? AND acknowledged_at IS NULL AND archived_at IS NULL |]
-    (Only pid))
+          (Only pid)
+      )
 
 
 -- | Clear test endpoints for this project before each test group.
 clearTestEndpoints :: TestResources -> IO ()
 clearTestEndpoints tr =
-  void $ withPool tr.trPool $ DBT.execute
-    [sql| DELETE FROM apis.endpoints WHERE project_id = ? |]
-    (Only pid)
+  void
+    $ withPool tr.trPool
+    $ DBT.execute
+      [sql| DELETE FROM apis.endpoints WHERE project_id = ? |]
+      (Only pid)
     >> void (withPool tr.trPool $ DBT.execute [sql| DELETE FROM apis.issues WHERE project_id = ? |] (Only pid))
 
 
 -- | After endpointTemplateDiscovery, merged endpoints are deleted and only the
 -- canonical template endpoint remains. This queries for those templates.
 queryCanonicalTemplates :: TestResources -> IO (V.Vector (Text, Text, Text))
-queryCanonicalTemplates tr = withPool tr.trPool $ DBT.query
-  [sql| SELECT url_path, method, host FROM apis.endpoints
+queryCanonicalTemplates tr =
+  withPool tr.trPool
+    $ DBT.query
+      [sql| SELECT url_path, method, host FROM apis.endpoints
         WHERE project_id = ? AND canonical_hash = hash
         ORDER BY method, url_path |]
-  (Only pid)
+      (Only pid)
 
 
 -- | Query all remaining endpoints for this project.
 queryAllEndpoints :: TestResources -> IO (V.Vector (Text, Text))
-queryAllEndpoints tr = withPool tr.trPool $ DBT.query
-  [sql| SELECT url_path, method FROM apis.endpoints
+queryAllEndpoints tr =
+  withPool tr.trPool
+    $ DBT.query
+      [sql| SELECT url_path, method FROM apis.endpoints
         WHERE project_id = ? ORDER BY method, url_path |]
-  (Only pid)
+      (Only pid)
 
 
 spec :: Spec
@@ -98,7 +181,8 @@ spec = around withTestResources do
         -- 1) ID-like endpoints  -> one {param} template
         -- 2) static sibling     -> survives untouched
         -- 3) shorter path       -> never merges into a longer template
-        insertTestEndpoints tr
+        insertTestEndpoints
+          tr
           [ ("GET", "api.example.com", "/api/v1/users/auth0|abc123def456")
           , ("GET", "api.example.com", "/api/v1/users/auth0|xyz789ghi012")
           , ("GET", "api.example.com", "/api/v1/users/google-oauth2|111222333")
@@ -118,7 +202,8 @@ spec = around withTestResources do
 
       it "running discovery twice is idempotent" \tr -> do
         clearTestEndpoints tr
-        insertTestEndpoints tr
+        insertTestEndpoints
+          tr
           [ ("GET", "api.example.com", "/api/v1/items/auth0|item001")
           , ("GET", "api.example.com", "/api/v1/items/auth0|item002")
           , ("GET", "api.example.com", "/api/v1/dashboard/overview")
@@ -134,7 +219,8 @@ spec = around withTestResources do
     describe "Edge cases" do
       it "requires at least 2 endpoints to form a tokenization template" \tr -> do
         clearTestEndpoints tr
-        insertTestEndpoints tr
+        insertTestEndpoints
+          tr
           [ ("GET", "api.example.com", "/api/v1/orders/provider|order001")
           ]
         runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
@@ -144,7 +230,8 @@ spec = around withTestResources do
 
       it "groups by method and host independently" \tr -> do
         clearTestEndpoints tr
-        insertTestEndpoints tr
+        insertTestEndpoints
+          tr
           [ ("GET", "api.example.com", "/api/v1/items/provider|item001")
           , ("GET", "api.example.com", "/api/v1/items/provider|item002")
           , ("POST", "api.example.com", "/api/v1/items/provider|item001")
@@ -313,3 +400,78 @@ spec = around withTestResources do
         before <- queryAllEndpoints tr
         runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
         queryAllEndpoints tr >>= (`shouldBe` before)
+
+    -- A new-endpoint warning asks "is this a route, or noise?". Sustained
+    -- successful traffic answers it, and an answered question should leave the
+    -- inbox on its own. The two cases that must stay apart are a real route and
+    -- a scanner burst, which differ in shape (spread over hours), not in volume.
+    describe "autoAckProvenEndpoints" do
+      let host = "api.example.com"
+          -- Spread over distinct hours: volume alone is what a scan produces too.
+          -- The span id folds in the path: two seedings numbering 1..n alike would
+          -- otherwise mint colliding ids. otel_logs_and_spans is NOT cleared between
+          -- tests, but every timestamp here is frozenTime-relative, so re-runs land in
+          -- the same hour buckets and the hour-spread assertions stay deterministic.
+          seedTraffic tr key path status n spreadHours =
+            forM_ [1 .. n] \i ->
+              ingestSpanLinked
+                tr
+                key
+                (UUID.toText UUID.nil)
+                (T.take 8 (toXXHash path) <> toText (printf "%08d" (i :: Int) :: String)) -- 16 hex chars; hexPad does not truncate
+                Nothing
+                ("GET " <> path)
+                -- Same attribute pair createOtelSpanAtTime uses (the shape known to
+                -- produce endpoints), plus the status the sweep gates on.
+                [("http.method", "GET"), ("http.route", path), ("http.response.status_code", status), ("server.address", host)]
+                (addUTCTime (fromIntegral ((i `mod` spreadHours) * 3600 + 60)) frozenTime)
+
+      it "acks an endpoint proven by served traffic, and leaves a scanner burst alone" \tr -> do
+        clearTestEndpoints tr
+        key <- createTestAPIKey tr pid "auto-ack-key"
+        let realPath = "/v1/orders"
+            scanPath = "/v1/burst"
+        -- Real route: comfortably over both thresholds, spread across 3 hours.
+        seedTraffic tr key realPath "200" 30 3
+        -- The discriminator under test is the hour spread, not volume: this path
+        -- takes MORE requests than the real one, all inside a single hour, which
+        -- is the shape a scanner sweep produces. (404s would not do here — a
+        -- request that matched no route never creates an endpoint at all, so it
+        -- could never have raised the issue this sweep is acking.)
+        seedTraffic tr key scanPath "200" 40 1
+        -- The extraction worker is what turns ingested spans into apis.endpoints
+        -- rows and stamped hashes; without draining it there is nothing to prove
+        -- an endpoint with. It needs the TimeFusion flags on, as ExtractionWorkerSpec does.
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+        -- The hash comes from the endpoint ingest actually derived, not from a
+        -- hand-rolled copy of the formula: the whole mechanism hangs on the issue
+        -- and the stamped span hash agreeing, and a test that computes both
+        -- itself would keep passing after they stopped agreeing.
+        realHash <- endpointHashFor tr realPath
+        scanHash <- endpointHashFor tr scanPath
+        forM_ [realHash, scanHash] \h -> pinIssueAtFrozen tr h True
+
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+
+        queryIssueAcked tr realHash `shouldReturn` True
+        queryIssueAcked tr scanHash `shouldReturn` False
+        -- A system ack with no trail reads as a bug the first time it is opened.
+        queryAckReasons tr realHash `shouldReturn` ["endpoint_proven_by_traffic"]
+
+      it "leaves an un-notified issue alone, so the ack cannot swallow its alert" \tr -> do
+        clearTestEndpoints tr
+        key <- createTestAPIKey tr pid "auto-ack-unnotified-key"
+        let path = "/v1/invoices"
+        seedTraffic tr key path "200" 30 3
+        -- The extraction worker is what turns ingested spans into apis.endpoints
+        -- rows and stamped hashes; without draining it there is nothing to prove
+        -- an endpoint with. It needs the TimeFusion flags on, as ExtractionWorkerSpec does.
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        h <- endpointHashFor tr path
+        pinIssueAtFrozen tr h False
+
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        queryIssueAcked tr h `shouldReturn` False

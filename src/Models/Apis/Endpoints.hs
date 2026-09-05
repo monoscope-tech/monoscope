@@ -44,6 +44,7 @@ module Models.Apis.Endpoints (
   insertLearnedIdRule,
   learnedIdRulesFor,
   unmergedScanLimit,
+  tsLit,
   setEndpointCanonical,
   insertCanonicalEndpoints,
   frameworkCanonicalHashes,

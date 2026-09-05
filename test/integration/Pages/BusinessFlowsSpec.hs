@@ -250,9 +250,11 @@ settingsTests = do
     -- label would render backwards ("Jan 15, 2026 – Jan 14").
     ((.total) <$> (d.currentInvoice :: Maybe BJ.StripeInvoice)) `shouldBe` Just (4150 :: Int)
     map (\c -> (c.start, c.end, (.total) <$> c.invoice, (.hostedUrl) =<< c.invoice)) d.pastCycles
-      `shouldBe` ([ (fromGregorian 2024 2 15, fromGregorian 2024 3 15, Just 3400, Just "https://invoice.stripe.com/i/inv_two")
-                  , (fromGregorian 2024 1 15, fromGregorian 2024 2 15, Just 2900, Just "https://invoice.stripe.com/i/inv_one")
-                  ] :: [(Day, Day, Maybe Int, Maybe Text)])
+      `shouldBe` ( [ (fromGregorian 2024 2 15, fromGregorian 2024 3 15, Just 3400, Just "https://invoice.stripe.com/i/inv_two")
+                   , (fromGregorian 2024 1 15, fromGregorian 2024 2 15, Just 2900, Just "https://invoice.stripe.com/i/inv_one")
+                   ]
+                     :: [(Day, Day, Maybe Int, Maybe Text)]
+                 )
     let html = TL.toStrict $ renderText $ LemonSqueezy.billingPage d
     html `shouldSatisfy` T.isInfixOf "https://invoice.stripe.com/i/inv_two"
     html `shouldSatisfy` T.isInfixOf "$41.50"
