@@ -28,6 +28,7 @@ module Pkg.DeriveUtils (
   bulkActionSlug,
   showPGFloatArray,
   mkHasqlPool,
+  mkHasqlPoolWithIdleTimeout,
   rawSql,
   selectFrom,
   -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
@@ -54,7 +55,7 @@ import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_,
 import Data.OpenApi qualified as OpenApi
 import Data.OpenApi.Internal.Schema (GToSchema)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (DiffTime, UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select)
@@ -597,13 +598,17 @@ instance HI.EncodeValue (CI Text) where
 -- the OTel db semantic-convention attributes (db.system, db.namespace, server.address,
 -- server.port, db.user) parsed from the connection string.
 mkHasqlPool :: Int -> ByteString -> IO OHasql.TracedPool
-mkHasqlPool sz cstr =
+mkHasqlPool = mkHasqlPoolWithIdleTimeout 1800
+
+
+mkHasqlPoolWithIdleTimeout :: DiffTime -> Int -> ByteString -> IO OHasql.TracedPool
+mkHasqlPoolWithIdleTimeout idleTimeout sz cstr =
   OHasql.acquireFromConnString
     ( HPC.settings
         [ HPC.size sz
         , HPC.acquisitionTimeout 30
         , HPC.agingTimeout 1800
-        , HPC.idlenessTimeout 1800
+        , HPC.idlenessTimeout idleTimeout
         , HPC.staticConnectionSettings (HCS.connectionString (decodeUtf8 cstr))
         ]
     )

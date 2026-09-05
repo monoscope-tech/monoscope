@@ -123,16 +123,17 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 spec :: Spec
 spec = around withTestResources do
   describe "Streaming cache and chunk boundaries" do
-    it "retries a generated chart read after its pooled connection closes" $ \tr -> do
+    it "recovers a generated chart read when multiple idle pooled connections close" $ \tr -> do
       clearAllTestData tr
       key <- createTestAPIKey tr pid "closed-chart-connection"
       ingestLog tr key "one event" (addUTCTime 3600 baseTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 1
-      E.bracket createPool destroyAllResources \pool -> do
-        withResource pool \conn -> do
-          [PG.Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [PG.Only Int]
-          withResource tr.trPool $ \control -> void (PG.query control "SELECT pg_terminate_backend(?, 5000)" (PG.Only backend) :: IO [PG.Only Bool])
+      let createPool = newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL tr.trConnStr) PG.close 1800 3
+      E.bracket createPool destroyAllResources \pool -> withResource pool \active -> do
+        withResource pool \idleA -> withResource pool \idleB ->
+          forM_ [idleA, idleB] \conn -> do
+            [PG.Only backend] <- PG.query_ conn "SELECT pg_backend_pid()" :: IO [PG.Only Int]
+            withResource tr.trPool $ \control -> void (PG.query control "SELECT pg_terminate_backend(?, 5000)" (PG.Only backend) :: IO [PG.Only Bool])
         let resources = tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
         response <- runQueryEffect resources $ Charts.queryMetricsStream (Just "timefusion") (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 1h)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 259200) (Just "spans") Nothing []
         frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
@@ -142,6 +143,7 @@ spec = around withTestResources do
             let count = KM.lookup "data" obj >>= \case AE.Object fields -> KM.lookup "rows_count" fields; _ -> Nothing
             count `shouldBe` Just (AE.Number 1)
           _ -> fail "missing complete chart frame"
+        PG.query_ active "SELECT 1" `shouldReturn` [PG.Only (1 :: Int)]
 
     it "keeps a slow query's response active until completion" $ \tr -> do
       let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"

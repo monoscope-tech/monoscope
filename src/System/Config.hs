@@ -492,17 +492,16 @@ configToEnv config = do
       _ -> pass
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
-  -- 1800s idle, matching the hasql pools: at 30s a chart-heavy page reopened
-  -- TF connections continuously, and connect() eventually returned
-  -- EADDRNOTAVAIL ("Can't assign requested address") under widgetGetH. TF
-  -- queries are slow and bursty, so recycling an idle connection every 30s
-  -- costs a full TCP+startup round trip for no benefit.
-  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 1800 10 & setNumStripes (Just 2))
+  -- Keep bursty chart connections reusable, but retire idle handles before the
+  -- PGWire proxy's five-minute timeout. Thirty minutes retained closed sockets;
+  -- thirty seconds previously caused excessive connection churn.
+  let timefusionIdleSeconds = 240 :: Int
+  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (fromIntegral timefusionIdleSeconds) 10 & setNumStripes (Just 2))
   let mainHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       tfHasqlSettings = tfParams
   hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings
   hasqlJobsPool <- liftIO $ DeriveUtils.mkHasqlPool 10 mainHasqlSettings
-  hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPool 30 tfHasqlSettings
+  hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPoolWithIdleTimeout (fromIntegral timefusionIdleSeconds) 30 tfHasqlSettings
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)

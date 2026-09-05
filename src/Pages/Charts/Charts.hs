@@ -15,7 +15,7 @@ import Data.ByteString qualified as BS
 import Data.Default
 import Data.Effectful.Hasql (runHasqlPool)
 import Data.Map.Strict qualified as M
-import Data.Pool (withResource)
+import Data.Pool (Pool, destroyAllResources, withResource)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -442,12 +442,16 @@ fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTim
 fetchMetricsData = fetchMetricsDataWithProgress Nothing
 
 
+metricsPool :: AuthContext -> Maybe Text -> Pool Connection
+metricsPool authCtx dbSource = case dbSource of
+  Just "postgres" -> authCtx.pool
+  Just "timefusion" -> authCtx.timefusionPgPool
+  _ -> if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource then authCtx.timefusionPgPool else authCtx.pool
+
+
 fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
 fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource = do
-  let pool = case dbSource of
-        Just "postgres" -> authCtx.pool
-        Just "timefusion" -> authCtx.timefusionPgPool
-        _ -> if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource then authCtx.timefusionPgPool else authCtx.pool
+  let pool = metricsPool authCtx dbSource
   let baseMetricsData = emptyMetricsFor now fromD toD
   let runQ :: FromRow r => IO [r]
       runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
@@ -608,7 +612,12 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     readMetrics callback statement lower upper = liftIO do
                       let attempt = fetchMetricsDataWithProgress callback actual statement now lower upper authCtx dbSource
                       attempt >>= \case
-                        Left err | isChartConnectionError err -> attempt
+                        Left err | isChartConnectionError err -> do
+                          -- A proxy expiry can leave several idle connections dead.
+                          -- Discard idle handles before retrying; checked-out queries
+                          -- stay in use, and the query cache is unaffected.
+                          destroyAllResources $ metricsPool authCtx dbSource
+                          attempt
                         result -> pure result
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
