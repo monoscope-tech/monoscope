@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, menuHref, serviceMapFilter, FILTER_EVENT, CARD_W, CARD_H, type Edge } from '../src/service-map';
+import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, menuHref, serviceMapFilter, FILTER_EVENT, CARD_W, CARD_H, NODE_GAP, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = async (keys: string[], edges: Edge[]) => {
@@ -155,6 +155,20 @@ describe('layoutGraph', () => {
     expect(coords.get('y')!.x).toBeGreaterThan(coords.get('x')!.x);
     // Disconnected roots share the leftmost column rather than stacking.
     expect(coords.get('a')!.x).toBe(coords.get('x')!.x);
+  });
+
+  it('stacks every layer from a shared top edge instead of centering on the fan-out', async () => {
+    // A caller must sit at the top of its column, not pinned to the middle of a long
+    // dependency list — reading starts top-left and flows right and down.
+    const leaves = Array.from({ length: 9 }, (_, i) => `leaf${i}`);
+    const { coords } = await layoutGraph(['entry', 'svc', ...leaves], [e('entry', 'svc'), ...leaves.map(l => e('svc', l))]);
+    const top = Math.min(...[...coords.values()].map(p => p.y));
+    expect(coords.get('entry')!.y).toBe(top);
+    expect(coords.get('svc')!.y).toBe(top);
+    const leafYs = leaves.map(l => coords.get(l)!.y).sort((a, b) => a - b);
+    expect(leafYs[0]).toBe(top);
+    // Siblings stack down the column at a constant pitch — no centering offsets left over.
+    for (let i = 1; i < leafYs.length; i++) expect(leafYs[i] - leafYs[i - 1]).toBe(CARD_H + NODE_GAP);
   });
 
   it('never overlaps two cards, however wide the fan-out', async () => {
