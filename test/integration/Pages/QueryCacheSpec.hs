@@ -122,6 +122,15 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 spec :: Spec
 spec = around withTestResources do
   describe "Streaming cache and chunk boundaries" do
+    it "keeps a slow query's response active until completion" $ \tr -> do
+      let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just pid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
+      values <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      frames <- either fail pure values
+      let kind = \case AE.Object obj -> KM.lookup "type" obj; _ -> Nothing
+      fmap kind (listToMaybe frames) `shouldBe` Just (Just $ AE.String "partial")
+      fmap kind (viaNonEmpty last frames) `shouldBe` Just (Just $ AE.String "complete")
+
     it "matches a whole query, populates the cache, and serves a hit without reading telemetry" $ \tr -> do
       clearAllTestData tr
       key <- createTestAPIKey tr pid "stream-cache-boundaries"
@@ -156,6 +165,21 @@ spec = around withTestResources do
       cached.rowsCount `shouldBe` expected.rowsCount
 
   describe "Query Cache" do
+    it "reuses successful empty history without querying telemetry again" $ \tr -> do
+      clearAllTestData tr
+      let q = "summarize count(*) by bin(timestamp, 1h)"
+          fetch = queryMetrics tr q (timeAt 0) (timeAt 3600)
+      initial <- fetch
+      initial.error `shouldBe` Nothing
+      initial.dataset `shouldBe` V.empty
+      cached <- withoutTelemetryTable tr fetch
+      cached.error `shouldBe` Nothing
+      cached.dataset `shouldBe` V.empty
+      withResource tr.trPool $ \conn -> void $ execute_ conn [sql|UPDATE query_cache SET cached_data = jsonb_set(cached_data, '{error}', '"old failure"') WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      recovered <- fetch
+      recovered.error `shouldBe` Nothing
+      recovered.dataset `shouldBe` V.empty
+
     it "cache hit returns same results as fresh query" $ \tr -> do
       clearAllTestData tr
       key <- createTestAPIKey tr pid "cache-key-1"

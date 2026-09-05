@@ -73,7 +73,12 @@ describe('Log Explorer chart auto-refresh', () => {
     (window as any).chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
-    const send = (type: string) => body.enqueue(new TextEncoder().encode(JSON.stringify({ type, data: chartData }) + '\n'));
+    const send = (type: string, data = chartData) => body.enqueue(new TextEncoder().encode(JSON.stringify({ type, data }) + '\n'));
+    send('partial', { ...chartData, dataset: [] });
+    await vi.waitFor(() => expect(instance.showLoading).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'Searching for matching events…' })));
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+    await frame();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     send('partial');
     await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('data-chart-partial')).toBe('true'));
     expect(instance.setOption).toHaveBeenCalled();

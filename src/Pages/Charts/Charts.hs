@@ -627,7 +627,10 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       frame kind value = AE.object ["type" AE..= (kind :: Text), "data" AE..= value]
       body = SourceT \consume -> do
         queue <- STM.newTBQueueIO 2
-        let write = STM.atomically . STM.writeTBQueue queue
+        latest <- STM.newTVarIO $ frame "partial" $ convertTimestampsToMs $ emptyMetricsFor now fromD toD
+        let write item = STM.atomically do
+              forM_ item $ STM.writeTVar latest
+              STM.writeTBQueue queue item
             producer = do
               result <- run (write . Just . frame "partial") `E.catch` \(e :: E.IOException) -> pure (Left $ Utils.sanitizeBackendError $ toText $ displayException e)
               write $ Just $ case result of
@@ -635,8 +638,19 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                 Right value -> frame "complete" value
               write Nothing
             step = Effect do
-              item <- STM.atomically $ STM.readTBQueue queue
-              pure $ maybe Stop (\value -> Yield value step) item
+              -- Keep slow queries active through proxies and notice disconnected
+              -- readers promptly, so their scoped producer cancels the SQL.
+              elapsed <- STM.registerDelay 5000000
+              item <-
+                STM.atomically
+                  $ (Left <$> STM.readTBQueue queue)
+                  `STM.orElse` do
+                    STM.readTVar elapsed >>= STM.check
+                    Right <$> STM.readTVar latest
+              pure $ case item of
+                Left Nothing -> Stop
+                Left (Just value) -> Yield value step
+                Right value -> Yield value step
         withAsync producer \worker -> do
           -- A producer failure must wake a waiting consumer rather than hang.
           UnliftIO.Async.link worker

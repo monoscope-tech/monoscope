@@ -547,6 +547,8 @@ const chartRequests = new WeakMap<object, AbortController>();
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
   if (!shouldFetch || lifetimeSignal.aborted) return;
+  // A timer must not replace an unfinished stream with a blocking refresh.
+  if (!showLoader && chartRequests.has(chart)) return;
   chartRequests.get(chart)?.abort();
   const request = new AbortController();
   chartRequests.set(chart, request);
@@ -583,7 +585,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       if (signal.aborted || isStale() || !showLoader) return;
       opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
       opt.dataset.source = [data.headers || [], ...(data.dataset || [])];
-      chart.hideLoading();
+      if (data.dataset?.length) chart.hideLoading();
+      else {
+        const styles = getChartStyles();
+        chart.showLoading({ text: 'Searching for matching events…', color: styles.brandColor,
+          textColor: styles.tooltipTextColor, maskColor: styles.chartMask, zlevel: 0 });
+      }
       hideNoDataOverlay(chartId);
       chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
       // Keep incomplete totals out of stat tiles. The loading state distinguishes
