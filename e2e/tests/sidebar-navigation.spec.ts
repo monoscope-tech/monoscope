@@ -21,17 +21,19 @@ const cases = [
   ['/reports', '/reports'],
 ];
 
-// Read-only. aria-current confirms the client has reconciled the server markup,
-// so these assertions catch a highlight that disappears after the bundle loads.
-for (const [path, section] of cases) {
-  test(`${path} highlights its sidebar section`, async ({ page }) => {
-    await page.goto(project + path, { waitUntil: 'domcontentloaded' });
-    const active = page.locator('#main-sidenav .main-nav-link[aria-current="page"]');
-    await expect(active).toHaveCount(1);
-    await expect(active).toHaveAttribute('href', project + section);
-    await expect(active).toHaveClass(/\bactive\b/);
-  });
-}
+// These pages must identify the active section without application JavaScript.
+test.describe('server-rendered sidebar', () => {
+  test.use({ javaScriptEnabled: false });
+  for (const [path, section] of cases) {
+    test(`${path} highlights its sidebar section`, async ({ page }) => {
+      await page.goto(project + path, { waitUntil: 'domcontentloaded' });
+      const active = page.locator('#main-sidenav .main-nav-link[aria-current="page"]');
+      await expect(active).toHaveCount(1);
+      await expect(active).toHaveAttribute('href', project + section);
+      await expect(active).toHaveClass(/\bactive\b/);
+    });
+  }
+});
 
 test('Explorer stays highlighted through tab navigation and browser history', async ({ page }) => {
   await page.goto(project + '/metrics');

@@ -335,7 +335,7 @@ instance ToHtml ReportsPost where
 
 wrapSingleResponse :: BWConfig -> FreeTierStatus -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
 wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content =
-  addRespHeaders $ maybe (ReportsGetSingle $ PageCtx bw{pageTitle, freeTierStatus} content) (const $ ReportsGetSingle' content) hxRequestM
+  addRespHeaders $ maybe (ReportsGetSingle $ PageCtx bw{pageTitle, menuItem = Just "Reports", freeTierStatus} content) (const $ ReportsGetSingle' content) hxRequestM
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)

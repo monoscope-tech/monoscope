@@ -388,7 +388,7 @@ bodyWrapper bcfg child = do
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
           input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
           section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem) bcfg.currProject
+            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) (if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem)) bcfg.currProject
             section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
               when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
               -- Empty navbar anchor so OOB morph can remove non-settings navbar
@@ -631,18 +631,12 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
               $ span_ [] (toHtml linkText)
           renderNavItem mTitle mUrl fIcon = do
-            let activeCls = bool "" " active" (fromMaybe pageTitle menuItem == mTitle)
-                flyoutItems = navFlyoutItems pidTxt mTitle
+            -- Page handlers name the section in English; labels may be translated.
+            let sectionTitle = fromMaybe mTitle $ lookup mUrl [(url, title) | (title, url, _) <- menu I18n.En project.id]
+                isActive = fromMaybe pageTitle menuItem == sectionTitle
+                activeCls = bool "" " active" isActive
+                flyoutItems = navFlyoutItems pidTxt sectionTitle
                 hasFlyout = not (null flyoutItems)
-                -- Match section ownership by URL, independently of translated labels.
-                -- Shared tab/settings lists keep sibling routes in sync with navigation.
-                matchPaths
-                  | "/log_explorer" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> path | (_, path) <- explorerTabs] <> ["/p/" <> pidTxt <> "/traces"]
-                  | "/infrastructure/hosts" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> "/infrastructure", "/p/" <> pidTxt <> "/containers"]
-                  | "/api_catalog" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> "/endpoints"]
-                  | "/settings" `T.isSuffixOf` mUrl = [url | (_, url, _) <- navBottomList pidTxt]
-                  | otherwise = []
-                extraMatch = [term "data-match" (T.unwords matchPaths) | not (null matchPaths)]
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
                 ( -- The visible label is display:none while the rail is collapsed, which
@@ -653,7 +647,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                   , Aria.label_ mTitle
                   , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
                   ]
-                    <> extraMatch
+                    <> [term "aria-current" "page" | isActive]
                     <> if hasFlyout then [] else tippyRight_ mTitle <> navTabAttrs
                 )
                 do
