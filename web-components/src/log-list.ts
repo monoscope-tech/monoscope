@@ -1910,8 +1910,8 @@ export class LogList extends LitElement {
       // An Error with an empty message (a bare `new Error()`, some DOM exceptions) took the
       // first branch and produced a blank toast — a failure the reader is shown nothing about.
       const msg = (error instanceof Error && error.message) || 'Network error';
-      // Show inline error when initial load fails (no data yet), toast otherwise
-      if (this.spanListTree.length === 0) {
+      // Replacement failures stay visible; failed pagination keeps its existing rows and toast.
+      if (isFullFetch || this.spanListTree.length === 0) {
         this.fetchError = msg;
       } else {
         this.showErrorToast(msg);
@@ -2780,6 +2780,15 @@ export class LogList extends LitElement {
               </button>
             </div>`
           : nothing}
+        ${!isInitialLoading && this.fetchError
+          ? html`<div role="alert" class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
+              ${faSprite('circle-exclamation', 'regular', 'w-6 h-6 text-textError')}
+              <span class="text-sm text-textStrong">Could not load events</span>
+              <span class="text-sm text-textWeak">${this.fetchError}</span>
+              ${this.spanListTree.length ? html`<span class="text-xs text-textWeak">Previously loaded events are still shown.</span>` : nothing}
+              <button class="btn btn-sm btn-ghost" ?disabled=${this.isLoading} @click=${() => this.fetchData(this.initialFetchUrl || this.buildJsonUrl(), true)}>${this.isLoading ? 'Retrying…' : 'Retry'}</button>
+            </div>`
+          : nothing}
         <table
           role="grid"
           aria-label="${isPatterns ? 'Log patterns' : this.mode === 'sessions' ? 'Sessions' : 'Log events'}"
@@ -2844,7 +2853,7 @@ export class LogList extends LitElement {
                 </tbody>
               `}
         </table>
-        ${!isInitialLoading && this.virtualListItems.length === 0
+        ${!isInitialLoading && !this.fetchError && this.virtualListItems.length === 0
           ? html`<div class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
               ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
               <span class="text-sm text-textWeak">No events match in the selected time range.</span>
@@ -3419,12 +3428,7 @@ export class LogList extends LitElement {
     );
 
   renderLoadMoreButton = () => {
-    if (this.fetchError && this.spanListTree.length === 0) {
-      return errorState(this.logsColumns.length, this.fetchError, () => {
-        this.fetchError = null;
-        this.fetchData(this.buildJsonUrl(), true);
-      });
-    }
+    if (this.fetchError) return nothing;
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
@@ -3470,6 +3474,7 @@ export class LogList extends LitElement {
   };
 
   renderFetchRecentButton = () => {
+    if (this.fetchError) return nothing;
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
@@ -4700,23 +4705,6 @@ function loadingSkeleton(columns: string[]) {
       </tr>
       ${Array.from({ length: 10 }, (_, rowIdx) => skeletonRow(rowIdx, cols))}
     </tbody>
-  `;
-}
-
-function errorState(cols: number, message: string, onRetry: () => void) {
-  return html`
-    <tr class="w-full flex justify-center">
-      <td colspan=${String(cols)} class="w-full mx-auto">
-        <div class="max-w-full mx-auto my-8 text-center p-5 sm:py-10 sm:px-24 flex flex-col gap-3 items-center">
-          ${faSprite('circle-exclamation', 'regular', 'h-10 w-10 stroke-strokeError-strong fill-fillError-strong opacity-70')}
-          <h2 class="text-lg text-textStrong font-semibold">Failed to load events</h2>
-          <p class="text-sm text-textWeak max-w-sm">${message}</p>
-          <button class="btn btn-sm btn-ghost border border-strokeWeak mt-1" @click=${onRetry}>
-            ${faSprite('arrow-rotate-right', 'regular', 'h-3.5 w-3.5')} Retry
-          </button>
-        </div>
-      </td>
-    </tr>
   `;
 }
 

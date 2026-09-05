@@ -941,7 +941,8 @@ renderChart widget = do
           div_ [id_ $ chartId <> "_error", class_ "hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-3 py-1.5"]
             $ div_ [class_ "flex items-center gap-1.5 text-xs text-textError"] do
               Utils.faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0"
-              span_ [class_ "truncate", id_ $ chartId <> "_errorMsg"] ""
+              span_ [class_ "min-w-0 break-words", id_ $ chartId <> "_errorMsg", role_ "status"] ""
+              button_ [type_ "button", id_ $ chartId <> "_retry", hidden_ "", class_ "shrink-0 underline px-2 py-1 disabled:opacity-50"] "Retry"
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
              in div_ [class_ "flex shrink-0 justify-end px-3 pt-3"]

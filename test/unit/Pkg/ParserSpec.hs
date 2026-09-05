@@ -33,6 +33,12 @@ shouldFailWith (Right _) _ = fail "Expected parse error"
 
 spec :: Spec
 spec = do
+  describe "incomplete comparison guidance" do
+    forM_ ["==", "!=", ">=", "<=", ">", "<"] \op ->
+      it ("explains a missing value after " <> toString op) do
+        parseQueryToAST ("level " <> op) `shouldSatisfy` either (T.isInfixOf $ "Add a value after " <> op) (const False)
+    it "does not suggest a value for an unclosed string" do
+      parseQueryToAST "level == \"==" `shouldSatisfy` either (not . T.isInfixOf "Add a value") (const False)
   describe "parseQueryToSQL" do
     it "query with ago() time function" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d)"

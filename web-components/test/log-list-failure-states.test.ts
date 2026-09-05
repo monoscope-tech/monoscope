@@ -63,10 +63,27 @@ describe('a query the server rejects', () => {
     await el.fetchData('bad', true);
 
     expect((el as any).fetchError).toBe('unknown field: srvice.name');
+    await el.updateComplete;
+    expect(el.textContent).toContain('Could not load events');
+    expect(el.textContent).not.toContain('No events match');
+
+    el.transport = serverTransport(logPage([], { hasMore: false }));
+    (el.querySelector('[role="alert"] button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(el.textContent).toContain('No events match'));
+    expect(el.textContent).not.toContain('Could not load events');
   });
 });
 
 describe('a page that fails after rows are already showing', () => {
+  test('labels retained rows when a replacement query fails', async () => {
+    const el = await loaded();
+    el.transport = async () => { throw new Error('query failed'); };
+    await el.fetchData('replacement', true);
+    await el.updateComplete;
+    expect(ids(el)).toEqual(['a', 'b']);
+    expect(el.textContent).toContain('Previously loaded events are still shown.');
+    expect(el.textContent).not.toContain('No events match');
+  });
   // Blanking the list would throw away the evidence the reader is working from; the failure
   // belongs in a toast instead.
   test('keeps the rows and reports the failure as a toast', async () => {

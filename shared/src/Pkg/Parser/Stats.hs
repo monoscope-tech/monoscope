@@ -1261,7 +1261,7 @@ badTimespan sections = listToMaybe [(t, msg) | SummarizeCommand _ by <- sections
 renderParseError :: Text -> ParseErrorBundle Text Void -> QueryError
 renderParseError q bundle =
   QueryError
-    { message = "Syntax error at column " <> show col <> ": " <> detail
+    { message = "Syntax error at column " <> show col <> ": " <> fromMaybe detail missingValue
     , column = col
     , -- Underline from the failure to the end of the offending token, or one
       -- character when it sits at the very end of the input.
@@ -1271,6 +1271,10 @@ renderParseError q bundle =
     (err :| _, _) = attachSourcePos errorOffset (bundleErrors bundle) (bundlePosState bundle)
     col = unPos (sourceColumn (snd err))
     detail = T.intercalate ", " . filter (not . T.null) . lines . toText . parseErrorTextPretty $ fst err
+    missingValue = do
+      op <- find (`T.isSuffixOf` q) ["==", "!=", ">=", "<=", ">", "<"]
+      guard $ isRight $ parse parseQuery "" (q <> " 0")
+      pure $ "Add a value after " <> op <> ", for example \"ERROR\" or 500."
 
 
 -- | Reject bare identifiers that name no column, so a typo surfaces as a

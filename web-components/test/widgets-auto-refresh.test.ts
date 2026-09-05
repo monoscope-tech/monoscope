@@ -39,11 +39,90 @@ describe('Log Explorer chart auto-refresh', () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
+    vi.restoreAllMocks();
     globalThis.fetch = originalFetch;
     delete (window as any).echarts;
     delete (window as any).logListTable;
     document.body.innerHTML = '';
     document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+    history.replaceState({}, '', '/');
+  });
+
+  test('counts failures per widget and does not hide a failure for a changed query', async () => {
+    const instances = new Map<string, ReturnType<typeof chart>>();
+    (window as any).echarts = { getInstanceByDom: () => null, init: (el: HTMLElement) => {
+      const instance = chart(); instances.set(el.id, instance); return instance;
+    } };
+    document.body.innerHTML = ['volume', 'latency'].map(id =>
+      `<div id="${id}" data-chart-widget></div><div id="${id}_error" class="hidden"><span id="${id}_errorMsg"></span></div>`).join('');
+    globalThis.fetch = vi.fn(async (url: string) => ({ ok: true, json: async () =>
+      new URL(url, location.origin).searchParams.get('pid') === 'volume' ? { error: 'query failed' } : chartData
+    })) as any;
+    for (const id of ['volume', 'latency']) {
+      const config = widget(id);
+      (config.opt.dataset as any).source = [['timestamp', 'count'], [0, 1]];
+      (window as any).chartWidget({ ...config, pid: id });
+    }
+    const tick = async (n: number) => {
+      window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+      await vi.waitFor(() => {
+        for (const instance of instances.values()) expect(instance.hideLoading).toHaveBeenCalledTimes(n);
+      });
+    };
+    await tick(1);
+    await tick(2);
+    expect(document.getElementById('volume_error')!.classList.contains('hidden')).toBe(true);
+    await tick(3);
+    expect(document.getElementById('volume_errorMsg')!.textContent).toContain('last successful data');
+    expect(document.getElementById('latency_error')!.classList.contains('hidden')).toBe(true);
+    history.replaceState({}, '', '/?query=level%20%3D%3D');
+    await tick(4);
+    expect(document.getElementById('volume_errorMsg')!.textContent).toBe('query failed');
+  });
+
+  test.each(['network', 'query'])('%s failures keep data quiet until the third consecutive background failure', async (failure) => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volumeValue"></div>' +
+      '<div id="volume_error" class="hidden"><span id="volume_errorMsg"></span><button id="volume_retry">Retry</button></div>';
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let fail = false;
+    globalThis.fetch = vi.fn(async () => {
+      if (fail && failure === 'network') throw new Error('offline');
+      return { ok: true, json: async () => fail ? { error: 'Query execution failed' } : chartData };
+    }) as any;
+    (window as any).chartWidget(widget('volume'));
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalledTimes(1));
+    const value = document.getElementById('volumeValue')!.textContent;
+    const banner = document.getElementById('volume_error')!;
+    let completed = 1;
+    const refresh = async (background = true) => {
+      window.dispatchEvent(new CustomEvent('update-query', { detail: { source: background ? 'auto-refresh' : 'user' } }));
+      completed++;
+      await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalledTimes(completed));
+    };
+    fail = true;
+    await refresh();
+    await refresh();
+    expect(banner.classList.contains('hidden')).toBe(true);
+    expect(document.getElementById('volumeValue')!.textContent).toBe(value);
+    fail = false;
+    await refresh(); // recovery resets the count
+    fail = true;
+    await refresh();
+    await refresh();
+    expect(banner.classList.contains('hidden')).toBe(true);
+    await refresh();
+    expect(banner.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('volume_errorMsg')!.textContent).toContain('last successful data');
+    expect(document.getElementById('volumeValue')!.textContent).toBe(value);
+    fail = false;
+    await refresh();
+    expect(banner.classList.contains('hidden')).toBe(true);
+    fail = true;
+    await refresh(false); // an explicit request reports failure immediately
+    expect(banner.classList.contains('hidden')).toBe(false);
   });
 
   test('refreshes each chart once without flashing or refetching the list', async () => {
@@ -123,7 +202,7 @@ describe('Log Explorer chart auto-refresh', () => {
     (window as any).echarts = { getInstanceByDom: () => null, init: () => chart() };
     document.body.innerHTML =
       '<div id="volume" data-chart-widget></div><div id="volume_loader" class="hidden"></div>' +
-      '<div id="volume_bordered"></div><div id="volume_error" class="hidden"></div><div id="volume_errorMsg"></div>';
+      '<div id="volume_bordered"></div><div id="volume_error" class="hidden"><div id="volume_errorMsg"></div><button id="volume_retry" hidden>Retry</button></div>';
 
     const logged: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
@@ -142,10 +221,24 @@ describe('Log Explorer chart auto-refresh', () => {
     await vi.waitFor(() => expect(logged.length).toBeGreaterThan(0));
     spy.mockRestore();
 
+    const retry = document.getElementById('volume_retry') as HTMLButtonElement;
+    expect(retry.hidden).toBe(false);
+    expect(document.getElementById('volume_error')?.classList.contains('hidden')).toBe(false);
+    const refetchList = vi.fn();
+    (window as any).logListTable = { refetchLogs: refetchList };
+    const response = Promise.withResolvers<typeof chartData>();
+    globalThis.fetch = vi.fn(async () => ({ ok: true, json: () => response.promise })) as any;
+    retry.click();
+    retry.click();
+    expect(retry.disabled).toBe(true);
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    response.resolve(chartData);
+    await vi.waitFor(() => expect(retry.disabled).toBe(false));
+    expect(document.getElementById('volume_error')?.classList.contains('hidden')).toBe(true);
+    expect(refetchList).not.toHaveBeenCalled();
+
     const all = logged.join(' ');
     expect(all).toContain('502');
     expect(all).not.toContain('did not match the expected pattern');
-    // The user still gets the friendly banner; only the logged error changes.
-    expect(document.getElementById('volume_error')?.classList.contains('hidden')).toBe(false);
   });
 });

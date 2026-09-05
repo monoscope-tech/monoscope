@@ -214,12 +214,20 @@ export const getChartStyles = () => {
 // describing, which left both unreadable. Whatever the chart last drew stays
 // visible underneath, which is usually the context you want while reading why
 // the refresh failed. Only the legitimately-empty range keeps a centred overlay.
-export const showChartError = (chartId: string, message: string) => {
+export const showChartError = (chartId: string, message: string, retry?: () => Promise<void>) => {
   hideNoDataOverlay(chartId);
   const msg = $(`${chartId}_errorMsg`);
   if (!msg) return;
   msg.textContent = message;
-  msg.title = message; // the banner truncates; the full text lives in the tooltip
+  msg.title = message;
+  const button = document.getElementById(`${chartId}_retry`) as HTMLButtonElement | null;
+  if (button) {
+    button.hidden = !retry;
+    button.onclick = retry ? async () => {
+      button.disabled = true;
+      try { await retry(); } finally { button.disabled = false; }
+    } : null;
+  }
   $(`${chartId}_error`)?.classList.remove('hidden');
 };
 
@@ -516,16 +524,37 @@ const takePrefetched = async (chartId: string, url: string): Promise<ChartDataRe
 // over a chart that is already drawn reads as the page breaking, several times a minute, and it
 // tells the reader nothing they need — the previous rendering stays correct right up until the
 // new data replaces it. Loaders belong to the initial load and to explicit user actions.
+const chartRefreshState = new WeakMap<object, { url: string; hasData: boolean; failures: number }>();
+const BACKGROUND_FAILURE_THRESHOLD = 3;
+
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal, showLoader = true) => {
   if (!shouldFetch || signal.aborted) return;
 
   const { chartId } = widgetData;
+  const url = chartDataUrl(widgetData);
+  let state = chartRefreshState.get(chart);
+  if (!state || state.url !== url) {
+    state = { url, hasData: false, failures: 0 };
+    chartRefreshState.set(chart, state);
+  }
   const isStale = beginChartFetch(chartId);
+  const retry = () => updateChartData(chart, opt, true, widgetData, signal);
+  const reportFailure = (message: string) => {
+    state.failures = showLoader ? 0 : state.failures + 1;
+    chart.hideLoading();
+    if (!showLoader && state.hasData) {
+      if (state.failures >= BACKGROUND_FAILURE_THRESHOLD) {
+        showChartError(chartId, 'Updates delayed. Showing last successful data.', retry);
+      }
+      return;
+    }
+    showChartError(chartId, message, retry);
+    if (!state.hasData) setStatValue(widgetData, null);
+  };
   // Batch DOM updates before fetch
   if (showLoader) setChartLoading(chartId, true);
 
   try {
-    const url = chartDataUrl(widgetData);
     const { from, to, headers, dataset, rows_per_min, stats, error }: ChartDataResponse =
       (await takePrefetched(chartId, url)) ??
       (await limitedFetch(url, signal).then((res) => {
@@ -548,9 +577,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
       // so the user can distinguish a broken widget from an empty range.
-      chart.hideLoading();
-      showChartError(chartId, error);
-      setStatValue(widgetData, null); // clear the stat spinner; failed ≠ loading
+      reportFailure(error);
       return;
     }
     const trmHeaders = headers?.map((h) => {
@@ -586,6 +613,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       hideNoDataOverlay(chartId);
     }
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+    state.hasData = !!dataset?.length;
+    state.failures = 0;
     if ((window as any).barChart) {
       (window as any).barChart.dispatchAction({
         type: 'takeGlobalCursor',
@@ -595,15 +624,11 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
     window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId, total: sumTimeseriesValues(dataset) } }));
   } catch (e) {
-    if (signal.aborted) return;
+    if (signal.aborted || isStale()) return;
     console.error('Failed to fetch new data:', e);
-    chart.hideLoading();
-    if (!isStale()) {
-      showChartError(chartId, "Couldn't load this chart. Try refreshing or changing the time range.");
-      setStatValue(widgetData, null); // clear the stat spinner on fetch failure
-    }
+    reportFailure("Couldn't load this chart. Retry to fetch it again.");
   } finally {
-    setChartLoading(chartId, false);
+    if (!signal.aborted && !isStale()) setChartLoading(chartId, false);
   }
 };
 
@@ -858,6 +883,7 @@ const chartWidget = (widgetData: WidGetData) => {
   }
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
+  chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
   applyHighlightBand(chart, widgetData);
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
 
@@ -871,7 +897,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   liveStreamCheckbox?.addEventListener('change', () => {
     if (liveStreamCheckbox.checked) {
-      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal), INITIAL_FETCH_INTERVAL);
+      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData, controller.signal, false), INITIAL_FETCH_INTERVAL);
     } else if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;

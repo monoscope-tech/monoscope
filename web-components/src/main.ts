@@ -530,33 +530,68 @@ let _cachedSearch = '',
 // like Resource-by-Service stay correct). Server-side rendering skips computing
 // these to keep the multi-second DISTINCT scan off the page critical path, so we
 // load them client-side: lazily on first dropdown open, and again on update-query.
-async function reloadVarWhitelist(input: HTMLElement) {
+const variableRefreshes = new WeakMap<HTMLElement, { url: string; request: Promise<void> }>();
+const variableLastRefresh = new WeakMap<HTMLElement, { url: string; startedAt: number }>();
+const VARIABLE_REFRESH_INTERVAL = 5 * 60_000;
+
+function reloadVarWhitelist(input: HTMLElement, background = false): Promise<void> {
   const querySql = input.getAttribute('data-tagify-query-sql') || '';
   const query = input.getAttribute('data-tagify-query') || '';
-  if (!querySql && !query) return;
+  if (!querySql && !query) return Promise.resolve();
   const tgfy = (input as any)._tagifyInstance;
-  try {
-    tgfy?.loading(true);
-    const params = new URLSearchParams({
-      ...Object.fromEntries(new URLSearchParams(location.search)),
-      query,
-      query_sql: querySql,
-      data_type: 'text',
-    });
-    const { data_text } = await fetch(`/chart_data?${params}`).then((res) => res.json());
-    if (tgfy) {
-      tgfy.settings.whitelist = data_text.map((i: any) => (i.length === 1 ? i[0] : { value: i[0], name: i[1] }));
-      tgfy.loading(false);
+  if (!tgfy) return Promise.resolve();
+  const params = new URLSearchParams({
+    ...Object.fromEntries(new URLSearchParams(location.search)),
+    query,
+    query_sql: querySql,
+    data_type: 'text',
+  });
+  const url = `/chart_data?${params}`;
+  const active = variableRefreshes.get(input);
+  if (active?.url === url) return active.request;
+  const last = variableLastRefresh.get(input);
+  if (background && last?.url === url && Date.now() - last.startedAt < VARIABLE_REFRESH_INTERVAL) return Promise.resolve();
+  // Pace failed attempts too, so an unavailable backend is not retried on every tick.
+  variableLastRefresh.set(input, { url, startedAt: Date.now() });
+  const refresh = { url, request: Promise.resolve() };
+  variableRefreshes.set(input, refresh);
+  refresh.request = (async () => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Variable options request failed: ${response.status}`);
+      const { data_text, error } = await response.json();
+      if (error) throw new Error(error);
+      if (!Array.isArray(data_text)) throw new Error('Variable options response is missing data');
+      if (variableRefreshes.get(input) !== refresh || (input as any)._tagifyInstance !== tgfy || !input.isConnected) return;
+      // Keep the picker usable, including its open menu, search text and selected tags.
+      // A quiet time window must not remove values the user may still need to select.
+      const existing = tgfy.settings.whitelist ?? [];
+      const valueOf = (option: any) => String(typeof option === 'object' ? option.value : option);
+      const seen = new Set(existing.map(valueOf));
+      const additions = data_text
+        .filter((row: unknown) => Array.isArray(row) && row.length > 0)
+        .map((row: any[]) => (row.length === 1 ? row[0] : { value: row[0], name: row[1] }))
+        .filter((option: any) => {
+          const value = valueOf(option);
+          if (seen.has(value)) return false;
+          seen.add(value);
+          return true;
+        });
+      if (additions.length) tgfy.settings.whitelist = [...existing, ...additions];
+    } catch (e) {
+      console.error(`Error fetching data for ${(input as any).name}:`, e);
+    } finally {
+      if (variableRefreshes.get(input) === refresh) variableRefreshes.delete(input);
     }
-  } catch (e) {
-    console.error(`Error fetching data for ${(input as any).name}:`, e);
-  }
+  })();
+  return refresh.request;
 }
 (window as any).reloadVarWhitelist = reloadVarWhitelist;
 
 // Reload whitelist for dashboard variables with data-tagify-reload-on-change on update-query
-window.addEventListener('update-query', async () => {
-  document.querySelectorAll<HTMLElement>('.dash-variable-input[data-tagify-reload-on-change="true"]').forEach(reloadVarWhitelist);
+window.addEventListener('update-query', (event) => {
+  const background = (event as CustomEvent).detail?.source === 'auto-refresh';
+  document.querySelectorAll<HTMLElement>('.dash-variable-input[data-tagify-reload-on-change="true"]').forEach((input) => reloadVarWhitelist(input, background));
   (window as any).interpolateVarTemplates();
 });
 
