@@ -102,6 +102,18 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf ("id=\"mute-pop-" <> UUID.toText alertId <> "-desktop\"")
       html `shouldSatisfy` T.isInfixOf ("id=\"mute-pop-" <> UUID.toText alertId <> "-mobile\"")
 
+    -- Regression: a healthy monitor rendered a green status dot beside a grey badge.
+    -- statusBadge_ matched labels as Text over eight spellings, and "Normal" — the one
+    -- statusInfo actually produces for MSNormal — was the live value missing from that
+    -- list, so it hit the grey default. The badge now takes the status itself, which
+    -- makes both the omission and the five never-produced spellings unrepresentable.
+    it "healthyMonitor_statusBadgeMatchesItsGreenDot" \tr -> do
+      _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
+      (_, page) <- testServant tr $ Alerts.unifiedMonitorOverviewH testPid (UUID.toText alertId)
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldSatisfy` T.isInfixOf "Normal"
+      html `shouldSatisfy` T.isInfixOf "badge-success"
+
     -- A bulk action authenticates the session against `pid`, then mutates monitors by
     -- id alone: none of the six monitorXByIds queries carried a project_id predicate,
     -- so any authenticated user could mute/deactivate/resolve/delete another tenant's

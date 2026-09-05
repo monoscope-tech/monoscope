@@ -529,7 +529,7 @@ renderNameCol item = do
     div_ [class_ "flex items-center gap-2"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 tooltip tooltip-right " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), data_ "tip" $ bool "Inactive" "Active" isActive] ""
       a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
-      when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False si.statusLabel
+      when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False (MDStatus item.currentStatus)
       whenJust item.mutedUntil \until' ->
         let muteLabel = untilLabel "Muted" item.now until'
          in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0 tooltip tooltip-top", data_ "tip" muteLabel] do
@@ -661,24 +661,41 @@ toUnifiedMonitorItem teamMap pid currTime alert =
     }
 
 
-statusBadge_ :: Bool -> Text -> Html ()
-statusBadge_ isLarge status = do
-  let isAlerting = status `elem` ["Alerting", "alert"]
-      (badgeClass, icon) = case status of
-        "Passing" -> ("badge-success", "check")
-        "Failing" -> ("badge-error", "xmark")
-        "Active" -> ("badge-success", "circle-check")
-        "Inactive" -> ("badge-ghost", "circle-pause")
-        "Warning" -> ("badge-warning", "triangle-exclamation")
-        "Healthy" -> ("badge-success", "heart-pulse")
-        "Pending" -> ("badge-ghost", "clock")
-        "NoData" -> ("badge-ghost", "circle-question")
-        _ -> bool ("badge-ghost", "circle") ("badge-error", "bell-exclamation") isAlerting
+-- | What the status badge shows: a monitor's evaluated status, or that it has been
+-- deactivated, which overrides the status entirely.
+--
+-- Was a 'Text' matched against eight spellings. Five of them (@Passing@, @Failing@,
+-- @Healthy@, @Pending@, @NoData@) were produced nowhere in the tree, and the one live
+-- value the list omitted — @Normal@ — fell through to the grey default while 'statusInfo'
+-- already coloured that same state green, so a healthy monitor rendered a green dot beside
+-- a grey badge. Taking the status instead of its label makes both halves unrepresentable.
+data MonitorDisplay = MDDeactivated | MDStatus Monitors.MonitorStatus
+  deriving stock (Eq, Show)
+
+
+-- | Deactivation wins over whatever the last evaluation left in @currentStatus@.
+monitorDisplay :: Monitors.QueryMonitor -> MonitorDisplay
+monitorDisplay alert = maybe (MDStatus alert.currentStatus) (const MDDeactivated) alert.deactivatedAt
+
+
+displayLabel :: MonitorDisplay -> Text
+displayLabel MDDeactivated = "Inactive"
+displayLabel (MDStatus s) = (statusInfo s).statusLabel
+
+
+statusBadge_ :: Bool -> MonitorDisplay -> Html ()
+statusBadge_ isLarge st = do
+  let isAlerting = st == MDStatus Monitors.MSAlerting
+      (badgeClass, icon) = case st of
+        MDDeactivated -> ("badge-ghost", "circle-pause")
+        MDStatus Monitors.MSAlerting -> ("badge-error", "bell-exclamation")
+        MDStatus Monitors.MSWarning -> ("badge-warning", "triangle-exclamation")
+        MDStatus Monitors.MSNormal -> ("badge-success", "circle-check")
       sizeClass = bool "badge-sm" "" isLarge
       iconSize = bool "h-3 w-3" "h-4 w-4" isLarge
   span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" isAlerting] do
     faSprite_ icon "regular" iconSize
-    toHtml status
+    toHtml $ displayLabel st
 
 
 -- | Rewrite @bin_auto@ to a fixed @<mins>m@ interval via the KQL AST so the monitor
@@ -772,7 +789,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   section_ [class_ "pt-2 mx-auto max-md:px-2 px-4 w-full flex flex-col gap-4 pb-4"] do
     div_ [class_ "flex items-center gap-3"] do
       h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)
-      statusBadge_ False displayName
+      statusBadge_ False display
 
     div_ [class_ "flex flex-wrap gap-2 items-center"] do
       metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
@@ -784,7 +801,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
           toHtml $ untilLabel "Muted" currTime until'
 
     div_ [class_ "flex max-md:flex-col gap-6 max-md:gap-3 border-t border-strokeWeak pt-4"] do
-      div_ [class_ "md:hidden"] $ alertSidebar_ displayName alert currTime
+      div_ [class_ "md:hidden"] $ alertSidebar_ display alert currTime
       div_ [class_ "flex-1 min-w-0 flex flex-col gap-3"] do
         div_ [class_ "flex items-center gap-2 flex-wrap"] do
           TimePicker.timepicker_ Nothing Nothing Nothing
@@ -802,7 +819,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
               , Widget.warningThreshold = alert.warningThreshold
               , Widget.showThresholdLines = Just "always"
               }
-      div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ displayName alert currTime
+      div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ display alert currTime
 
     -- Which tab is open is DOM state (radio), so no script is needed and it survives a morph.
     div_ [role_ "tablist", class_ "w-full group/mt", id_ "monitor-tabs"] do
@@ -812,7 +829,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
       div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
-    displayName = bool (statusInfo alert.currentStatus).statusLabel "Inactive" (isJust alert.deactivatedAt)
+    display = monitorDisplay alert
 
 
 monitorHistoryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorId -> Html ()
@@ -823,12 +840,12 @@ monitorHistoryTab_ pid alertId = do
     termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" initialUrl] ("" :: Text)
 
 
-alertSidebar_ :: Text -> Monitors.QueryMonitor -> UTCTime -> Html ()
-alertSidebar_ displayName alert currTime = do
+alertSidebar_ :: MonitorDisplay -> Monitors.QueryMonitor -> UTCTime -> Html ()
+alertSidebar_ display alert currTime = do
   div_ [class_ "w-full border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
     div_ [class_ "md:hidden divide-y divide-strokeWeak text-sm"] do
       div_ [class_ "px-3 py-2 flex items-center justify-between"] do
-        statusBadge_ True displayName
+        statusBadge_ True display
         span_ [class_ $ statusColor <> " tabular-nums text-xl font-bold"] $ toHtml $ formatWithCommas alert.currentValue
       mobileRow_ "Trigger" $ span_ [class_ "tabular-nums"] $ toHtml $ direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> mobileRow_ "Warning" $ span_ [class_ "tabular-nums text-textWarning"] $ toHtml $ direction <> " " <> formatWithCommas w
@@ -839,7 +856,7 @@ alertSidebar_ displayName alert currTime = do
       mobileRow_ "Last eval" $ span_ [] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.lastEvaluated
       mobileRow_ "Last triggered" $ span_ [class_ "text-textWeak"] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
     div_ [class_ "max-md:hidden divide-y divide-strokeWeak"] do
-      sidebarItem_ "Status" $ statusBadge_ True displayName
+      sidebarItem_ "Status" $ statusBadge_ True display
       sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.currentValue
       sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
       sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
