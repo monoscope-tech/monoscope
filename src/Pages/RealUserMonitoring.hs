@@ -804,7 +804,13 @@ slot_ page panel skeleton content
   | otherwise =
       Components.deferredShell_
         (panelId panel)
-        (rumUrl page.links [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")])
+        -- Search, session filter and selected session ride along so a deep link still
+        -- renders as the page it addressed; without them the sessions panel came back
+        -- unfiltered with nothing selected.
+        ( rumUrl page.links
+            $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
+            <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+        )
         -- Deliberately NOT serialised with @hx-sync ... queue@. The panels do contend in
         -- TimeFusion, but measured cold over 24h that is still the better trade: concurrent
         -- paints the first panel at 2.6s and finishes at 24.7s, queued paints the first at
@@ -1204,7 +1210,10 @@ sessionTable_ workspace links sessions query sessionFilter =
        in href_ url
             : if workspace
               then
-                [ hxGet_ $ url <> "&deferred=1"
+                [ -- @panel=sessions@ is what makes the response carry the workspace at all: a
+                  -- deferred request without a panel renders every slot as a shell, so the
+                  -- hx-select found nothing and the outerHTML swap deleted the workspace.
+                  hxGet_ $ url <> "&panel=sessions&deferred=1"
                 , hxTarget_ "#rum-replay-workspace"
                 , hxSelect_ "#rum-replay-workspace"
                 , hxSwap_ "outerHTML"

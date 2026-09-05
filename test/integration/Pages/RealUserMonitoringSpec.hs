@@ -138,6 +138,14 @@ spec = sequential $ aroundAll withTestResources do
       sessions <- renderPage tr (Just "sessions") Nothing (Just "errors") (Just sessionId)
       sessions `shouldContainAll` ["With errors", "Ada Lovelace", "Watch replay", "initialSession=\"00000000-0000-0000-0000-000000000042\"", "hx-target=\"#rum-replay-workspace\"", "hx-sync=\"#rum-replay-workspace:replace\""]
       T.isInfixOf "/search" sessions `shouldBe` False
+      -- A row click must fetch the sessions panel: a deferred request without a panel renders
+      -- only shells, hx-select finds no workspace in it, and the outerHTML swap deletes the
+      -- workspace from the page.
+      sessions `shouldContainAll` ["panel=sessions&amp;deferred=1"]
+      -- And the shells a deep link renders must carry its filter and selection, or the panel
+      -- they fetch comes back unfiltered with nothing selected.
+      (_, deepShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing (Just "errors") Nothing Nothing (Just "24H") (Just sessionId) Nothing Nothing (Just "1")
+      toStrict (Lucid.renderText $ Lucid.toHtml deepShell) `shouldContainAll` ["filter=errors", "session=00000000-0000-0000-0000-000000000042"]
 
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
       T.isInfixOf "No recording" replaySessions `shouldBe` False
