@@ -393,56 +393,45 @@ otelSessions scope =
       )
 
 
--- | P75 of each vital per time bucket — an honest percentile within every bucket, unlike
--- the summary cards' recent-sample estimate. This is what makes a regression visible as a
--- change over time rather than a slightly different aggregate.
-rumVitalTrend :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> RumBucket -> Eff es [VitalTrendPoint]
-rumVitalTrend scope bucket =
-  let bucketLit = fromString $ toString $ "'" <> renderBucket bucket <> "'"
-   in Hasql.withHasqlTimefusion scope.useTf
-        $ Hasql.interp
-          ( [HI.sql|
-            SELECT time_bucket(|]
-              <> bucketLit
-              <> [HI.sql|, timestamp), metric_name,
-              approx_percentile(0.75, percentile_agg(COALESCE(value, distribution_sum / NULLIF(distribution_count, 0))))::float8
-            FROM otel_metrics
-            WHERE |]
-              <> scopePredicate scope
-              <> [HI.sql| AND metric_name IN |]
-              <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
-              <> [HI.sql| AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
-            GROUP BY 1, 2 ORDER BY 1|]
-          )
-
-
--- | P75 of each vital per page. The site-wide P75 hides exactly the page being hunted: a
--- checkout LCP regression disappears into a healthy landing-page average. Our SDK stamps
--- @page.url@ on every vital datapoint; k6's browser module stamps @url@.
-rumPageVitals :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [PageVitalPoint]
-rumPageVitals scope =
-  -- Both nested ({"page":{"url":..}}) and flat ({"page.url":..}) spellings, because the two
-  -- stores may not agree on how a dotted attribute key was flattened at ingest.
-  let vitalPage = [HI.sql|COALESCE(attributes->'page'->>'url', attributes->>'page.url', attributes->>'url')|]
-   in Hasql.withHasqlTimefusion scope.useTf
-        $ Hasql.interp
-          ( [HI.sql|
-            SELECT |]
-              <> vitalPage
-              <> [HI.sql|, metric_name,
-              approx_percentile(0.75, percentile_agg(COALESCE(value, distribution_sum / NULLIF(distribution_count, 0))))::float8,
-              COUNT(*)::bigint
-            FROM otel_metrics
-            WHERE |]
-              <> scopePredicate scope
-              <> [HI.sql| AND metric_name IN |]
-              <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
-              <> [HI.sql| AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
-              AND |]
-              <> vitalPage
-              <> [HI.sql| IS NOT NULL
-            GROUP BY 1, 2 ORDER BY 4 DESC LIMIT 150|]
-          )
+-- | P75 of each vital per time bucket AND per page, from one scan. These are two views of
+-- the same rows: a full-window read of otel_metrics is the expensive part (concurrent with
+-- the span panels it ran 20–48s on the demo project), so both groupings share it via
+-- GROUPING SETS. The bucket rows make a regression visible as a change over time; the page
+-- rows find the page it happened on — a site-wide P75 hides exactly the page being hunted.
+-- Our SDK stamps @page.url@ on every vital datapoint; k6's browser module stamps @url@.
+rumVitalsDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> RumBucket -> Eff es ([VitalTrendPoint], [PageVitalPoint])
+rumVitalsDetail scope bucket = do
+  let bucketExpr = [HI.sql|time_bucket(|] <> fromString (toString $ "'" <> renderBucket bucket <> "'") <> [HI.sql|, timestamp)|]
+      -- Both nested ({"page":{"url":..}}) and flat ({"page.url":..}) spellings, because the
+      -- two stores may not agree on how a dotted attribute key was flattened at ingest.
+      pageExpr = [HI.sql|COALESCE(attributes->'page'->>'url', attributes->>'page.url', attributes->>'url')|]
+  rows :: [(Maybe UTCTime, Maybe Text, Text, Double, Int64)] <-
+    Hasql.withHasqlTimefusion scope.useTf
+      $ Hasql.interp
+        ( [HI.sql|SELECT |]
+            <> bucketExpr
+            <> [HI.sql|, |]
+            <> pageExpr
+            <> [HI.sql|, metric_name,
+            approx_percentile(0.75, percentile_agg(COALESCE(value, distribution_sum / NULLIF(distribution_count, 0))))::float8,
+            COUNT(*)::bigint
+          FROM otel_metrics
+          WHERE |]
+            <> scopePredicate scope
+            <> [HI.sql| AND metric_name IN |]
+            <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
+            <> [HI.sql| AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
+          GROUP BY GROUPING SETS ((|]
+            <> bucketExpr
+            <> [HI.sql|, metric_name), (|]
+            <> pageExpr
+            <> [HI.sql|, metric_name)) ORDER BY 1|]
+        )
+  let trend = [VitalTrendPoint bucketTime metric p75 | (Just bucketTime, _, metric, p75, _) <- rows]
+      -- Bucket NULL and page NULL together is the page grouping's "vitals without a page
+      -- attribute" bucket; a page column can't represent it, so it is dropped.
+      byPage = [PageVitalPoint page metric p75 samples | (Nothing, Just page, metric, p75, samples) <- rows]
+  pure (trend, take 150 $ sortWith (Down . (.samples)) byPage)
 
 
 -- | Traffic per user agent string, busiest first. Classification into browser, OS and
@@ -601,7 +590,7 @@ data RumLinks = RumLinks
 -- window, costing 0.5–4s on its own, and the panels together contend badly enough that six
 -- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
-data RumPanel = PanelServices | PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelPageVitals | PanelErrors | PanelSessions | PanelAudience
+data RumPanel = PanelServices | PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelAudience
   deriving stock (Eq, Read, Show)
 
 
@@ -660,10 +649,9 @@ cacheableRumResult = \case
   SessionsResult rows -> not $ null rows
   ReplaySessionsResult rows -> not $ null rows
   VitalSamplesResult rows -> not $ null rows
-  VitalTrendResult rows -> not $ null rows
+  VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
   ServicesResult names -> not $ null names
   BreakdownResult rows -> not $ null rows
-  PageVitalsResult rows -> not $ null rows
 
 
 -- | Every RUM panel is a separate scan of a 24-hour window, and a tab click re-runs all of
@@ -714,8 +702,9 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessions scope)
       replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessions scope)
       vitalsQ = ("web vitals" :: Text, cacheKey VitalSamplesQuery, panelTtl, VitalSamplesResult <$> vitalSamples scope)
-      vitalTrendQ = ("web vitals trend" :: Text, cacheKey $ VitalTrendQuery bucket, panelTtl, VitalTrendResult <$> rumVitalTrend scope bucket)
-      pageVitalsQ = ("page vitals" :: Text, cacheKey PageVitalsQuery, panelTtl, PageVitalsResult <$> rumPageVitals scope)
+      -- Held longer than the panel TTL: this is the heaviest scan on the page, and per-page
+      -- P75s move on deploys, not by the minute.
+      vitalsDetailQ = ("web vitals detail" :: Text, cacheKey $ VitalsDetailQuery bucket, max panelTtl (TimeSpec 900 0), uncurry VitalsDetailResult <$> rumVitalsDetail scope bucket)
       breakdownQ = ("audience" :: Text, cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
       -- The picker is on every tab, so its options are read on every tab.
       -- Keyed unscoped, matching the query: the option list is the same whichever service is
@@ -736,8 +725,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         Just PanelPulse -> [pulseQ]
         Just PanelPages -> [pagesQ]
         Just PanelVitals -> [vitalsQ]
-        Just PanelVitalTrend -> [vitalTrendQ]
-        Just PanelPageVitals -> [pageVitalsQ]
+        Just PanelVitalTrend -> [vitalsDetailQ]
         Just PanelErrors -> [errorsQ]
         Just PanelSessions -> [sessionsQ, replaysQ]
         Just PanelAudience -> [breakdownQ]
@@ -762,8 +750,8 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         errors = fold [value | ErrorsResult value <- results]
         sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
-        vitalTrend = fold [value | VitalTrendResult value <- results]
-        pageVitals = fold [value | PageVitalsResult value <- results]
+        vitalTrend = fold [value | VitalsDetailResult value _ <- results]
+        pageVitals = fold [value | VitalsDetailResult _ value <- results]
         services = fold [value | ServicesResult value <- results]
         breakdown = fold [value | BreakdownResult value <- results]
     pure RumData{links, tab, panel, summary, trend, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
@@ -1251,8 +1239,9 @@ replayPrompt_ title description action =
 performance_ :: RumData -> Html ()
 performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
   slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page
-  slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) $ vitalTrendPanel_ page.vitalTrend
-  slot_ page PanelPageVitals (panelSkeleton_ $ Components.tableSkeleton_ 5) $ pageVitalsTable_ page.pageVitals
+  slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
+    vitalTrendPanel_ page.vitalTrend
+    div_ [class_ "mt-4"] $ pageVitalsTable_ page.pageVitals
   div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
     slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
     slot_ page PanelErrors (panelSkeleton_ $ Components.tableSkeleton_ 5) $ recentErrors_ page.links page.errors

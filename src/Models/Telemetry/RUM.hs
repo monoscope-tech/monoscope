@@ -145,8 +145,7 @@ data RumQueryResult
   | SessionsResult [RumSession]
   | ReplaySessionsResult [ReplaySession]
   | VitalSamplesResult [VitalSample]
-  | VitalTrendResult [VitalTrendPoint]
-  | PageVitalsResult [PageVitalPoint]
+  | VitalsDetailResult [VitalTrendPoint] [PageVitalPoint]
   | ServicesResult [Text]
   | BreakdownResult [RumBreakdown]
 
@@ -158,8 +157,7 @@ data RumQuery
   | SessionsQuery
   | ReplaySessionsQuery
   | VitalSamplesQuery
-  | VitalTrendQuery RumBucket
-  | PageVitalsQuery
+  | VitalsDetailQuery RumBucket
   | ServicesQuery
   | BreakdownQuery
   deriving stock (Eq, Generic, Ord, Show)
