@@ -50,6 +50,10 @@ export const CARD_H = 62;
 // Horizontal room between one hop and the next, and vertical room between siblings.
 export const LAYER_GAP = 96;
 export const NODE_GAP = 26;
+// Fit-to-view never zooms below this: cards must stay identifiable after a fit. A map that
+// cannot fit at this zoom overflows the pane and is panned instead.
+export const MIN_FIT_ZOOM = 0.5;
+const FIT_PAD = 24;
 
 /**
  * The payload carries both levels: collapsed group heads plus the members that would
@@ -210,7 +214,22 @@ export async function layoutGraph(
   // ELK reports a node's top-left; echarts positions a symbol by its centre.
   const coords = new Map<string, Point>();
   const w = opts.cardW ?? CARD_W, h = opts.cardH ?? CARD_H;
-  for (const n of laid.children ?? []) coords.set(n.id, { x: (n.x ?? 0) + w / 2, y: (n.y ?? 0) + h / 2 });
+  const gap = opts.nodeGap ?? NODE_GAP;
+  // SIMPLE placement centres each layer on the diagram's vertical middle. Invisible at a
+  // handful of siblings, but a 170-row fan-out pins its caller to the middle of the column:
+  // reading the map means starting halfway down and panning both ways. Restack every layer
+  // from a shared top edge instead, keeping ELK's within-layer order (its crossing
+  // minimisation), so the flow reads left→right and each column top→down. Cards share one
+  // footprint, so nodes of a layer share their ELK x and the column key is exact.
+  const columns = new Map<number, Array<{ id: string; y: number }>>();
+  for (const n of laid.children ?? []) {
+    const x = Math.round(n.x ?? 0);
+    columns.set(x, [...(columns.get(x) ?? []), { id: n.id, y: n.y ?? 0 }]);
+  }
+  for (const [x, col] of columns) {
+    col.sort((a, b) => (a.y - b.y) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    col.forEach((c, i) => coords.set(c.id, { x: x + w / 2, y: i * (h + gap) + h / 2 }));
+  }
   // A node ELK dropped (it never should) still needs a coordinate rather than a crash.
   for (const k of keys) if (!coords.has(k)) coords.set(k, { x: 0, y: 0 });
   return { coords, back: backKeys };
@@ -427,11 +446,14 @@ async function render(
     const w = Math.max(...xs) - Math.min(...xs) + CARD_W;
     const h = Math.max(...ys) - Math.min(...ys) + CARD_H;
     const box = el.getBoundingClientRect();
-    // A three-service topology should not feel like an empty stadium. A modest cap keeps
-    // sparse maps legible while a dense architecture still scales down to fit.
-    k = Math.min(1.25, (box.width - 48) / w, (box.height - 48) / h);
-    tx = (box.width - w * k) / 2 - Math.min(...xs) * k;
-    ty = (box.height - h * k) / 2 - Math.min(...ys) * k;
+    // A three-service topology should not feel like an empty stadium, and a 170-dependency
+    // fan-out must not shrink into an unreadable sliver: the zoom is capped both ways.
+    k = Math.min(1.25, Math.max(MIN_FIT_ZOOM, Math.min((box.width - 2 * FIT_PAD) / w, (box.height - 2 * FIT_PAD) / h)));
+    // A map that fits is centred; one that overflows anchors to the top-left, because with
+    // top-stacked layers that corner is where reading starts — centring a tall column shows
+    // its middle and hides the entry point off-screen in both directions.
+    tx = w * k + 2 * FIT_PAD <= box.width ? (box.width - w * k) / 2 - Math.min(...xs) * k : FIT_PAD - Math.min(...xs) * k;
+    ty = h * k + 2 * FIT_PAD <= box.height ? (box.height - h * k) / 2 - Math.min(...ys) * k : FIT_PAD - Math.min(...ys) * k;
     applyTransform();
   };
 
@@ -452,14 +474,19 @@ async function render(
   }, { passive: false, signal });
 
   let drag: { x: number; y: number; tx: number; ty: number } | null = null;
+  // A pan still ends in a click event on the pane. Without this flag, releasing a drag
+  // counted as a background click and threw away the selection the user was panning to see.
+  let dragMoved = false;
   el.addEventListener('pointerdown', e => {
     if ((e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) return;
     drag = { x: e.clientX, y: e.clientY, tx, ty };
+    dragMoved = false;
     el.setPointerCapture(e.pointerId);
     el.style.cursor = 'grabbing';
   }, { signal });
   el.addEventListener('pointermove', e => {
     if (!drag) return;
+    if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 3) dragMoved = true;
     tx = drag.tx + (e.clientX - drag.x);
     ty = drag.ty + (e.clientY - drag.y);
     applyTransform();
@@ -731,7 +758,17 @@ async function render(
     isolated = null;
     if (wasExpanded) void rebuild().then(fit); else paint();
   };
-  el.addEventListener('click', e => { if (!(e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) resetView(); }, { signal });
+  // Expansion is a re-layout the user asked for by name; only Escape (or a scope change)
+  // folds it back. A background click clears the transient state — menu and isolation —
+  // because collapsing "N more dependencies" on any stray click made expansion unusable.
+  const clearSelection = () => {
+    hideMenu();
+    if (isolated) { isolated = null; paint(); }
+  };
+  el.addEventListener('click', e => {
+    if (dragMoved) { dragMoved = false; return; }
+    if (!(e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) clearSelection();
+  }, { signal });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && (isolated || expanded.size)) resetView(); }, { signal });
 
   const unsubscribeTheme = subscribeChartTheme(() => { paint(); drawOverview(); });
