@@ -1,5 +1,6 @@
 'use strict';
 import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
+import { ChartQueryError, readChartResponse } from './chart-stream';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
@@ -30,23 +31,24 @@ const ensureECharts = () => {
   return echartsLoad;
 };
 
-// --- Concurrency limiter for fetch requests (max 3 in-flight) ---
+// --- Concurrency limiter for response bodies (max 4 in flight) ---
 const MAX_CONCURRENT_FETCHES = 4;
 let activeFetches = 0;
 const fetchQueue: Array<() => void> = [];
 
-const limitedFetch = (url: string, signal?: AbortSignal): Promise<Response> => {
+const limitedFetch = <T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> => {
   return new Promise((resolve, reject) => {
     const run = () => {
       if (signal?.aborted) {
         reject(signal.reason);
+        fetchQueue.shift()?.();
         return;
       }
       activeFetches++;
       // Accept marks this as a data request, so an expired session answers 401 JSON
       // instead of 302-ing to the login page — which fetch follows transparently,
       // handing us 200 HTML that res.json() then chokes on. See Web.Auth.challengeFor.
-      fetch(url, { signal, headers: { Accept: 'application/json' } }).then(resolve, reject).finally(() => {
+      fetch(url, { signal, headers: { Accept: 'application/x-ndjson, application/json' } }).then(consume).then(resolve, reject).finally(() => {
         activeFetches--;
         if (fetchQueue.length > 0) fetchQueue.shift()!();
       });
@@ -487,7 +489,14 @@ export const chartDataUrl = ({
 // construction and an IntersectionObserver — on the log explorer that put it ~2.8s into
 // the page. Nothing about the request depends on any of that, so it starts as soon as this
 // module evaluates and the chart picks up the in-flight promise when it's ready.
-const chartDataPrefetch = new Map<string, { url: string; response: Promise<ChartDataResponse | null> }>();
+type ChartPrefetch = { url: string; response: Promise<ChartDataResponse | null>; controller: AbortController; latest?: ChartDataResponse; partial?: (data: ChartDataResponse) => void };
+const chartDataPrefetch = new Map<string, ChartPrefetch>();
+const streamUrl = (url: string) => url.replace('/chart_data?', '/chart_data/stream?');
+const checkChartResponse = (res: Response) => {
+  if (res.status === 401) { window.location.reload(); throw new Error('session expired'); }
+  if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
+  return res;
+};
 
 const prefetchChartData = (widgetData: WidGetData) => {
   const { chartId } = widgetData;
@@ -500,19 +509,27 @@ const prefetchChartData = (widgetData: WidGetData) => {
   const url = chartDataUrl(widgetData);
   // A failed prefetch resolves to null so the consumer falls back to a live fetch and
   // surfaces the real error, rather than inheriting a rejection nobody is awaiting yet.
-  const response = limitedFetch(url)
-    .then(res => res.json())
-    .catch(() => null);
-  chartDataPrefetch.set(chartId, { url, response });
+  const entry: ChartPrefetch = { url, response: Promise.resolve(null), controller: new AbortController() };
+  entry.response = limitedFetch(streamUrl(url), res => readChartResponse<ChartDataResponse>(checkChartResponse(res), data => {
+    entry.latest = data;
+    entry.partial?.(data);
+  }), entry.controller.signal).catch(() => null);
+  chartDataPrefetch.set(chartId, entry);
 };
 
 // Single-use, and only for the URL it was issued against: if the query changed between
 // prefetch and first render, the stale body must not be adopted.
-const takePrefetched = async (chartId: string, url: string): Promise<ChartDataResponse | null> => {
+const takePrefetched = async (chartId: string, url: string, partial: (data: ChartDataResponse) => void, signal: AbortSignal): Promise<ChartDataResponse | null> => {
   const entry = chartDataPrefetch.get(chartId);
   if (!entry) return null;
   chartDataPrefetch.delete(chartId);
-  return entry.url === url ? await entry.response : null;
+  if (entry.url !== url) { entry.controller.abort(); return null; }
+  const abort = () => entry.controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  entry.partial = partial;
+  if (entry.latest) partial(entry.latest);
+  try { return await entry.response; }
+  finally { signal.removeEventListener('abort', abort); }
 };
 
 // Widget.hs pushes configs during HTML parse. Flush whatever landed before this module
@@ -526,9 +543,16 @@ const takePrefetched = async (chartId: string, url: string): Promise<ChartDataRe
 // new data replaces it. Loaders belong to the initial load and to explicit user actions.
 const chartRefreshState = new WeakMap<object, { url: string; hasData: boolean; failures: number }>();
 const BACKGROUND_FAILURE_THRESHOLD = 3;
+const chartRequests = new WeakMap<object, AbortController>();
 
-const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, signal: AbortSignal, showLoader = true) => {
-  if (!shouldFetch || signal.aborted) return;
+const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
+  if (!shouldFetch || lifetimeSignal.aborted) return;
+  chartRequests.get(chart)?.abort();
+  const request = new AbortController();
+  chartRequests.set(chart, request);
+  const signal = request.signal;
+  const abort = () => request.abort();
+  lifetimeSignal.addEventListener('abort', abort, { once: true });
 
   const { chartId } = widgetData;
   const url = chartDataUrl(widgetData);
@@ -538,7 +562,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     chartRefreshState.set(chart, state);
   }
   const isStale = beginChartFetch(chartId);
-  const retry = () => updateChartData(chart, opt, true, widgetData, signal);
+  const retry = () => updateChartData(chart, opt, true, widgetData, lifetimeSignal);
   const reportFailure = (message: string) => {
     state.failures = showLoader ? 0 : state.failures + 1;
     chart.hideLoading();
@@ -555,24 +579,22 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (showLoader) setChartLoading(chartId, true);
 
   try {
+    const partial = (data: ChartDataResponse) => {
+      if (signal.aborted || isStale() || !showLoader) return;
+      opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
+      opt.dataset.source = [data.headers || [], ...(data.dataset || [])];
+      chart.hideLoading();
+      hideNoDataOverlay(chartId);
+      chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+      // Keep incomplete totals out of stat tiles. The loading state distinguishes
+      // a partial chart from an empty or complete result.
+      const element = $(chartId);
+      element?.setAttribute('aria-busy', 'true');
+      element?.setAttribute('data-chart-partial', 'true');
+    };
     const { from, to, headers, dataset, rows_per_min, stats, error }: ChartDataResponse =
-      (await takePrefetched(chartId, url)) ??
-      (await limitedFetch(url, signal).then((res) => {
-        // Not res.json() straight off: a non-2xx body is HTML (an error page, or a 404 from a
-        // route/chunk that moved in a deploy), and parsing that throws Safari's opaque
-        // "The string did not match the expected pattern" — which is what the catch below
-        // logged, with no status to act on. Guarded by the non-2xx test in
-        // widgets-auto-refresh.test.ts; if you revert this file wholesale, that test tells you.
-        // A 401 means the session expired while the tab sat open. Reloading lands on
-        // the login page and comes back here, instead of every refresh tick painting
-        // the same error over a chart that will never recover on its own.
-        if (res.status === 401) {
-          window.location.reload();
-          throw new Error('session expired');
-        }
-        if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
-        return res.json();
-      }));
+      (await takePrefetched(chartId, url, partial, signal)) ??
+      (await limitedFetch(showLoader ? streamUrl(url) : url, res => readChartResponse<ChartDataResponse>(checkChartResponse(res), partial), signal));
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
@@ -613,6 +635,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       hideNoDataOverlay(chartId);
     }
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+    $(chartId)?.removeAttribute('data-chart-partial');
+    $(chartId)?.setAttribute('aria-busy', 'false');
     state.hasData = !!dataset?.length;
     state.failures = 0;
     if ((window as any).barChart) {
@@ -626,9 +650,14 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     if (signal.aborted || isStale()) return;
     console.error('Failed to fetch new data:', e);
-    reportFailure("Couldn't load this chart. Retry to fetch it again.");
+    reportFailure(e instanceof ChartQueryError ? e.message : "Couldn't load this chart. Retry to fetch it again.");
   } finally {
-    if (!signal.aborted && !isStale()) setChartLoading(chartId, false);
+    lifetimeSignal.removeEventListener('abort', abort);
+    if (chartRequests.get(chart) === request) chartRequests.delete(chart);
+    if (!signal.aborted && !isStale()) {
+      setChartLoading(chartId, false);
+      $(chartId)?.setAttribute('aria-busy', 'false');
+    }
   }
 };
 
@@ -780,6 +809,8 @@ const chartDisposers = new Map<string, () => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 
 const disposeChart = (chartId: string) => {
+  chartDataPrefetch.get(chartId)?.controller.abort();
+  chartDataPrefetch.delete(chartId);
   const dispose = chartDisposers.get(chartId);
   if (!dispose) return;
   chartDisposers.delete(chartId);
@@ -789,7 +820,7 @@ const disposeChart = (chartId: string) => {
 // Registers (and takes over) teardown for a chart container id. Any previously
 // registered disposer for the id runs first, so re-rendering is idempotent.
 export const registerChartDisposer = (chartId: string, dispose: () => void) => {
-  disposeChart(chartId);
+  chartDisposers.get(chartId)?.();
   chartDisposers.set(chartId, dispose);
 };
 
@@ -810,7 +841,7 @@ document.addEventListener('htmx:before:swap', (event) => {
 // Morph navigation can replace the target without exposing it in before:swap. Sweep only
 // registrations whose container is now gone; same-id replacements are taken over by chartWidget.
 document.addEventListener('htmx:after:swap', () => {
-  [...chartDisposers.keys()].forEach((chartId) => {
+  [...new Set([...chartDisposers.keys(), ...chartDataPrefetch.keys()])].forEach((chartId) => {
     if (!document.getElementById(chartId)?.matches(DISPOSABLE_CHARTS)) disposeChart(chartId);
   });
 });

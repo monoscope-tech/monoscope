@@ -8,21 +8,30 @@
 -- suite by existing rather than by someone remembering to add it.
 module Pages.DashboardWidgetsSpec (spec) where
 
+import Control.Exception qualified as E
+import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PG
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Dashboards (DashboardFilters (..))
 import Pages.Charts.Charts qualified as Charts
+import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import Relude
+import Servant qualified
+import Servant.Types.SourceT qualified as Source
+import System.IO.Error (userError)
+import System.Timeout (timeout)
 import System.Types (addRespHeaders)
 import Test.Hspec
 import Text.Slugify (slugify)
@@ -390,3 +399,31 @@ spec = sequential $ aroundAll withTestResources do
       md <- runSql tr "SELECT NULL::int4 AS n, 'after'::text AS s"
       md.error `shouldBe` Nothing
       md.dataText `shouldBe` V.singleton (V.fromList ["", "after"])
+
+  describe "Streaming chart results" do
+    let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
+    it "emits partial data and the same final chart as the JSON endpoint" \tr -> do
+      expected <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
+      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      case frames of
+        Right values -> do
+          length values `shouldSatisfy` (> 1)
+          take 1 values `shouldSatisfy` all (\case AE.Object obj -> KM.lookup "type" obj == Just (AE.String "partial"); _ -> False)
+          viaNonEmpty last values `shouldBe` Just (AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
+        Left message -> expectationFailure message
+
+    it "discards a connection when a row consumer fails and keeps the pool usable" \tr -> do
+      -- Two large rows flush a complete first row through PostgreSQL's socket buffer.
+      -- The third row stays asleep until the consumer cancels the query.
+      result <- timeout 3000000 $ E.try @E.IOException $ withResource tr.trPool \conn ->
+        Charts.streamQuery_ conn "SELECT i::bigint, repeat('x', 10000) FROM generate_series(1, 3) i CROSS JOIN LATERAL pg_sleep(CASE WHEN i <= 2 THEN 0 ELSE 30 END)" \(_ :: (Int64, Text)) -> E.throwIO $ userError "consumer stopped"
+      result `shouldSatisfy` maybe False isLeft
+      withResource tr.trPool (\conn -> PG.query_ conn "SELECT 42::bigint") `shouldReturn` [PG.Only (42 :: Int64)]
+
+    it "ends decoder failures with an error frame" \tr -> do
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just "SELECT 'wrong type'::text, 'value'::text, 1::double precision") (Just "24H") Nothing Nothing Nothing Nothing []
+      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      frames `shouldSatisfy` \case
+        Right [AE.Object obj] -> KM.lookup "type" obj == Just (AE.String "error")
+        _ -> False

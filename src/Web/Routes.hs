@@ -489,6 +489,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
@@ -931,6 +932,7 @@ cookieProtectedServer =
     , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
       chartsDataGet = Charts.queryMetrics Nothing
+    , chartsDataStreamGet = Charts.queryMetricsStream Nothing
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH

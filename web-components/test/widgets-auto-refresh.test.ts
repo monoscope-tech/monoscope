@@ -48,6 +48,41 @@ describe('Log Explorer chart auto-refresh', () => {
     history.replaceState({}, '', '/');
   });
 
+  test('holds fetch slots until streaming bodies finish', async () => {
+    const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
+    document.body.innerHTML = Array.from({ length: 5 }, (_, i) => `<div id="prefetch-${i}" data-chart-widget></div>`).join('');
+    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(body) { bodies.push(body); } }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
+    for (let i = 0; i < 5; i++) (window as any).__chartPrefetch.push(widget(`prefetch-${i}`));
+    await vi.waitFor(() => expect(bodies).toHaveLength(4));
+    await frame();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+    const complete = new TextEncoder().encode(JSON.stringify({ type: 'complete', data: chartData }) + '\n');
+    bodies[0].enqueue(complete);
+    await vi.waitFor(() => expect(bodies).toHaveLength(5));
+    for (const body of bodies.slice(1)) body.enqueue(complete);
+  });
+
+  test('renders partial points before completion and finalizes statistics afterward', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volumeValue"></div>';
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
+    (window as any).chartWidget(widget('volume'));
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    const send = (type: string) => body.enqueue(new TextEncoder().encode(JSON.stringify({ type, data: chartData }) + '\n'));
+    send('partial');
+    await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('data-chart-partial')).toBe('true'));
+    expect(instance.setOption).toHaveBeenCalled();
+    expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('true');
+    send('complete');
+    await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('false'));
+    expect(document.getElementById('volume')!.hasAttribute('data-chart-partial')).toBe(false);
+  });
+
   test('counts failures per widget and does not hide a failure for a changed query', async () => {
     const instances = new Map<string, ReturnType<typeof chart>>();
     (window as any).echarts = { getInstanceByDom: () => null, init: (el: HTMLElement) => {

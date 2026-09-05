@@ -1,8 +1,13 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
+module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
+import Control.Concurrent (threadWaitRead)
+import Control.Concurrent.STM qualified as STM
+import Control.Exception qualified as E
 import Control.Exception.Annotated (checkpoint, try)
+import Control.Monad.Trans.Reader (runReaderT)
+import Control.Monad.Trans.State.Strict (runStateT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
@@ -13,16 +18,22 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException, query_)
-import Database.PostgreSQL.Simple.FromField (FromField (..))
+import Database.PostgreSQL.LibPQ qualified as PQ
+import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, query_)
+import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..))
+import Database.PostgreSQL.Simple.FromRow (fromRow)
+import Database.PostgreSQL.Simple.Internal qualified as PGI
+import Database.PostgreSQL.Simple.Ok (ManyErrors (..), Ok (..))
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import GHC.Clock (getMonotonicTimeNSec)
 import Log qualified
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Media ((//))
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
@@ -32,10 +43,14 @@ import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause
 import Pkg.Parser.Stats (QueryError (..), Section (..), Sources (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
 import Relude
+import Servant qualified
 import Servant.Server (ServerError (errBody), err400)
+import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
 import Text.Megaparsec (parseMaybe)
+import UnliftIO.Async (withAsync)
+import UnliftIO.Async qualified
 import UnliftIO.Exception (catch, throwIO)
 import Utils qualified
 
@@ -372,7 +387,11 @@ withChartSpan tbl attrs sqlQuery fallback action =
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
-fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
+fetchMetricsData = fetchMetricsDataWithProgress Nothing
+
+
+fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
+fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource = do
   let pool = case dbSource of
         Just "postgres" -> authCtx.pool
         Just "timefusion" -> authCtx.timefusionPgPool
@@ -390,16 +409,22 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           , rowsCount = 1
           }
     DTMetric -> do
-      chartsDataV <- V.fromList <$> runQ
-      let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
-      pure
-        baseMetricsData
-          { dataset = groupedData
-          , headers = V.cons "timestamp" hdrs
-          , rowsCount
-          , rowsPerMin = Just rpm
-          , stats = Just $ statsTriple chartsDataV
-          }
+      let metrics rows =
+            let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
+             in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
+      case progress of
+        Nothing -> metrics . V.fromList <$> runQ
+        Just emit -> do
+          rowsRef <- newIORef []
+          lastEmit <- newIORef 0
+          withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
+            modifyIORef' rowsRef (row :)
+            tick <- getMonotonicTimeNSec
+            previous <- readIORef lastEmit
+            when (previous == 0 || tick - previous >= 100000000) do
+              readIORef rowsRef >>= emit . metrics . V.fromList . reverse
+              writeIORef lastEmit tick
+          metrics . V.fromList . reverse <$> readIORef rowsRef
     DTText -> do
       -- Decoded through 'AnyText', not 'Text': a raw-SQL widget selects whatever its author
       -- wrote, and demanding `text` for every column failed the *whole* widget on one
@@ -439,3 +464,110 @@ convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1
     convertRow row = case V.uncons row of
       Just (Just ts, rest) -> V.cons (Just $ ts * 1000) rest
       _ -> row
+
+
+-- | Receive one libpq result at a time, keeping the existing typed row decoders.
+-- The caller owns the connection exclusively for the duration of the stream.
+-- On abandonment, cancel the server query and let withResource discard the connection.
+streamQuery_ :: FromRow row => Connection -> Query -> (row -> IO ()) -> IO ()
+streamQuery_ conn (Query sql) emit = run `E.onException` cancel
+  where
+    cancel = PGI.withConnection conn \handle -> do
+      token <- PQ.getCancel handle
+      forM_ token \c -> void $ PQ.cancel c
+    run = do
+      PGI.withConnection conn \handle -> do
+        sent <- PQ.sendQuery handle sql
+        unless sent $ PGI.throwLibPQError handle "Could not send chart query"
+        enabled <- PQ.setSingleRowMode handle
+        unless enabled $ PGI.throwLibPQError handle "Could not enable streaming results"
+      loop
+    next = PGI.withConnection conn await
+    await handle = do
+      consumed <- PQ.consumeInput handle
+      unless consumed $ PGI.throwLibPQError handle "Could not read chart results"
+      busy <- PQ.isBusy handle
+      if busy
+        then do
+          fd <- PQ.socket handle >>= maybe (PGI.throwLibPQError handle "Chart connection closed") pure
+          threadWaitRead fd
+          await handle
+        else PQ.getResult handle
+    loop =
+      next >>= \case
+        Nothing -> pure ()
+        Just result -> do
+          status <- PQ.resultStatus result
+          case status of
+            PQ.SingleTuple -> do
+              columns <- PQ.nfields result
+              decoded <- PGI.runConversion (runStateT (runReaderT (PGI.unRP fromRow) (PGI.Row 0 result)) 0) conn
+              case decoded of
+                Ok (value, consumed) | consumed == columns -> emit value
+                Ok _ -> throwIO $ ConversionFailed "" Nothing "" "" "Chart result column count does not match its decoder"
+                Errors [] -> throwIO $ ConversionFailed "" Nothing "" "" "Chart row decoder failed without an error"
+                Errors [err] -> throwIO err
+                Errors errors -> throwIO $ PGI.SomePostgreSqlException $ ManyErrors errors
+            PQ.TuplesOk -> pure ()
+            _ -> PGI.throwResultError "chart stream" result status
+          loop
+
+
+-- | A separate framed endpoint preserves the existing complete JSON contract.
+-- Only IO values escape the handler. The producer exists only while the response
+-- is consumed, and the bounded queue propagates browser backpressure to libpq.
+queryMetricsStream :: (Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es (Servant.Headers '[Servant.Header "Cache-Control" Text, Servant.Header "X-Accel-Buffering" Text] (Servant.SourceIO AE.Value))
+queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sourceM densityM allParams = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
+  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
+  let requested = maybeToMonoid dataTypeM
+      (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
+      density = fromMaybe def densityM
+      source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
+      mapping = variablePresets density pid.toText fromD toD allParams now
+      mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
+      parsed = first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM
+      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
+      run emit = case parsed of
+        Left message -> pure $ Left message
+        Right ast -> do
+          let (_, components) = queryASTToComponents cfg ast
+              raw = Utils.nonEmptyT querySQLM
+              actual = if isJust raw then requested else decoderFor requested ast
+              sql = case raw of
+                Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) components.whereClause)]) template
+                Nothing -> maybeToMonoid components.finalSummarizeQuery
+              convert = convertTimestampsToMs . coerceBinnedScalar requested actual
+          result <- fetchMetricsDataWithProgress (Just $ emit . convert) actual sql now fromD toD authCtx dbSource
+          pure $ first (Utils.sanitizeBackendError . toText . displayException) $ convert <$> result
+      frame kind value = AE.object ["type" AE..= (kind :: Text), "data" AE..= value]
+      body = SourceT \consume -> do
+        queue <- STM.newTBQueueIO 2
+        let write = STM.atomically . STM.writeTBQueue queue
+            producer = do
+              result <- run (write . Just . frame "partial") `E.catch` \(e :: E.IOException) -> pure (Left $ Utils.sanitizeBackendError $ toText $ displayException e)
+              write $ Just $ case result of
+                Left message -> AE.object ["type" AE..= ("error" :: Text), "error" AE..= message]
+                Right value -> frame "complete" value
+              write Nothing
+            step = Effect do
+              item <- STM.atomically $ STM.readTBQueue queue
+              pure $ maybe Stop (\value -> Yield value step) item
+        withAsync producer \worker -> do
+          -- A producer failure must wake a waiting consumer rather than hang.
+          UnliftIO.Async.link worker
+          consume step
+  pure $ Servant.addHeader "no-store, no-transform" $ Servant.addHeader "no" body
+
+
+-- | NewlineFraming separates each JSON message on the wire.
+data ChartStream
+
+
+instance Servant.Accept ChartStream where
+  contentType _ = "application" // "x-ndjson"
+
+
+instance Servant.MimeRender ChartStream AE.Value where
+  mimeRender _ = AE.encode
