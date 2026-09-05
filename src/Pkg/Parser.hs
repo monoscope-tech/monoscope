@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -79,12 +79,15 @@ buildDateRange :: SqlQueryCfg -> Text
 buildDateRange cfg =
   let fmtTime = toText . iso8601Show
       between a b = timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+      range a b = case cfg.rangeEnd of
+        InclusiveEnd -> between a b
+        ExclusiveEnd -> timestampCol <> " >= '" <> fmtTime a <> "' AND " <> timestampCol <> " < '" <> fmtTime b <> "'"
    in case (cfg.dateRange, cfg.cursorM) of
         ((Just a, _), Just (PageCursor PageOlder cursor)) -> between a cursor
         ((Nothing, _), Just (PageCursor PageOlder cursor)) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
         ((_, Just b), Just (PageCursor PageNewer cursor)) -> between cursor b
         ((_, Nothing), Just (PageCursor PageNewer cursor)) -> timestampCol <> " >= '" <> fmtTime cursor <> "'"
-        ((Just a, Just b), Nothing) -> between a b
+        ((Just a, Just b), Nothing) -> range a b
         ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
         ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
         ((Nothing, Nothing), Nothing) -> ""
@@ -270,10 +273,19 @@ data PageCursor = PageCursor PageDirection UTCTime
   deriving stock (Eq, Generic, Show)
 
 
+data RangeEnd = InclusiveEnd | ExclusiveEnd
+  deriving stock (Eq, Generic, Show)
+
+
+instance Default RangeEnd where
+  def = InclusiveEnd
+
+
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
   , binDensity :: BinDensity
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
+  , rangeEnd :: RangeEnd
   , cursorM :: Maybe PageCursor
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
   , currentTime :: UTCTime
@@ -678,6 +690,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , binDensity = def
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
+    , rangeEnd = InclusiveEnd
     , source = source
     , metricJsonAsVariant = False
     , targetSpansM = spanT

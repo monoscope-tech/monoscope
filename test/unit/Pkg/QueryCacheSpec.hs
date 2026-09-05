@@ -4,10 +4,10 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Pages.Charts.Charts (MetricsData (..))
-import Pkg.Parser (defPid, defSqlQueryCfg, fixedUTCTime)
+import Pkg.Parser (RangeEnd (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache (CacheKey (..), generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, trimOldData, trimToRange)
+import Pkg.QueryCache (CacheKey (..), bucketStart, chartChunks, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, trimOldData, trimToRange)
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -17,19 +17,20 @@ mkTime = posixSecondsToUTCTime . fromIntegral
 
 
 mkMetrics :: [(Double, Double)] -> MetricsData
-mkMetrics rows = MetricsData
-  { dataset = V.fromList $ map (\(ts, val) -> V.fromList [Just ts, Just val]) rows
-  , dataFloat = Nothing
-  , dataJSON = V.empty
-  , dataText = V.empty
-  , headers = V.fromList ["timestamp", "value"]
-  , rowsCount = fromIntegral $ length rows
-  , rowsPerMin = Nothing
-  , from = floor . fst <$> viaNonEmpty head rows
-  , to = floor . fst <$> viaNonEmpty last rows
-  , stats = Nothing
-  , error = Nothing
-  }
+mkMetrics rows =
+  MetricsData
+    { dataset = V.fromList $ map (\(ts, val) -> V.fromList [Just ts, Just val]) rows
+    , dataFloat = Nothing
+    , dataJSON = V.empty
+    , dataText = V.empty
+    , headers = V.fromList ["timestamp", "value"]
+    , rowsCount = fromIntegral $ length rows
+    , rowsPerMin = Nothing
+    , from = floor . fst <$> viaNonEmpty head rows
+    , to = floor . fst <$> viaNonEmpty last rows
+    , stats = Nothing
+    , error = Nothing
+    }
 
 
 emptyMetrics :: MetricsData
@@ -42,6 +43,15 @@ timestampSubject = Subject "timestamp" "timestamp" []
 
 spec :: Spec
 spec = do
+  describe "chart chunk boundaries" do
+    it "covers a range once, newest first, including the inclusive final endpoint" do
+      chartChunks "1 hour" (mkTime 17, mkTime 20000)
+        `shouldBe` [(mkTime 14400, mkTime 20000, InclusiveEnd), (mkTime 17, mkTime 14400, ExclusiveEnd)]
+      chartChunks "1 hour" (mkTime 0, mkTime 0) `shouldBe` []
+      bucketStart "1 hour" (mkTime (-1)) `shouldBe` mkTime (-3600)
+      bucketStart "1w" (mkTime 700000) `shouldBe` mkTime 604800
+      bucketStart "700ms" (mkTime 1) `shouldBe` posixSecondsToUTCTime 0.7
+
   describe "hasSummarizeWithBin" do
     it "detects bin(timestamp, interval)" do
       let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]

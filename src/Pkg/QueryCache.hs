@@ -14,15 +14,20 @@ module Pkg.QueryCache (
   slidingWindowSeconds,
   cacheWindowStart,
   deltaOverlapSeconds,
+  bucketStart,
+  chartChunks,
+  nextBucketStart,
+  chunkIntervalSupported,
+  replaceTimeseriesRange,
 ) where
 
-import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 
 -- Merge, not Intro: the sort MUST be stable. 'dedupeByTimestamp' keeps the last
@@ -36,8 +41,8 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
-import Pkg.Parser (SqlQueryCfg (..), autoBinWidth)
-import Pkg.Parser.Expr (ToQueryText (..))
+import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth)
+import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import Utils (toXXHash)
@@ -99,17 +104,30 @@ rewriteBinAutoToFixed interval = map \case
 
 -- | Parse bin interval text to seconds (e.g., "5 minutes" -> 300, "1 hour" -> 3600)
 parseBinIntervalToSeconds :: Text -> Int
-parseBinIntervalToSeconds txt = num * unitToSeconds (T.toLower $ T.dropWhile isDigit unitPart)
-  where
-    (firstPart, restPart) = (fromMaybe "" $ viaNonEmpty head $ words txt, fromMaybe "" $ viaNonEmpty head $ drop 1 $ words txt)
-    num = fromMaybe 1 $ readMaybe $ toString $ T.takeWhile isDigit firstPart
-    unitPart = if T.null restPart then firstPart else restPart
-    unitToSeconds u
-      | any (`T.isPrefixOf` u) ["second", "s"] = 1
-      | any (`T.isPrefixOf` u) ["minute", "m"] = 60
-      | any (`T.isPrefixOf` u) ["hour", "h"] = 3600
-      | any (`T.isPrefixOf` u) ["day", "d"] = 86400
-      | otherwise = 60
+parseBinIntervalToSeconds = max 1 . ceiling . intervalWidth
+
+
+intervalWidth :: Text -> Rational
+intervalWidth interval = fromMaybe 60 $ do
+  canonical <- kqlTimespanToTimeBucket interval
+  case words canonical of
+    [n, unit] -> do
+      count <- readMaybe @Integer $ toString n
+      multiplier <-
+        lookup
+          (T.dropWhileEnd (== 's') unit)
+          [("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800), ("millisecond", 1 / 1000), ("microsecond", 1 / 1000000), ("nanosecond", 1 / 1000000000)]
+      guard (count > 0)
+      pure $ fromInteger count * multiplier
+    _ -> Nothing
+
+
+-- Chart timestamps are whole seconds. Keep subsecond bins on the existing
+-- single-query path rather than merge distinct groups with the same timestamp.
+chunkIntervalSupported :: Text -> Bool
+chunkIntervalSupported interval =
+  let width = intervalWidth interval
+   in width >= 1 && width == fromInteger (floor width)
 
 
 -- | Calculate sliding window size in seconds based on bin interval
@@ -159,6 +177,40 @@ cacheWindowStart binInterval (from, to) =
 -- 3600
 deltaOverlapSeconds :: Text -> Int
 deltaOverlapSeconds binInterval = min 3600 $ max 900 (parseBinIntervalToSeconds binInterval * 5)
+
+
+-- | Epoch-aligned start of a fixed-width bucket, including dates before 1970.
+bucketStart :: Text -> UTCTime -> UTCTime
+bucketStart interval timestamp =
+  let width = intervalWidth interval
+      bucket = floor $ toRational (utcTimeToPOSIXSeconds timestamp) / width
+   in posixSecondsToUTCTime $ fromRational $ fromInteger bucket * width
+
+
+nextBucketStart :: Text -> UTCTime -> UTCTime
+nextBucketStart interval = addUTCTime (fromRational $ intervalWidth interval) . bucketStart interval
+
+
+-- | A completed refresh replaces even buckets that are now empty (for example
+-- after deletions). Merely merging nonempty rows preserves stale values.
+replaceTimeseriesRange :: MetricsData -> MetricsData -> UTCTime -> UTCTime -> MetricsData
+replaceTimeseriesRange cached fresh start end =
+  mergeTimeseriesData (filterByTimestamp (\ts -> ts < toPosix start || ts >= toPosix end) cached) fresh
+
+
+-- | Recent buckets first. Grow from one bucket to at most a day of work per
+-- query. Adjacent chunks have exclusive upper bounds, so boundary events occur
+-- exactly once. The original request keeps its inclusive final endpoint.
+chartChunks :: Text -> (UTCTime, UTCTime) -> [(UTCTime, UTCTime, RangeEnd)]
+chartChunks interval (start, end) = go 1 end InclusiveEnd
+  where
+    width = fromIntegral $ max 1 $ parseBinIntervalToSeconds interval
+    go buckets upper endMode
+      | upper <= start = []
+      | otherwise =
+          let lower = max start $ addUTCTime (negate $ width * buckets) $ bucketStart interval upper
+              next = min (max 1 $ 86400 / width) (buckets * 4)
+           in (lower, upper, endMode) : go next lower ExclusiveEnd
 
 
 -- | Extract bin interval from summarize clause
@@ -269,7 +321,8 @@ mergeTimeseriesData cached new
         cached
           { dataset = dedupedRows
           , headers = mergedHdrs
-          , rowsCount = fromIntegral $ V.length dedupedRows
+          , rowsCount = sum $ V.concatMap (V.mapMaybe id . V.drop 1) dedupedRows
+          , rowsPerMin = Just $ timeseriesRate dedupedRows
           , from = liftA2 min cached.from new.from <|> cached.from <|> new.from
           , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
           , stats = Just $ recalculateStats dedupedRows
@@ -314,11 +367,20 @@ recalculateStats rows =
          in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
 
 
+timeseriesRate :: V.Vector (V.Vector (Maybe Double)) -> Double
+timeseriesRate rows =
+  let timestamps = V.mapMaybe rowTimestamp rows
+      count = V.length $ V.concatMap (V.mapMaybe id . V.drop 1) rows
+   in if V.null timestamps || V.maximum timestamps <= V.minimum timestamps
+        then 0
+        else fromIntegral count * 60 / (V.maximum timestamps - V.minimum timestamps)
+
+
 -- | Filter dataset rows by timestamp predicate and recalculate stats
 filterByTimestamp :: (Int -> Bool) -> MetricsData -> MetricsData
 filterByTimestamp p metrics =
   let filtered = V.filter (maybe False (p . floor) . rowTimestamp) metrics.dataset
-   in metrics{dataset = filtered, rowsCount = fromIntegral $ V.length filtered, stats = Just $ recalculateStats filtered}
+   in metrics{dataset = filtered, rowsCount = sum $ V.concatMap (V.mapMaybe id . V.drop 1) filtered, rowsPerMin = Just $ timeseriesRate filtered, stats = Just $ recalculateStats filtered}
 
 
 -- | Trim data to a specific time range

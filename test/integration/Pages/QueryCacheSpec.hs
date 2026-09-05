@@ -1,5 +1,8 @@
 module Pages.QueryCacheSpec (spec) where
 
+import Control.Exception qualified as E
+import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
@@ -17,7 +20,9 @@ import Pkg.Parser (dateRange, defSqlQueryCfg, parseQueryToAST)
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, around, describe, it, pendingWith, shouldBe, shouldReturn, shouldSatisfy)
+import Servant qualified
+import Servant.Types.SourceT qualified as Source
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 
 
@@ -57,7 +62,8 @@ cachedToFor tr key = withResource tr.trPool \conn -> do
     PG.query
       conn
       [sql|SELECT cached_to FROM query_cache WHERE project_id = ? AND query_hash = ? AND bin_interval = ? AND source = ?|]
-      (key.projectId, key.queryHash, key.binInterval, key.source) :: IO [PG.Only UTCTime]
+      (key.projectId, key.queryHash, key.binInterval, key.source)
+      :: IO [PG.Only UTCTime]
   pure $ PG.fromOnly <$> listToMaybe rows
 
 
@@ -74,23 +80,15 @@ seedCache tr q (t0, t1, t2) = do
   pure key
 
 
--- | Why the three backend-failure guards are disabled.
---
--- They need a query that parses but fails in the database. @totally_made_up_column@
--- was exactly that until field validation landed (e7ad369): unknown fields are now
--- rejected at parse time, so the query never reaches the backend and 'seedCache'
--- dies in 'parseQueryToAST'. @summarize avg(name)@ was tried as a replacement and
--- succeeds, with and without rows in range.
---
--- They are marked pending rather than rewritten against the parse-time path,
--- because they guard a real incident — a failed delta advancing @cached_to@ past
--- data that was never fetched, leaving a permanent hole — and a green test that
--- exercises a different path would hide that. The likely route back is the
--- raw-SQL override (5th argument of 'Charts.queryMetrics'), which reaches the
--- backend without the parser; the work is making 'QC.generateCacheKey' agree
--- between the seed and the read.
-noBackendFailureFixture :: String
-noBackendFailureFixture = "no fixture reaches the backend: unknown fields are rejected at parse time (see note in QueryCacheSpec)"
+-- The parser remains valid while the isolated test database cannot execute the
+-- query. Restore the table even if an assertion or request fails.
+withoutTelemetryTable :: TestResources -> IO a -> IO a
+withoutTelemetryTable tr =
+  E.bracket_
+    (rename "ALTER TABLE otel_logs_and_spans RENAME TO chart_test_unavailable")
+    (rename "ALTER TABLE chart_test_unavailable RENAME TO otel_logs_and_spans")
+  where
+    rename sqlQuery = withResource tr.trPool $ \conn -> void $ execute_ conn sqlQuery
 
 
 -- | Rejected by the parser before any SQL is built.
@@ -123,6 +121,40 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 
 spec :: Spec
 spec = around withTestResources do
+  describe "Streaming cache and chunk boundaries" do
+    it "matches a whole query, populates the cache, and serves a hit without reading telemetry" $ \tr -> do
+      clearAllTestData tr
+      key <- createTestAPIKey tr pid "stream-cache-boundaries"
+      forM_ [17, 3599, 3600, 86400, 172800, 259200] $ \offset ->
+        ingestLog tr key ("boundary " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      let q = "summarize count(*) by bin(timestamp, 1h)"
+          runStream = do
+            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just $ timeAt 17) (Just $ timeAt 259200) (Just "spans") Nothing []
+            values <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+            either fail pure values
+          final :: [AE.Value] -> IO Charts.MetricsData
+          final values = case viaNonEmpty last values of
+            Just (AE.Object obj) | KM.lookup "type" obj == Just (AE.String "complete") ->
+              case KM.lookup "data" obj of
+                Just value -> case AE.fromJSON value of AE.Success md -> pure md; AE.Error message -> fail message
+                Nothing -> fail "missing final data"
+            _ -> fail "missing completion frame"
+      expected <- queryMetrics tr q (timeAt 17) (timeAt 259200)
+      clearCache tr
+      frames <- runStream
+      length frames `shouldSatisfy` (> 2)
+      actual <- final frames
+      actual.dataset `shouldBe` expected.dataset
+      actual.headers `shouldBe` expected.headers
+      actual.rowsCount `shouldBe` expected.rowsCount
+      withResource tr.trPool $ \conn -> void $ execute_ conn [sql|DELETE FROM otel_logs_and_spans WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      cachedFrames <- runStream
+      length cachedFrames `shouldBe` 1
+      cached <- final cachedFrames
+      cached.dataset `shouldBe` expected.dataset
+      cached.rowsCount `shouldBe` expected.rowsCount
+
   describe "Query Cache" do
     it "cache hit returns same results as fresh query" $ \tr -> do
       clearAllTestData tr
@@ -204,8 +236,10 @@ spec = around withTestResources do
       result.error `shouldBe` Just "Unknown field \"totally_made_up_column\""
       V.length result.dataset `shouldBe` 0
 
-    it "a backend SQL failure surfaces a sanitized error instead of empty data" $ \_ ->
-      pendingWith noBackendFailureFixture
+    it "a backend SQL failure surfaces a sanitized error instead of empty data" $ \tr -> do
+      clearAllTestData tr
+      result <- withoutTelemetryTable tr $ queryMetrics tr "summarize count(*) by bin_auto(timestamp)" (timeAt (-1800)) (timeAt 1800)
+      result.error `shouldSatisfy` isJust
 
   -- Regression: a partial-hit delta fetch that fails (timeout / TF planning
   -- error / dropped conn) used to still advance `cached_to` to the requested
@@ -214,11 +248,21 @@ spec = around withTestResources do
   -- wider ranges (a separate bin_interval cache entry) looked fine. The
   -- watermark must never advance past data we actually fetched.
   describe "partial-hit watermark" do
-    it "does not advance cached_to when the delta fetch errors" $ \_ ->
-      pendingWith noBackendFailureFixture
+    it "does not advance cached_to when the delta fetch errors" $ \tr -> do
+      clearAllTestData tr
+      let q = "summarize count(*) by bin_auto(timestamp)"
+          times@(_, t1, _) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
+      key <- seedCache tr q times
+      result <- withoutTelemetryTable tr $ runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
+      result.error `shouldSatisfy` isJust
+      cachedToFor tr key `shouldReturn` Just t1
 
-    it "does not populate cache when a cache-miss fetch errors" $ \_ ->
-      pendingWith noBackendFailureFixture
+    it "does not populate cache when a cache-miss fetch errors" $ \tr -> do
+      clearAllTestData tr
+      result <- withoutTelemetryTable tr $ queryMetrics tr "summarize count(*) by bin_auto(timestamp)" (timeAt (-1800)) (timeAt 1800)
+      result.error `shouldSatisfy` isJust
+      rows <- withResource tr.trPool $ \conn -> PG.query_ conn [sql|SELECT count(*) FROM query_cache WHERE project_id = '00000000-0000-0000-0000-000000000000'|]
+      rows `shouldBe` [PG.Only (0 :: Int64)]
 
     -- Counterpart to the guard above: a delta that *succeeds* but legitimately
     -- returns no rows is not a failure, so the watermark must still advance.

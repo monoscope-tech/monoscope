@@ -6,11 +6,13 @@ import Control.Concurrent (threadWaitRead)
 import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as E
 import Control.Exception.Annotated (checkpoint, try)
+import Control.Monad (foldM)
 import Control.Monad.Trans.Reader (runReaderT)
 import Control.Monad.Trans.State.Strict (runStateT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
+import Data.Effectful.Hasql (runHasqlPool)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
@@ -25,7 +27,7 @@ import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Ok (ManyErrors (..), Ok (..))
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
@@ -39,8 +41,9 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
-import Pkg.Parser.Stats (QueryError (..), Section (..), Sources (..), parseQueryDiagnosed)
+import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
+import Pkg.Parser.Expr (Subject (..))
+import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), QueryError (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
 import Relude
 import Servant qualified
@@ -51,7 +54,7 @@ import System.Tracing (Tracing, withSpan_)
 import Text.Megaparsec (parseMaybe)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Async qualified
-import UnliftIO.Exception (catch, throwIO)
+import UnliftIO.Exception (catch, throwIO, tryAny)
 import Utils qualified
 
 
@@ -265,7 +268,40 @@ queryMetricsWithCache
   -> Maybe UTCTime
   -> Maybe UTCTime
   -> Eff es MetricsData
-queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD =
+  queryMetricsWithCacheUsing executeQueryWith Nothing respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+  where
+    executeQueryWith cfg ast _ = do
+      let (_, qc) = queryASTToComponents cfg ast
+          sqlQuery = maybeToMonoid qc.finalSummarizeQuery
+          tbl = sourceTable source
+      withChartSpan
+        tbl
+        ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
+            <> [("monoscope.kql.query", OA.toAttribute originalQuery), ("monoscope.kql.mode", OA.toAttribute ("kql" :: Text))]
+        )
+        sqlQuery
+        (emptyMetricsFor now fromD toD)
+        (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
+
+
+-- | Shared cache policy for complete and streaming responses. Only successful
+-- complete queries advance the cache watermark; progress is never persisted.
+queryMetricsWithCacheUsing
+  :: (DB es, Time.Time :> es)
+  => (SqlQueryCfg -> [Section] -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData)
+  -> Maybe (MetricsData -> IO ())
+  -> DataType
+  -> Projects.ProjectId
+  -> Maybe Sources
+  -> [Section]
+  -> SqlQueryCfg
+  -> Text
+  -> UTCTime
+  -> Maybe UTCTime
+  -> Maybe UTCTime
+  -> Eff es MetricsData
+queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
   | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
   | not (QC.hasSummarizeWithBin queryAST) = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
@@ -275,52 +311,67 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
         QC.CacheHit entry -> do
-          let trimmed = QC.trimToRange entry.cachedData reqFrom reqTo
-              coversRange = entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo
-          refetchUnlessAdequate coversRange entry.cachedData trimmed
+          let trimmed = trimCached cacheKey entry.cachedData reqFrom reqTo
+              fixed = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
+              refresh value lower upper endMode = do
+                fresh <- fetch sqlQueryCfg{dateRange = (Just lower, Just upper), rangeEnd = endMode} fixed Nothing
+                pure $ if isJust fresh.error then fresh else QC.replaceTimeseriesRange value fresh (QC.bucketStart cacheKey.binInterval lower) (case endMode of ExclusiveEnd -> upper; InclusiveEnd -> QC.nextBucketStart cacheKey.binInterval upper)
+          -- Reuse complete interior buckets when zooming into cached history;
+          -- only the changed boundary buckets require new computation.
+          leading <-
+            if reqFrom /= entry.cachedFrom && reqFrom /= QC.bucketStart cacheKey.binInterval reqFrom
+              then refresh trimmed reqFrom (min reqTo $ QC.nextBucketStart cacheKey.binInterval reqFrom) (if reqTo <= QC.nextBucketStart cacheKey.binInterval reqFrom then InclusiveEnd else ExclusiveEnd)
+              else pure trimmed
+          result <-
+            if isNothing leading.error && reqTo /= entry.cachedTo
+              then refresh leading (max reqFrom $ QC.bucketStart cacheKey.binInterval reqTo) reqTo InclusiveEnd
+              else pure leading
+          pure $ trimCached cacheKey result reqFrom reqTo
         QC.PartialHit entry -> do
           -- Re-read a trailing overlap, not just [cachedTo, reqTo]: a bin read
           -- once and never revisited freezes a bad read into the chart forever.
-          let deltaFromTime = addUTCTime (negate $ fromIntegral $ QC.deltaOverlapSeconds cacheKey.binInterval) entry.cachedTo
+          let deltaFromTime = max reqFrom $ QC.bucketStart cacheKey.binInterval $ addUTCTime (negate $ fromIntegral $ QC.deltaOverlapSeconds cacheKey.binInterval) entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
           -- Rewrite bin_auto to fixed interval for delta fetch to match cached data
           let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
-          deltaData <- executeQueryWith deltaSqlCfg deltaAST
-          let merged = QC.mergeTimeseriesData entry.cachedData deltaData
-          let slidingWindowStart = QC.cacheWindowStart cacheKey.binInterval (reqFrom, reqTo)
-          let trimmed = QC.trimOldData slidingWindowStart merged
-          -- Only advance the watermark when the delta actually succeeded. A failed
-          -- fetch (timeout, TF planning error, dropped conn) is swallowed into an
-          -- empty MetricsData by 'withChartSpan'; advancing cached_to past it would
-          -- orphan the [cachedTo, reqTo] window forever (no later delta revisits it).
-          whenNothing_ deltaData.error
-            $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
-          let result = QC.trimToRange trimmed reqFrom reqTo
-          refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
-        QC.CacheMiss -> do
-          result <- executeQueryWith sqlQueryCfg queryAST
-          -- Don't cache a failed fetch (same reasoning as the partial-hit guard);
-          -- it carries no data, so leave the cache cold and let the next request retry.
-          when (isNothing result.error)
-            $ QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
-          pure result
-        QC.CacheBypassed _ -> executeQueryWith sqlQueryCfg queryAST
+          liftIO $ forM_ progress $ \emit -> emit $ trimCached cacheKey entry.cachedData reqFrom reqTo
+          -- A sliding window also changes its first, incomplete bucket. Re-read
+          -- it rather than retaining values that have fallen outside the range.
+          base <-
+            if reqFrom > entry.cachedFrom && QC.bucketStart cacheKey.binInterval reqFrom /= reqFrom && QC.nextBucketStart cacheKey.binInterval reqFrom <= deltaFromTime
+              then do
+                let firstEnd = QC.nextBucketStart cacheKey.binInterval reqFrom
+                leading <- fetch sqlQueryCfg{dateRange = (Just reqFrom, Just $ min firstEnd reqTo), rangeEnd = ExclusiveEnd} deltaAST Nothing
+                pure $ if isJust leading.error then leading else QC.replaceTimeseriesRange entry.cachedData leading (QC.bucketStart cacheKey.binInterval reqFrom) firstEnd
+              else pure entry.cachedData
+          if isJust base.error
+            then pure base
+            else do
+              let emitMerged value = forM_ progress $ \emit -> emit $ trimCached cacheKey (QC.mergeTimeseriesData base value) reqFrom reqTo
+              deltaData <- fetch deltaSqlCfg deltaAST (Just emitMerged)
+              if isJust deltaData.error
+                then pure deltaData
+                else do
+                  let merged = QC.replaceTimeseriesRange base deltaData (QC.bucketStart cacheKey.binInterval deltaFromTime) (addUTCTime 1 reqTo)
+                  let slidingWindowStart = reqFrom
+                  let trimmed = QC.trimOldData slidingWindowStart merged
+                  -- Only advance the watermark when the delta actually succeeded. A failed
+                  -- fetch (timeout, TF planning error, dropped conn) is swallowed into an
+                  -- empty MetricsData by 'withChartSpan'; advancing cached_to past it would
+                  -- orphan the [cachedTo, reqTo] window forever (no later delta revisits it).
+                  whenNothing_ deltaData.error
+                    $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
+                  let result = trimCached cacheKey trimmed reqFrom reqTo
+                  refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
+        QC.CacheMiss -> fetchAndCache cacheKey (reqFrom, reqTo)
+        QC.CacheBypassed _ -> fetchAndCache cacheKey (reqFrom, reqTo)
   where
-    executeQueryWith cfg ast = do
-      let (_, qc) = queryASTToComponents cfg ast
-      let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
-      let tbl = sourceTable source
-      withChartSpan
-        tbl
-        ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
-            <> [ ("monoscope.kql.query", OA.toAttribute originalQuery)
-               , ("monoscope.kql.mode", OA.toAttribute ("kql" :: Text))
-               , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
-               ]
-        )
-        sqlQuery
-        (emptyMetricsFor now fromD toD)
-        (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
+    trimCached key value a b = (QC.trimToRange value (QC.bucketStart key.binInterval a) b){from = Just $ floor $ utcTimeToPOSIXSeconds a}
+    fetchAndCache cacheKey range = do
+      result <- executeQueryWith sqlQueryCfg queryAST
+      when (isNothing result.error) $ QC.updateCache cacheKey range result originalQuery
+      pure result
+    executeQueryWith cfg ast = fetch cfg ast progress
     refetchUnlessAdequate coversRange cached result
       | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
       | otherwise = executeQueryWith sqlQueryCfg queryAST
@@ -539,7 +590,39 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                 Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) components.whereClause)]) template
                 Nothing -> maybeToMonoid components.finalSummarizeQuery
               convert = convertTimestampsToMs . coerceBinnedScalar requested actual
-          result <- fetchMetricsDataWithProgress (Just $ emit . convert) actual sql now fromD toD authCtx dbSource
+          let fetch cfg' ast' progress = do
+                let (_, parts) = queryASTToComponents cfg' ast'
+                    (start, end) = cfg'.dateRange
+                    key = QC.generateCacheKey pid source ast' cfg'
+                    fixed = QC.rewriteBinAutoToFixed key.binInterval ast'
+                    runChunk chunkCfg = do
+                      let (_, chunkParts) = queryASTToComponents chunkCfg fixed
+                          (chunkFrom, chunkTo) = chunkCfg.dateRange
+                      result <- liftIO $ fetchMetricsDataWithProgress (Just $ const $ pure ()) actual (maybeToMonoid chunkParts.finalSummarizeQuery) now chunkFrom chunkTo authCtx dbSource
+                      either throwIO pure result
+                case (actual, chunkableChart ast', start, end) of
+                  (DTMetric, True, Just a, Just b) | QC.chunkIntervalSupported key.binInterval && b > addUTCTime 86400 a -> do
+                    result <-
+                      foldM
+                        ( \acc (lower, upper, endMode) -> do
+                            chunk <- runChunk cfg'{dateRange = (Just lower, Just upper), rangeEnd = endMode}
+                            let merged = (QC.mergeTimeseriesData acc chunk){from = acc.from, to = acc.to}
+                            liftIO $ forM_ progress ($ merged)
+                            pure merged
+                        )
+                        (emptyMetricsFor now start end)
+                        (QC.chartChunks key.binInterval (a, b))
+                    pure result{from = floor . utcTimeToPOSIXSeconds <$> Just a, to = floor . utcTimeToPOSIXSeconds <$> Just b}
+                  _ -> do
+                    result <- liftIO $ fetchMetricsDataWithProgress progress actual (maybeToMonoid parts.finalSummarizeQuery) now start end authCtx dbSource
+                    either throwIO pure result
+          result <- tryAny $ case raw of
+            Just _ -> fetchMetricsDataWithProgress (Just $ emit . convert) actual sql now fromD toD authCtx dbSource >>= either throwIO pure
+            Nothing ->
+              runEff
+                $ Time.runTime
+                $ runHasqlPool authCtx.hasqlPool
+                $ queryMetricsWithCacheUsing fetch (Just $ emit . convert) actual pid source ast cfg (maybeToMonoid queryM) now fromD toD
           pure $ first (Utils.sanitizeBackendError . toText . displayException) $ convert <$> result
       frame kind value = AE.object ["type" AE..= (kind :: Text), "data" AE..= value]
       body = SourceT \consume -> do
@@ -559,6 +642,25 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
           UnliftIO.Async.link worker
           consume step
   pure $ Servant.addHeader "no-store, no-transform" $ Servant.addHeader "no" body
+
+
+-- | Splitting is valid only when each output group belongs to one timestamp
+-- bucket. Global sorts, limits, computed time keys and post-aggregate operations
+-- retain the single-query path.
+chunkableChart :: [Section] -> Bool
+chunkableChart sections = case reverse sections of
+  SummarizeCommand _ (Just (SummarizeByClause items)) : preceding ->
+    length [() | ByBinFunc _ <- items]
+      == 1
+      && any
+        ( \case
+            ByBinFunc (BinAuto (Subject "timestamp" _ [])) -> True
+            ByBinFunc (Bin (Subject "timestamp" _ []) _) -> True
+            _ -> False
+        )
+        items
+      && all (\case Search _ -> True; WhereClause _ -> True; Source _ -> True; _ -> False) preceding
+  _ -> False
 
 
 -- | NewlineFraming separates each JSON message on the wire.
