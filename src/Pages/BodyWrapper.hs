@@ -3,6 +3,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, w
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.HashMap.Strict qualified as HM
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
