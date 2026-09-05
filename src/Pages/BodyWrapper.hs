@@ -625,7 +625,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       -- Collapsed: search icon
       button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end on htmx:after:history:push from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
+    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
@@ -634,7 +634,15 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             let activeCls = bool "" " active" (fromMaybe pageTitle menuItem == mTitle)
                 flyoutItems = navFlyoutItems pidTxt mTitle
                 hasFlyout = not (null flyoutItems)
-                extraMatch = [term "data-match" ("/p/" <> pidTxt <> "/endpoints") | "/api_catalog" `T.isSuffixOf` mUrl]
+                -- Match section ownership by URL, independently of translated labels.
+                -- Shared tab/settings lists keep sibling routes in sync with navigation.
+                matchPaths
+                  | "/log_explorer" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> path | (_, path) <- explorerTabs] <> ["/p/" <> pidTxt <> "/traces"]
+                  | "/infrastructure/hosts" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> "/infrastructure", "/p/" <> pidTxt <> "/containers"]
+                  | "/api_catalog" `T.isSuffixOf` mUrl = ["/p/" <> pidTxt <> "/endpoints"]
+                  | "/settings" `T.isSuffixOf` mUrl = [url | (_, url, _) <- navBottomList pidTxt]
+                  | otherwise = []
+                extraMatch = [term "data-match" (T.unwords matchPaths) | not (null matchPaths)]
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
                 ( -- The visible label is display:none while the rail is collapsed, which
