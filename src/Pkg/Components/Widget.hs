@@ -1006,7 +1006,7 @@ renderChart widget = do
                 highlightFromJS = encodeText widget.highlightFrom
                 highlightToJS = encodeText widget.highlightTo
             script_
-              [type_ "text/javascript"]
+              [type_ "text/javascript", data_ "chart-init" chartId]
               [text|
 
               // IIFE to avoid global variable conflicts

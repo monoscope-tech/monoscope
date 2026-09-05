@@ -829,13 +829,25 @@ const disposeChartsIn = (root: Element) => {
   charts.forEach((chart) => disposeChart((chart as HTMLElement).id));
 };
 
-// htmx 4's beforeSwap detail has no `target` (htmx 2 did), and the compat shim re-fires
-// the old event name with the new payload — so read the swap target defensively and fall
-// back to the element the event was dispatched on.
+// Use the actual swap tasks, including OOB targets. The compatibility shim sets
+// detail.target to the source link, which need not contain the outgoing charts.
 document.addEventListener('htmx:before:swap', (event) => {
-  const e = event as CustomEvent<{ target?: unknown; ctx?: { target?: unknown } }>;
-  const target = e.detail?.target ?? e.detail?.ctx?.target ?? (e.target instanceof Element ? e.target : null);
-  if (target instanceof Element) disposeChartsIn(target);
+  const e = event as CustomEvent<{
+    tasks?: Array<{ target?: unknown; swapSpec?: { style?: string } }>;
+    target?: unknown;
+    ctx?: { target?: unknown };
+  }>;
+  const tasks = e.detail?.tasks ?? [{ target: e.detail?.ctx?.target ?? e.detail?.target ?? e.target }];
+  for (const task of tasks) {
+    if (['none', 'beforebegin', 'afterbegin', 'beforeend', 'afterend'].includes(task.swapSpec?.style ?? '')) continue;
+    const target = typeof task.target === 'string' ? document.querySelector(task.target) : task.target;
+    if (!(target instanceof Element)) continue;
+    disposeChartsIn(target);
+    // Morph removes ECharts' generated DOM but preserves identical script nodes.
+    // Remove the outgoing initializers so incoming widgets run even when their
+    // configuration is unchanged (e.g. Explorer navigation clears the URL query).
+    target.querySelectorAll('script[data-chart-init]').forEach(script => script.remove());
+  }
 });
 
 // Morph navigation can replace the target without exposing it in before:swap. Sweep only
