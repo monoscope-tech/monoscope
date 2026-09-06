@@ -619,7 +619,7 @@ spec = sequential $ aroundAll withTestResources do
     -- that, the Investigation panel reserved lg:h-[70vh] to say "No trace data
     -- available", which a query alert can never have (mTraceRef is Nothing by
     -- construction for this type).
-    it "query alert issue shows the breach and no trace panel" \tr -> do
+    it "query alert issue distinguishes recorded evaluations and preserves the query handoff" \tr -> do
       monitorId <- DataUUID.toText <$> UUID.nextRandom
       alertHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
       issueId <- withResource tr.trPool \conn ->
@@ -647,9 +647,9 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The two numbers that were compared, and the direction, are all on the page.
-      html `shouldSatisfy` T.isInfixOf "Threshold Breach"
-      html `shouldSatisfy` T.isInfixOf "Actual"
-      html `shouldSatisfy` T.isInfixOf "Threshold (below)"
+      html `shouldSatisfy` T.isInfixOf "Recorded evaluation"
+      html `shouldSatisfy` T.isInfixOf "Recorded value"
+      html `shouldSatisfy` T.isInfixOf "At or below"
       -- The alert's own query is charted, carrying its threshold as a mark line.
       html `shouldSatisfy` T.isInfixOf "alertThreshold: 5.0"
       -- The monitor id survives the `show` blob it is stored inside.
@@ -657,6 +657,14 @@ spec = sequential $ aroundAll withTestResources do
       -- ...and the void is gone: no trace panel, and no boilerplate subtitle.
       html `shouldSatisfy` not . T.isInfixOf "No trace data available"
       html `shouldSatisfy` not . T.isInfixOf Issues.queryAlertRecommendedAction
+      html `shouldSatisfy` T.isInfixOf "Open query in Explorer"
+      html `shouldSatisfy` T.isInfixOf "data-preserve-time-range"
+      html `shouldSatisfy` T.isInfixOf "query=resource.service.name"
+      for_ ([(Issues.Below, 5, False), (Issues.Below, 10, True), (Issues.Above, 5, False), (Issues.Above, 3, True)] :: [(Issues.ThresholdDirection, Double, Bool)]) \(direction, value :: Double, mismatch) -> do
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE apis.issues SET issue_data = issue_data || jsonb_build_object('actual_value', ?::float8, 'threshold_type', ?::text) WHERE id = ?|] (value, display direction, issueId)
+        (_, evaluated) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+        T.isInfixOf "does not meet the recorded threshold" (renderPage evaluated) `shouldBe` mismatch
 
     -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
     -- issue page 504'd behind the gateway. The trace is supporting evidence — past

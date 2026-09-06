@@ -4,7 +4,7 @@
 // lives at `detail.ctx.request`, NOT `detail.request`; reading the wrong one silently no-ops.
 // Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
 // itself on the hx-ext marker attribute the call sites already carry.
-import { copyParams } from './time-range-utils';
+import { copyParams, TIME_PARAMS } from './time-range-utils';
 
 const htmx4 = (window as any).htmx;
 
@@ -318,7 +318,11 @@ function preserveTimeRange(target: EventTarget | null) {
   const link = (target as Element | null)?.closest?.('a[data-preserve-time-range]') as HTMLAnchorElement | null;
   if (!link) return;
   const next = new URL(link.href);
-  copyParams(new URLSearchParams(window.location.search), next.searchParams);
+  const source = new URLSearchParams(window.location.search);
+  if (TIME_PARAMS.some((key) => source.get(key))) {
+    for (const key of TIME_PARAMS) next.searchParams.delete(key);
+    copyParams(source, next.searchParams);
+  }
   link.href = next.toString();
 }
 

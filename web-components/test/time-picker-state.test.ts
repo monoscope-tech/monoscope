@@ -220,3 +220,25 @@ describe('updateUrlState', () => {
     expect(params().get('since')).toBe('1H');
   });
 });
+
+
+describe('links that preserve the time range', () => {
+  test('replaces stale range modes while retaining the query and an initial fallback', () => {
+    const link = document.createElement('a');
+    link.dataset.preserveTimeRange = '';
+    link.href = '/p/proj/log_explorer?query=count()&since=7D';
+    document.body.append(link);
+    for (const [search, expected] of [
+      ['', ['7D', null, null]],
+      ['?since=1H', ['1H', null, null]],
+      ['?from=2026-09-02T06:00:00Z&to=2026-09-02T10:00:00Z', [null, '2026-09-02T06:00:00Z', '2026-09-02T10:00:00Z']],
+      ['?since=15M&from=&to=', ['15M', null, null]],
+    ] as const) {
+      window.history.replaceState({}, '', '/p/proj/issues/id' + search);
+      link.dispatchEvent(new Event('pointerover', { bubbles: true }));
+      const target = new URL(link.href).searchParams;
+      expect(['since', 'from', 'to'].map((key) => target.get(key))).toEqual(expected);
+      expect(target.get('query')).toBe('count()');
+    }
+  });
+});

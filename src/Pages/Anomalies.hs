@@ -99,7 +99,7 @@ import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -1032,35 +1032,39 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
               -- Similar patterns
               whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
             Just (Issues.QueryAlertP alertData) -> do
-              -- The breach is the whole story, so it leads: the two numbers that were
-              -- compared, side by side, then the series they were compared on with the
-              -- threshold drawn across it. Previously this branch rendered the query
-              -- string alone and left the reader to infer the rest.
-              let breached = display alertData.thresholdType
+              let below = alertData.thresholdType == Issues.Below
+                  meetsThreshold = if below then alertData.actualValue <= alertData.thresholdValue else alertData.actualValue >= alertData.thresholdValue
+                  conditionLabel = if below then "At or below" else "At or above" :: Text
+                  explorerLink = a_
+                    [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", alertData.queryExpression)] tp.from tp.to tp.since
+                    , data_ "preserve-time-range" ""
+                    , class_ "ml-auto text-xs text-textBrand hover:underline flex items-center gap-1"
+                    ]
+                    do
+                      "Open query in Explorer"
+                      faSprite_ "arrow-up-right-from-square" "regular" "h-3 w-3 shrink-0"
               div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
                 div_ [class_ "min-w-0 flex-1"] $ chartCard_ "Alert Query" "h-56" (Just alertData.thresholdValue) alertData.queryExpression
-                detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-4"} "Threshold Breach" do
-                  -- The breach direction is carried by the arrow as well as the colour:
-                  -- "0 is the bad number here" must survive a reader who cannot
-                  -- distinguish amber from the default ink (design principle 3).
-                  let below = alertData.thresholdType == Issues.Below
+                detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-4"} "Recorded evaluation" do
                   div_ [class_ "flex items-start gap-6"] do
                     div_ [class_ "flex flex-col gap-1"] do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Actual"
-                      span_ [class_ "flex items-center gap-1 text-2xl font-semibold text-fillWarning-strong tabular-nums leading-none"] do
-                        faSprite_ (bool "arrow-up" "arrow-down" below) "regular" "w-4 h-4 shrink-0"
+                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Recorded value"
+                      span_ [class_ $ "text-2xl font-semibold tabular-nums leading-none " <> if meetsThreshold then "text-fillWarning-strong" else "text-textStrong"] do
                         toHtml $ formatWithCommas alertData.actualValue
                     div_ [class_ "flex flex-col gap-1"] do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] $ "Threshold (" <> toHtml breached <> ")"
+                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Threshold"
                       span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml $ formatWithCommas alertData.thresholdValue
-                  -- The monitor's name is the page title, so it is not repeated here —
-                  -- only the two facts the title cannot carry.
-                  detailRow_ [("bolt", "text-fillWarning-strong", "Triggered", compactTimeAgo $ toText $ prettyTimeAuto now alertData.triggeredAt)]
+                      span_ [class_ "text-xs text-textWeak"] $ toHtml conditionLabel
+                  unless meetsThreshold
+                    $ p_
+                      [class_ "text-sm text-textWeak"]
+                      "This value does not meet the recorded threshold. Check the monitor’s warning and recovery settings."
+                  detailRow_ [("bolt", "text-fillWarning-strong", "Recorded", compactTimeAgo $ toText $ prettyTimeAuto now alertData.triggeredAt)]
                   whenJust (monitorIdFromStored alertData.queryId) \mid_ ->
                     a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> mid_ <> "/overview", class_ "text-xs text-textBrand hover:underline flex items-center gap-1.5 w-fit"] do
                       faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
                       "View monitor"
-              detailCard_ (Just "terminal") def{bodyCls = Just "p-3"} "Query"
+              detailCard_ (Just "terminal") def{bodyCls = Just "p-3", trailing = Just explorerLink} "Query"
                 $ pre_ [class_ "text-sm font-mono text-textStrong whitespace-pre-wrap break-words"]
                 $ toHtml alertData.queryExpression
             Just (Issues.ApiChangeP d) -> do

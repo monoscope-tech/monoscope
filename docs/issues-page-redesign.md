@@ -1042,7 +1042,8 @@ The badge now names the browser timezone instead of claiming one fixed offset.
 The final browser check covers winter and summer dates on both pages in all three timezones.
 The timezone-label build passed. All 12 browser cases passed without JavaScript errors or document overflow.
 Each displayed range matched the URL bounds converted to the browser timezone, including the different winter offsets.
-Deployment of this correction remains pending.
+Deployment run `34051412266` completed successfully.
+All 12 production checks passed across issue detail and Service Map in UTC, Berlin, and New York, in winter and summer.
 
 ## 17. Warning threshold provenance
 
@@ -1067,3 +1068,22 @@ Deployment of this fix remains pending.
 
 Historical snapshots can still reflect older configuration or an evaluation inside a recovery band.
 A follow-up should label the panel as a recorded evaluation and avoid asserting a threshold breach when the stored values do not cross it.
+
+
+## 18. Recorded query evaluations and Explorer handoff
+
+Historical query alerts now label their values as a recorded evaluation.
+The panel states the inclusive comparison and explains when the stored value does not meet the stored threshold.
+It directs the reader to the monitor’s warning and recovery settings without inferring a historical cause.
+The recorded payload remains unchanged.
+
+The Query card now links directly to Explorer with the recorded query and selected time range.
+The shared link handler removes stale range parameters when switching between relative and absolute ranges.
+It retains the server-provided range when the current URL has no explicit selection.
+
+The application and frontend builds passed, along with 26 issue integration examples and 35 frontend checks.
+The integration cases cover both threshold directions, inclusive equality, and mismatched recorded values.
+Four browser cases covered matching and mismatched values at 390px and 1440px.
+They verified the explanatory copy, query preservation, relative-to-absolute changes, and navigation to Explorer.
+No JavaScript errors or document overflow occurred. Desktop and mobile screenshots were reviewed.
+Deployment of this batch remains pending.
