@@ -222,7 +222,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         window.htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
       onmouseenter: (e: MouseEvent) =>
-        showTooltip(e, `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
+        showTooltip(e, `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${t} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
       onmouseleave: () => hideTooltip(),
     });
     div.style.left = `${startPix}px`;
@@ -238,7 +238,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     // the label (no overlap with the span name).
     if (item.hasErrors && width >= 24) div.appendChild(getErrorGlyph());
     const text = elt('span', { class: 'ml-1 min-w-0 truncate mr-4 text-xs relative', style: `color: ${textColor}` }, item.label);
-    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums relative', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
+    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums relative', style: `color: ${textColor}` }, `${t} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);
     container.appendChild(div);
@@ -348,26 +348,31 @@ export function buildHierarchy(spans: FlameGraphItem[]): FlameGraphItem[] {
   return roots;
 }
 
+// Leave room for each ruler label at the current panel width.
+const timeIntervalCount = (width: number) => Math.max(1, Math.min(9, Math.floor(width / 64)));
+
 function generateTimeIntervals(duration: number, target: string, padLeft = 0) {
   const container = document.querySelector('#' + target) as HTMLElement;
   if (!container) return;
-  const drawWidth = container.offsetWidth - SCROLL_BAR_WIDTH - padLeft;
-  const intervalWidth = drawWidth / 9;
+  const drawWidth = Math.max(0, container.offsetWidth - SCROLL_BAR_WIDTH - padLeft);
+  const count = timeIntervalCount(drawWidth);
+  const intervalWidth = drawWidth / count;
 
   // Clear container after reading width
   container.innerHTML = '';
   const intervals = [];
-  for (let i = 0; i < 10; i++) {
-    const t = Math.floor((i * duration) / 9);
+  for (let i = 0; i <= count; i++) {
+    const t = Math.floor((i * duration) / count);
     let [time, unit] = formatDuration(t);
-    unit = t === 0 ? '' : unit;
+    if (t === 0) { time = '0'; unit = ''; }
+    const anchor = i === 0 ? 0 : i === count ? -100 : -50;
     intervals.push(`
               <div class="absolute bottom-0 text-textStrong border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${
       padLeft + i * intervalWidth
     }px;">
                <div class="relative" style="height:10px">
                 <div class="bg-fillPress"  style="width:1px; height:10px;"></div>
-                <span class="absolute  left-0 -translate-x-1/2 text-xs" style="top:-13px">${time} ${unit}</span>
+                <span class="absolute left-0 text-xs whitespace-nowrap" style="top:-13px;transform:translateX(${anchor}%)">${time} ${unit}</span>
                </div>
               </div>
       `);
@@ -376,7 +381,11 @@ function generateTimeIntervals(duration: number, target: string, padLeft = 0) {
 }
 
 function formatDuration(duration: number): string[] {
-  if (duration >= 1000000000) {
+  if (duration >= 3600000000000) {
+    return [Number((duration / 3600000000000).toFixed(1)).toString(), 'h'];
+  } else if (duration >= 60000000000) {
+    return [Number((duration / 60000000000).toFixed(1)).toString(), 'm'];
+  } else if (duration >= 1000000000) {
     const v = duration / 1000000000;
     return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 's'];
   } else if (duration >= 1000000) {
@@ -429,7 +438,7 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
     const [t, u] = formatDuration(duration);
     min = Math.min(min, start);
     max = Math.max(max, start + duration);
-    barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${Math.floor(Number(t))} ${u}`, hasErrors: el.dataset.hasErrors === 'true', spanName: el.dataset.spanName || '', service });
+    barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${t} ${u}`, hasErrors: el.dataset.hasErrors === 'true', spanName: el.dataset.spanName || '', service });
   });
   const maxDuration = Number.isFinite(max - min) && max > min ? max - min : 1;
 
@@ -444,10 +453,11 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
     rows.style.zIndex = '0';
     rows.querySelector('.wf-grid')?.remove();
     const leftCol = ruler.getBoundingClientRect().left - rows.getBoundingClientRect().left;
-    const drawWidth = ruler.offsetWidth - SCROLL_BAR_WIDTH;
+    const drawWidth = Math.max(0, ruler.offsetWidth - SCROLL_BAR_WIDTH);
+    const count = timeIntervalCount(drawWidth);
     const grid = elt('div', { class: 'wf-grid absolute inset-0 pointer-events-none', style: 'z-index:-1' });
-    for (let i = 0; i <= 9; i++) {
-      grid.appendChild(elt('div', { class: 'absolute top-0 bottom-0 w-px', style: `left:${leftCol + (drawWidth * i) / 9}px;background-color:var(--color-fillPress);` }));
+    for (let i = 0; i <= count; i++) {
+      grid.appendChild(elt('div', { class: 'absolute top-0 bottom-0 w-px', style: `left:${leftCol + (drawWidth * i) / count}px;background-color:var(--color-fillPress);` }));
     }
     rows.appendChild(grid);
   };

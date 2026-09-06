@@ -1223,3 +1223,25 @@ An initial repeat run then caught a second invalid assumption: the real recovery
 The captured page correctly showed `Query execution failed`, so hiding its banner would have been a product bug.
 The UI test now supplies both failure and successful completion responses explicitly, then checks that refresh clears the banner and loading state.
 All ten repetitions pass with two browser workers. No sleeps, retries, or weaker banner assertions were added.
+
+## 23. Production verification and trace ruler follow-up
+
+Deployment `34059083671` for `017d00d9` passed every required CI stage and deployed successfully.
+The seven reference pages returned HTTP 200 with no JavaScript errors or page overflow.
+Observed shell navigation times were 223–838ms in this pass; these are individual observations, not a latency percentile.
+The query-alert heading now shows its monitor name. At 390px and 1440px, threshold 5 sits inside an axis spanning 0–5.25.
+
+The payment trace previously assumed absent was recoverable. Its stored error data identifies August 27 at 15:59:56.329Z,
+rather than the September 6 processing timestamp used before this correction.
+The page now renders five spans and four errors. Both payment references passed mobile/light and desktop/dark checks,
+with trace responses observed in 4.27–4.68s, including shell navigation.
+The initial production fallback assertion failed because the page now rendered a trace, not an empty state.
+A direct read at the old, incorrect timestamp still verifies the new honest empty state and scoped Explorer link.
+
+The recovered trace exposed crowded ruler labels on narrow screens: ten second-based labels overlapped in a roughly 200px plot.
+The ruler now chooses its interval count from available width, anchors endpoint labels inside the plot, and keeps gridlines aligned.
+Long durations use minutes or hours, and bar labels retain the formatter's precision.
+The frontend build passes, as do 11 trace-hierarchy checks.
+Browser previews at 320px, 390px, 768px, and 1440px verify that ruler labels stay inside the plot and do not overlap.
+These previews load the changed chart code into a test browser using the real trace; production assets remain unchanged until deployment.
+The full frontend build used a temporary output directory to preserve assets used by concurrent local Haskell builds.
