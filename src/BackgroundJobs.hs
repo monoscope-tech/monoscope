@@ -43,7 +43,7 @@ import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (concurrently, forConcurrently)
+import Effectful.Concurrent.Async (forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -72,7 +72,6 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -81,6 +80,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Report qualified as Report
 import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -91,7 +91,6 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
@@ -3167,61 +3166,15 @@ sendReportForProject pid rType = do
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
   let prv = case rType of
-        Projects.RTWeekly -> 6 * 86400
+        Projects.RTWeekly -> 7 * 86400
         Projects.RTDaily -> 86400
 
   let startTime = addUTCTime (negate prv) currentTime
-      prevStart = addUTCTime (negate (prv * 2)) currentTime
-      prevEnd = addUTCTime (negate prv) currentTime
-      parseQ q =
-        let qAST = fromRight [] (parseQueryToAST q)
-            sqlQueryComponents = (defSqlQueryCfg pid currentTime Nothing Nothing){dateRange = (Just startTime, Just currentTime)}
-            (_, qc) = queryASTToComponents sqlQueryComponents qAST
-         in maybeToMonoid qc.finalSummarizeQuery
   whenJustM (Projects.activeProjectById pid) \pr -> do
-    ( (stats, statsPrev)
-      , ( (statsBySpanType, statsBySpanTypePrev)
-          , ((slowDbQueriesL, (endpointStats, endpointStatsPrev)), ((chartDataEvents, chartDataErrors), (anomalies, _)))
-          )
-      ) <-
-      concurrently
-        ( concurrently
-            (Telemetry.getProjectStatsForReport pid startTime currentTime)
-            (Telemetry.getProjectStatsForReport pid prevStart prevEnd)
-        )
-        ( concurrently
-            ( concurrently
-                (V.fromList <$> Telemetry.getProjectStatsBySpanType pid startTime currentTime)
-                (V.fromList <$> Telemetry.getProjectStatsBySpanType pid prevStart prevEnd)
-            )
-            ( concurrently
-                ( concurrently
-                    (Telemetry.getDBQueryStats pid startTime currentTime)
-                    ( concurrently
-                        (V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime)
-                        (V.fromList <$> Telemetry.getEndpointStats pid prevStart prevEnd)
-                    )
-                )
-                ( concurrently
-                    ( concurrently
-                        (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
-                        (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
-                    )
-                    (Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.timeRange = Just (startTime, currentTime), Issues.limit = 100})
-                )
-            )
-        )
-    let slowDbQueries = V.fromList slowDbQueriesL
-        anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
-        totalErrors = sum $ map (\(_, x, _) -> x) stats
-        totalEvents = sum $ map (\(_, _, x) -> x) stats
-        totalErrorsPrev = sum $ map (\(_, x, _) -> x) statsPrev
-        totalEventsPrev = sum $ map (\(_, _, x) -> x) statsPrev
-        errorsChange = RP.pctChange totalErrors totalErrorsPrev
-        eventsChange = RP.pctChange totalEvents totalEventsPrev
-        spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
-        endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
+    systemSnapshot <- RP.collectSystemReport pid startTime currentTime
+    let (totalEvents, totalErrors, _, _) = RP.snapshotTotals systemSnapshot
+        stats = mapMaybe (\s -> s.current <&> \r -> (fromMaybe "Unnamed service" r.service, fromIntegral r.errorEvents, fromIntegral r.events)) systemSnapshot.services
+        rp_json = RP.buildReportJson' systemSnapshot
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
@@ -3252,30 +3205,15 @@ sendReportForProject pid rType = do
       broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
       when (rType == Projects.RTWeekly)
         $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
-          totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
-          when (totalRequest > 0) do
-            patterns <- LogPatterns.getLogPatterns pid 10 0
-            -- Date labels render in the project's timezone, not the server's — see RP.renderWeeklyEmail.
-            let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
-                freeTierExceeded = Projects.isFreeTier pr.paymentPlan && totalRequest > 5000
-            forM_ users \user -> do
-              (_, subj, rendered) <-
-                RP.renderWeeklyEmail
-                  ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
-                  pr
-                  user.firstName
-                  startTime
-                  currentTime
-                  totalEvents
-                  totalErrors
-                  eventsChange
-                  errorsChange
-                  anomalies'
-                  endpointPerformance
-                  slowDbQueries
-                  topPatterns
-                  freeTierExceeded
-              sendRenderedEmail (CI.original user.email) subj rendered
+          forM_ users \user -> do
+            (_, subj, rendered) <-
+              RP.renderSystemEmail
+                ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
+                pr
+                user.firstName
+                False
+                systemSnapshot
+            sendRenderedEmail (CI.original user.email) subj rendered
       Log.logInfo "Completed sending report notifications for" pid
 
 

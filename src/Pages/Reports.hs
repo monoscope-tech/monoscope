@@ -15,21 +15,27 @@ module Pages.Reports (
   eventsWidget,
   errorsWidget,
   renderWeeklyEmail,
+  collectSystemReport,
+  renderSystemEmail,
+  snapshotTotals,
 )
 where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Default (def)
+import Data.Effectful.Hasql (Hasql)
 import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
-import Effectful (Eff, type (:>))
-import Effectful.Concurrent.Async (concurrently)
+import Effectful (Eff, IOE, type (:>))
+import Effectful.Concurrent.Async (Concurrent, concurrently)
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
@@ -37,11 +43,11 @@ import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.Containers qualified as Containers
+import Models.Telemetry.Report qualified as Report
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
@@ -49,8 +55,9 @@ import Pkg.EmailTemplates qualified as ET
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
+import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders, addSuccessToast)
+import UnliftIO (tryAny)
+import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, freeTierDailyMaxEvents, hostPath, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -111,7 +118,7 @@ data ReportData = ReportData
 -- | Shared widget definitions for chart URL generation
 eventsWidget, errorsWidget :: Widget.Widget
 eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"}
-errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+errorsWidget = eventsWidget{Widget.query = Just "(status_code == \"ERROR\" or attributes.exception.type != null or severity.severity_number >= 17 or level =~ /(?i)^(error|fatal)$/) | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
 
 
 anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int, Int, Int)
@@ -127,19 +134,21 @@ anomalyTypeCounts getType =
     (0, 0, 0, 0, 0)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector Issues.IssueSummary -> AE.Value
-buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
-  AE.toJSON
-    ReportData
-      { endpoints = (\(u, m, p, d, dc, req, cc) -> PerformanceReport{host = u, urlPath = p, method = m, averageDuration = fromIntegral d, durationDiffPct = dc, requestCount = fromIntegral req, requestDiffPct = cc}) <$> V.toList (V.take 10 endpointsPerformance)
-      , events = StatData{total = fromIntegral totalEvents, change = eventsChange}
-      , errors = StatData{total = fromIntegral totalErrors, change = errorsChange}
-      , spanTypeStats = (\(t, e, chang, dur, durChange) -> SpanTypeStats{spanType = t, eventCount = fromIntegral e, eventChange = chang, averageDuration = fromIntegral dur, durationChange = durChange}) <$> V.toList spanTypeStatsDiff'
-      , slowDbQueries = (\(q, d, c) -> DBQueryStat{query = q, averageDuration = fromIntegral d, totalEvents = fromIntegral c}) <$> V.toList slowDbQueries
-      , errorDataset = Widget.toWidgetDataset chartErr
-      , eventsDataset = Widget.toWidgetDataset chartEv
-      , issues = V.toList issues
-      }
+-- | New reports persist one evidence snapshot. The legacy decoder below remains for
+-- existing reports; new collection no longer computes unused chart datasets.
+buildReportJson' :: Report.ReportSnapshot -> AE.Value
+buildReportJson' snapshot = AE.object ["systemSnapshot" AE..= snapshot]
+
+
+snapshotTotals :: Report.ReportSnapshot -> (Int, Int, Double, Double)
+snapshotTotals snapshot = (events, errors, pctChange events (fromIntegral oldEvents), pctChange errors (fromIntegral oldErrors))
+  where
+    current = mapMaybe (.current) snapshot.services
+    previous = mapMaybe (.previous) snapshot.services
+    events = fromIntegral $ sum $ map (.events) current
+    errors = fromIntegral $ sum $ map (.errorEvents) current
+    oldEvents = sum $ map (.events) previous
+    oldErrors = sum $ map (.errorEvents) previous
 
 
 type EndpointStatsTuple = (Text, Text, Text, Int64, Int64)
@@ -214,12 +223,56 @@ reportDayLabels zone startTime endTime =
    in (label startTime, label endTime)
 
 
+-- | Collect once per report; each optional source preserves absence versus failure.
+collectSystemReport
+  :: (Concurrent :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es)
+  => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es Report.ReportSnapshot
+collectSystemReport pid start end = do
+  ctx <- ask @AuthContext
+  let useTf = ctx.env.enableTimefusionReads
+      previousStart = addUTCTime (negate $ diffUTCTime end start) start
+      infraStart = max start (addUTCTime (-Containers.freshnessWindow) end)
+  ((current, previous), ((infrastructure, monitors), ((issues, topPatterns), (performance, (databases, workloads))))) <-
+    concurrently
+      (concurrently (Report.serviceStats useTf pid start end) (Report.serviceStats useTf pid previousStart start))
+      ( concurrently
+          ( concurrently
+              (optionalReportSection pid "infrastructure" $ Report.infrastructureStats infraStart end <$> Containers.containersForReport useTf pid infraStart end)
+              (optionalReportSection pid "monitors" $ Report.monitorStats <$> Monitors.queryMonitorsAll pid)
+          )
+          ( concurrently
+              ( concurrently
+                  (optionalReportSection pid "issues" $ Report.issueStats pid start end)
+                  (optionalReportSection pid "log patterns" $ map (\p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)) <$> LogPatterns.getLogPatterns pid 5 0)
+              )
+              ( concurrently
+                  (optionalReportSection pid "endpoint performance" $ uncurry Report.compareEndpoints <$> concurrently (Report.endpointStats useTf pid start end) (Report.endpointStats useTf pid previousStart start))
+                  ( concurrently
+                      (optionalReportSection pid "database performance" $ Report.databaseStats useTf pid start end)
+                      (optionalReportSection pid "workload composition" $ Report.workloadStats useTf pid start end)
+                  )
+              )
+          )
+      )
+  project <- Projects.projectById pid
+  let ingestionCapped = project <&> \p -> Projects.isFreeTier p.paymentPlan && fromIntegral (sum $ map (.recentDayEvents) current) >= freeTierDailyMaxEvents
+  pure Report.ReportSnapshot{services = Report.compareServices current previous, infrastructure, monitors, issues, generatedAt = end, startTime = start, endTime = end, topPatterns, performance, databases, workloads, ingestionCapped}
+
+
+optionalReportSection :: (IOE :> es, Log :> es) => Projects.ProjectId -> Text -> Eff es a -> Eff es (Report.ReportSection a)
+optionalReportSection pid label action =
+  tryAny action
+    >>= either
+      (\err -> Report.Unavailable <$ Log.logAttention "Report section unavailable" (pid, label, displayException err))
+      (pure . Report.Available)
+
+
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email.
 -- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
 -- row so both the request handlers and the weekly-report background job render the same email;
 -- @reportUrl@ is host-relative.
-renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Eff es (Text, Text, Text)
-renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
+renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Maybe Report.ReportSnapshot -> Bool -> Eff es (Text, Text, Text)
+renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded systemSnapshot fullReport = do
   ctx <- ask @AuthContext
   let pid = project.id
       reportUrl' = hostPath ctx.env.hostUrl reportUrl
@@ -254,6 +307,11 @@ renderWeeklyEmail reportUrl project userName startTime endTime totalEvents total
           , slowQueries
           , topPatterns
           , freeTierExceeded
+          , systemSnapshot
+          , fullReport
+          , timeZone = if isJust (TZ.tzByName $ encodeUtf8 project.timeZone) then project.timeZone else "UTC"
+          , fromTime = stmTxt
+          , toTime = endTxt
           }
       (subj, html) = ET.weeklyReportEmail reportData
   pure (dayEnd, subj, ET.renderEmail subj html)
@@ -261,14 +319,27 @@ renderWeeklyEmail reportUrl project userName startTime endTime totalEvents total
 
 -- | Reconstruct the email HTML from a stored Report's reportJson. Returns (dateLabel, emailHtml)
 reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
-reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.reportJson of
-  AE.Error err -> ("", "Error: Could not parse report data") <$ Log.logAttention "Unparseable stored report json" (report.id.toText, toText err)
-  AE.Success rd -> do
-    let anomalies' = V.fromList rd.issues
-        performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
-        slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
-        reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
-    dropSubject <$> renderWeeklyEmail reportUrl project userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False
+reportToEmailHtml report project userName =
+  case AET.parseMaybe (AE.withObject "Report" (AE..:? "systemSnapshot")) report.reportJson of
+    Just (Just snapshot) -> dropSubject <$> renderSystemEmail reportUrl project userName True snapshot
+    Nothing -> invalid "Invalid system report snapshot"
+    Just Nothing -> case AE.fromJSON @ReportData report.reportJson of
+      AE.Error err -> invalid (toText err)
+      AE.Success rd -> do
+        let anomalies' = V.fromList rd.issues
+            performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
+            slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
+        dropSubject <$> renderWeeklyEmail reportUrl project userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False Nothing True
+  where
+    reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
+    invalid err = ("", "Error: Could not parse report data") <$ Log.logAttention "Unparseable stored report json" (report.id.toText, err)
+
+
+renderSystemEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> Bool -> Report.ReportSnapshot -> Eff es (Text, Text, Text)
+renderSystemEmail reportUrl project userName fullReport snapshot =
+  let (events, errors, eventChange, errorChange) = snapshotTotals snapshot
+      patterns = case snapshot.topPatterns of Report.Available rows -> V.fromList rows; Report.Unavailable -> V.empty
+   in renderWeeklyEmail reportUrl project userName snapshot.startTime snapshot.endTime events errors eventChange errorChange V.empty V.empty V.empty patterns (snapshot.ingestionCapped == Just True) (Just snapshot) fullReport
 
 
 -- | The page views show the email body; only the background job needs its subject line.
@@ -280,41 +351,8 @@ dropSubject (dateLabel, _, html) = (dateLabel, html)
 buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
 buildLiveReportEmailHtml pid project userName = do
   currentTime <- Time.currentTime
-  let startTime = addUTCTime (negate $ 6 * 86400) currentTime
-      prevStart = addUTCTime (negate $ 12 * 86400) currentTime
-  ( (stats, statsPrev)
-    , ((slowQueriesL, (endpointStats, endpointStatsPrev)), ((anomalies, _), (patterns, totalRequest)))
-    ) <-
-    concurrently
-      ( concurrently
-          (Telemetry.getProjectStatsForReport pid startTime currentTime)
-          (Telemetry.getProjectStatsForReport pid prevStart startTime)
-      )
-      ( concurrently
-          ( concurrently
-              (Telemetry.getDBQueryStats pid startTime currentTime)
-              ( concurrently
-                  (V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime)
-                  (V.fromList <$> Telemetry.getEndpointStats pid prevStart startTime)
-              )
-          )
-          ( concurrently
-              (Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.timeRange = Just (startTime, currentTime), Issues.limit = 100})
-              (concurrently (LogPatterns.getLogPatterns pid 10 0) (LogQueries.getLastSevenDaysTotalRequest pid))
-          )
-      )
-  let totals xs = (sum [e | (_, e, _) <- xs], sum [v | (_, _, v) <- xs])
-      (totalErrors, totalEvents) = totals stats
-      (totalErrorsPrev, totalEventsPrev) = totals statsPrev
-      eventsChangePct = pctChange totalEvents totalEventsPrev
-      errorsChangePct = pctChange totalErrors totalErrorsPrev
-      slowQueries = V.fromList slowQueriesL
-      performance = computeDurationChanges endpointStats endpointStatsPrev
-      anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
-      topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
-      reportUrl = "/p/" <> pid.toText <> "/reports"
-      freeTierExceeded = Projects.isFreeTier project.paymentPlan && totalRequest > 5000
-  dropSubject <$> renderWeeklyEmail reportUrl project userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
+  snapshot <- collectSystemReport pid (addUTCTime (-7 * 86400) currentTime) currentTime
+  dropSubject <$> renderSystemEmail ("/p/" <> pid.toText <> "/reports/live") project userName True snapshot
 
 
 reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
@@ -399,7 +437,7 @@ singleReportPage (reportType, dateLabel, emailHtml) =
       span_ [class_ "text-sm text-textWeak"] $ toHtml dateLabel
     if T.null emailHtml
       then h3_ [class_ "p-4"] "Report Not Found"
-      else iframe_ [term "srcdoc" emailHtml, style_ "width:100%;height:100%;border:none;", term "sandbox" "allow-same-origin"] ""
+      else iframe_ [term "srcdoc" emailHtml, style_ "width:100%;height:100%;border:none;", term "sandbox" "allow-same-origin allow-top-navigation-by-user-activation"] ""
 
 
 -- | HTMX attrs loading @url@ into the report detail pane.
