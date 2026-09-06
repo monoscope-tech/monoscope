@@ -3420,7 +3420,7 @@ newEndpointAlertsPerHour = 10
 runHostRetentionSweep :: Config.AuthContext -> Projects.ProjectId -> ATBackgroundCtx ()
 runHostRetentionSweep authCtx pid = do
   now <- Time.currentTime
-  traffic <- Endpoints.hostTrafficSince authCtx.env.enableTimefusionReads pid (addUTCTime (-48 * 3600) now)
+  traffic <- Endpoints.hostTrafficSince authCtx.env.enableTimefusionReads pid (addUTCTime (-(48 * 3600)) now)
   (unarchivedRaw, archivedCount) <- Endpoints.hostRetentionSweep pid traffic
   let unarchived = ordNub $ V.toList unarchivedRaw
   when (archivedCount > 0) $ Log.logInfo "Hosts auto-archived after 30 idle days" ("project_id", pid.toText, "count", archivedCount)
