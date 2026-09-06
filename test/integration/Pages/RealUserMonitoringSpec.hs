@@ -255,20 +255,23 @@ spec = sequential $ aroundAll withTestResources do
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must
       -- still answer, proven by deleting the underlying rows so a recompute could not.
+      -- The span is documentLoad-shaped: TimeFusion's text-index prefilter currently loses
+      -- LIKE-matched ("Pageview \183 ") names inside narrow windows, which is a store bug
+      -- this example must not depend on.
       apiKey <- createTestAPIKey tr testPid "rum-l2-key"
-      browserSpan apiKey "80000000000000000000000000000008" "8000000000000001" [("url.path", "/l2-cached")] "Pageview · /l2-cached" "session-l2" Nothing "storefront" tr
+      ingestSpanReq tr $ mkSpanRequest "80000000000000000000000000000008" "8000000000000001" Nothing "documentLoad" [] Nothing [mkAttr "session.id" "session-l2", mkAttr "url.full" "https://l2.example/cached"] (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" "Mozilla/5.0 L2"]) frozenTime
       -- A window no earlier example used, so the shared table has no entry yet for this key.
       let renderPages since = do
             (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1")
             pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
       firstRender <- renderPages "6H"
-      firstRender `shouldContainAll` ["/l2-cached"]
+      firstRender `shouldContainAll` ["l2.example/cached"]
       -- Memory only — the shared table entry is exactly what a fresh replica would find.
       Cache.purge tr.trATCtx.rumCache
       withResource tr.trPool \conn ->
         void $ PG.execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ? AND attributes___session___id = ?" (testPid, "session-l2" :: Text)
       secondRender <- renderPages "6H"
-      secondRender `shouldContainAll` ["/l2-cached"]
+      secondRender `shouldContainAll` ["l2.example/cached"]
 
     it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
       purgeRumCaches tr
