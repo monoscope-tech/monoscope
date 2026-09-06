@@ -881,7 +881,7 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
 
 
 hostMapSkeleton_ :: Html ()
-hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgSunken", role_ "status", Aria.label_ "Loading host map"] do
+hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgBase", role_ "status", Aria.label_ "Loading host map"] do
   div_ [class_ "flex flex-wrap gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"]
     $ replicateM_ 4
     $ div_ [class_ "h-9 w-44 rounded-lg skeleton-shimmer"] ""
@@ -891,7 +891,7 @@ hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgSunken", role_ "s
 
 
 hostMap_ :: HostMapData -> Html ()
-hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgSunken"] do
+hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgBase"] do
   form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (hostMapFillParam page.fill) (map hostMapFillOption [minBound ..])

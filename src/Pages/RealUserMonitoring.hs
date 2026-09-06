@@ -648,8 +648,8 @@ rumSkeleton_ :: RumTab -> Html ()
 rumSkeleton_ Sessions =
   div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase", role_ "status", Aria.label_ "Loading sessions"] do
     section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5"] $ Components.tableSkeleton_ 8
-    section_ [class_ "col-span-3 min-w-0 bg-bgSunken max-xl:col-span-5"] mempty
-rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
+    section_ [class_ "col-span-3 min-w-0 bg-bgBase max-xl:col-span-5"] mempty
+rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
   div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
     $ replicateM_ 4
     $ div_ [class_ "flex flex-col gap-2 px-4 py-3"] do
@@ -819,7 +819,7 @@ slot_ page panel skeleton content
 
 
 rumPage_ :: RumData -> Html ()
-rumPage_ page = main_ [id_ "rum-page", class_ "min-h-full bg-bgSunken"] do
+rumPage_ page = main_ [id_ "rum-page", class_ "min-h-full bg-bgBase"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
   slot_ page PanelServices mempty $ servicePicker_ page
   case page.tab of
@@ -1175,7 +1175,7 @@ sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
     section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"]
       $ sessionsTable_ True page.links page.query page.sessionFilter filtered
-    section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgSunken max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
+    section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgBase max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
 
 
 filterSessions :: Maybe Text -> SessionFilter -> [RumSession] -> [RumSession]

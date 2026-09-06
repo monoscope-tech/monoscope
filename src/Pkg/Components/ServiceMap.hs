@@ -48,7 +48,7 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
           -- our own tokens, carry sprite icons, and are focusable — none of which a canvas
           -- node can be.
           div_
-            [ class_ "border border-strokeStrong bg-bgSunken rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
+            [ class_ "border border-strokeStrong bg-bgBase rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.
