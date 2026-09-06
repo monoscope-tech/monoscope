@@ -933,3 +933,14 @@ distinguish aggregate tag values from individual event context.
 [Datadog's explorer](https://docs.datadoghq.com/tracing/error_tracking/explorer/)
 places triage information near the top and provides diagnostic context for each error sample.
 These patterns support moving available evidence ahead of empty panels and making sample scope explicit.
+
+### Evidence layout implementation, pending browser validation
+
+All issue types now share one activity sidebar beside the evidence column.
+The main column contains the chart, issue-specific details, Investigation, and replay when available.
+On smaller screens, activity follows this evidence in DOM and visual order.
+A tall activity timeline no longer creates an empty gap before Investigation.
+
+Stackless errors now show compact explanatory text and a direct link to the trace or related logs.
+The section title is "Error details" when no stack exists.
+The CSS build passed. The application build and browser checks remain pending.
