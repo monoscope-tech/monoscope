@@ -1,6 +1,7 @@
 module Data.Effectful.HasqlSpec (spec) where
 
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Text qualified as T
 import Hasql.Errors qualified as HE
 import Hasql.Pool qualified as HP
 import Relude
@@ -63,6 +64,20 @@ spec = describe "isTransientException" $ do
     EHasql.isLockTimeout (EHasql.HasqlException lockTimeoutError) `shouldBe` True
     EHasql.isLockTimeout (EHasql.HasqlException realSqlStateError) `shouldBe` False -- 23505
     EHasql.isLockTimeout (EHasql.HasqlException deadlockError) `shouldBe` False -- 40P01
+  it "keeps database diagnostics without serializing ingestion parameters" do
+    let payload = T.replicate 100000 "private-batch-value"
+        err =
+          EHasql.HasqlException
+            $ HP.SessionUsageError
+            $ HE.StatementSessionError 2 1 "INSERT INTO events SELECT * FROM unnest($1)" [payload] True
+            $ HE.ServerStatementError
+            $ HE.ServerError "57P03" "database is draining" (Just "retry after recovery") Nothing Nothing
+    for_ [show @String err, displayException err, show @String $ toException err] \rendered -> do
+      rendered `shouldNotContain` "private-batch-value"
+      rendered `shouldContain` "57P03"
+      rendered `shouldContain` "database is draining"
+      rendered `shouldContain` "retry after recovery"
+      rendered `shouldContain` "INSERT INTO events"
   where
     allConnectionErrors =
       [ HE.NetworkingConnectionError "ECONNREFUSED"
