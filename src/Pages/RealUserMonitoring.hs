@@ -51,6 +51,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Relude
+import Relude.Extra.Foldable1 (maximum1)
 import System.Clock (TimeSpec (..))
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
@@ -1042,8 +1043,8 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
       RumPage
         { path = pageRoute newest.path
         , views = sum $ (.views) <$> routePages
-        , p75LoadMs = viaNonEmpty maximum $ mapMaybe (.p75LoadMs) $ toList routePages
-        , lastSeen = maximum $ (.lastSeen) <$> routePages
+        , p75LoadMs = viaNonEmpty maximum1 $ mapMaybe (.p75LoadMs) $ toList routePages
+        , lastSeen = maximum1 $ (.lastSeen) <$> routePages
         }
 
 
@@ -1184,7 +1185,7 @@ sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
   div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
-    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"]
+    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak p-3 max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"]
       $ sessionsTable_ True page.links page.query page.sessionFilter filtered
     section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgBase max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
 
