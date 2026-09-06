@@ -290,10 +290,11 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr testPid "rum-search-limit-key"
       let oldId = "00000000-0000-0000-000b-000000000001"
           oldTime = addUTCTime (-3600) frozenTime
+          recentId :: Int -> Text
           recentId n = "00000000-0000-0000-000a-" <> T.justifyRight 12 '0' (show n)
       browserSpanAt apiKey "e0000000000000000000000000000001" "e000000000000001" [("url.path", "/needle%_path")] "documentLoad" oldId Nothing "bulk-ui" oldTime tr
       browserSpanAt apiKey "e0000000000000000000000000000001" "e000000000000002" [("url.path", "/checkout"), ("exception.type", "TypeError")] "documentLoad" oldId Nothing "bulk-ui" (addUTCTime 1 oldTime) tr
-      forM_ [1 .. 201 :: Int] $ \n ->
+      forM_ ([1 .. 201] :: [Int]) $ \n ->
         browserSpan apiKey ("f" <> T.justifyRight 31 '0' (show n)) (T.justifyRight 16 '0' (show n)) [("url.path", "/recent")] "documentLoad" (recentId n) Nothing "bulk-ui" tr
       withResource tr.trPool $ \conn -> do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Archive analyst')" (oldId, testPid, oldTime, addUTCTime 60 oldTime)
