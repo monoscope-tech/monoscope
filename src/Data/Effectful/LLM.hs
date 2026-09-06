@@ -20,6 +20,7 @@ import Data.ByteString qualified as BS
 import Data.Effectful.Wreq (withGoldenCache)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
+import Data.Text.Foreign qualified as TextForeign
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
@@ -83,7 +84,7 @@ openAIEmbeddings apiKey baseUrl =
 
 -- | Apply the embedding provider's per-input and batch limits without losing text.
 -- UTF-8 byte length is an upper bound on cl100k_base token count. Keep inputs
--- under 8192 bytes; four bytes per code point bounds even non-ASCII chunks.
+-- under 8192 bytes, preserving UTF-8 boundaries when splitting chunks.
 -- A batch of at most 36 such chunks stays below the 300,000-token request limit.
 -- Long documents use a byte-length-weighted mean, normalized for cosine search.
 embedDocumentsBounded :: Monad m => ([DocLoader.Document] -> m (Either Text [[Float]])) -> [DocLoader.Document] -> m (Either Text [[Float]])
@@ -93,15 +94,23 @@ embedDocumentsBounded request docs
       means <- go mempty chunks
       traverse (finish means) [0 .. length docs - 1]
   where
+    maxInputBytes = 8191 :: Int
+    maxBatchChunks = 300000 `div` maxInputBytes
+    -- takeWord8/dropWord8 advance together by up to three bytes to finish a
+    -- code point. Reserve those bytes so even that final character fits.
+    chunkBytes = fromIntegral (maxInputBytes - 3)
+    splitText txt
+      | T.null txt = []
+      | otherwise = TextForeign.takeWord8 chunkBytes txt : splitText (TextForeign.dropWord8 chunkBytes txt)
     chunks = concat $ zipWith splitDocument [0 :: Int ..] docs
     splitDocument docId doc =
       let txt = toStrict $ DocLoader.pageContent doc
-          parts = if byteLength txt < 8192 then [txt] else T.chunksOf (8191 `div` 4) txt
+          parts = if byteLength txt <= maxInputBytes then [txt] else splitText txt
        in map (\part -> (docId, byteLength part, doc{DocLoader.pageContent = toLazy part})) parts
     byteLength = BS.length . encodeUtf8
     go means [] = pure means
     go means remaining = do
-      let (batch, rest) = splitAt 36 remaining
+      let (batch, rest) = splitAt maxBatchChunks remaining
       vectors <- ExceptT $ request $ map (\(_, _, doc) -> doc) batch
       when (length vectors /= length batch) $ throwError "Embedding response count does not match request"
       updated <- foldM add means $ zip batch vectors

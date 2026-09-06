@@ -75,3 +75,20 @@ spec = do
       embedDocumentsBounded request [Doc.Document (toLazy $ T.replicate 100000 "🌍") mempty]
         `shouldReturn` Left "rate limited"
       readIORef calls `shouldReturn` 1
+
+    it "fills byte-sized chunks for ASCII text" do
+      calls <- newIORef (0 :: Int)
+      let request batch = modifyIORef' calls (+ 1) $> Right (replicate (length batch) [1, 0])
+      embedDocumentsBounded request [Doc.Document (toLazy $ T.replicate 50000 "abc ") mempty]
+        `shouldReturn` Right [[1, 0]]
+      readIORef calls `shouldReturn` 1
+
+    it "combines distinct vectors across request boundaries" do
+      let input = T.replicate (8188 * 40) "a" <> T.replicate 8188 "b"
+          vector doc = if T.all (== 'a') (toStrict $ Doc.pageContent doc) then [1, 0] else [0, 1]
+      result <- embedDocumentsBounded (pure . Right . map vector) [Doc.Document (toLazy input) mempty]
+      case result of
+        Right [[x, y]] -> do
+          abs (x - 40 / sqrt 1601) `shouldSatisfy` (< 0.000001)
+          abs (y - 1 / sqrt 1601) `shouldSatisfy` (< 0.000001)
+        _ -> expectationFailure $ show result
