@@ -17,6 +17,7 @@ module Pages.RealUserMonitoring (
   pageLabel,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
@@ -25,6 +26,7 @@ import Data.Fixed (mod')
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
@@ -1308,32 +1310,36 @@ performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
   slot_ page PanelAudience (panelSkeleton_ $ Components.tableSkeleton_ 3) $ audiencePanel_ page.breakdown
 
 
--- | One strip per vital: P75 per interval, colored by its own rating. A regression reads
--- as the strip turning amber mid-window — visible in a way two aggregate numbers never are.
--- Where two emitters report the same vital in a bucket, the worse P75 is shown.
+-- | One platform chart per vital, with Google's good/poor marks as the widget's own
+-- threshold lines. The data is computed server-side ('rumVitalsDetail') because
+-- histogram-backed vitals are not yet expressible in the widget KQL pipeline (@value@ is
+-- NULL on histogram datapoints); the dataset is embedded, so the widget renders like every
+-- other chart in the product without fetching anything of its own.
 vitalTrendPanel_ :: [VitalTrendPoint] -> Html ()
-vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 per interval, colored by Google's thresholds" Nothing do
+vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 per interval with Google's thresholds marked" Nothing do
   if null points
     then panelEmpty_ "No web vital samples in this time range"
-    else div_ [class_ "grid grid-cols-2 gap-px bg-strokeWeak max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
+    else div_ [class_ "grid grid-cols-2 gap-3 p-3 max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
+      -- Where two emitters report the same vital in a bucket, the worse P75 is shown.
       let series = sortWith fst $ M.toList $ M.fromListWith max [(p.bucket, p.p75) | p <- points, vitalKey p.metricName == vital.name]
-          maxValue = foldl' max vital.poorAt $ map snd series
-      unless (null series) $ figure_ [class_ "bg-bgBase px-3 py-2.5", Aria.label_ $ vital.label <> " P75 over time"] do
-        div_ [class_ "flex items-baseline justify-between gap-2"] do
-          h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml vital.label
-          forM_ (viaNonEmpty last series) \(_, latest) ->
-            span_ [class_ $ "text-xs font-semibold tabular-nums " <> (ratingStyle $ classifyVital vital.goodAt vital.poorAt $ Just latest).textClass]
-              $ toHtml
-              $ formatVitalThreshold vital latest
-        div_ [class_ "mt-1.5 flex h-12 items-end gap-px"] $ forM_ series \(bucketTime, value) -> do
-          let barHeight = max 12 $ round @Double @Int $ value / maxValue * 100
-              rating = classifyVital vital.goodAt vital.poorAt $ Just value
-          div_
-            [ class_ $ "min-w-1 flex-1 rounded-t-sm " <> (ratingStyle rating).fillClass
-            , style_ $ "height:" <> show barHeight <> "%"
-            , data_ "tippy-content" $ fmtDate "%d %b %H:%M" bucketTime <> ": " <> formatVitalThreshold vital value
-            ]
-            ""
+          sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (floor $ utcTimeToPOSIXSeconds bucketTime :: Int64, value) | (bucketTime, value) <- series]
+      unless (null series)
+        $ div_ [class_ "h-52 min-h-52"]
+        $ Widget.widget_
+          def
+            { Widget.wType = Widget.WTTimeseriesLine
+            , Widget.id = Just $ "rum-vital-trend-" <> vital.name
+            , Widget.title = Just vital.label
+            , Widget.unit = Just vital.unit
+            , Widget.standalone = Just True
+            , Widget.hideSubtitle = Just True
+            , Widget.hideLegend = Just True
+            , Widget.hideValue = Just True
+            , Widget.warningThreshold = Just vital.goodAt
+            , Widget.alertThreshold = Just vital.poorAt
+            , Widget.showThresholdLines = Just "always"
+            , Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON sourceRows}
+            }
 
 
 -- | Path of a page URL for display; the full URL stays in the tooltip.
