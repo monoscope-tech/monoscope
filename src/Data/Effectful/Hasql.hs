@@ -53,6 +53,7 @@ import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
+import Text.Show (showString, showsPrec)
 import UnliftIO qualified
 
 
@@ -85,13 +86,29 @@ type instance DispatchOf Hasql = 'Dynamic
 
 
 newtype HasqlException = HasqlException UsageError
-  deriving stock (Show)
+
+
+-- Parameter values can contain an entire ingestion batch. Keep the typed error
+-- for classification, but render its SQL template and diagnostics without them.
+instance Show HasqlException where
+  showsPrec _ = showString . displayException
 
 
 instance Exception HasqlException where
   displayException (HasqlException ue) = case ue of
     AcquisitionTimeoutUsageError -> "Hasql: pool acquisition timeout"
     ConnectionUsageError e -> "Hasql connection error: " <> toString (toDetailedText e)
+    SessionUsageError (StatementSessionError total index template _ prepared err) ->
+      "Hasql statement error (statement "
+        <> show (index + 1)
+        <> "/"
+        <> show total
+        <> ", prepared="
+        <> show prepared
+        <> "):\n"
+        <> toString template
+        <> "\n"
+        <> toString (toDetailedText err)
     SessionUsageError e -> "Hasql session error: " <> toString (toDetailedText e)
 
 
