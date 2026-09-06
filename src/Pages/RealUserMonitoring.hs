@@ -924,9 +924,12 @@ panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak surface-raise
 rumStatWidgets_ :: RumLinks -> Html ()
 rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
   statSlot_
+    -- Distinct sessions per interval, summed: a session spanning two intervals counts twice,
+    -- which is a far smaller error than the alternative — a two-stage summarize renders a
+    -- nonsense total through the chart pipeline's own re-aggregation.
     $ statWidget "rum-stat-sessions" Widget.WTTimeseriesStat "Sessions" "users" "sessions"
     $ scopedKql links (browserKql <> " and attributes.session.id != null")
-    <> " | summarize started_at=min(timestamp) by attributes.session.id | summarize count() by bin_auto(started_at)"
+    <> " | summarize dcount(attributes.session.id) by bin_auto(timestamp)"
   statSlot_
     $ statWidget "rum-stat-pageviews" Widget.WTTimeseriesStat "Page views" "file-lines" "views"
     $ scopedKql links browserPageViewKql
