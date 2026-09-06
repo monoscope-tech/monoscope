@@ -15,6 +15,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues (ReportListItem (..))
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
@@ -28,6 +29,7 @@ import Pkg.Parser (parseQueryToAST)
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
+import Utils (formatWithCommas)
 
 
 spec :: Spec
@@ -62,11 +64,15 @@ spec = around withTestResources do
       void $ testServant tr $ Reports.reportsPostH testPid Projects.RTWeekly
       weekly <- fst <$> captureNotifs tr (BackgroundJobs.processBackgroundJob tr.trATCtx $ BackgroundJobs.WeeklyReports testPid)
       weekly `shouldSatisfy` any (\case DiscordNotification{} -> True; _ -> False)
-      let emails = [email | EmailNotification email <- weekly]
+      stored <- maybe (fail "weekly snapshot was not saved") pure =<< runTestBg frozenTime tr (Issues.getLatestReportByType testPid Projects.RTWeekly)
+      snapshot <- either fail pure $ AET.parseEither (AE.withObject "report" (AE..: "systemSnapshot")) stored.reportJson
+      let (events, errors, _, _) = Reports.snapshotTotals snapshot
+          headline = if events == 0 then "No telemetry events" else formatWithCommas (fromIntegral errors) <> " error events across " <> formatWithCommas (fromIntegral events) <> " telemetry events"
+          emails = [email | EmailNotification email <- weekly]
       emails `shouldSatisfy` (not . null)
       forM_ emails $ \email -> do
         email.subject `shouldSatisfy` T.isPrefixOf "Weekly system report"
-        email.htmlBody `shouldContainAll` ["Services", "Infrastructure", "Monitors", "No telemetry events"]
+        email.htmlBody `shouldContainAll` ["Services", "Infrastructure", "Monitors", headline]
 
       (_, reportsPage) <- testServant tr $ Reports.reportsGetH testPid Nothing Nothing Nothing
       reportId <- case reportsPage of
@@ -80,7 +86,7 @@ spec = around withTestResources do
         Reports.ReportsGetSingle (PageCtx _ (reportType, dateLabel, emailHtml)) -> do
           reportType `shouldBe` "daily"
           dateLabel `shouldNotBe` ""
-          emailHtml `shouldContainAll` ["Daily system report", "No telemetry events", "Services"]
+          emailHtml `shouldContainAll` ["Daily system report", "Services", "Infrastructure"]
         _ -> fail "the report detail did not load"
 
       -- Weekly emails used to be rendered by the job in the SERVER's timezone, so a
@@ -227,6 +233,20 @@ spec = around withTestResources do
       T.count "Avg request" email `shouldBe` 8
       (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable}
       partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Services"]
+      let quiet =
+            emptySnapshot
+              { Report.services = []
+              , Report.infrastructure = Report.Available $ Report.InfrastructureStats 0 0 0 [] 0 (addUTCTime (-900) frozenTime) frozenTime
+              , Report.monitors = Report.Available $ Report.MonitorStats 0 0 0 0 0 []
+              , Report.issues = Report.Available $ Report.IssueStats 0 0 0 0 0 []
+              , Report.performance = Report.Available []
+              , Report.databases = Report.Available []
+              , Report.workloads = Report.Available []
+              , Report.topPatterns = Report.Available []
+              , Report.ingestionCapped = Just False
+              }
+      (_, _, quietEmail) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False quiet
+      quietEmail `shouldContainAll` ["No telemetry events", "No HTTP server spans", "No infrastructure metrics observed", "No monitors configured"]
 
     it "counts issue lifecycle states before selecting the highest-priority evidence" \tr -> do
       let start = addUTCTime (-7 * 86400) frozenTime
