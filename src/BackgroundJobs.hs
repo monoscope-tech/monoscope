@@ -3053,8 +3053,13 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
 
 
 -- | Send notifications for a query monitor status change (inline, no separate job)
-notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Bool -> ATBackgroundCtx ()
-notifyQueryMonitorStatusChange monitor value isRecovery = do
+notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> ATBackgroundCtx ()
+notifyQueryMonitorStatusChange monitor value status = do
+  let isRecovery = status == Monitors.MSNormal
+      threshold = case status of
+        -- Match the state machine when a prior warning remains in its recovery band.
+        Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold
+        _ -> monitor.alertThreshold
   appCtx <- ask @Config.AuthContext
   whenJustM (Projects.projectById monitor.projectId) \p -> do
     teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
@@ -3070,9 +3075,9 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
       if isRecovery
         then pure (MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = monitorListUrl}, monitorListUrl)
         else do
-          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
-          Issues.insertIssue issue
-          let issueUrl = projectUrl appCtx monitor.projectId <> "/issues/" <> issue.id.toText
+          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
+          persistedId <- Issues.insertIssueReturningId issue
+          let issueUrl = projectUrl appCtx monitor.projectId <> "/issues/" <> persistedId.toText
           pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl, chartUrl = chartUrlM}, issueUrl)
     targetTeams <-
       if null teams
@@ -3081,7 +3086,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     let (subj, html) =
           if isRecovery
             then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
-            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold (display thresholdDir) chartUrlM
+            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value threshold (display thresholdDir) chartUrlM
         renderedBody = ET.renderEmail subj html
     for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj renderedBody
 
@@ -4935,7 +4940,7 @@ evaluateWithResults monitor startWall title total durationNs = do
         | otherwise = "reminder"
   Log.logInfo "Monitor notify decision" (monitor.id, title, status, total, shouldNotify, isMuted, reason)
   when (shouldNotify && not isMuted)
-    $ notifyQueryMonitorStatusChange monitor total isRecovery
+    $ notifyQueryMonitorStatusChange monitor total status
 
 
 -- | Feed a deterministic reading through the production monitor state machine.

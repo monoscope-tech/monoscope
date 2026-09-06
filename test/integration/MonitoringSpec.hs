@@ -8,11 +8,14 @@ import Data.Effectful.Notify qualified as Notify
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
@@ -312,17 +315,37 @@ spec = sequential $ aroundAll withTestResources do
 
     it "Warning → Alerting transition with hysteresis" \tr -> do
       let hystMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "33333333-3333-3333-3333-333333333333"
+      let assertIssue expectedThreshold expectedValue notifications = do
+            rows <- withResource tr.trPool \conn ->
+              PGS.query
+                conn
+                [sql| SELECT id, title, issue_data FROM apis.issues
+                      WHERE project_id = ? AND target_hash = ? AND issue_type = 'query_alert'
+                        AND acknowledged_at IS NULL AND archived_at IS NULL |]
+                (testPid, show @Text hystMonId)
+                :: IO [(Issues.IssueId, Text, Aeson Issues.QueryAlertData)]
+            [(title, d.thresholdValue, d.actualValue) | (_, title, Aeson d) <- rows]
+              `shouldBe` [("Pipeline Test Monitor", expectedThreshold, expectedValue)]
+            let emails = [email.htmlBody | EmailNotification email <- notifications]
+            emails `shouldSatisfy` (not . null)
+            for_ rows \(iid, _, _) -> for_ emails \body ->
+              body `shouldSatisfy` T.isInfixOf ("/issues/" <> iid.toText)
       insertPipelineMonitor tr hystMonId "SELECT 90::float8" 100 (Just 80) "above" (Just 60) Nothing
 
       -- Value 90 → MSWarning (above warning=80, below alert=100)
-      evalMonitorValueAt t0 tr hystMonId 90
+      warningNotifications <- evalMonitorValueWithNotifs t0 tr hystMonId 90
       m1 <- fetchMonitor tr hystMonId
       m1.currentStatus `shouldBe` Monitors.MSWarning
+      assertIssue 80 90 warningNotifications
+      -- Existing issues can carry a threshold-bearing title from an earlier release.
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text hystMonId)
 
       -- Value 110 → MSAlerting
-      evalMonitorValueAt (addUTCTime 120 t0) tr hystMonId 110
+      alertNotifications <- evalMonitorValueWithNotifs (addUTCTime 120 t0) tr hystMonId 110
       m2 <- fetchMonitor tr hystMonId
       m2.currentStatus `shouldBe` Monitors.MSAlerting
+      assertIssue 100 110 alertNotifications
 
       -- Value 70 → still MSAlerting (above recovery threshold of 60)
       evalMonitorValueAt (addUTCTime 240 t0) tr hystMonId 70

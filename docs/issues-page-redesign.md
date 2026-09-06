@@ -1008,7 +1008,8 @@ The application build and CSS build passed. The compiled page passed all four vi
 The final check also selected two custom dates, verified the resulting one-day interval, and returned to Last hour.
 Switching views moves focus to the new view and restores the calendar scroll position.
 The browser verified focus in both directions and a zero scroll offset when the calendar opened.
-Deployment of the mobile control change remains pending.
+Deployment run `34050684584` completed successfully.
+Production checks passed at all four viewport sizes, including custom dates, preset selection, focus, and scroll reset.
 
 ### Follow-up: warning threshold provenance
 
@@ -1042,3 +1043,27 @@ The final browser check covers winter and summer dates on both pages in all thre
 The timezone-label build passed. All 12 browser cases passed without JavaScript errors or document overflow.
 Each displayed range matched the URL bounds converted to the browser timezone, including the different winter offsets.
 Deployment of this correction remains pending.
+
+## 17. Warning threshold provenance
+
+The notification builder received only a recovery flag, so it could not distinguish warning from alert state.
+It always recorded the alert threshold in the issue and email.
+A warning value of 3 could therefore appear against an alert threshold of 5, even when the warning threshold was 2.
+
+The builder now receives the evaluated monitor state and selects its matching threshold.
+The warning fallback follows the existing state machine when a prior warning remains inside its recovery band.
+Generated issue titles use the monitor name, with the threshold kept in the evidence payload.
+An open query issue refreshes that title on its next notification, so escalation cannot retain an old threshold in the title.
+
+The existing warning-to-alert test now checks the recorded values and thresholds at both transitions.
+It also seeds an old title before escalation and checks its replacement.
+The insert now returns its persisted ID atomically, including on conflict.
+Monitor notifications use that ID instead of the newly generated candidate ID, which can be discarded during an update.
+The regression checks that warning and escalation emails point to the stored issue row.
+The application and integration-test builds passed.
+All 22 monitoring/RUM checks and all 26 issue-detail checks passed.
+The transition regression confirmed both threshold snapshots, title refresh, and emails linking to the persisted issue.
+Deployment of this fix remains pending.
+
+Historical snapshots can still reflect older configuration or an evaluation inside a recovery band.
+A follow-up should label the panel as a recorded evaluation and avoid asserting a threshold breach when the stored values do not cross it.

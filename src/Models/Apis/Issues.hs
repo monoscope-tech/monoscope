@@ -38,6 +38,7 @@ module Models.Apis.Issues (
 
   -- * Database Operations
   insertIssue,
+  insertIssueReturningId,
   selectIssueById,
   selectIssues,
   IssueProjection (..),
@@ -387,9 +388,15 @@ instance HI.DecodeRow IssueL where
 -- ON CONFLICT dedup applies to all issue types on (project_id, target_hash, issue_type)
 -- but only for open issues (not acknowledged/archived). Preserves occurrence_count and first_seen.
 insertIssue :: DB es => Issue -> Eff es ()
-insertIssue (i :: Issue) =
-  Hasql.interpExecute_
-    [HI.sql|
+insertIssue = void . insertIssueReturningId
+
+
+-- | Return the persisted identity, including when this insert updates an open issue.
+insertIssueReturningId :: DB es => Issue -> Eff es IssueId
+insertIssueReturningId (i :: Issue) =
+  fmap HI.getOneRow
+    $ Hasql.interp
+      [HI.sql|
 INSERT INTO apis.issues (
   id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
@@ -406,6 +413,7 @@ ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
+  title = CASE WHEN apis.issues.issue_type = 'query_alert' THEN EXCLUDED.title ELSE apis.issues.title END,
   affected_requests = apis.issues.affected_requests + EXCLUDED.affected_requests,
   affected_clients = apis.issues.affected_clients + EXCLUDED.affected_clients,
   issue_data = EXCLUDED.issue_data
@@ -418,6 +426,7 @@ DO UPDATE SET
     || CASE WHEN jsonb_exists(apis.issues.issue_data, 'first_seen_at')
        THEN jsonb_build_object('first_seen_at', apis.issues.issue_data->'first_seen_at')
        ELSE '{}'::jsonb END
+RETURNING id
     |]
 
 
@@ -891,7 +900,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , service = Just "Monitoring"
       , critical = True
       , severity = Warning
-      , title = queryName <> " threshold " <> display thresholdType <> " " <> show threshold
+      , title = queryName
       , recommendedAction = queryAlertRecommendedAction
       , migrationComplexity = "n/a"
       , payload =
