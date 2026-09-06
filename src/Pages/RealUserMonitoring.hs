@@ -1303,7 +1303,7 @@ performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
   slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
     vitalTrendPanel_ page.vitalTrend
-    div_ [class_ "mt-4"] $ pageVitalsTable_ page.pageVitals
+    div_ [class_ "mt-4"] $ pageVitalsTable_ page.links page.pageVitals
   div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
     slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
     slot_ page PanelErrors (panelSkeleton_ $ Components.tableSkeleton_ 5) $ recentErrors_ page.links page.errors
@@ -1376,13 +1376,13 @@ opportunityScore vitals sampleTotal = fromIntegral sampleTotal * sum [max 0 ((p7
 -- | Sentry's signature vitals view: one row per page, P75 per vital, each judged on its
 -- own thresholds. Rows lead with the largest 'opportunityScore' (ties broken by traffic),
 -- so the fix that would move the site-wide experience most is always on top.
-pageVitalsTable_ :: [PageVitalPoint] -> Html ()
-pageVitalsTable_ points = rumPanel_ "Web Vitals by page" "P75 per page, biggest traffic-weighted regressions first — a site-wide average hides the page that hurts most users" Nothing do
+pageVitalsTable_ :: RumLinks -> [PageVitalPoint] -> Html ()
+pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "P75 per page, biggest traffic-weighted regressions first — a site-wide average hides the page that hurts most users" Nothing do
   toHtml
     Table.Table
       { config = rumTableConfig "rumPageVitals"
       , columns =
-          (Table.col "Page" \(page, _, _) -> span_ [class_ "block truncate font-medium text-textStrong", data_ "tippy-content" page] $ toHtml $ pageLabel page){Table.attrs = [class_ "w-[28%]"]}
+          (Table.col "Page" \(page, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> pagePathKql page), class_ "block truncate font-medium text-textBrand", data_ "tippy-content" page] $ toHtml $ pageLabel page){Table.attrs = [class_ "w-[28%]"]}
             : [rightCol (T.toUpper vital.name) (\(_, byVital, _) -> vitalCell vital byVital) | vital <- vitalDefinitions]
               <> [rightCol "Samples" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
       , rows = V.fromList pageRows
