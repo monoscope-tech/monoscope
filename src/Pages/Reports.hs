@@ -347,7 +347,7 @@ dropSubject :: (Text, Text, Text) -> (Text, Text)
 dropSubject (dateLabel, _, html) = (dateLabel, html)
 
 
--- | Build live "week to date" email preview. Returns (dateLabel, emailHtml)
+-- | Build the live seven-day email preview. Returns (dateLabel, emailHtml)
 buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
 buildLiveReportEmailHtml pid project userName = do
   currentTime <- Time.currentTime
@@ -474,14 +474,14 @@ reportsPage pid reports nextUrl =
     if V.null reports
       then
         div_ [class_ "flex h-full w-full justify-center items-center"]
-          $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled digests will appear here once your project has activity to summarize."
+          $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
       else do
         div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
           $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
             reportCard_ "border-strokeBrand-weak bg-fillBrand-weak/10" ("/p/" <> pid.toText <> "/reports/live") do
               reportCardHead_ "bg-fillBrand-weak" "Weekly report"
                 $ span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
-              reportCardTitle_ "Week to Date"
+              reportCardTitle_ "Last 7 days"
             reportListItems pid reports nextUrl
         div_ [class_ "w-full md:w-2/3 overflow-y-auto"]
           $ div_ [class_ "flex h-full", id_ "detailSidebar"]
