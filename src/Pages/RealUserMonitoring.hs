@@ -1376,12 +1376,16 @@ pageLabel url
 -- like @2ZYFJ3GM2N@ don't leave partial-mask confetti. Short segments such as @v2@ stay
 -- literal.
 --
+-- A wholly id-like segment keeps its inferred type — "/lookup/{uuid}" vs
+-- "/lookup/{integer}" is the key shape of the endpoint, learned without any route
+-- template. @:id@ is reserved for SKU-style tokens where no type is detectable.
+--
 -- >>> pageRoute "https://shop.example/cart/checkout/c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd?order=x"
--- "/cart/checkout/:id"
+-- "/cart/checkout/{uuid}"
 -- >>> pageRoute "/product/2ZYFJ3GM2N"
 -- "/product/:id"
 -- >>> pageRoute "/products/12345"
--- "/products/:id"
+-- "/products/{integer}"
 -- >>> pageRoute "/api/v2/cart"
 -- "/api/v2/cart"
 --
@@ -1393,9 +1397,11 @@ pageRoute :: Text -> Text
 pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`notElem` ("?#" :: String)) . pageLabel
   where
     maskSegment seg
-      | replaceAllFormats seg `elem` ["{uuid}", "{integer}", "{hex}", "{sha1}", "{sha256}", "{md5}"] = ":id"
+      | masked `elem` ["{uuid}", "{integer}", "{hex}", "{sha1}", "{sha256}", "{md5}"] = masked
       | T.length seg >= 8 && T.any isDigit seg && not (T.any isLower seg) = ":id"
       | otherwise = seg
+      where
+        masked = replaceAllFormats seg
 
 
 -- | Explorer filter for a masked route: exact path match when nothing was masked, else a
@@ -1405,7 +1411,7 @@ routeKql route
   | prefix == route = pagePathKql route
   | otherwise = "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
   where
-    prefix = fst $ T.breakOn ":id" route
+    prefix = fst $ T.breakOn "{" $ fst $ T.breakOn ":id" route
 
 
 -- | Traffic-weighted room for improvement, after Sentry's "Opportunity" ranking: sample
