@@ -857,7 +857,8 @@ metricCardGetH pid metricName labelM sourceM = do
 
 metricCard :: Projects.ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
 metricCard pid source metricName metricType metricUnit labels selectedM = do
-  let selected = mfilter (/= "all") selectedM
+  let orderedLabels = metricDimensions labels
+      selected = if selectedM == Just "all" then Nothing else selectedM <|> listToMaybe orderedLabels
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source selected
   div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
@@ -865,7 +866,7 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
     $ toHtml
     $ (metricWidget pid metricName metricType metricUnit source selected (Just metricName) Nothing (Just detailUrl))
       { Widget.expandPushUrl = Just $ metricExpandUrl pid metricName source selected
-      , Widget.groupByOptions = V.toList labels <$ guard (not $ V.null labels)
+      , Widget.groupByOptions = orderedLabels <$ guard (not $ null orderedLabels)
       , Widget.groupBySelected = Just $ fromMaybe "all" selected
       , Widget.groupByUrl = Just $ "/p/" <> pid.toText <> "/metrics/card/" <> toUriStr metricName <> "?metric_source=" <> toUriStr source
       , Widget.groupByTarget = Just $ "#" <> cardId
@@ -1033,15 +1034,23 @@ dataPointCountCells_ dataPoints = do
   span_ [id_ "metric-datapoint-count-status", role_ "status", class_ "text-xs text-textWeak", term "hx-swap-oob" "true"] "Datapoint counts loaded."
 
 
+-- | Prefer datapoint attributes, then service identity, then other resource fields.
+-- Share this order between the default chart grouping and the dimension controls.
+metricDimensions :: V.Vector Text -> [Text]
+metricDimensions = sortOn (labelPriority &&& id) . V.toList
+  where
+    labelPriority label
+      | "attributes." `T.isPrefixOf` label = 0 :: Int
+      | "resource.service." `T.isPrefixOf` label = 1
+      | "resource." `T.isPrefixOf` label = 2
+      | otherwise = 3
+
+
 metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor]) -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
 metricsDetailsPage pid sources metric (dashboards, monitors) source selected currentRange = do
   let refreshId = "metric-details-chart-refresh"
       chartId = "details_" <> T.replace "." "_" metric.metricName
-      labelPriority label
-        | "attributes." `T.isPrefixOf` label = 0 :: Int
-        | "resource.service." `T.isPrefixOf` label = 1
-        | otherwise = 2
-      sortedLabels = sortOn (labelPriority &&& id) $ V.toList metric.metricLabels
+      sortedLabels = metricDimensions metric.metricLabels
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
       dimensionChips ds = div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ ds $ metricDimension pid metric.metricName source selected
@@ -1233,7 +1242,7 @@ metricDetailChart pid metric source selected chartId =
   div_ [class_ "h-72 w-full", id_ $ chartId <> "-container", term "data-exemplars-url" $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"]
     $ toHtml
     $ (metricWidget pid metric.metricName metric.metricType metric.metricUnit source selected Nothing (Just chartId) Nothing)
-      { Widget.groupByOptions = V.toList metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
+      { Widget.groupByOptions = metricDimensions metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
       , Widget.groupBySelected = selected
       , Widget.groupByUrl = Just $ metricDetailUrl pid metric.metricName source Nothing
       , Widget.groupByTarget = Just "#metric-details-content"

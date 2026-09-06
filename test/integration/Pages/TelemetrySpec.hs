@@ -337,19 +337,46 @@ spec = do
       markup `shouldSatisfy` T.isInfixOf "q=%25_%26%2B"
       markup `shouldSatisfy` not . T.isInfixOf "a.unrelated"
 
-    it "metricCharts_preserveServiceScope_andDoNotSumDistributionMeans" \tr -> do
+    it "metricCharts_defaultToAvailableDimensions_andPreserveExplicitGroupingAndServiceScope" \tr -> do
       withPool tr.trPool
         $ void
         $ DBT.execute
           [sql| INSERT INTO otel_metrics_meta
           (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,
            metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
-          VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test',ARRAY['attributes.region'],now(),now(),now(),now()) |]
+          VALUES (?,'request.duration','HISTOGRAM','s','latency','checkout','test','{}',now(),now(),now(),now()) |]
           (Only testPid)
-      (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" Nothing (Just "checkout")
-      let markup = LT.toStrict $ Lucid.renderText card
-      for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count > 0", "resource.service.name", "checkout", "hideValue: true", "All values"] \text ->
-        markup `shouldSatisfy` T.isInfixOf text
+      let dimensions :: [Text]
+          dimensions = ["name", "resource.host.name", "resource.service.name", "attributes.zone", "attributes.region"]
+          cases :: [([Text], Maybe Text, Maybe Text)]
+          cases =
+            [ (dimensions, Nothing, Just "attributes.region")
+            , (dimensions, Just "resource.host.name", Just "resource.host.name")
+            , (dimensions, Just "invalid", Just "attributes.region")
+            , (dimensions, Just "all", Nothing)
+            , (take 3 dimensions, Nothing, Just "resource.service.name")
+            , (take 2 dimensions, Nothing, Just "resource.host.name")
+            , (["name"], Nothing, Just "name")
+            , ([], Nothing, Nothing)
+            ]
+      for_ cases \(labels, requested, expected) -> do
+        withPool tr.trPool
+          $ void
+          $ DBT.execute [sql| UPDATE otel_metrics_meta SET metric_labels = ? WHERE project_id = ? AND metric_name = 'request.duration' |] (PGArray labels, testPid)
+        (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" requested (Just "checkout")
+        let markup = LT.toStrict $ Lucid.renderText card
+        for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count > 0", "resource.service.name", "checkout", "hideValue: true"] \text ->
+          markup `shouldSatisfy` T.isInfixOf text
+        case expected of
+          Just label -> do
+            markup `shouldSatisfy` T.isInfixOf ("by bin_auto(timestamp)," <> label)
+            markup `shouldSatisfy` T.isInfixOf ("text-textStrong\">" <> label <> "</span>")
+            markup `shouldSatisfy` T.isInfixOf ("&amp;label=" <> label)
+          Nothing -> do
+            markup `shouldSatisfy` not . T.isInfixOf "by bin_auto(timestamp),"
+            if null labels
+              then markup `shouldSatisfy` not . T.isInfixOf ">Group by</span>"
+              else markup `shouldSatisfy` T.isInfixOf "text-textStrong\">All values</span>"
 
     -- The service filter used to render every service as an <option> (2.3k of them, ~117KB
     -- of HTML, on the demo project). It is now searched and capped server-side.
