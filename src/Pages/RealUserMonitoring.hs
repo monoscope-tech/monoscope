@@ -1261,7 +1261,7 @@ sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> [RumSession
 sessionsTable_ workspace links query sessionFilter sessions =
   toHtml
     Table.Table
-      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0"}
+      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[32rem]"}
       , columns =
           [ ( Table.col "User / session" \session -> do
                 a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
