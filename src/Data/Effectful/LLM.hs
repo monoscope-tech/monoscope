@@ -4,6 +4,7 @@ module Data.Effectful.LLM (
   callAgenticChat,
   embedDocuments,
   openAIEmbeddings,
+  embedDocumentsBounded,
   callOpenAIAPI,
   modelAndEffort,
   runLLMReal,
@@ -11,11 +12,17 @@ module Data.Effectful.LLM (
 ) where
 
 import Control.Lens ((^?))
+import Control.Monad (foldM)
+import Control.Monad.Except (throwError)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key)
+import Data.ByteString qualified as BS
 import Data.Effectful.Wreq (withGoldenCache)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
+import Data.Text.Foreign qualified as TextForeign
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
@@ -27,6 +34,7 @@ import Langchain.LLM.OpenAI qualified as OpenAI
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
 import Relude
+import Relude.Extra.Bifunctor (firstF)
 
 
 -- Generic-derived JSON for LLMCore.Message (record field names match the prior
@@ -74,6 +82,67 @@ openAIEmbeddings apiKey baseUrl =
     normalized = T.dropWhileEnd (== '/') baseUrl
 
 
+-- | Apply the embedding provider's per-input and batch limits without losing text.
+-- UTF-8 byte length is an upper bound on cl100k_base token count. Keep inputs
+-- under 8192 bytes, preserving UTF-8 boundaries when splitting chunks.
+-- A batch of at most 36 such chunks stays below the 300,000-token request limit.
+-- Long documents use a byte-length-weighted mean, normalized for cosine search.
+embedDocumentsBounded :: Monad m => ([DocLoader.Document] -> m (Either Text [[Float]])) -> [DocLoader.Document] -> m (Either Text [[Float]])
+embedDocumentsBounded request docs
+  | any (T.null . toStrict . DocLoader.pageContent) docs = pure $ Left "Cannot embed an empty document"
+  | otherwise = runExceptT do
+      means <- go mempty chunks
+      traverse (finish means) [0 .. length docs - 1]
+  where
+    maxInputBytes = 8191 :: Int
+    maxBatchChunks = 300000 `div` maxInputBytes
+    -- takeWord8/dropWord8 advance together by up to three bytes to finish a
+    -- code point. Reserve those bytes so even that final character fits.
+    chunkBytes = fromIntegral (maxInputBytes - 3)
+    splitText txt
+      | T.null txt = []
+      | otherwise = TextForeign.takeWord8 chunkBytes txt : splitText (TextForeign.dropWord8 chunkBytes txt)
+    chunks = concat $ zipWith splitDocument [0 :: Int ..] docs
+    splitDocument docId doc =
+      let txt = toStrict $ DocLoader.pageContent doc
+          parts = if byteLength txt <= maxInputBytes then [txt] else splitText txt
+       in map (\part -> (docId, byteLength part, doc{DocLoader.pageContent = toLazy part})) parts
+    byteLength = BS.length . encodeUtf8
+    go means [] = pure means
+    go means remaining = do
+      let (batch, rest) = splitAt maxBatchChunks remaining
+      vectors <- ExceptT $ request $ map (\(_, _, doc) -> doc) batch
+      when (length vectors /= length batch) $ throwError "Embedding response count does not match request"
+      updated <- foldM add means $ zip batch vectors
+      go updated rest
+    add means ((docId, weight, _), values)
+      | null values || any (\v -> isNaN v || isInfinite v) values = throwError "Embedding response contains an invalid vector"
+      | otherwise = do
+          let !vector = VU.fromList $ map realToFrac values
+          next <- case IntMap.lookup docId means of
+            Nothing -> pure $ EmbeddingMean 1 weight vector
+            Just (EmbeddingMean count total mean)
+              | VU.length mean /= VU.length vector -> throwError "Embedding response dimensions do not match"
+              | otherwise ->
+                  let fraction = fromIntegral weight / fromIntegral (total + weight)
+                      !combined = VU.zipWith (\a b -> a + fraction * (b - a)) mean vector
+                   in pure $ EmbeddingMean (count + 1) (total + weight) combined
+          pure $ IntMap.insert docId next means
+    finish means docId = case IntMap.lookup docId means of
+      Nothing -> throwError "Embedding response is missing a document"
+      Just (EmbeddingMean count _ mean)
+        | count == 1 -> pure $ map realToFrac $ VU.toList mean
+        | otherwise ->
+            let norm = sqrt $ VU.sum $ VU.map (\v -> v * v) mean :: Double
+             in if norm == 0
+                  then throwError "Chunk embeddings have a zero-length mean"
+                  else pure $ map (realToFrac . (/ norm)) $ VU.toList mean
+
+
+-- Strict fields keep chunk accumulation from retaining previous batch vectors.
+data EmbeddingMean = EmbeddingMean !Int !Int !(VU.Vector Double)
+
+
 -- | Real interpreter that makes actual OpenAI API calls
 runLLMReal :: IOE :> es => Eff (LLM ': es) a -> Eff es a
 runLLMReal = interpret $ \_ -> \case
@@ -82,7 +151,7 @@ runLLMReal = interpret $ \_ -> \case
     let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
     result <- LLMCore.chat openAI history (Just params)
     pure $ first show result
-  EmbedDocuments config docs -> liftIO $ first show <$> EmbCore.embedDocuments config docs
+  EmbedDocuments config docs -> liftIO $ embedDocumentsBounded (firstF show . EmbCore.embedDocuments config) docs
 
 
 -- | Golden test interpreter that caches responses
@@ -221,7 +290,7 @@ data EmbeddingCache = EmbeddingCache
 getOrCreateEmbeddingGoldenResponse :: FilePath -> EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> IO (Either Text [[Float]])
 getOrCreateEmbeddingGoldenResponse goldenDir config docs =
   withGoldenCache goldenDir (cacheKey <> ".json") ("Failed to decode embedding cache from: " <>) (.result) $ do
-    result <- first show <$> EmbCore.embedDocuments config docs
+    result <- embedDocumentsBounded (firstF show . EmbCore.embedDocuments config) docs
     pure (EmbeddingCache{texts, result}, result)
   where
     texts = map (toStrict . DocLoader.pageContent) docs
