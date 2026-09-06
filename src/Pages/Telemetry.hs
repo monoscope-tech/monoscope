@@ -700,7 +700,11 @@ metricsToolbar_ pid tab filters status =
 servicePicker_ :: Projects.ProjectId -> Text -> Html ()
 servicePicker_ pid current =
   details_ [class_ "relative", id_ "metric-service-picker"] do
-    summary_ [class_ "btn btn-sm min-w-36", Aria.label_ "Filter by service"] $ toHtml $ if current == "all" then "All Services" else current
+    summary_ [class_ "btn btn-sm min-w-36 justify-between gap-2 font-normal", Aria.label_ "Filter by service"] do
+      span_ [class_ "flex items-center gap-1.5 truncate"] do
+        faSprite_ "filter" "regular" $ "w-3 h-3 " <> bool "text-iconNeutral" "text-iconBrand" (current /= "all")
+        toHtml $ if current == "all" then "All Services" else current
+      faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 text-iconNeutral"
     div_ [class_ "absolute left-0 top-full z-30 w-72 bg-bgRaised border border-strokeWeak rounded-lg shadow-lg p-2"] do
       input_
         [ class_ "input input-sm w-full"
@@ -875,16 +879,16 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
 
 inactiveMetricsList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Html ()
 inactiveMetricsList pid source metrics = do
-  details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak mt-4"] do
-    summary_ [class_ "collapse-title font-medium text-sm text-textWeak"]
+  details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak rounded-lg"] do
+    summary_ [class_ "collapse-title min-h-0 py-2 pl-3 font-medium text-sm text-textWeak"]
       $ toHtml
       $ countNoun (V.length metrics) "inactive metric"
       <> " (no data in 7 days)"
-    div_ [class_ "collapse-content"] do
+    div_ [class_ "collapse-content px-3 pb-2"] do
       div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
         forM_ metrics $ \metric ->
           a_
-            ([class_ "flex items-center justify-between py-2 px-2 hover:bg-fillWeak rounded focus-visible:outline focus-visible:outline-strokeFocus", href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing))
+            ([class_ "flex items-center justify-between py-1.5 px-2 hover:bg-fillWeak rounded focus-visible:outline focus-visible:outline-strokeFocus", href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing))
             do
               div_ [class_ "flex items-center gap-2"] do
                 faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
