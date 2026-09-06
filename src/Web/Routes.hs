@@ -603,6 +603,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
+  , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
   , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
   , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Post '[HTML] (RespHeaders (Html ()))
@@ -1031,6 +1032,7 @@ anomaliesServer pid =
     , errorSubscriptionPost = AnomalyList.errorSubscriptionPostH pid
     , aiChatPost = AnomalyList.aiChatPostH pid
     , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
+    , sampleGet = AnomalyList.issueSampleGetH pid
     , activityGet = AnomalyList.issueActivityGetH pid
     , errorGroupMembersGet = AnomalyList.errorGroupMembersGetH pid
     , errorUnmergePost = AnomalyList.errorUnmergePostH pid

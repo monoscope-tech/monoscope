@@ -959,4 +959,33 @@ The check now identifies module chunks through the served manifest and checks al
 Worker entry files are absent from that manifest, so only module chunks use the manifest membership check.
 All 10 asset checks passed.
 
-Deployment remains pending. The local browser report is `/private/tmp/issue-layout-verified.json`.
+Deployment run `34047456390` completed successfully. All seven production reference pages returned HTTP 200 without JavaScript errors or horizontal overflow.
+The local browser report is `/private/tmp/issue-layout-verified.json`.
+
+## 14. Deferred event samples (local implementation)
+
+The sample lookup used PostgreSQL directly, while the event list obeys the configured telemetry reader.
+It also completed before the issue handler returned the page.
+
+The page now returns the stored sample immediately and requests the latest matching event separately.
+The new authenticated `/issues/:id/sample` route checks the issue's project before it reads telemetry.
+It uses the configured telemetry reader with a four-second database statement limit and a five-second outer timeout.
+The connection's previous statement limit is restored after success or failure.
+TimeFusion ignores `SET LOCAL`, so the query uses the existing PostgreSQL protocol pool with bracketed cleanup.
+The query retains the selected time range and pattern hash.
+The original reference query ran on TimeFusion and returned no matching row without a query error.
+
+The panel distinguishes loading, no match, lookup failure, and a captured event.
+A captured event includes its UTC timestamp and a trace link when available.
+A stored sample is explicitly outside the range filter.
+Range changes request a new sample, and a retry action repeats an unavailable lookup.
+
+The regression fixture now checks deferred rendering, event selection, the stored fallback, and project isolation.
+The application and test builds passed, along with all 26 issue integration examples.
+Browser checks at 1440px and 390px confirmed captured events, range updates, timestamps, trace links, and empty fallbacks without JavaScript errors or overflow.
+The Retry button successfully replaced a failed lookup with a captured event.
+
+An exclusive telemetry-table lock exposed a limitation in the original application-only timeout: the sample response waited 10.8 seconds.
+With the database statement limit, the page returned in 19ms and the failed sample returned in 4.02 seconds, while the lock remained held.
+The panel retained the stored sample and offered Retry.
+Deployment of this change remains pending.

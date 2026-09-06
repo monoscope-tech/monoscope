@@ -23,6 +23,7 @@ module Pages.Anomalies (
   aiChatHistoryGetH,
   -- Activity
   issueActivityGetH,
+  issueSampleGetH,
   -- Pattern group members
   errorGroupMembersGetH,
   errorUnmergePostH,
@@ -32,6 +33,7 @@ module Pages.Anomalies (
 where
 
 import BackgroundJobs qualified
+import Control.Exception qualified as Exception
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
@@ -49,7 +51,9 @@ import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Exception (trySync)
@@ -60,7 +64,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw), makeAttribute)
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -91,6 +95,7 @@ import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue
 import PyF (fmt)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
@@ -262,7 +267,6 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
             Just (Issues.QueryAlertP d) -> bracketAround d.triggeredAt
             _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
             _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
-          (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
       stateEvent <- enriching "latest_state_event" Nothing $ Issues.selectLatestStateEvent issue.id
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
@@ -346,24 +350,81 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       replaySession <- enriching "replay_recording" Nothing $ flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
-      sampleOverride <-
-        enriching "log_pattern_sample" Nothing
-          $ if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
-            then do
-              let pidTxt = pid.toText
-                  patHash = "pat:" <> issue.targetHash
-                  from = fromMaybe (addUTCTime (-3600) now) rangeStart
-                  to = fromMaybe now rangeEnd
-              listToMaybe @(V.Vector Text)
-                <$> Hasql.interp
-                  [HI.sql| SELECT summary FROM otel_logs_and_spans
-                          WHERE project_id = #{pidTxt}
-                            AND timestamp BETWEEN #{from} AND #{to}
-                            AND #{patHash} = ANY(hashes)
-                          ORDER BY timestamp DESC
-                          LIMIT 1 |]
-            else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp sampleOverride stateEvent
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp stateEvent
+
+
+-- The snapshot is available immediately; telemetry never holds up the page shell.
+data IssueSampleResult
+  = SampleLoading
+  | SampleUnavailable
+  | SampleEmpty
+  | SampleFound UTCTime (V.Vector Text) (Maybe Text)
+
+
+issueSampleGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+issueSampleGetH pid issueId sinceM fromM toM = do
+  _ <- Projects.sessionAndProject pid
+  issueM <- Issues.selectIssueById pid issueId
+  now <- Time.currentTime
+  appCtx <- ask @AuthContext
+  case issueM of
+    Just issue | issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange] -> do
+      let (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
+          from = fromMaybe (addUTCTime (-3600) now) rangeStart
+          to = fromMaybe now rangeEnd
+          patHash = "pat:" <> issue.targetHash
+          snapshot = case Issues.issuePayload issue of
+            Just (Issues.LogPatternP d) -> d.sampleMessage
+            Just (Issues.LogPatternRateChangeP d) -> d.sampleMessage
+            _ -> Nothing
+      result <-
+        trySync
+          $ timeout 5_000_000
+          $ liftIO
+          $ withResource (if appCtx.env.enableTimefusionReads then appCtx.timefusionPgPool else appCtx.pool) \conn -> do
+            previous <- PG.query_ conn "SHOW statement_timeout" :: IO [PG.Only Text]
+            case previous of
+              [PG.Only previousTimeout] ->
+                -- Restore even when the query fails; SET LOCAL is ignored by TimeFusion.
+                Exception.bracket_
+                  (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only ("4s" :: Text)))
+                  (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only previousTimeout))
+                  ( listToMaybe @(UTCTime, PGArray Text, Maybe Text)
+                      <$> PG.query
+                        conn
+                        "SELECT timestamp, summary, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND timestamp BETWEEN ? AND ? AND ? = ANY(hashes) ORDER BY timestamp DESC LIMIT 1"
+                        (pid.toText, from, to, patHash)
+                  )
+              _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
+      sample <- case result of
+        Right (Just (Just (at, PGArray summary, sampleTraceId))) -> pure $ SampleFound at (V.fromList summary) sampleTraceId
+        Right (Just Nothing) -> pure SampleEmpty
+        Right Nothing -> SampleUnavailable <$ Log.logAttention "ISSUE_SAMPLE_TIMEOUT" (AE.object ["issue_id" AE..= issueId])
+        Left err -> SampleUnavailable <$ Log.logAttention "ISSUE_SAMPLE_FAILED" (AE.object ["issue_id" AE..= issueId, "error" AE..= show @Text err])
+      addRespHeaders $ issueSampleCard_ pid snapshot sample
+    _ -> addRespHeaders $ p_ [class_ "text-sm text-textWeak"] "This issue has no event sample."
+
+
+issueSampleCard_ :: Projects.ProjectId -> Maybe Text -> IssueSampleResult -> Html ()
+issueSampleCard_ pid snapshot result = detailCard_ Nothing def "Event sample" $ case result of
+  SampleFound at summary sampleTraceId -> do
+    div_ [class_ "px-4 pt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-textWeak"] do
+      span_ "Latest event in range"
+      time_ [datetime_ $ formatUTC at] $ toHtml $ formatTime defaultTimeLocale "%F %T UTC" at
+      whenJust (mfilter (not . T.null) sampleTraceId) \tid ->
+        a_ [href_ $ "/p/" <> pid.toText <> "/traces/" <> toUriStr tid <> "?timestamp=" <> toUriStr (formatUTC at), class_ "text-textBrand underline underline-offset-2"] "View trace"
+    div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ V.mapM_ (summaryToken_ True) summary
+  SampleLoading -> withSnapshot "Looking for an event in the selected range…"
+  SampleEmpty -> withSnapshot "No matching event in the selected range. Try another range or inspect the logs below."
+  SampleUnavailable -> withSnapshot do
+    "The event sample could not be loaded. "
+    button_ [type_ "button", class_ "text-textBrand underline underline-offset-2", [__|on click send retryIssueSample to #issue-sample|]] "Retry"
+  where
+    withSnapshot message = do
+      div_ [class_ "px-4 py-3 text-sm text-textWeak", role_ "status"] message
+      whenJust (mfilter (not . T.null . T.strip) snapshot) \stored -> do
+        div_ [class_ "px-4 pt-2 border-t border-strokeWeak text-xs text-textWeak"] "Stored sample · saved with this issue, outside the range filter"
+        renderLogContent_ stored
 
 
 -- | A stack trace rendered the way Sentry renders one: frames split into the code you
@@ -781,8 +842,8 @@ issueStatusStrip_ now issue = forM_ banners \(icon, cls, msg) ->
 -- its waterfall from — the panel fetches it itself, so a slow trace can't hold up
 -- this page. @replaySession@ is the one value the page still needs out of that
 -- trace, resolved by a scalar lookup rather than by reading every span.
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Maybe Issues.IssueEvent -> Html ()
-anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOverride stateEvent = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe Issues.IssueEvent -> Html ()
+anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEvent = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
@@ -797,20 +858,23 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       unless (Issues.isBoilerplateAction issue.recommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
-      -- Prefer a real captured log line (sampleOverride) over the stored
-      -- sample, which the drain pipeline often normalises down to the same
-      -- placeholders as the template. The override is the original summary
-      -- vector — render each element as a single chip so values with
-      -- internal whitespace (user-agents, page titles) stay intact.
       let logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             detailCard_ Nothing def{trailing = Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField} "Log Pattern"
               $ renderLogContent_ logPattern
-            let renderSample :: Html () -> Html ()
-                renderSample = detailCard_ Nothing def "Sample Message"
-            maybe
-              (whenJust (mfilter ((/= T.strip logPattern) . T.strip) sampleMessage) (renderSample . renderLogContent_))
-              (renderSample . div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] . V.mapM_ (summaryToken_ True))
-              (mfilter (not . V.null) sampleOverride)
+            let fallbackRange =
+                  decodeUtf8 @Text
+                    $ AE.encode
+                    $ AE.object
+                      [key AE..= value | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
+            div_
+              [ id_ "issue-sample"
+              , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issueId <> "/sample"
+              , hxTrigger_ "load, update-query from:window delay:200ms, retryIssueSample"
+              , hxSwap_ "innerHTML"
+              , term "hx-sync" "this:replace"
+              , hxVals_ $ "js:{...(()=>{const p=new URLSearchParams(location.search);return p.get('since')||p.get('from')||p.get('to')?Object.fromEntries(p):" <> fallbackRange <> "})()}"
+              ]
+              $ issueSampleCard_ pid sampleMessage SampleLoading
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge_ issue.severity
         issueTypeLabel issue.issueType issue.critical

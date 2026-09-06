@@ -440,21 +440,22 @@ spec = sequential $ aroundAll withTestResources do
           html `shouldSatisfy` T.isInfixOf ("\"to\":\"" <> to <> "\"")
           html `shouldSatisfy` T.isInfixOf "first_occurrence=true&amp;from=2026-09-02T06"
 
-    it "log-pattern evidence uses the shared absolute range" \tr -> do
+    it "log-pattern evidence loads separately and honors the shared absolute range" \tr -> do
       patternHash <- DataUUID.toText <$> UUID.nextRandom
+      traceIdText <- T.filter (/= '-') . DataUUID.toText <$> UUID.nextRandom
       let selectedAt = addUTCTime (-86400) frozenTime
           iso = toText . formatTime defaultTimeLocale "%FT%TZ"
           from = iso $ addUTCTime (-60) selectedAt
           to = iso $ addUTCTime 60 selectedAt
-          payload = Issues.LogPatternData patternHash "payment failed <*>" Nothing Nothing (Just "checkout") "body" selectedAt 2
+          payload = Issues.LogPatternData patternHash "payment failed <*>" (Just "saved occurrence") Nothing (Just "checkout") "body" selectedAt 2
       issueId <- withResource tr.trPool \conn -> do
         forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(at, message) ->
           void
             $ PGS.execute
               conn
-              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary)
-                  VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY[?], ARRAY[?]) |]
-              (testPid, at, at, "pat:" <> patternHash, message)
+              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id)
+                  VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY[?], ARRAY[?], ?) |]
+              (testPid, at, at, "pat:" <> patternHash, message, traceIdText)
         maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
           . listToMaybe
           =<< PGS.query
@@ -464,8 +465,24 @@ spec = sequential $ aroundAll withTestResources do
             (testPid, patternHash, AE.encode payload, selectedAt, frozenTime)
       (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to)
       let html = renderPage page
-      html `shouldSatisfy` T.isInfixOf "selected occurrence"
-      html `shouldSatisfy` not . T.isInfixOf "outside occurrence"
+      html `shouldSatisfy` not . T.isInfixOf "selected occurrence"
+      html `shouldSatisfy` T.isInfixOf "id=\"issue-sample\""
+      html `shouldSatisfy` T.isInfixOf "saved occurrence"
+      (_, sample) <- testServant tr $ AnomalyList.issueSampleGetH testPid (UUIDId issueId) Nothing (Just from) (Just to)
+      let sampleHtml = TL.toStrict $ renderText sample
+      sampleHtml `shouldSatisfy` T.isInfixOf "selected occurrence"
+      sampleHtml `shouldSatisfy` not . T.isInfixOf "outside occurrence"
+      sampleHtml `shouldSatisfy` not . T.isInfixOf "saved occurrence"
+      sampleHtml `shouldSatisfy` T.isInfixOf "Latest event in range"
+      sampleHtml `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText <> "?timestamp=")
+      (_, emptySample) <- testServant tr $ AnomalyList.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
+      let emptyHtml = TL.toStrict $ renderText emptySample
+      emptyHtml `shouldSatisfy` T.isInfixOf "No matching event"
+      emptyHtml `shouldSatisfy` T.isInfixOf "Stored sample"
+      emptyHtml `shouldSatisfy` T.isInfixOf "saved occurrence"
+      let otherPid = UUIDId $ DataUUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+      (_, otherProjectSample) <- testServant tr $ AnomalyList.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
+      TL.toStrict (renderText otherProjectSample) `shouldSatisfy` not . T.isInfixOf "occurrence"
       html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
       html `shouldSatisfy` not . T.isInfixOf "class=\"sr-only err-tab-trace\""
       html `shouldSatisfy` T.isInfixOf "class=\"sr-only err-tab-logs\" checked"
