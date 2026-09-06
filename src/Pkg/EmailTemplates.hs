@@ -134,6 +134,7 @@ emailCss =
   .monoscope-email a { color: #1d4ed8; text-decoration: none; }
   .monoscope-email a:hover { text-decoration: underline; }
   .monoscope-email a img { border: none; }
+  .monoscope-email .report-muted { color: #57606a; }
   .monoscope-email td { word-break: break-word; }
   .monoscope-email, .monoscope-email td, .monoscope-email th { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif; }
   .monoscope-email h1 { color: #24292f; font-size: 24px; font-weight: 600; line-height: 1.25; margin: 0 0 16px; letter-spacing: -0.02em; }
@@ -909,7 +910,7 @@ reportSection title detail content = do
 
 
 reportNote :: Text -> Html ()
-reportNote = p_ [class_ "report-muted", style_ "font-size:13px;line-height:1.5;color:#57606a;margin:0 0 12px;overflow-wrap:anywhere;"] . toHtml
+reportNote = p_ [class_ "report-muted", style_ "font-size:13px;line-height:1.5;margin:0 0 12px;overflow-wrap:anywhere;"] . toHtml
 
 
 reportNotice :: Text -> Text -> Html ()
