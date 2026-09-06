@@ -1027,14 +1027,24 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
     Table.Table
       { config = rumTableConfig "rumTopPages"
       , columns =
-          [ (Table.col "Page" \page -> a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> pagePathKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path){Table.attrs = [class_ "w-[46%]"]}
+          [ (Table.col "Page" \page -> a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> routeKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path){Table.attrs = [class_ "w-[46%]"]}
           , rightCol "Views" $ toHtml . show . (.views)
           , rightCol "P75 load" $ toHtml . maybe "—" (getDurationNSMS . round . (* 1e6)) . (.p75LoadMs)
           , (rightCol "Last seen" $ toHtml . fmtDate "%d %b %H:%M" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
           ]
-      , rows = V.fromList pages
+      , rows = V.fromList $ sortWith (Down . (.views)) $ map merge $ M.elems $ M.fromListWith (<>) [(pageRoute p.path, pure @NonEmpty p) | p <- pages]
       , features = def{Table.zeroState = Just $ tableZero_ "No page views in this time range"}
       }
+  where
+    -- One row per route; views add up, the worst P75 wins (same worse-wins rule the
+    -- vitals table applies across emitters), and the route replaces the raw URL.
+    merge routePages@(newest :| _) =
+      RumPage
+        { path = pageRoute newest.path
+        , views = sum $ (.views) <$> routePages
+        , p75LoadMs = viaNonEmpty maximum $ mapMaybe (.p75LoadMs) $ toList routePages
+        , lastSeen = maximum $ (.lastSeen) <$> routePages
+        }
 
 
 vitalsPanel_ :: [Vital] -> Html ()
