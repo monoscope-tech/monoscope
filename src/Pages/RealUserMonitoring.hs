@@ -875,7 +875,7 @@ sessionSearch_ page = form_
   [ method_ "get"
   , action_ route
   , hxGet_ route
-  , hxTrigger_ "input changed delay:300ms, submit"
+  , hxTrigger_ "input delay:300ms, submit"
   , hxTarget_ "#rum-sessions-list"
   , hxSelect_ "#rum-sessions-list"
   , hxSwap_ "outerHTML"
@@ -902,10 +902,9 @@ sessionSearch_ page = form_
         , onkeydown_ "if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.blur(); }"
         , term "_" "on keydown[key == '/' and not ctrlKey and not metaKey and not altKey and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <dialog[open]/> and no <[popover]:popover-open/>] from window halt the event then call me.focus() end"
         ]
-      kbd_ [class_ "kbd kbd-xs text-textWeak max-sm:hidden", title_ "Press / to focus search"] "/"
-    button_ [type_ "submit", class_ "btn btn-sm gap-2 max-sm:min-h-11"] do
-      "Search"
-      kbd_ [class_ "kbd kbd-xs text-textWeak max-sm:hidden"] "Enter"
+      span_ [class_ "flex shrink-0 items-center gap-1 text-xs text-textWeak max-sm:hidden"] do
+        kbd_ [class_ "kbd kbd-xs"] "/"
+        "to focus"
   where
     route = "/p/" <> page.links.pid.toText <> "/rum"
 
