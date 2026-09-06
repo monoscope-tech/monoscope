@@ -144,14 +144,14 @@ spec = sequential $ aroundAll withTestResources do
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
-      (_, page) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH pid issue.id Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH pid issue.id Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherPage) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH otherPid issue.id Nothing Nothing
+      (_, otherPage) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf issue.title

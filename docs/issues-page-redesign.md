@@ -896,7 +896,7 @@ The browser report is `/private/tmp/issue-details-inspection.json`.
 Screenshots use `/private/tmp/issue-<first eight ID characters>.png`.
 These are temporary local artifacts, not repository fixtures.
 
-### Current fixes, pending validation and deployment
+### Current fixes, validated locally
 
 - Both issue routes discarded absolute `from` and `to` parameters.
   Widgets read the browser URL, but server sample queries used an independent default window.
@@ -934,7 +934,7 @@ distinguish aggregate tag values from individual event context.
 places triage information near the top and provides diagnostic context for each error sample.
 These patterns support moving available evidence ahead of empty panels and making sample scope explicit.
 
-### Evidence layout implementation, pending browser validation
+### Evidence layout implementation and local validation
 
 All issue types now share one activity sidebar beside the evidence column.
 The main column contains the chart, issue-specific details, Investigation, and replay when available.
@@ -943,4 +943,20 @@ A tall activity timeline no longer creates an empty gap before Investigation.
 
 Stackless errors now show compact explanatory text and a direct link to the trace or related logs.
 The section title is "Error details" when no stack exists.
-The CSS build passed. The application build and browser checks remain pending.
+The CSS and application builds passed.
+The issue-detail suite passed all 26 examples. The error-pattern suite passed all 30 examples.
+The latter suite initially exceeded the local database connection limit while the browser server ran.
+It passed after that server stopped, with one test worker.
+
+Six browser cases covered runtime errors, log patterns, and query alerts at 1440px and 390px.
+Each returned HTTP 200 with no JavaScript errors or document overflow.
+Each contained one activity panel. Mobile activity followed Investigation, and dates survived occurrence links.
+The final pass also confirmed that mobile titles no longer sit beneath the AI tab.
+
+The asset suite exposed two different chunks with the same generic `dist` name.
+One contains bundler helpers. The other contains the Buffer implementation.
+The check now identifies module chunks through the served manifest and checks all bundles for duplicate requests.
+Worker entry files are absent from that manifest, so only module chunks use the manifest membership check.
+All 10 asset checks passed.
+
+Deployment remains pending. The local browser report is `/private/tmp/issue-layout-verified.json`.

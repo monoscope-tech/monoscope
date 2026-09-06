@@ -793,7 +793,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       -- h2: the page shell's breadcrumb already owns h1. This was an h3 sitting
       -- \*below* empty-state h2s, so a screen reader heard "No stack trace in this
       -- event" outrank the incident it was reporting.
-      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong pr-8 break-words"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
       unless (Issues.isBoilerplateAction issue.recommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
@@ -1076,7 +1076,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                     h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
                   div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
                     let rangeParams = [(key, value) | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
-                        aUrl first =
+                        aUrl useFirst =
                           "/p/"
                             <> pid.toText
                             <> "/issues/"
@@ -1084,7 +1084,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                             <> "?"
                             <> T.intercalate
                               "&"
-                              [key <> "=" <> toUriStr value | (key, value) <- [("first_occurrence", "true") | first] <> rangeParams]
+                              [key <> "=" <> toUriStr value | (key, value) <- [("first_occurrence", "true") | useFirst] <> rangeParams]
                         navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
                         -- Radio inside the label, panel shown by a CSS variant off
                         -- #error-details-container's group: no JS, and the choice
