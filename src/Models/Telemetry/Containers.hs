@@ -38,6 +38,7 @@ module Models.Telemetry.Containers (
   ContainerSnapshotKey,
   containersInWindowCached,
   containersInWindow,
+  containersForReport,
   freshnessWindow,
 ) where
 
@@ -334,7 +335,21 @@ freshnessWindow = 15 * 60
 containersInWindow
   :: (DB es, Labeled "timefusion" Hasql :> es)
   => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
-containersInWindow useTimefusion pid fromTime' toTime =
+containersInWindow = containersWithLimit (Just containerListLimit)
+
+
+-- | Reports compute inventory totals before choosing their own priority rows. Reuse
+-- the same identities and latest-sample normalization without the explorer's row cap.
+containersForReport
+  :: (DB es, Labeled "timefusion" Hasql :> es)
+  => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
+containersForReport = containersWithLimit Nothing
+
+
+containersWithLimit
+  :: (DB es, Labeled "timefusion" Hasql :> es)
+  => Maybe Int -> Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es (V.Vector ContainerRow)
+containersWithLimit limitM useTimefusion pid fromTime' toTime =
   Hasql.withHasqlTimefusion useTimefusion
     $ V.fromList
     . dropShadowed
@@ -489,8 +504,8 @@ containersInWindow useTimefusion pid fromTime' toTime =
       FROM latest
       WHERE rn = 1
       GROUP BY container_name, group_key
-      ORDER BY container_name
-      LIMIT #{containerListLimit}|]
+      ORDER BY container_name|]
+          <> foldMap (\rowLimit -> [HI.sql| LIMIT #{rowLimit}|]) limitM
       )
   where
     -- Anchored on the window's end, not on `now`: a historical from/to range then reports the

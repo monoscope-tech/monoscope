@@ -217,6 +217,7 @@ library
       Models.Telemetry.Containers
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
+      Models.Telemetry.Report
       Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
@@ -819,6 +820,7 @@ test-suite test-dev
       Models.Telemetry.Containers
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
+      Models.Telemetry.Report
       Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
