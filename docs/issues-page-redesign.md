@@ -1024,3 +1024,21 @@ This supports the warning-path explanation, though historical configuration chan
 `initTimeDisplay` passes those values to `new Date`, which interprets them in the browser's local timezone.
 This can label UTC bounds as local clock times without applying the offset.
 Verify the rendered label against the URL bounds in a non-UTC browser before changing the format contract.
+
+## 16. Absolute range timezone correction
+
+A browser check confirmed that absolute ranges displayed UTC clock values in every timezone.
+For the same 06:04–10:04 UTC bounds, Berlin displayed 06:04–10:04 instead of 08:04–12:04.
+New York also displayed 06:04–10:04 instead of 02:04–06:04.
+
+Both range producers now preserve ISO timestamps with the UTC suffix for browser formatting.
+The issue regression assertions and parser doctest expect explicit UTC timestamps.
+The application and test builds passed, along with all 26 issue integration examples.
+Six browser checks passed across issue detail and Service Map in UTC, Berlin, and New York.
+
+A winter check then showed that the badge used today's offset: Berlin displayed UTC+02 beside January dates that used UTC+01.
+The badge now names the browser timezone instead of claiming one fixed offset.
+The final browser check covers winter and summer dates on both pages in all three timezones.
+The timezone-label build passed. All 12 browser cases passed without JavaScript errors or document overflow.
+Each displayed range matched the URL bounds converted to the browser timezone, including the different winter offsets.
+Deployment of this correction remains pending.

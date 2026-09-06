@@ -868,7 +868,7 @@ parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
   Nothing ->
     let f = iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime
         t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
-        disp = fmtDate "%F %T"
+        disp = formatUTC
      in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
 
 

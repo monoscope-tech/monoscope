@@ -434,8 +434,8 @@ spec = sequential $ aroundAll withTestResources do
         \handler -> do
           (_, absolutePage) <- testServant tr handler
           let html = renderPage absolutePage
-          html `shouldSatisfy` T.isInfixOf "data-start=\"2026-09-02 06:04:43\""
-          html `shouldSatisfy` T.isInfixOf "data-end=\"2026-09-02 10:04:43\""
+          html `shouldSatisfy` T.isInfixOf "data-start=\"2026-09-02T06:04:43Z\""
+          html `shouldSatisfy` T.isInfixOf "data-end=\"2026-09-02T10:04:43Z\""
           html `shouldSatisfy` T.isInfixOf ("\"from\":\"" <> from <> "\"")
           html `shouldSatisfy` T.isInfixOf ("\"to\":\"" <> to <> "\"")
           html `shouldSatisfy` T.isInfixOf "first_occurrence=true&amp;from=2026-09-02T06"

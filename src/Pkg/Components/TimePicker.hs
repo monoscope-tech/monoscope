@@ -14,7 +14,7 @@ module Pkg.Components.TimePicker (
 import Data.Aeson qualified as AE
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime, secondsToNominalDiffTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
@@ -29,7 +29,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl)
+import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl)
 
 
 -- $setup
@@ -99,7 +99,7 @@ defaultSince = "1H"
 --
 -- Test with from/to values
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
--- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31 08:00:00","2024-10-31 10:00:00"))
+-- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31T08:00:00Z","2024-10-31T10:00:00Z"))
 --
 -- Empty since/from/to must fall back to the default range, never an unbounded scan
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "") (Just "") (Just ""))
@@ -114,7 +114,8 @@ parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT t
   where
     parseUTCTime :: Maybe Text -> Maybe UTCTime
     parseUTCTime = iso8601ParseM . toString . fromMaybe ""
-    fmtTime = fmap (toText . formatTime defaultTimeLocale "%F %T")
+    -- Browser Date parsing must retain the UTC instant in every viewer timezone.
+    fmtTime = fmap formatUTC
 
 
 -----------------------------------------------------------------------------------------------------
@@ -203,11 +204,9 @@ timepicker_ submitForm currentRange targetIdM = do
         const fmt = (d) => new Date(d).toLocaleString();
         const el = (suffix) => document.getElementById("$targetPr-" + suffix);
         const hideSidebar = () => el('timepickerSidebar').classList.add('hidden');
-        // main.js and easepick are deferred, so poll until they land
         function initTimeDisplay() {
-          if (typeof getUTCOffset === 'undefined') { setTimeout(initTimeDisplay, 50); return; }
-          const offsetEl = el('offsetIndicator');
-          if (offsetEl) offsetEl.innerText = getUTCOffset();
+          const zoneEl = el('offsetIndicator');
+          if (zoneEl) zoneEl.innerText = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const range = el('currentRange');
           if (!range) return;
           const { start, end } = range.dataset;
