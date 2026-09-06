@@ -5,7 +5,6 @@ module Pages.RealUserMonitoring (
   rumGetH,
   RumGet (..),
   RumData (..),
-  RumSummary (..),
   RumSession (..),
   RumLinks (..),
   SessionFilter (..),
@@ -27,6 +26,7 @@ import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Labeled (Labeled)
@@ -38,12 +38,14 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), RumSummary (..), RumTrend (..), VitalSample (..), VitalTrendPoint (..))
+import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), VitalSample (..), VitalTrendPoint (..))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
 import Pages.Containers (showFFloat')
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Relude
@@ -82,8 +84,13 @@ tabLabel :: RumTab -> Text
 tabLabel = T.toTitle . tabParam
 
 
+-- | Accepts both the canonical short values this page links with ("errors", "replays") and
+-- the tab labels the shared Table's filter tabs put in the URL ("With errors").
 parseSessionFilter :: Maybe Text -> SessionFilter
-parseSessionFilter paramM = fromMaybe AllSessionRows $ find ((== paramM) . sessionFilterParam) [minBound .. maxBound]
+parseSessionFilter paramM = fromMaybe AllSessionRows $ find matches [minBound .. maxBound]
+  where
+    normalized = T.toLower <$> paramM
+    matches value = normalized `elem` [sessionFilterParam value, Just $ T.toLower $ sessionFilterLabel value]
 
 
 sessionFilterParam :: SessionFilter -> Maybe Text
@@ -270,38 +277,17 @@ rumServices scope =
       )
 
 
--- | Summary counts and the activity trend from one scan. These used to be two separate
--- 24-hour scans of the same rows — the summary alone cost ~7s cold — so they are rolled up
--- together: the grand-total row (NULL bucket) is the summary, with distinct counts computed
--- across the whole window rather than summed per bucket; the rest is the trend.
-rumPulse :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> RumBucket -> Eff es (RumSummary, [RumTrend])
-rumPulse scope bucket = do
-  let bucketLit = fromString $ toString $ "'" <> renderBucket bucket <> "'"
-      bucketExpr = [HI.sql|time_bucket(|] <> bucketLit <> [HI.sql|, timestamp)|]
-  rows :: [(Maybe UTCTime, Int64, Int64, Int64, Int64)] <-
-    Hasql.withHasqlTimefusion scope.useTf
-      $ Hasql.interp
-        ( [HI.sql|SELECT |]
-            <> bucketExpr
-            <> [HI.sql|,
-            COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
-            COUNT(*) FILTER (WHERE |]
-            <> pageViewPredicate
-            <> [HI.sql|)::bigint,
-            COUNT(DISTINCT NULLIF(COALESCE(attributes___user___id, attributes___user___email), ''))::bigint,
-            COUNT(*) FILTER (WHERE |]
-            <> errorPredicate
-            <> [HI.sql|)::bigint
-          FROM otel_logs_and_spans
-          WHERE |]
-            <> browserScope scope
-            <> [HI.sql| GROUP BY ROLLUP(|]
-            <> bucketExpr
-            <> [HI.sql|) ORDER BY 1|]
-        )
-  let summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [RumSummary sessions views users errors | (Nothing, sessions, views, users, errors) <- rows]
-      trend = [RumTrend bucketTime views errors | (Just bucketTime, _, views, _, errors) <- rows]
-  pure (summary, trend)
+-- | Whether any browser telemetry exists in the window. One probe row decides between the
+-- onboarding empty state and the widget hero; the numbers and chart themselves are Widget
+-- components that fetch through the same chart pipeline (and cache) as dashboards and the
+-- Log Explorer, so RUM cannot drift from how the rest of the platform reads and draws.
+rumHasBrowserTelemetry :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es Bool
+rumHasBrowserTelemetry scope =
+  Hasql.withHasqlTimefusion scope.useTf
+    $ not
+    . null
+    . map (HI.getOneColumn @Int64)
+    <$> Hasql.interp ([HI.sql|SELECT 1::bigint FROM otel_logs_and_spans WHERE |] <> browserScope scope <> [HI.sql| LIMIT 1|])
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
@@ -614,8 +600,7 @@ data RumData = RumData
   , panel :: Maybe RumPanel
   -- ^ Which panel this response carries. 'Nothing' is the page skeleton: every panel
   -- renders as a shell that fetches itself.
-  , summary :: RumSummary
-  , trend :: [RumTrend]
+  , hasTelemetry :: Bool
   , pages :: [RumPage]
   , errors :: [RumError]
   , sessions :: [RumSession]
@@ -643,7 +628,7 @@ instance ToHtml RumGet where
 -- pinning an empty first visit would hide it until expiry.
 cacheableRumResult :: RumQueryResult -> Bool
 cacheableRumResult = \case
-  PulseResult summary trend -> summary.sessions > 0 || summary.pageViews > 0 || summary.users > 0 || summary.errors > 0 || not (null trend)
+  PresenceResult present -> present
   PagesResult rows -> not $ null rows
   ErrorsResult rows -> not $ null rows
   SessionsResult rows -> not $ null rows
@@ -670,9 +655,9 @@ rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgSunken p-4", role_ "sta
       div_ [class_ "h-6 w-16 rounded skeleton-shimmer"] ""
       div_ [class_ "h-3 w-24 rounded skeleton-shimmer"] ""
   div_ [class_ "grid grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)] gap-4 max-xl:grid-cols-1"] do
-    div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase p-4"] Components.chartSkeleton_
-    div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] $ Components.tableSkeleton_ 5
-  div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] $ Components.tableSkeleton_ 6
+    div_ [class_ "rounded-lg border border-strokeWeak surface-raised p-4"] Components.chartSkeleton_
+    div_ [class_ "rounded-lg border border-strokeWeak surface-raised"] $ Components.tableSkeleton_ 5
+  div_ [class_ "rounded-lg border border-strokeWeak surface-raised"] $ Components.tableSkeleton_ 6
 
 
 rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
@@ -696,7 +681,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         | otherwise = SixHours
       cacheKey query = RumCacheKey pid query environment serviceFilter fromM toM since
       panelTtl = TimePicker.cacheTtl window
-      pulseQ = ("experience" :: Text, cacheKey $ PulseQuery bucket, panelTtl, uncurry PulseResult <$> rumPulse scope bucket)
+      pulseQ = ("experience" :: Text, cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
       pagesQ = ("pages" :: Text, cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
       errorsQ = ("errors" :: Text, cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
       sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessions scope)
@@ -744,8 +729,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
     outcomes <- pooledForConcurrently panelQueries runQuery
     let (degradedPanels, results) = partitionEithers outcomes
-        summary = fromMaybe (RumSummary 0 0 0 0) $ listToMaybe [value | PulseResult value _ <- results]
-        trend = fold [value | PulseResult _ value <- results]
+        hasTelemetry = or [value | PresenceResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
         sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
@@ -754,7 +738,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         pageVitals = fold [value | VitalsDetailResult _ value <- results]
         services = fold [value | ServicesResult value <- results]
         breakdown = fold [value | BreakdownResult value <- results]
-    pure RumData{links, tab, panel, summary, trend, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
+    pure RumData{links, tab, panel, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
   let conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -910,86 +894,123 @@ overview_ page = div_ [class_ "space-y-5 p-4 max-md:p-3"] do
   slot_ page PanelSessions (panelSkeleton_ $ Components.tableSkeleton_ 6) $ recentSessions_ page
 
 
--- | The onboarding pitch belongs to the summary: it is the panel that knows whether the
--- project has any browser telemetry at all. Panels with no rows of their own still render
--- their individual empty states. Summary and activity render together because they are one
--- scan — see 'rumPulse'.
+-- | The onboarding pitch belongs here: this is the panel that knows whether the project has
+-- any browser telemetry at all. With telemetry present, the numbers and the activity chart
+-- are the same Widget components dashboards are built from — they fetch their own data
+-- through the chart pipeline, so they look, behave and cache exactly like every other
+-- number and chart in the product.
 pulseOrEmpty_ :: RumData -> Html ()
 pulseOrEmpty_ page
-  | page.summary.sessions > 0 || page.summary.pageViews > 0 = div_ [class_ "space-y-5"] do
-      pulse_ page
-      trendPanel_ page.trend
+  | page.hasTelemetry = div_ [class_ "space-y-4"] do
+      rumStatWidgets_ page.links
+      rumActivityWidget_ page.links
   | otherwise = maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
 
 
 pulseSkeleton_ :: Html ()
-pulseSkeleton_ = div_ [class_ "space-y-5", role_ "status", Aria.label_ "Loading summary"] do
-  div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
+pulseSkeleton_ = div_ [class_ "space-y-4", role_ "status", Aria.label_ "Loading summary"] do
+  div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"]
     $ replicateM_ 4
-    $ div_ [class_ "flex flex-col gap-2 px-4 py-3"] do
+    $ div_ [class_ "flex h-28 flex-col justify-center gap-2 rounded-lg border border-strokeWeak surface-raised px-4"] do
       div_ [class_ "h-6 w-16 rounded skeleton-shimmer"] ""
       div_ [class_ "h-3 w-24 rounded skeleton-shimmer"] ""
   panelSkeleton_ Components.chartSkeleton_
 
 
 panelSkeleton_ :: Html () -> Html ()
-panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"]
+panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak surface-raised"]
 
 
-pulse_ :: RumData -> Html ()
-pulse_ page = section_ [Aria.label_ "Experience pulse", class_ "grid grid-cols-4 divide-x divide-strokeWeak border-y border-strokeWeak bg-bgBase max-md:grid-cols-2 max-md:divide-x-0"] do
-  pulseCell "users" (show page.summary.sessions) "sessions" "text-iconNeutral"
-  pulseCell "file-lines" (show page.summary.pageViews) "page views" "text-iconNeutral"
-  pulseCell "user" (show page.summary.users) "identified users" "text-iconNeutral"
-  pulseCell "triangle-exclamation" (show page.summary.errors) (bool "browser errors" "browser error" (page.summary.errors == 1)) (bool "text-textWeak" "text-textError" (page.summary.errors > 0))
+rumStatWidgets_ :: RumLinks -> Html ()
+rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
+  statSlot_
+    $ statWidget "rum-stat-sessions" Widget.WTTimeseriesStat "Sessions" "users" "sessions"
+    $ scopedKql links (browserKql <> " and attributes.session.id != null")
+    <> " | summarize started_at=min(timestamp) by attributes.session.id | summarize count() by bin_auto(started_at)"
+  statSlot_
+    $ statWidget "rum-stat-pageviews" Widget.WTTimeseriesStat "Page views" "file-lines" "views"
+    $ scopedKql links browserPageViewKql
+    <> " | summarize count() by bin_auto(timestamp)"
+  statSlot_
+    $ ( statWidget "rum-stat-errors" Widget.WTTimeseriesStat "Browser errors" "triangle-exclamation" "errors"
+          $ scopedKql links (browserKql <> " and " <> errorKql)
+          <> " | summarize count() by bin_auto(timestamp)"
+      )
+      { Widget.seriesIntent = Just "error"
+      }
+  statSlot_
+    $ statWidget "rum-stat-p75" Widget.WTStat "P75 page load" "gauge" "ms"
+    $ scopedKql links (browserPageViewKql <> " and duration != null")
+    <> " | summarize p75(duration) / 1000000"
   where
-    pulseCell icon value label colour = div_ [class_ "flex min-w-0 items-center gap-3 px-4 py-3 max-md:border-b max-md:border-strokeWeak"] do
-      faSprite_ icon "regular" $ "h-4 w-4 shrink-0 " <> colour
-      div_ [class_ "min-w-0"] do
-        strong_ [class_ "block text-lg font-semibold tabular-nums text-textStrong"] $ toHtml value
-        span_ [class_ "block truncate text-xs text-textWeak"] $ toHtml label
+    statSlot_ = div_ [class_ "h-28 min-h-28"] . Widget.widget_
+    statWidget wid wType title icon unit query =
+      def
+        { Widget.wType = wType
+        , Widget.id = Just wid
+        , Widget.title = Just title
+        , Widget.icon = Just icon
+        , Widget.unit = Just unit
+        , Widget.query = Just query
+        , Widget.summarizeBy = Just Widget.SBSum
+        , Widget._projectId = Just links.pid
+        , Widget.standalone = Just True
+        , Widget.hideSubtitle = Just True
+        }
 
 
-trendPanel_ :: [RumTrend] -> Html ()
-trendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
-  panelHeader_ "Experience activity" "Page views with browser errors marked in red" Nothing
-  if null points
-    then panelEmpty_ "No activity in this time range"
-    else figure_ [class_ "p-4", Aria.label_ "Page views and browser errors over time"] do
-      div_ [class_ "flex h-44 items-end gap-1 border-b border-strokeWeak"] $ forM_ points \point -> do
-        let pageHeight = max 4 $ round (fromIntegral point.pageViews / fromIntegral maxViews * 100 :: Double)
-            errorHeight = min pageHeight $ round (fromIntegral point.errors / fromIntegral maxViews * 100 :: Double)
-            label = fmtDate "%d %b %H:%M" point.bucket <> ": " <> show point.pageViews <> " page views, " <> show point.errors <> " errors"
-        div_ [class_ "group relative flex h-full min-w-1 flex-1 items-end", data_ "tippy-content" label] do
-          div_ [class_ "relative w-full rounded-t-sm bg-fillInformation-strong/35", style_ $ "height:" <> show pageHeight <> "%"] do
-            when (point.errors > 0) $ span_ [class_ "absolute inset-x-0 bottom-0 rounded-t-sm bg-fillError-strong", style_ $ "height:" <> show (max 4 errorHeight) <> "%", Aria.hidden_ "true"] ""
-      figcaption_ [class_ "mt-2 flex items-center justify-between text-xs text-textWeak"] do
-        span_ $ toHtml $ maybe "" (fmtDate "%d %b %H:%M" . (.bucket)) (listToMaybe points)
-        span_ [class_ "inline-flex items-center gap-3"] do
-          legendDot "bg-fillInformation-strong/60" "Page views"
-          legendDot "bg-fillError-strong" "Errors"
-        span_ $ toHtml $ maybe "" (fmtDate "%d %b %H:%M" . (.bucket)) (viaNonEmpty last points)
-  where
-    maxViews = foldl' max 1 $ map (.pageViews) points
-    legendDot colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-2 w-2 rounded-sm " <> colour, Aria.hidden_ "true"] "" >> toHtml label
+rumActivityWidget_ :: RumLinks -> Html ()
+rumActivityWidget_ links =
+  div_ [class_ "h-80 min-h-80"]
+    $ Widget.widget_
+      def
+        { Widget.wType = Widget.WTTimeseries
+        , Widget.id = Just "rum-activity"
+        , Widget.title = Just "Page views and errors"
+        , Widget.query = Just $ scopedKql links (browserKql <> " and (" <> pageViewKql <> " or " <> errorKql <> ")") <> " | summarize count() by bin_auto(timestamp), iff(" <> errorKql <> ", \"Errors\", \"Page views\")"
+        , Widget._projectId = Just links.pid
+        , Widget.standalone = Just True
+        , Widget.hideSubtitle = Just True
+        , Widget.legendPosition = Just "top-right"
+        , Widget.legendSize = Just "xs"
+        , Widget.allowZoom = Just True
+        }
+
+
+-- | Config every embedded RUM table shares. They sit inside a panel that already carries
+-- the card frame, so the table adds no second surface; fixed layout makes long URLs and
+-- session ids truncate instead of forcing the panel to scroll sideways.
+rumTableConfig :: Text -> Table.Config
+rumTableConfig elemId = def{Table.elemID = elemId, Table.renderAsTable = True, Table.noSurface = True, Table.tableClasses = "table table-sm w-full table-fixed"}
+
+
+rightCol :: Text -> (a -> Html ()) -> Table.Column a
+rightCol name render = (Table.col name render){Table.align = Just "text-right tabular-nums"}
+
+
+tableZero_ :: Text -> Table.ZeroState
+tableZero_ title = Table.ZeroState{icon = "web", title, description = "", action = ESNone}
 
 
 topPages_ :: RumLinks -> [RumPage] -> Html ()
-topPages_ links pages = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
+topPages_ links pages = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Top pages" "Traffic and real-user load latency" $ Just ("Explore all events", logsUrl links browserPageViewKql)
-  if null pages
-    then panelEmpty_ "No page views in this time range"
-    else div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
-      thead_ $ tr_ $ th_ "Page" >> th_ [class_ "text-right"] "Views" >> th_ [class_ "text-right"] "P75 load" >> th_ [class_ "text-right max-sm:hidden"] "Last seen"
-      tbody_ $ forM_ pages \page -> tr_ do
-        td_ [class_ "max-w-xl"] $ a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> pagePathKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path
-        td_ [class_ "text-right tabular-nums"] $ toHtml $ show page.views
-        td_ [class_ "text-right tabular-nums"] $ toHtml $ maybe "—" formatMilliseconds page.p75LoadMs
-        td_ [class_ "text-right text-xs text-textWeak max-sm:hidden"] $ toHtml $ fmtDate "%d %b %H:%M" page.lastSeen
+  toHtml
+    Table.Table
+      { config = rumTableConfig "rumTopPages"
+      , columns =
+          [ (Table.col "Page" \page -> a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> pagePathKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path){Table.attrs = [class_ "w-[46%]"]}
+          , rightCol "Views" $ toHtml . show . (.views)
+          , rightCol "P75 load" $ toHtml . maybe "—" formatMilliseconds . (.p75LoadMs)
+          , (rightCol "Last seen" $ toHtml . fmtDate "%d %b %H:%M" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
+          ]
+      , rows = V.fromList pages
+      , features = def{Table.zeroState = Just $ tableZero_ "No page views in this time range"}
+      }
 
 
 vitalsPanel_ :: [Vital] -> Html ()
-vitalsPanel_ vitals = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
+vitalsPanel_ vitals = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Core Web Vitals" "P75 of the most recent samples against Google's thresholds" Nothing
   div_ [class_ "divide-y divide-strokeWeak"] $ forM_ vitals vitalRow_
 
@@ -1047,7 +1068,7 @@ groupErrors errors =
 
 
 recentErrors_ :: RumLinks -> [RumError] -> Html ()
-recentErrors_ links errors = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
+recentErrors_ links errors = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Browser errors" "Grouped by signature; counts and sessions are within this range" $ Just ("View errors", logsUrl links (browserKql <> " and status_code == \"ERROR\""))
   if null errors
     then div_ [class_ "flex items-center gap-2 px-3 py-5 text-sm text-textWeak"] $ faSprite_ "circle-check" "regular" "h-4 w-4 text-textSuccess" >> "No browser errors in this range"
@@ -1063,7 +1084,7 @@ recentErrors_ links errors = section_ [class_ "rounded-lg border border-strokeWe
           p_ [class_ "mt-0.5 line-clamp-2 text-xs text-textWeak"] $ toHtml issue.message
           div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 text-xs text-textWeak"] do
             forM_ issue.path $ span_ [class_ "max-w-56 truncate font-mono"] . toHtml
-            when (issue.sessions > 0) $ span_ [class_ "tabular-nums"] $ toHtml $ show issue.sessions <> bool " sessions" " session" (issue.sessions == 1)
+            when (issue.sessions > 0) $ span_ [class_ "tabular-nums"] $ toHtml $ countNoun issue.sessions "session"
             forM_ issue.sessionId \sid -> a_ [href_ $ sessionLogsUrl links sid, class_ "font-medium text-textBrand hover:underline"] "Latest occurrence"
 
 
@@ -1090,7 +1111,7 @@ audienceBy pick rows =
 -- | Who the traffic is: the first question of "is this bug Safari-only?" and "is mobile
 -- slower?", which an aggregate summary cannot answer. Every RUM product leads with this.
 audiencePanel_ :: [RumBreakdown] -> Html ()
-audiencePanel_ breakdown = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
+audiencePanel_ breakdown = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Audience" "Sessions by browser, operating system, and device class — errors highlight where failures concentrate" Nothing
   if null breakdown
     then panelEmpty_ "No user agent data in this time range"
@@ -1108,9 +1129,9 @@ audienceColumn_ title rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
       span_ [class_ "truncate font-medium text-textStrong"] $ toHtml row.name
       span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] do
         when (row.errors > 0) do
-          span_ [class_ "font-medium text-textError"] $ toHtml $ show row.errors <> bool " errors" " error" (row.errors == 1)
+          span_ [class_ "font-medium text-textError"] $ toHtml $ countNoun row.errors "error"
           " · "
-        toHtml $ show row.sessions <> bool " sessions" " session" (row.sessions == 1)
+        toHtml $ countNoun row.sessions "session"
     div_ [class_ "mt-1 h-1.5 w-full overflow-hidden rounded-full bg-fillWeak", Aria.hidden_ "true"]
       $ div_ [class_ "h-full rounded-full bg-fillInformation-strong/60", style_ $ "width:" <> show (share row) <> "%"] ""
   where
@@ -1119,9 +1140,9 @@ audienceColumn_ title rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
 
 
 recentSessions_ :: RumData -> Html ()
-recentSessions_ page = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
+recentSessions_ page = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Recent sessions" "Open a recording or inspect its correlated telemetry" $ Just ("View all sessions", sessionsUrl page.links Nothing AllSessionRows Nothing)
-  sessionTable_ False page.links (take 8 page.sessions) Nothing AllSessionRows
+  sessionsTable_ False page.links Nothing AllSessionRows (take 8 page.sessions)
 
 
 sessions_ :: RumData -> Html ()
@@ -1129,40 +1150,9 @@ sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
   div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
-    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"] do
-      sessionsToolbar_ page.links page.query page.sessionFilter (length filtered)
-      sessionTable_ True page.links filtered page.query page.sessionFilter
+    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"]
+      $ sessionsTable_ True page.links page.query page.sessionFilter filtered
     section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgSunken max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
-
-
-sessionsToolbar_ :: RumLinks -> Maybe Text -> SessionFilter -> Int -> Html ()
-sessionsToolbar_ links query sessionFilter count = div_ [class_ "space-y-2 border-b border-strokeWeak p-3"] do
-  form_ [method_ "get", action_ $ "/p/" <> links.pid.toText <> "/rum", class_ "flex items-center gap-2"] do
-    input_ [type_ "hidden", name_ "tab", value_ "sessions"]
-    whenJust links.service \value -> input_ [type_ "hidden", name_ "service", value_ value]
-    TimePicker.timeHiddenInputs_ links.window.fromQuery links.window.toQuery links.window.sinceQuery
-    label_ [Lucid.for_ "rum-session-search", class_ "sr-only"] "Search sessions"
-    div_ [class_ "relative min-w-0 flex-1"] do
-      faSprite_ "magnifying-glass" "regular" "pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-iconNeutral"
-      input_ [id_ "rum-session-search", name_ "q", value_ $ fromMaybe "" query, placeholder_ "User, session, page, or service", class_ "input input-sm w-full pl-8"]
-    button_ [type_ "submit", class_ "btn btn-sm"] "Search"
-  div_ [class_ "flex items-center justify-between gap-2"] do
-    div_ [class_ "tabs tabs-box tabs-outline tabs-sm", role_ "tablist", Aria.label_ "Session filters"] do
-      filterLink AllSessionRows "All sessions"
-      filterLink ErrorSessionRows "With errors"
-      filterLink ReplaySessionRows "With replay"
-    span_ [class_ "text-xs tabular-nums text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ show count <> " sessions"
-  where
-    filterLink value label =
-      a_
-        ( [ href_ $ sessionsUrl links query value Nothing
-          , role_ "tab"
-          , class_ $ "tab h-auto!" <> bool "" " tab-active text-textStrong" (sessionFilter == value)
-          , Aria.selected_ $ bool "false" "true" (sessionFilter == value)
-          ]
-            <> navTabAttrs
-        )
-        $ toHtml label
 
 
 filterSessions :: Maybe Text -> SessionFilter -> [RumSession] -> [RumSession]
@@ -1176,34 +1166,71 @@ filterSessions query sessionFilter = filter (\s -> matchesQuery s && matchesFilt
       ReplaySessionRows -> session.hasReplay
 
 
--- | @workspace@ marks the Sessions tab, where the replay panel sits beside the table: there a
--- row swaps only that panel instead of re-rendering the page around it. The Overview's recent
--- list has no panel to swap, so its rows navigate.
-sessionTable_ :: Bool -> RumLinks -> [RumSession] -> Maybe Text -> SessionFilter -> Html ()
-sessionTable_ workspace links sessions query sessionFilter =
-  if null sessions
-    then panelEmpty_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows)
-    else div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
-      thead_ $ tr_ $ th_ "User / session" >> th_ "Last page" >> th_ [class_ "text-right"] "Signals" >> th_ [class_ "text-right"] "Duration" >> th_ [class_ "w-12"] ""
-      tbody_ $ forM_ sessions \session -> tr_ [class_ "hover:bg-fillHover"] do
-        td_ [class_ "max-w-64"] do
-          a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
-          span_ [class_ "block truncate font-mono text-xs text-textWeak"] $ toHtml session.id
-        td_ [class_ "max-w-56"] do
-          -- A recording with no correlated spans is a real session, not a mystery: say what
-          -- it is instead of stacking "Unknown page" over "0 views · 0 events".
-          span_ [class_ $ "block truncate text-xs " <> bool "text-textStrong" "text-textWeak" (replayOnly session)] $ toHtml $ fromMaybe (bool "Unknown page" "Recording only — no telemetry events" (replayOnly session)) session.lastPage
-          forM_ session.service $ span_ [class_ "block truncate text-xs text-textWeak"] . toHtml
-        td_ [class_ "text-right"] do
-          div_ [class_ "flex justify-end gap-1"] do
-            when (session.errors > 0) $ span_ [class_ "badge badge-sm badge-error gap-1"] $ faSprite_ "triangle-exclamation" "solid" "h-2.5 w-2.5" >> toHtml (show session.errors)
-            when session.hasReplay $ span_ [class_ "badge badge-sm badge-ghost gap-1"] $ faSprite_ "video" "regular" "h-2.5 w-2.5" >> "Replay"
-          unless (replayOnly session) $ span_ [class_ "mt-0.5 block text-xs tabular-nums text-textWeak"] $ toHtml $ show session.views <> " views · " <> show session.events <> " events"
-        td_ [class_ "text-right text-xs tabular-nums text-textWeak"] $ toHtml $ formatSessionDuration session
-        td_ [class_ "text-right"] do
-          if session.hasReplay
-            then a_ (sessionLinkAttrs session.id <> [class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"]) $ faSprite_ "circle-play" "regular" "h-4 w-4"
-            else a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
+sessionFilterLabel :: SessionFilter -> Text
+sessionFilterLabel = \case
+  AllSessionRows -> "All sessions"
+  ErrorSessionRows -> "With errors"
+  ReplaySessionRows -> "With replay"
+
+
+-- | @workspace@ marks the Sessions tab, where the replay panel sits beside the table: there
+-- a row swaps only that panel instead of re-rendering the page around it, and the shared
+-- Table contributes search, the filter tabs and the zero state. The Overview's recent list
+-- has no panel to swap, so its rows navigate and it carries none of the chrome.
+sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> [RumSession] -> Html ()
+sessionsTable_ workspace links query sessionFilter sessions =
+  toHtml
+    Table.Table
+      { config = rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace
+      , columns =
+          [ ( Table.col "User / session" \session -> do
+                a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
+                span_ [class_ "block truncate font-mono text-xs text-textWeak"] $ toHtml session.id
+            )
+              { Table.attrs = [class_ "w-[32%]"]
+              }
+          , ( Table.col "Last page" \session -> do
+                -- A recording with no correlated spans is a real session, not a mystery: say
+                -- what it is instead of stacking "Unknown page" over "0 views · 0 events".
+                span_ [class_ $ "block truncate text-xs " <> bool "text-textStrong" "text-textWeak" (replayOnly session)] $ toHtml $ fromMaybe (bool "Unknown page" "Recording only — no telemetry events" (replayOnly session)) session.lastPage
+                forM_ session.service $ span_ [class_ "block truncate text-xs text-textWeak"] . toHtml
+            )
+              { Table.attrs = [class_ "w-[30%]"]
+              }
+          , ( Table.col "Signals" \session -> do
+                div_ [class_ "flex flex-wrap justify-end gap-1"] do
+                  when (session.errors > 0) $ span_ [class_ "badge badge-sm badge-error gap-1"] $ faSprite_ "triangle-exclamation" "solid" "h-2.5 w-2.5" >> toHtml (show session.errors)
+                  when session.hasReplay $ span_ [class_ "badge badge-sm badge-ghost gap-1"] $ faSprite_ "video" "regular" "h-2.5 w-2.5" >> "Replay"
+                unless (replayOnly session) $ span_ [class_ "mt-0.5 block truncate text-xs tabular-nums text-textWeak"] $ toHtml $ countNoun session.views "view" <> " · " <> countNoun session.events "event"
+            )
+              { Table.align = Just "text-right"
+              }
+          , (rightCol "Duration" $ toHtml . formatSessionDuration){Table.attrs = [class_ "w-16 text-xs"]}
+          , ( Table.col "" \session ->
+                if session.hasReplay
+                  then a_ (sessionLinkAttrs session.id <> [class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"]) $ faSprite_ "circle-play" "regular" "h-4 w-4"
+                  else a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
+            )
+              { Table.attrs = [class_ "w-11 px-1"]
+              , Table.align = Just "text-right"
+              }
+          ]
+      , rows = V.fromList sessions
+      , features =
+          def
+            { Table.search = guard workspace $> Table.ClientSide
+            , Table.searchPlaceholder = Just "User, session, page, or service"
+            , Table.tabs =
+                guard workspace
+                  $> Table.TabFilter
+                    { current = sessionFilterLabel sessionFilter
+                    , currentURL = sessionsUrl links query sessionFilter Nothing
+                    , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
+                    }
+            , Table.resultSummary = guard workspace $> countNoun (length sessions) "session"
+            , Table.zeroState = Just $ tableZero_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows)
+            }
+      }
   where
     sessionLinkAttrs sid =
       let url = sessionsUrl links query sessionFilter $ Just sid
@@ -1261,7 +1288,7 @@ performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
 -- as the strip turning amber mid-window — visible in a way two aggregate numbers never are.
 -- Where two emitters report the same vital in a bucket, the worse P75 is shown.
 vitalTrendPanel_ :: [VitalTrendPoint] -> Html ()
-vitalTrendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak bg-bgBase"] do
+vitalTrendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Web Vitals over time" "P75 per interval, colored by Google's thresholds" Nothing
   if null points
     then panelEmpty_ "No web vital samples in this time range"
@@ -1303,25 +1330,25 @@ pageLabel url
 -- | Sentry's signature vitals view: one row per page, P75 per vital, each judged on its
 -- own thresholds. Rows are ordered by sample count so the busiest pages lead.
 pageVitalsTable_ :: [PageVitalPoint] -> Html ()
-pageVitalsTable_ points = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
+pageVitalsTable_ points = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
   panelHeader_ "Web Vitals by page" "P75 per page — a site-wide average hides the page that regressed" Nothing
-  if null points
-    then panelEmpty_ "No page-attributed web vital samples in this time range"
-    else div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
-      thead_ $ tr_ do
-        th_ "Page"
-        forM_ vitalDefinitions $ th_ [class_ "text-right"] . toHtml . T.toUpper . (.name)
-        th_ [class_ "text-right"] "Samples"
-      tbody_ $ forM_ pageRows \(page, byVital, sampleTotal) -> tr_ do
-        td_ [class_ "max-w-xs"] $ span_ [class_ "block truncate font-medium text-textStrong", data_ "tippy-content" page] $ toHtml $ pageLabel page
-        forM_ vitalDefinitions \vital -> td_ [class_ "text-right"] $ case M.lookup vital.name byVital of
-          Nothing -> span_ [class_ "text-textWeak"] "—"
-          Just value ->
-            span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ classifyVital vital.goodAt vital.poorAt $ Just value).textClass]
-              $ toHtml
-              $ formatVitalThreshold vital value
-        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ show sampleTotal
+  toHtml
+    Table.Table
+      { config = rumTableConfig "rumPageVitals"
+      , columns =
+          (Table.col "Page" \(page, _, _) -> span_ [class_ "block truncate font-medium text-textStrong", data_ "tippy-content" page] $ toHtml $ pageLabel page){Table.attrs = [class_ "w-[28%]"]}
+            : [rightCol (T.toUpper vital.name) (\(_, byVital, _) -> vitalCell vital byVital) | vital <- vitalDefinitions]
+              <> [rightCol "Samples" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
+      , rows = V.fromList pageRows
+      , features = def{Table.zeroState = Just $ tableZero_ "No page-attributed web vital samples in this time range"}
+      }
   where
+    vitalCell vital byVital = case M.lookup vital.name byVital of
+      Nothing -> span_ [class_ "text-textWeak"] "—"
+      Just value ->
+        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ classifyVital vital.goodAt vital.poorAt $ Just value).textClass]
+          $ toHtml
+          $ formatVitalThreshold vital value
     pageRows =
       take 12
         $ sortWith (\(_, _, sampleTotal) -> Down sampleTotal)
@@ -1332,7 +1359,7 @@ pageVitalsTable_ points = section_ [class_ "overflow-hidden rounded-lg border bo
 
 vitalsTable_ :: RumData -> Html ()
 vitalsTable_ page = do
-  section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak bg-bgBase"] do
+  section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
     panelHeader_ "Web Vitals field performance" "P75 of the most recent samples — what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
       thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ [class_ "text-right"] "Samples"
@@ -1368,6 +1395,14 @@ sessionIdentity session = fromMaybe session.id $ session.userName <|> session.us
 -- | A recording whose session id never appeared on a span: it has a replay and nothing else.
 replayOnly :: RumSession -> Bool
 replayOnly session = session.hasReplay && session.events == 0
+
+
+-- | >>> countNoun (1 :: Int) "view"
+-- "1 view"
+-- >>> countNoun (3 :: Int) "view"
+-- "3 views"
+countNoun :: (Eq n, Num n, Show n) => n -> Text -> Text
+countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
 
 
 formatSessionDuration :: RumSession -> Text
@@ -1414,8 +1449,24 @@ browserKql :: Text
 browserKql = "(resource.telemetry.sdk.language == \"webjs\" or resource.user_agent.original != \"\" or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
 
 
+-- | The KQL twin of 'pageViewPredicate'.
+pageViewKql :: Text
+pageViewKql = "(name == \"documentLoad\" or name startswith \"Pageview \")"
+
+
+-- | The KQL twin of 'errorPredicate'.
+errorKql :: Text
+errorKql = "(status_code == \"ERROR\" or attributes.exception.type != null)"
+
+
 browserPageViewKql :: Text
-browserPageViewKql = browserKql <> " and (name == \"documentLoad\" or name startswith \"Pageview \")"
+browserPageViewKql = browserKql <> " and " <> pageViewKql
+
+
+-- | A first-stage KQL filter carrying the page's service scope. The scope has to land in
+-- the filter stage — before any pipe — or a piped query would append it to the summarize.
+scopedKql :: RumLinks -> Text -> Text
+scopedKql links q = q <> foldMap (\value -> " and resource.service.name == " <> kqlValue value) links.service
 
 
 -- | Matches 'pagePath': our SDK sets url.path, the browser SDK only url.full.
@@ -1441,7 +1492,7 @@ logsUrl :: RumLinks -> Text -> Text
 logsUrl links query =
   TimePicker.windowUrl
     ("/p/" <> links.pid.toText <> "/log_explorer")
-    [("query", query <> foldMap (\value -> " and resource.service.name == " <> kqlValue value) links.service)]
+    [("query", scopedKql links query)]
     links.window
 
 

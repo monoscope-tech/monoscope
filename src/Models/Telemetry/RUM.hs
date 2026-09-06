@@ -1,7 +1,5 @@
 module Models.Telemetry.RUM (
   RumBucket (..),
-  RumSummary (..),
-  RumTrend (..),
   RumPage (..),
   RumError (..),
   RumBreakdown (..),
@@ -25,25 +23,6 @@ import Relude
 data RumBucket = FiveMinutes | OneHour | SixHours
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
-
-
-data RumSummary = RumSummary
-  { sessions :: Int64
-  , pageViews :: Int64
-  , users :: Int64
-  , errors :: Int64
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
-
-
-data RumTrend = RumTrend
-  { bucket :: UTCTime
-  , pageViews :: Int64
-  , errors :: Int64
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
 
 
 data RumPage = RumPage
@@ -139,7 +118,7 @@ data VitalSample = VitalSample
 
 
 data RumQueryResult
-  = PulseResult RumSummary [RumTrend]
+  = PresenceResult Bool
   | PagesResult [RumPage]
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]
@@ -151,7 +130,7 @@ data RumQueryResult
 
 
 data RumQuery
-  = PulseQuery RumBucket
+  = PresenceQuery
   | PagesQuery
   | ErrorsQuery
   | SessionsQuery

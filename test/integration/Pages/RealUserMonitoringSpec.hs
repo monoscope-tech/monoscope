@@ -117,15 +117,15 @@ spec = sequential $ aroundAll withTestResources do
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
-      overviewData.summary.sessions `shouldBe` 2
-      overviewData.summary.pageViews `shouldBe` 2
-      overviewData.summary.errors `shouldBe` 1
+      overviewData.hasTelemetry `shouldBe` True
       overviewData.degradedPanels `shouldBe` []
       overview <- renderPage tr Nothing Nothing Nothing Nothing
       -- The unscoped read caches under an unscoped key; `service` is part of that key so a
       -- scoped page can never be served these rows.
       isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid RUMData.VitalSamplesQuery Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
-      overview `shouldContainAll` ["page views", "browser error", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
+      -- The numbers and activity chart are dashboard Widget components that fetch their own
+      -- data through the chart pipeline; the page ships their queries, not their values.
+      overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
 
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
