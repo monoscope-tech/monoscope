@@ -36,7 +36,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), VitalSample (..), VitalTrendPoint (..))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
@@ -903,6 +903,17 @@ pulseOrEmpty_ page
   | page.hasTelemetry = div_ [class_ "space-y-4"] do
       rumStatWidgets_ page.links
       rumActivityWidget_ page.links
+      -- Warms the Performance tab's heaviest scan while the user reads the Overview: the
+      -- vitals-detail query costs ~25s cold and its result is cached for 15 minutes, so by
+      -- the time Performance is opened it answers from cache. The response is discarded;
+      -- the delay keeps the warm-up from contending with the panels the user is watching.
+      div_
+        [ hxGet_ $ rumUrl page.links [("tab", "performance"), ("panel", panelParam PanelVitalTrend), ("deferred", "1")]
+        , hxTrigger_ "load delay:8s"
+        , hxSwap_ "none"
+        , term "hx-preload" "false"
+        ]
+        mempty
   | otherwise = maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
 
 

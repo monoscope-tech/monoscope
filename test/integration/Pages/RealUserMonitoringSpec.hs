@@ -120,6 +120,9 @@ spec = sequential $ aroundAll withTestResources do
       -- The numbers and activity chart are dashboard Widget components that fetch their own
       -- data through the chart pipeline; the page ships their queries, not their values.
       overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
+      -- The Overview warms the Performance tab's heaviest scan in the background, with the
+      -- response discarded — so opening Performance answers from cache.
+      overview `shouldContainAll` ["panel=vital_trend", "hx-swap=\"none\""]
 
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
