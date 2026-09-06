@@ -83,8 +83,13 @@ test.describe('metrics catalog', () => {
     await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
     const radio = page.getByRole('radio', { name: 'ux-checkout', exact: true });
     await expect(radio).toBeVisible();
+    // The search input refreshes the option list 200ms after the last keystroke, and a
+    // refresh landing after Space re-renders the radios with the pre-selection state —
+    // the intermittent metric_source=all CI failure. Let the refresh settle first.
+    await page.waitForLoadState('networkidle');
     await radio.focus();
     await page.keyboard.press('Space');
+    await expect(radio).toBeChecked();
     await servicePicker.focus();
     await page.keyboard.press('Enter');
     await page.locator('#metric-filters').getByRole('button', { name: 'Search', exact: true }).click();
