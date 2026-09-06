@@ -1,6 +1,6 @@
 Run systematic **technical** quality checks on a native app (`ios` / `android` / `adaptive`) and generate a comprehensive report. Don't fix issues; document them for other commands to address.
 
-This is a code-level audit, not a design critique. Audit from source (SwiftUI / UIKit / Compose / React Native / Flutter); no browser tooling or `detect.mjs` applies. Score against the platform reference(s): [ios.md](ios.md) / [android.md](android.md), both for `adaptive`. Read them before scoring if Setup hasn't already. The report skeleton mirrors [audit.md](audit.md); keep the two in sync when changing it.
+This is a code-level audit, not a design critique. Audit from source (SwiftUI / UIKit / Compose / React Native / Flutter); no browser tooling or `impeccable detect` applies. Score against the platform reference(s): [ios.md](ios.md) / [android.md](android.md), both for `adaptive`. Read them before scoring if Setup hasn't already. The report skeleton mirrors [audit.md](audit.md); keep the two in sync when changing it.
 
 ## Diagnostic Scan
 
@@ -36,7 +36,7 @@ Run comprehensive checks across 5 dimensions. Score each dimension 0-4 using the
 - **Hard-coded colors**: raw hex instead of semantic system colors (iOS) / Material color roles (Android) / design tokens
 - **Broken dark appearance**: missing dark variants, poor contrast in dark, quick inverts
 - **Dynamic Color** (Android 12+): no static fallback scheme, or ignored where it fits
-- **Off-platform materials**: hand-rolled blur/glassmorphism instead of system materials or tonal elevation
+- **Off-platform materials**: hand-rolled visual materials where system materials or tonal elevation are expected
 
 **Score 0-4**: 0=Hard-coded everything, 1=Minimal tokens, 2=Partial (tokens exist, inconsistently used), 3=Good (minor hard-coded values), 4=Excellent (semantic throughout, both appearances first-class)
 
@@ -48,7 +48,7 @@ Score against the loaded platform reference(s), including their slop tests. **Ch
 - **Off-platform navigation**: custom global nav, overloaded tab bars, iOS patterns on Android or vice versa
 - **Web-shaped controls**: HTML-style buttons, custom toggles, hover-dependent affordances
 - **Icon drift**: mixed icon sets instead of SF Symbols / Material Symbols
-- **AI tells**: the shared absolute bans still apply (AI palette, gradient text, hero metrics)
+- **System drift**: repeated shortcuts or decorative patterns that conflict with the product, platform, or established design system
 
 **Score 0-4**: 0=Web port (nothing native), 1=Heavy violations (3-4 kinds), 2=Some (1-2 noticeable), 3=Mostly conformant (subtle issues), 4=Fully native (a fluent user trusts every screen)
 

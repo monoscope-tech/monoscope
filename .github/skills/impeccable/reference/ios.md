@@ -2,7 +2,7 @@
 
 For native iOS / iPadOS apps: SwiftUI, UIKit, React Native, Expo, Flutter shipping to Apple hardware.
 
-On native, register narrows. HIG conformance governs structure, navigation, and interaction whatever the register; brand expresses through the expressive layer the platform provides (tint, type, motion, content). Calm, Duolingo, and Spotify carry strong identity entirely inside HIG conventions.
+On native, the visitor mode narrows what expression may override. HIG conformance governs structure, navigation, and interaction in every mode; brand expresses through the layer the platform leaves open (tint, type, motion, content).
 
 ## The iOS slop test
 
@@ -43,3 +43,9 @@ Would a fluent iPhone user trust this app, or pause at off-spec controls? The te
 
 - **System transitions.** Push slides, sheets rise, dismiss reverses the entrance. Custom transitions that fight the navigation model disorient.
 - **Honor Reduce Motion.** Crossfade instead of parallax and large slides.
+
+## Verifying the build
+
+- **Screenshots come from the Simulator, never a browser.** Build and run, then capture with `xcrun simctl io booted screenshot <path>` (with several running, replace `booted` with the target's UDID from `xcrun simctl list devices booted`; display names can collide, the UDID never does). Capture every device class the app ships to, at least one iPhone and, when iPad is a target, one iPad, and write the files where the review flow expects them.
+- **Dark Mode and Dynamic Type belong in the pass.** `xcrun simctl ui booted appearance dark` flips appearance, reusing the capture's UDID when several are booted; a check at a large Dynamic Type size catches the truncation a fixed layout hides.
+- **Simulators give breadth; posture, gestures, and performance need hardware.** Say which one produced the evidence.
