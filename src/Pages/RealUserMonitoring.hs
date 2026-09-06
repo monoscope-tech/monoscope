@@ -1358,10 +1358,26 @@ pageLabel url
   | otherwise = url
 
 
+-- | Traffic-weighted room for improvement, after Sentry's "Opportunity" ranking: sample
+-- count times how far each vital's P75 sits past its "good" threshold, normalized per
+-- vital so CLS (unitless) and the millisecond vitals weigh equally.
+--
+-- The invariant this exists for — a quiet page with a poor vital outranks a busy page
+-- whose vitals are all good:
+--
+-- >>> opportunityScore [(2500, 4000, 2000)] 100000
+-- 0.0
+-- >>> opportunityScore [(2500, 4000, 4750)] 10 > opportunityScore [(2500, 4000, 2000)] 100000
+-- True
+opportunityScore :: [(Double, Double, Double)] -> Int64 -> Double
+opportunityScore vitals sampleTotal = fromIntegral sampleTotal * sum [max 0 ((p75 - goodAt) / (poorAt - goodAt)) | (goodAt, poorAt, p75) <- vitals]
+
+
 -- | Sentry's signature vitals view: one row per page, P75 per vital, each judged on its
--- own thresholds. Rows are ordered by sample count so the busiest pages lead.
+-- own thresholds. Rows lead with the largest 'opportunityScore' (ties broken by traffic),
+-- so the fix that would move the site-wide experience most is always on top.
 pageVitalsTable_ :: [PageVitalPoint] -> Html ()
-pageVitalsTable_ points = rumPanel_ "Web Vitals by page" "P75 per page — a site-wide average hides the page that regressed" Nothing do
+pageVitalsTable_ points = rumPanel_ "Web Vitals by page" "P75 per page, biggest traffic-weighted regressions first — a site-wide average hides the page that hurts most users" Nothing do
   toHtml
     Table.Table
       { config = rumTableConfig "rumPageVitals"
@@ -1379,9 +1395,11 @@ pageVitalsTable_ points = rumPanel_ "Web Vitals by page" "P75 per page — a sit
         span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ classifyVital vital.goodAt vital.poorAt $ Just value).textClass]
           $ toHtml
           $ formatVitalThreshold vital value
+    -- Scored off the same aggregated map the cells render from, so rank and display agree.
+    score byVital = opportunityScore [(v.goodAt, v.poorAt, p75) | v <- vitalDefinitions, Just p75 <- [M.lookup v.name byVital]]
     pageRows =
       take 12
-        $ sortWith (\(_, _, sampleTotal) -> Down sampleTotal)
+        $ sortWith (\(_, byVital, sampleTotal) -> Down (score byVital sampleTotal, sampleTotal))
         $ map (\(page, cells) -> (page, M.fromListWith max [(vitalKey p.metricName, p.p75) | p <- cells], sum $ map (.samples) cells))
         $ M.toList
         $ M.fromListWith (<>) [(p.page, [p]) | p <- points]
