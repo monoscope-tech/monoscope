@@ -2279,13 +2279,18 @@ safetyNetReprocess pid = do
 
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
-dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" sql'
+dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
+
+
+-- | Keep native PostgreSQL comparisons when TimeFusion needs a different cast.
+dualExecPgTfWithSql :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
+dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
+  mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" pgSql
   _ <- forkWithCtx scope $ when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
     when shouldAttempt
-      $ tryAny (withHasqlTimefusion True $ Hasql.interpExecute sql')
+      $ tryAny (withHasqlTimefusion True $ Hasql.interpExecute tfSql)
       >>= \case
         Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
         Left e -> do
@@ -2604,7 +2609,8 @@ processEagerBatch batch shard
                   summaryText = T.copy $ T.intercalate " " (V.toList s.summary)
                in ( T.copy svcName
                   , ExtractionWorker.BufferedSpan
-                      { ExtractionWorker.spanCtxId = T.copy spanCtxId'
+                      { ExtractionWorker.eventId = T.copy s.id
+                      , ExtractionWorker.spanCtxId = T.copy spanCtxId'
                       , ExtractionWorker.traceId = T.copy traceId'
                       , ExtractionWorker.timestamp = s.timestamp
                       , ExtractionWorker.summary = summaryText
@@ -2786,7 +2792,7 @@ flushDrainTask shard task
       -- Build NewEvent inputs from the buffered spans.
       let events =
             V.fromList
-              [ NewEvent bs.spanCtxId bs.summary
+              [ NewEvent bs.eventId bs.summary
               | bs <- task.spans
               ]
           (!mergedTree, allPatternsRaw) = processDrainBatch True events now seededTree
@@ -2806,10 +2812,10 @@ flushDrainTask shard task
       -- Merge membership along with templates before deriving tags or error flags.
       -- The same representative is now used for persisted patterns and events.
       let allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
-          tagByCtx :: HM.HashMap Text Text
-          tagByCtx = HM.fromList [(lid, "pat:" <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
-          errByCtx :: HM.HashMap Text Bool
-          errByCtx = HM.fromList [(bs.spanCtxId, bs.isError) | bs <- task.spans]
+          tagByEvent :: HM.HashMap Text Text
+          tagByEvent = HM.fromList [(lid, "pat:" <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
+          errByEvent :: HM.HashMap Text Bool
+          errByEvent = HM.fromList [(bs.eventId, bs.isError) | bs <- task.spans]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
                 patternHash = toXXHash dp.templateStr
@@ -2827,7 +2833,7 @@ flushDrainTask shard task
                           , traceId = Nothing
                           , sampleMessage = Just dp.exampleLog
                           , eventCount
-                          , isError = any (\lid -> HM.lookupDefault False lid errByCtx) dp.logIds
+                          , isError = any (\lid -> HM.lookupDefault False lid errByEvent) dp.logIds
                           }
                       , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
                       )
@@ -2842,43 +2848,47 @@ flushDrainTask shard task
       -- the `NOT @>` predicate makes re-extraction of the same pattern a
       -- no-op (zero rows touched) on both engines.
       let taggedSpans =
-            [ (bs.spanCtxId, bs.traceId, tag, bs.timestamp)
+            [ (bs, tag)
             | bs <- task.spans
-            , Just tag <- [HM.lookup bs.spanCtxId tagByCtx]
+            , Just tag <- [HM.lookup bs.eventId tagByEvent]
             ]
       whenJust (nonEmpty taggedSpans) \taggedNE -> do
         let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
-            spanIds' = [sid | (sid, _, _, _) <- taggedSpans]
-            traceIds' = [tid | (_, tid, _, _) <- taggedSpans]
-            tagArr = [t | (_, _, t, _) <- taggedSpans]
-            tsList = fmap (\(_, _, _, ts) -> ts) taggedNE
+            eventIds' = [bs.eventId | (bs, _) <- taggedSpans]
+            spanIds' = [bs.spanCtxId | (bs, _) <- taggedSpans]
+            traceIds' = [bs.traceId | (bs, _) <- taggedSpans]
+            tagArr = map snd taggedSpans
+            tsList = fmap ((.timestamp) . fst) taggedNE
             (minTs, maxTs) = (minimum1 tsList, maximum1 tsList)
             effectiveMinTs = max minTs hashCutoff
             maxTsPad = addUTCTime 1 maxTs
-            update2Sql =
+            update2Sql matchEvent =
               [HI.sql| UPDATE otel_logs_and_spans o
                           SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
                           FROM (
                             -- ORDER BY matches UPDATE-1 so all hot-row writers acquire
                             -- row locks in the same (span_id, trace_id) order — kills the
                             -- lock-order deadlock class (40P01) against UPDATE-1/backfill.
-                            SELECT span_id, trace_id, tag
+                            SELECT event_id, tag
                             FROM (
-                              SELECT unnest(#{spanIds'}::text[]) AS span_id,
+                              SELECT unnest(#{eventIds'}::text[]) AS event_id,
+                                     unnest(#{spanIds'}::text[]) AS span_id,
                                      unnest(#{traceIds'}::text[]) AS trace_id,
                                      unnest(#{tagArr}::text[])    AS tag
                             ) raw
-                            ORDER BY span_id, trace_id
+                            ORDER BY span_id, trace_id, event_id
                           ) u
                           WHERE o.project_id = #{pid.toText}
                             AND o.timestamp >= #{effectiveMinTs}
                             AND o.timestamp <  #{maxTsPad}
-                            AND o.context___span_id = u.span_id
-                            AND o.context___trace_id = u.trace_id
+                            AND ^{matchEvent}
                             AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
         when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
           $ void
-          $ dualExecPgTf ctx update2Sql
+          $ dualExecPgTfWithSql
+            ctx
+            (update2Sql [HI.sql|o.id = u.event_id::uuid|])
+            (update2Sql [HI.sql|o.id::text = u.event_id|])
       Metrics.count Metrics.drainFlushesCompleted 1 []
       Metrics.count Metrics.drainSpansFlushed (length task.spans) []
       Metrics.count Metrics.drainPatternsPersisted (length ups) []

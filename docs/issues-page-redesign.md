@@ -1152,3 +1152,43 @@ The production query screenshot also leaves two presentation follow-ups:
 its historical generated title still embeds the old threshold, and the chart's y-axis stops at 1 while the recorded threshold is 5.
 The detail header should prefer the recorded monitor name, and the chart should keep the threshold visible when it lies outside the returned series.
 These require separate validation after the ingestion change.
+
+
+## 20. Validation follow-ups for pattern identity and threshold axes
+
+Commits `12f16ea0` and `ead6d241` appeared on shared master during local validation.
+The application build completed. The extraction fixture needed its required summary field before its database assertion could run.
+After that correction, all five extraction checks and all 26 issue-detail checks passed.
+The broader 23-case log-pattern run then caught a real regression: logs without span IDs produced no patterns.
+Their empty span ID had been mistaken for the seed-template sentinel by batch membership accounting.
+
+Cancellation was requested for deployment `34055192437`. An external rerun started attempt 2 against the same pre-fix SHA; cancellation was requested again.
+Attempt 2 is now confirmed cancelled, including the CapRover deployment job.
+The follow-up now carries the existing telemetry row UUID in `BufferedSpan.eventId`.
+Membership, error flags, and UPDATE-2 use that row identity, while span/trace fields retain the established lock ordering.
+The database regression includes a row with no span or trace context.
+The correction passes 5 extraction, 23 log-pattern, and 26 issue-detail integration examples (54 total).
+The extraction parity assertion now requires a `pat:` tag, rather than any nonempty hash.
+Local tests use PostgreSQL for both connections; real TimeFusion write validation remains a CI gate.
+
+The chart-axis change passed 12 frontend checks and browser checks at 390px and 1440px.
+For a series peaking at 1 and threshold 5, the axis spans 0–5.25; the threshold's pixel position is inside the plot.
+The label moved from the clipped outside edge to `insideEndTop`; the mobile screenshot shows `Alert: 5` in full.
+The rebuilt server passed four browser cases using its own asset references: relative and absolute ranges at 390px and 1440px.
+All cases show the threshold inside the plot, with no JavaScript errors, missing assets, or page overflow.
+The absolute-range fixture required its date field to match its event timestamp and its local cached query result to be cleared.
+One overlapping frontend build temporarily removed the manifest during Haskell compilation; builds are now kept sequential.
+
+
+### Telemetry backend compatibility
+
+The first row-ID query used `uuid[]`, which the configured TimeFusion planner rejects as an unsupported SQL type.
+A read-only `EXPLAIN UPDATE` succeeded after comparing TimeFusion's text IDs directly.
+The writer now supplies separate match expressions to the existing dual-backend execution path:
+PostgreSQL compares `o.id = u.event_id::uuid`; TimeFusion compares `o.id::text = u.event_id`.
+Both forms keep project, age, and timestamp bounds. No production rows were updated by the planner probes.
+The local PostgreSQL schema has no ID index, contrary to an earlier commentary assumption.
+Its inspected plan uses a project index with the timestamp window as a filter; no ID-index performance claim is made.
+The native PostgreSQL comparison avoids per-row UUID-to-text conversion.
+Planner artifacts are `/private/tmp/pattern-update-plan.log` and `/private/tmp/pattern-update-pg-plan.log`.
+The application and integration-test builds completed successfully. Deployment verification remains pending.

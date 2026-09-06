@@ -55,17 +55,17 @@ spec = around withTestResources do
           pgOnly = tr{trATCtx = ctx{config = ctx.config{enableTimefusionWrites = False, enableHashUpdates = True}}}
           service = "pattern-membership-regression"
           spans =
-            [ ExtractionWorker.BufferedSpan "pattern-first" "pattern-trace" frozenTime "Connected to database primary" True
-            , ExtractionWorker.BufferedSpan "pattern-second" "pattern-trace" frozenTime "Connected to database replica" False
-            , ExtractionWorker.BufferedSpan "pattern-third" "pattern-trace" frozenTime "Connected to database <*> <*>" False
+            [ ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000001" "pattern-first" "pattern-trace" frozenTime "Connected to database primary" True
+            , ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000002" "pattern-second" "pattern-trace" frozenTime "Connected to database replica" False
+            , ExtractionWorker.BufferedSpan "10000000-0000-4000-8000-000000000003" "" "" frozenTime "Connected to database <*> <*>" False
             ]
       for_ spans \span' ->
         void
           $ withPool tr.trPool
           $ DBT.execute
-            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id)
-              VALUES (gen_random_uuid(), ?, ?, ?, 'span', ?, ?) |]
-            (pid.toText, frozenTime, frozenTime, span'.spanCtxId, span'.traceId)
+            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id, summary)
+              VALUES (?::uuid, ?, ?, ?, 'SERVER', NULLIF(?::text, ''), NULLIF(?::text, ''), ARRAY[?]::text[]) |]
+            (span'.eventId, pid.toText, frozenTime, frozenTime, span'.spanCtxId, span'.traceId, span'.summary)
       for_ worker.shards \shard ->
         runTestBg frozenTime pgOnly
           $ BackgroundJobs.flushDrainTask
@@ -77,7 +77,7 @@ spec = around withTestResources do
             [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int
               FROM apis.log_patterns lp JOIN otel_logs_and_spans o
                 ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
-              WHERE lp.project_id = ? AND lp.service_name = ? AND o.context___trace_id = 'pattern-trace'
+              WHERE lp.project_id = ? AND lp.service_name = ?
               GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |]
             (pid, service)
           :: IO (V.Vector (Int, Bool, Int))
@@ -124,7 +124,7 @@ spec = around withTestResources do
                   FROM otel_logs_and_spans
                   WHERE project_id = #{pid.toText}
                     AND name = 'GET /api/parity/check' |]
-      tfHashes `shouldSatisfy` any (not . T.null)
+      tfHashes `shouldSatisfy` any (T.isInfixOf "pat:")
 
     it "safety-net: unprocessed rows get re-driven through the worker" \tr -> do
       apiKey <- createTestAPIKey tr pid "ew-safetynet-key"

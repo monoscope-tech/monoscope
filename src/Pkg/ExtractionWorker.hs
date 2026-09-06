@@ -118,7 +118,8 @@ data ServiceBuffer = ServiceBuffer
 
 
 data BufferedSpan = BufferedSpan
-  { spanCtxId :: !Text
+  { eventId :: !Text -- Telemetry row UUID, present even on logs without span context
+  , spanCtxId :: !Text
   , traceId :: !Text
   , timestamp :: !UTCTime
   , summary :: !Text
