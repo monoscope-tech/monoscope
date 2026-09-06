@@ -3204,16 +3204,17 @@ sendReportForProject pid rType = do
       teamM <- ProjectMembers.getEveryoneTeam pid
       broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
       when (rType == Projects.RTWeekly)
-        $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
-          forM_ users \user -> do
-            (_, subj, rendered) <-
-              RP.renderSystemEmail
-                ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
-                pr
-                user.firstName
-                False
-                systemSnapshot
-            sendRenderedEmail (CI.original user.email) subj rendered
+        $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
+        $ forM_ users \user -> do
+          (_, subj, rendered) <-
+            RP.renderSystemEmail
+              rType
+              ("p/" <> pid.toText <> "/reports/" <> report.id.toText)
+              pr
+              user.firstName
+              False
+              systemSnapshot
+          sendRenderedEmail (CI.original user.email) subj rendered
       Log.logInfo "Completed sending report notifications for" pid
 
 

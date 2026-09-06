@@ -89,14 +89,14 @@ Density target: approximately 680–720px maximum report width, 14px body text, 
 - [x] Inspect primary competitor documentation and at least one visual email sample.
 - [x] Inspect current code and desktop/mobile baseline; record confirmed defects.
 - [x] Brainstorm alternatives and refine an implementation direction in this Markdown file.
-- [ ] Complete query/schema audit and implement richer persisted report data.
-- [ ] Correct seven-day windows, interval boundaries, units, counts, and missing baselines.
-- [ ] Implement reusable email-safe components and the new report hierarchy.
-- [ ] Improve shared email layout defects that affect other user emails, then inspect representative alert/invite/report previews.
-- [ ] Verify populated, quiet, missing-instrumentation, partial-source, legacy-saved, long-text, and many-service cases.
-- [ ] Integration tests prove isolation, period boundaries, service aggregates, infra/monitor semantics, saved-email agreement, and delivery preferences without sending real email.
-- [ ] Render a batched review at desktop/mobile and light/dark, with images blocked and essential inline-style fallback; fix confirmed defects in one batch, then confirm once.
-- [ ] Check semantic reading order, all mobile metrics, contrast, links, no horizontal clipping, no scripts, and HTML byte size.
+- [x] Complete query/schema audit and implement richer persisted report data.
+- [x] Correct seven-day windows, interval boundaries, units, counts, and missing baselines.
+- [x] Implement reusable email-safe components and the new report hierarchy.
+- [x] Improve shared email layout defects that affect other user emails, then inspect representative alert/invite/report previews.
+- [x] Verify populated, quiet, missing-instrumentation, partial-source, legacy-saved, long-text, and many-service cases.
+- [x] Integration tests prove isolation, period boundaries, service aggregates, infra/monitor semantics, saved-email agreement, and delivery preferences without sending real email.
+- [x] Render a batched review at desktop/mobile and light/dark, with images blocked and essential inline-style fallback; fix confirmed defects in one batch, then confirm once.
+- [x] Check semantic reading order, all mobile metrics, contrast, links, no horizontal clipping, no scripts, and HTML byte size.
 - [ ] Run repository-required compile/test/CI gates; record exact evidence.
 - [ ] Deploy to production master while preserving concurrent work.
 - [ ] Verify deployed report preview and saved report behavior; record post-deployment findings and resolve material defects.
@@ -138,3 +138,13 @@ Concurrent work is present in the shared checkout (parser, monitoring tests, and
 - Development server recovery removed stale orphan listeners using the prescribed Makefile workflow. The current verified new server is now **IPv4 `127.0.0.1:8080`** (the earlier IPv6-only advice is stale). Verify served markup before future captures.
 
 Still required: legacy saved-report regression; explicit issue priority/state fixture; final Haskell review and required gates; reconcile latest master in an isolated deployment worktree; production deployment and post-deploy preview/saved-report checks. The email work is not yet committed or deployed.
+
+### Review and release preparation (7 September)
+
+- Draft PR: https://github.com/monoscope-tech/monoscope/pull/509. The deployment worktree is `/tmp/monoscope-weekly-report-deploy`, based on master `90b23980d`. It excludes unrelated local work.
+- Seven integration examples now pass (36.72 seconds in the last run), including an old saved JSON report with corrected daily title and SQL duration, and issue lifecycle/critical-priority ordering. Captured email tests and persisted snapshot round-trips are part of that suite.
+- Review corrections: use the existing KQL quoting helper for names, paths, hosts, and statements; pass the actual stored/scheduled report type through rendering instead of inferring daily/weekly from duration; preserve missing-environment and endpoint-host context; reuse the shared decimal formatter.
+- HLint 3.10, matching CI, reports **No hints** after corrections. The system-installed 3.3.6 cannot parse this repository's `MultilineStrings` extension; the matching binary lives under `/tmp/weekly-report-hlint-tool` and does not replace the system tool.
+- Contrast spot checks of the actual report palette against its backgrounds: body 14.65:1, muted text 6.39:1, links 5.07:1, attention 6.57:1; dark links 8.63:1, attention 9.14:1, footer 6.92:1.
+- The pre-deploy production `/reports/live` route returned its old report successfully in 0.35 seconds (35,111-byte iframe document). This is not a like-for-like performance benchmark: the new report collects considerably more data through the configured backend. Verify generation timing and availability in production after deployment.
+- CI full build/tests and deployment remain pending. Optional refactors (flattening the concurrent collector and separating the legacy construction helper) are not correctness prerequisites. Infrastructure, issues, and slow database details intentionally remain priority samples in the stored snapshot; their omission links open the relevant explorers, while full reports expand all stored services/endpoints/monitors. Endpoint performance intentionally ranks current traffic rather than enumerating disappeared routes.

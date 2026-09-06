@@ -49,18 +49,18 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, diffUTCTime, formatTime, fromGregorian)
+import Data.Time (UTCTime (..), addUTCTime, formatTime, fromGregorian)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Report qualified as Report
-import Numeric (showFFloat)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
-import Utils (formatWithCommas, toUriStr)
+import Utils (formatWithCommas, kqlQuoted, showFFloat', toUriStr)
 
 
 -- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
@@ -669,7 +669,8 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
 -- =============================================================================
 
 data WeeklyReportData = WeeklyReportData
-  { userName :: Text
+  { reportType :: Projects.ReportType
+  , userName :: Text
   , projectName :: Text
   , reportUrl :: Text
   , projectUrl :: Text
@@ -809,7 +810,7 @@ weeklyReportEmail d =
                 forM_ (reportRows 6 rows) $ \comparison -> do
                   let e = comparison.current
                   reportItem
-                    (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> show e.method <> " and attributes.url.path == " <> show e.path)
+                    (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> kqlQuoted e.method <> " and attributes.url.path == " <> kqlQuoted e.path)
                     (e.method <> " " <> reportClip 140 e.path)
                     (T.intercalate " · " $ catMaybes [e.service, e.environment, Just e.host])
                     [("Requests", reportCount e.requests, "Server spans"), ("Avg duration", maybe "Not measured" reportMs e.averageMs, reportChange e.averageMs (comparison.previous >>= (.averageMs)))]
@@ -820,7 +821,7 @@ weeklyReportEmail d =
                 when (null rows) $ reportNote "No database queries above this threshold were recorded."
                 forM_ (reportRows 4 rows) $ \q ->
                   reportItem
-                    (queryUrl $ servicePredicate q.service <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> show q.statement else " and duration > 500000000")
+                    (queryUrl $ servicePredicate q.service <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> kqlQuoted q.statement else " and duration > 500000000")
                     (reportClip 180 q.statement)
                     (fromMaybe "Unnamed service" q.service)
                     [("Avg duration", reportMs q.averageMs, ""), ("Operations", reportCount q.operations, "Recorded spans")]
@@ -833,7 +834,7 @@ weeklyReportEmail d =
                 unless (null rows) $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "font-size:13px;table-layout:fixed;text-align:left;"] do
                   thead_ $ tr_ $ forM_ (["Kind", "Events", "Avg duration"] :: [Text]) $ \label -> th_ [scope_ "col", style_ "padding:8px 0;"] $ toHtml label
                   tbody_ $ forM_ rows $ \w -> tr_ do
-                    td_ [style_ "padding:6px 0;"] $ a_ [target_ "_top", href_ $ queryUrl $ "kind == " <> show w.kind] $ toHtml $ T.toTitle w.kind
+                    td_ [style_ "padding:6px 0;"] $ a_ [target_ "_top", href_ $ queryUrl $ "kind == " <> kqlQuoted w.kind] $ toHtml $ T.toTitle w.kind
                     td_ [style_ "padding:6px 0;"] $ toHtml $ reportCount w.events
                     td_ [style_ "padding:6px 0;"] $ toHtml $ maybe "—" reportMs w.averageMs
           Nothing -> do
@@ -871,7 +872,7 @@ weeklyReportEmail d =
             a_ [target_ "_top", href_ "https://monoscope.tech/docs"] "Instrumentation guide"
   )
   where
-    daily = maybe False (\s -> diffUTCTime s.endTime s.startTime <= 86400) d.systemSnapshot
+    daily = d.reportType == Projects.RTDaily
     reportTitle = if daily then "Daily system report" else "Weekly system report"
     reportRows :: Int -> [a] -> [a]
     reportRows n rows = if d.fullReport then rows else take n rows
@@ -883,9 +884,10 @@ weeklyReportEmail d =
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
     queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
     serviceUrl service environment = queryUrl $ serviceFilter service environment
-    servicePredicate service = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> show name) service
-    serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> show e) environment
-    endpointHostFilter host = " and (attributes.server.address == " <> show host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> show host) <> "))"
+    servicePredicate :: Maybe Text -> Text
+    servicePredicate = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> kqlQuoted name)
+    serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> kqlQuoted e) environment
+    endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> kqlQuoted host) <> "))"
 
 
 reportFinding :: Text -> Text -> Html ()
@@ -946,7 +948,7 @@ reportCount = formatWithCommas . fromIntegral
 
 
 reportDecimal :: Double -> Text
-reportDecimal value = toText $ showFFloat (Just 1) value ""
+reportDecimal = showFFloat' 1
 
 
 reportMs :: Double -> Text
@@ -954,7 +956,7 @@ reportMs value = reportDecimal value <> " ms"
 
 
 reportRatio :: Int64 -> Int64 -> Text
-reportRatio errorCount eventCount = if eventCount == 0 then "Not measured" else toText (showFFloat (Just 2) (100 * fromIntegral errorCount / fromIntegral eventCount :: Double) "") <> "%"
+reportRatio errorCount eventCount = if eventCount == 0 then "Not measured" else showFFloat' 2 (100 * fromIntegral errorCount / fromIntegral eventCount) <> "%"
 
 
 reportChange :: Maybe Double -> Maybe Double -> Text
@@ -1067,7 +1069,8 @@ sampleWeeklyReport :: Text -> Text -> (Text, Html ())
 sampleWeeklyReport eventsChart errorsChart =
   weeklyReportEmail
     WeeklyReportData
-      { userName = "Jane Doe"
+      { reportType = Projects.RTWeekly
+      , userName = "Jane Doe"
       , projectName = "My API Project"
       , reportUrl = "https://app.monoscope.tech/p/sample-id/reports/sample-report"
       , projectUrl = "https://app.monoscope.tech/p/sample-id"
@@ -1145,7 +1148,7 @@ sampleSystemSnapshot =
     , databases = Report.Available [Report.DatabaseStats (Just "checkout-api") "SELECT * FROM users WHERE email = $1" 1250 3400]
     , workloads = Report.Available [Report.WorkloadStats "server" 80000 (Just 245), Report.WorkloadStats "consumer" 2000 (Just 70), Report.WorkloadStats "client" 5000 (Just 80)]
     , ingestionCapped = Just False
-    , startTime = addUTCTime (-7 * 86400) end
+    , startTime = addUTCTime (-(7 * 86400)) end
     , endTime = end
     }
   where

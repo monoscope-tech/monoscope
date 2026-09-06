@@ -271,8 +271,8 @@ optionalReportSection pid label action =
 -- Returns @(dateLabel from endTime, subject, rendered email HTML)@. Generalised over the effect
 -- row so both the request handlers and the weekly-report background job render the same email;
 -- @reportUrl@ is host-relative.
-renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Maybe Report.ReportSnapshot -> Bool -> Eff es (Text, Text, Text)
-renderWeeklyEmail reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded systemSnapshot fullReport = do
+renderWeeklyEmail :: (Log :> es, Reader AuthContext :> es) => Projects.ReportType -> Text -> Projects.Project -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> Maybe Report.ReportSnapshot -> Bool -> Eff es (Text, Text, Text)
+renderWeeklyEmail reportType reportUrl project userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded systemSnapshot fullReport = do
   ctx <- ask @AuthContext
   let pid = project.id
       reportUrl' = hostPath ctx.env.hostUrl reportUrl
@@ -285,7 +285,8 @@ renderWeeklyEmail reportUrl project userName startTime endTime totalEvents total
   let projectUrl = hostPath ctx.env.hostUrl ("p/" <> pid.toText)
       reportData =
         ET.WeeklyReportData
-          { userName
+          { reportType
+          , userName
           , projectName = project.title
           , reportUrl = reportUrl'
           , projectUrl
@@ -321,7 +322,7 @@ renderWeeklyEmail reportUrl project userName startTime endTime totalEvents total
 reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
 reportToEmailHtml report project userName =
   case AET.parseMaybe (AE.withObject "Report" (AE..:? "systemSnapshot")) report.reportJson of
-    Just (Just snapshot) -> dropSubject <$> renderSystemEmail reportUrl project userName True snapshot
+    Just (Just snapshot) -> dropSubject <$> renderSystemEmail report.reportType reportUrl project userName True snapshot
     Nothing -> invalid "Invalid system report snapshot"
     Just Nothing -> case AE.fromJSON @ReportData report.reportJson of
       AE.Error err -> invalid (toText err)
@@ -329,17 +330,17 @@ reportToEmailHtml report project userName =
         let anomalies' = V.fromList rd.issues
             performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
             slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
-        dropSubject <$> renderWeeklyEmail reportUrl project userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False Nothing True
+        dropSubject <$> renderWeeklyEmail report.reportType reportUrl project userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False Nothing True
   where
     reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
     invalid err = ("", "Error: Could not parse report data") <$ Log.logAttention "Unparseable stored report json" (report.id.toText, err)
 
 
-renderSystemEmail :: (Log :> es, Reader AuthContext :> es) => Text -> Projects.Project -> Text -> Bool -> Report.ReportSnapshot -> Eff es (Text, Text, Text)
-renderSystemEmail reportUrl project userName fullReport snapshot =
+renderSystemEmail :: (Log :> es, Reader AuthContext :> es) => Projects.ReportType -> Text -> Projects.Project -> Text -> Bool -> Report.ReportSnapshot -> Eff es (Text, Text, Text)
+renderSystemEmail reportType reportUrl project userName fullReport snapshot =
   let (events, errors, eventChange, errorChange) = snapshotTotals snapshot
       patterns = case snapshot.topPatterns of Report.Available rows -> V.fromList rows; Report.Unavailable -> V.empty
-   in renderWeeklyEmail reportUrl project userName snapshot.startTime snapshot.endTime events errors eventChange errorChange V.empty V.empty V.empty patterns (snapshot.ingestionCapped == Just True) (Just snapshot) fullReport
+   in renderWeeklyEmail reportType reportUrl project userName snapshot.startTime snapshot.endTime events errors eventChange errorChange V.empty V.empty V.empty patterns (snapshot.ingestionCapped == Just True) (Just snapshot) fullReport
 
 
 -- | The page views show the email body; only the background job needs its subject line.
@@ -351,8 +352,8 @@ dropSubject (dateLabel, _, html) = (dateLabel, html)
 buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
 buildLiveReportEmailHtml pid project userName = do
   currentTime <- Time.currentTime
-  snapshot <- collectSystemReport pid (addUTCTime (-7 * 86400) currentTime) currentTime
-  dropSubject <$> renderSystemEmail ("/p/" <> pid.toText <> "/reports/live") project userName True snapshot
+  snapshot <- collectSystemReport pid (addUTCTime (-(7 * 86400)) currentTime) currentTime
+  dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project userName True snapshot
 
 
 reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)

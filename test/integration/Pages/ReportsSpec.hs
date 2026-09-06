@@ -90,7 +90,7 @@ spec = around withTestResources do
       let elevenAmUTC = UTCTime (fromGregorian 2025 1 1) (11 * 3600)
       (tzDateLabel, tzSubject, _) <-
         runTestBg frozenTime tr
-          $ Reports.renderWeeklyEmail "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC 0 0 0 0 V.empty V.empty V.empty V.empty False Nothing False
+          $ Reports.renderWeeklyEmail Projects.RTWeekly "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC 0 0 0 0 V.empty V.empty V.empty V.empty False Nothing False
       tzDateLabel `shouldBe` "2025-01-02"
       tzSubject `shouldNotBe` ""
 
@@ -110,7 +110,7 @@ spec = around withTestResources do
       void $ withResource tr.trPool $ \conn -> PGS.execute conn [sql|UPDATE apis.reports SET report_json = ? WHERE id = ?|] (legacyJson, reportId)
       (_, legacyPage) <- testServant tr $ Reports.singleReportGetH testPid reportId Nothing
       case legacyPage of
-        Reports.ReportsGetSingle (PageCtx _ (_, _, html)) -> html `shouldContainAll` ["Historical report", "1,234", "SELECT legacy", "1250.0 ms", "34"]
+        Reports.ReportsGetSingle (PageCtx _ (_, _, html)) -> html `shouldContainAll` ["Historical report", "Daily system report", "1,234", "SELECT legacy", "1250.0 ms", "34"]
         _ -> fail "the legacy report detail did not load"
 
     it "counts the complete service period, separates request metrics, and retains missing baselines" \tr -> do
@@ -217,15 +217,15 @@ spec = around withTestResources do
               }
           json = Reports.buildReportJson' snapshot
       AET.parseEither (AE.withObject "report" (AE..: "systemSnapshot")) json `shouldBe` Right snapshot
-      (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail "/reports/test" project "Ada" False snapshot
-      (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail "/reports/test" project "Ada" True snapshot
+      (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot
+      (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
       email `shouldContainAll` ["View 22 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 24 more endpoints"]
       email `shouldSatisfy` (not . T.isInfixOf "<script>")
       BS.length (encodeUtf8 email) `shouldSatisfy` (< 80000)
       full `shouldSatisfy` (not . T.isInfixOf "View 22 more service comparisons")
       T.count "Avg request" full `shouldBe` 30
       T.count "Avg request" email `shouldBe` 8
-      (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable}
+      (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable}
       partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Services"]
 
     it "counts issue lifecycle states before selecting the highest-priority evidence" \tr -> do
