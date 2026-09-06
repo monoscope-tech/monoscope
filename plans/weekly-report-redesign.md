@@ -1,6 +1,6 @@
 # Weekly system report: research, design, and delivery
 
-Status: research and implementation planning in progress. This document is the iteration record, not a claim that the work is shipped.
+Status: implementation and PR validation complete; merged into production master. Deployment succeeded; live verification found a telemetry backend failure that remains unresolved. Earlier entries below are a chronological iteration record.
 
 ## Objective and audience
 
@@ -97,8 +97,8 @@ Density target: approximately 680–720px maximum report width, 14px body text, 
 - [x] Integration tests prove isolation, period boundaries, service aggregates, infra/monitor semantics, saved-email agreement, and delivery preferences without sending real email.
 - [x] Render a batched review at desktop/mobile and light/dark, with images blocked and essential inline-style fallback; fix confirmed defects in one batch, then confirm once.
 - [x] Check semantic reading order, all mobile metrics, contrast, links, no horizontal clipping, no scripts, and HTML byte size.
-- [ ] Run repository-required compile/test/CI gates; record exact evidence.
-- [ ] Deploy to production master while preserving concurrent work.
+- [x] Run repository-required compile/test/CI gates; record exact evidence.
+- [x] Deploy to production master while preserving concurrent work.
 - [ ] Verify deployed report preview and saved report behavior; record post-deployment findings and resolve material defects.
 
 ## Implementation / review log
@@ -152,3 +152,18 @@ Still required: legacy saved-report regression; explicit issue priority/state fi
 The renderer now takes a `ReportEvidence` sum: `SystemEvidence ReportSnapshot` or a named `HistoricalReportEvidence` record. Removed legacy filler vectors, duplicate totals, and unused category/change fields from the shared template record. Historical summaries explicitly say “Not recorded” for service/request metrics they did not retain. Sample pattern evidence now lives inside its snapshot too. This refactor removes more lines than it adds; all seven report examples pass again (32.81 seconds), and HLint reports no hints.
 
 The first full CI run passed build, doctests, unit tests, CLI tests, formatting, and HLint. Its 840-example integration run found one report-test assumption: the shared TimeFusion test backend can already contain telemetry, so the lifecycle test cannot assume zero events. Replaced that assumption with a captured-email versus persisted-snapshot comparison, and retained quiet-state coverage using an explicitly empty, internally consistent snapshot. All seven report examples pass locally again (22.55 seconds). The CI shard reported zero unavailable report sources. Rebased the release branch cleanly onto master `644a2a24a`; final CI and production release remain pending.
+
+### Release validation
+
+- PR #509 merged into master as `0189e4cff2990d4abf32d702f68bd790aff9db70`, preserving the intervening CLI change.
+- Final PR CI [34065122168](https://github.com/monoscope-tech/monoscope/actions/runs/34065122168) passed build, unused-code check, doctests, unit tests, CLI tests, integration tests, and end-to-end tests. Frontend, HLint, formatting, and security checks passed; the separate UI test job was skipped by the fingerprint gate.
+- Production workflow [34066258808](https://github.com/monoscope-tech/monoscope/actions/runs/34066258808) is running. Deployment and production verification are not yet claimed complete.
+
+### Production verification: material issue found
+
+- Deployment workflow `34066258808` completed successfully, including all merged-tree test suites and CapRover deployment.
+- The first immediate live request returned the old layout during rollout. Two fresh requests subsequently returned HTTP 504. Do not treat the green deployment as successful live-report verification.
+- Historical saved report returned HTTP 200 in 0.258 seconds and contains the new `system-report` markup and historical evidence label. Artifact: `/tmp/monoscope-report-research/deployed-saved-outer.html`.
+- Production event `9c90df9a-1589-5cc2-894e-217da1994815` at `2026-09-06T23:39:57.343198Z` records database-performance collection failing because a referenced Parquet object in the demo project’s 2026-09-06 partition returns S3 `NoSuchKey` / HTTP 404. Event `64cdae94-dc7e-51ea-be64-b35464d15f85` confirms the same missing object on the previous request. Workload cancellation cleanup also reports the pre-existing pgwire `Prepared statement all does not exist` error. Backend recovery and live latency verification remain required.
+
+Read-only storage verification confirms this is current metadata damage: Delta version `528425` still includes the missing path among 24 active demo-project files for 2026-09-06, and a direct S3 HEAD returns 404. Bucket versioning is not enabled and listing versions for the exact key finds no recoverable version. Evidence: `/tmp/weekly-report-storage-check.json`. No metadata or telemetry objects were changed.
