@@ -1064,7 +1064,7 @@ The regression checks that warning and escalation emails point to the stored iss
 The application and integration-test builds passed.
 All 22 monitoring/RUM checks and all 26 issue-detail checks passed.
 The transition regression confirmed both threshold snapshots, title refresh, and emails linking to the persisted issue.
-Deployment of this fix remains pending.
+Deployment run `34052634915` completed successfully, including integration and browser gates.
 
 Historical snapshots can still reflect older configuration or an evaluation inside a recovery band.
 A follow-up should label the panel as a recorded evaluation and avoid asserting a threshold breach when the stored values do not cross it.
@@ -1086,4 +1086,69 @@ The integration cases cover both threshold directions, inclusive equality, and m
 Four browser cases covered matching and mismatched values at 390px and 1440px.
 They verified the explanatory copy, query preservation, relative-to-absolute changes, and navigation to Explorer.
 No JavaScript errors or document overflow occurred. Desktop and mobile screenshots were reviewed.
-Deployment of this batch remains pending.
+Deployment run `34053278096` completed successfully.
+Production browser checks passed at 390px and 1440px in light and dark themes.
+Each check followed the Explorer link after changing range modes and preserved the complete query.
+The first check briefly received the old page during rollout; a direct read confirmed the new markup before the successful repeat.
+Screenshots confirmed that the historical 3-versus-5 evaluation receives the explanatory copy.
+
+
+## 19. Missing pattern evidence: writer mismatch reproduced
+
+A fresh production sweep returned HTTP 200 for all seven reference issues.
+No JavaScript errors or document overflow appeared during the observation window.
+Main-document response times ranged from 267ms to 1.04s; deferred evidence is excluded.
+The query-alert copy deployment was still pending during this sweep.
+
+A compiled probe against the current library reproduced two independent hash mismatches.
+These are writer defects, not proof of the cause of every historical empty sample.
+
+1. Drain returns the template matched at each event's insertion time.
+   For `Connected to database primary` followed by `Connected to database replica`,
+   the final tree contains only `Connected to database <*>`.
+   The first event remains mapped to `Connected to database primary`, which is not persisted.
+2. `flushDrainTask` builds event tags before applying `mergeByJaccard` to persisted patterns.
+   The probe merged `user <*> logged in <*>` into `user <*> logged in`.
+   Events retain the former hash, while the writer persists the latter pattern.
+   Error-bearing flags also use the pre-merge hashes, so they can miss merged members.
+
+The probe source and executable are `/private/tmp/issue-pattern-probe.hs` and `/private/tmp/issue-pattern-probe`.
+Its output establishes the mismatch without production writes.
+The next correction must preserve event-to-group identity through in-batch template generalization and Jaccard merging.
+The persisted template, event tag, and error-bearing aggregation must use the same final identity.
+Tests must include earlier events whose group changes later in the batch, merged members, and bounded-tree eviction.
+Historical rows require separate assessment; changing the forward writer cannot repair existing event hashes.
+
+
+### Writer correction in progress
+
+Cached Drain groups now have a stable internal identity independent of template text.
+Batch membership follows that identity through generalization and is emitted even after tree eviction.
+Jaccard merging combines memberships before the writer derives hashes and error-bearing flags.
+Batch frequencies count current events only; previously the writer added cached cumulative frequencies again.
+The tree does not retain batch event IDs or apply the 500-ID diagnostic sample limit to writer membership.
+Application and regression builds are in progress; this correction is not deployed yet.
+
+### Additional trace finding
+
+The payment reference `cc1c70a9` returned the trace fallback on initial load and after retry.
+Its trace requests completed in 263–332ms, so the generic timeout explanation is not established by this observation.
+The request pairs trace `17cd10403b697f3a56701efde797470b` with `2026-09-06T13:27:56.315404Z`.
+The issue URL selects August 27. The actual trace timestamp still needs verification.
+`batchUpsertErrorPatterns` currently stores the processing-time `now` as `recent_trace_at`.
+That keeps two columns in one update but does not prove that the timestamp matches the telemetry event.
+The browser evidence is `/private/tmp/issue-trace-retry-production.json`.
+Investigate the trace timestamp and distinguish empty results from failed reads in a separate change.
+
+
+The configured telemetry reader returned zero rows for that trace in both the August 27 issue window
+and the ten-minute window around the linked September 6 timestamp.
+Both bounded reads completed successfully with a four-second statement deadline.
+This supports an empty-result state; it does not prove the trace is absent outside those windows.
+The read-only probe is `/private/tmp/check-issue-trace-time.py`; results are in `/private/tmp/issue-trace-time-result.log`.
+
+
+The production query screenshot also leaves two presentation follow-ups:
+its historical generated title still embeds the old threshold, and the chart's y-axis stops at 1 while the recorded threshold is 5.
+The detail header should prefer the recorded monitor name, and the chart should keep the threshold visible when it lies outside the returned series.
+These require separate validation after the ingestion change.

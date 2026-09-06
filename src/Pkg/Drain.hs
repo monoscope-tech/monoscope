@@ -7,6 +7,7 @@ module Pkg.Drain (
   updateTreeWithLog,
   buildDrainTree,
   buildDrainTreeWithMapping,
+  buildDrainBatch,
   generateDrainTokens,
   generateSummaryDrainTokens,
   tokenizeForDrain,
@@ -18,6 +19,8 @@ module Pkg.Drain (
 ) where
 
 import Data.Char (isSpace)
+import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
@@ -45,8 +48,14 @@ wildcardToken :: Text
 wildcardToken = "<*>"
 
 
+newtype GroupId = GroupId Int
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (NFData)
+
+
 data LogGroup = LogGroup
-  { template :: V.Vector Text
+  { groupId :: GroupId
+  , template :: V.Vector Text
   , templateStr :: Text
   , exampleLog :: Text
   , logIds :: V.Vector Text
@@ -92,12 +101,13 @@ templateText :: V.Vector Text -> Text
 templateText = unwords . V.toList
 
 
-createLogGroup :: V.Vector Text -> Text -> Text -> Maybe Text -> UTCTime -> LogGroup
-createLogGroup templateTokens templateString logId sampleContent now =
+createLogGroup :: GroupId -> Bool -> V.Vector Text -> Text -> Text -> Maybe Text -> UTCTime -> LogGroup
+createLogGroup groupId trackIds templateTokens templateString logId sampleContent now =
   LogGroup
-    { template = templateTokens
+    { groupId
+    , template = templateTokens
     , templateStr = templateString
-    , logIds = V.singleton logId
+    , logIds = if trackIds then V.singleton logId else V.empty
     , exampleLog = fromMaybe templateString sampleContent
     , frequency = 1
     , firstSeen = now
@@ -116,43 +126,44 @@ calculateSimilarity tokens1 tokens2
        in fromIntegral matches / fromIntegral total
 
 
--- | Returns (updatedTree, matchedTemplateStr)
-updateTreeWithLogM :: Bool -> DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (DrainTree, Text)
+-- | A matched group's template can change; an eviction must finish its batch
+-- membership before the replacement starts collecting events.
+data GroupChange = NewGroup | MatchedGroup | EvictedGroup LogGroup
+
+
+updateTreeWithLogM :: Bool -> DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (DrainTree, GroupChange, LogGroup)
 updateTreeWithLogM trackIds tree tokenCount' firstToken tokensVec logId sampleContent now =
-  let (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelOne trackIds (children tree) tokenCount' firstToken tokensVec logId sampleContent now
-      newTotalLogs = totalLogs tree + 1
-      newTotalPatterns = if wasUpdated then totalPatterns tree else totalPatterns tree + 1
-   in (tree{children = updatedChildren, totalLogs = newTotalLogs, totalPatterns = newTotalPatterns}, tpl)
+  let (updatedChildren, change, group') = updateOrCreateLevelOne (GroupId $ totalPatterns tree) trackIds (children tree) tokenCount' firstToken tokensVec logId sampleContent now
+      newTotalPatterns = case change of MatchedGroup -> totalPatterns tree; _ -> totalPatterns tree + 1
+   in (tree{children = updatedChildren, totalLogs = totalLogs tree + 1, totalPatterns = newTotalPatterns}, change, group')
 
 
 updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainTree
-updateTreeWithLog tree tc ft tv lid sc now = fst $ updateTreeWithLogM True tree tc ft tv lid sc now
+updateTreeWithLog tree tc ft tv lid sc now = let (updated, _, _) = updateTreeWithLogM True tree tc ft tv lid sc now in updated
 
 
-updateOrCreateLevelOne :: Bool -> V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelOne, Bool, Text)
-updateOrCreateLevelOne trackIds levelOnes targetCount firstToken tokensVec logId sampleContent now =
+updateOrCreateLevelOne :: GroupId -> Bool -> V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelOne, GroupChange, LogGroup)
+updateOrCreateLevelOne newId trackIds levelOnes targetCount firstToken tokensVec logId sampleContent now =
   case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
     Just index ->
       let existing = levelOnes V.! index
-          (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelTwo trackIds (nodes existing) firstToken tokensVec logId sampleContent now
-       in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated, tpl)
-    Nothing -> (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False, newTpl)
+          (updatedChildren, change, group') = updateOrCreateLevelTwo newId trackIds (nodes existing) firstToken tokensVec logId sampleContent now
+       in (levelOnes V.// [(index, existing{nodes = updatedChildren})], change, group')
+    Nothing -> (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, NewGroup, newGroup)
   where
-    newTpl = templateText tokensVec
-    newGroup = createLogGroup tokensVec newTpl logId sampleContent now
+    newGroup = createLogGroup newId trackIds tokensVec (templateText tokensVec) logId sampleContent now
 
 
-updateOrCreateLevelTwo :: Bool -> V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelTwo, Bool, Text)
-updateOrCreateLevelTwo trackIds levelTwos targetToken tokensVec logId sampleContent now =
+updateOrCreateLevelTwo :: GroupId -> Bool -> V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector DrainLevelTwo, GroupChange, LogGroup)
+updateOrCreateLevelTwo newId trackIds levelTwos targetToken tokensVec logId sampleContent now =
   case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
     Just index ->
       let existing = levelTwos V.! index
-          (updatedLogGroups, wasUpdated, tpl) = updateOrCreateLogGroup trackIds (logGroups existing) tokensVec logId sampleContent now
-       in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated, tpl)
-    Nothing -> (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False, newTpl)
+          (updatedLogGroups, change, group') = updateOrCreateLogGroup newId trackIds (logGroups existing) tokensVec logId sampleContent now
+       in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], change, group')
+    Nothing -> (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, NewGroup, newGroup)
   where
-    newTpl = templateText tokensVec
-    newGroup = createLogGroup tokensVec newTpl logId sampleContent now
+    newGroup = createLogGroup newId trackIds tokensVec (templateText tokensVec) logId sampleContent now
 
 
 -- | Only called when V.length logGroups >= maxLogGroups (> 0)
@@ -160,23 +171,18 @@ leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
 leastRecentlyUsedIndex = V.minIndexBy (comparing lastSeen)
 
 
-updateOrCreateLogGroup :: Bool -> V.Vector LogGroup -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector LogGroup, Bool, Text)
-updateOrCreateLogGroup trackIds lgs tokensVec logId sampleContent now =
+updateOrCreateLogGroup :: GroupId -> Bool -> V.Vector LogGroup -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> (V.Vector LogGroup, GroupChange, LogGroup)
+updateOrCreateLogGroup newId trackIds lgs tokensVec logId sampleContent now =
   case findBestMatch lgs tokensVec of
     Just (index, bestGroup) ->
-      let updatedTemplate =
-            if V.length tokensVec == V.length (template bestGroup)
-              then mergeTemplates (template bestGroup) tokensVec
-              else template bestGroup
+      let updatedTemplate = mergeTemplates (template bestGroup) tokensVec
           updatedGroup = updateLogGroupWithTemplate trackIds bestGroup updatedTemplate logId sampleContent now
-          updatedGroups = lgs V.// [(index, updatedGroup)]
-       in (updatedGroups, True, updatedGroup.templateStr)
+       in (lgs V.// [(index, updatedGroup)], MatchedGroup, updatedGroup)
     Nothing ->
-      let newTpl = templateText tokensVec
-          newGroup = createLogGroup tokensVec newTpl logId sampleContent now
+      let newGroup = createLogGroup newId trackIds tokensVec (templateText tokensVec) logId sampleContent now
        in if V.length lgs >= maxLogGroups
-            then (lgs V.// [(leastRecentlyUsedIndex lgs, newGroup)], False, newTpl)
-            else (V.cons newGroup lgs, False, newTpl)
+            then let index = leastRecentlyUsedIndex lgs in (lgs V.// [(index, newGroup)], EvictedGroup (lgs V.! index), newGroup)
+            else (V.cons newGroup lgs, NewGroup, newGroup)
 
 
 findBestMatch :: V.Vector LogGroup -> V.Vector Text -> Maybe (Int, LogGroup)
@@ -219,11 +225,15 @@ data DrainResult = DrainResult
 
 
 getAllLogGroups :: DrainTree -> V.Vector DrainResult
-getAllLogGroups tree =
-  let levelOnes = children tree
-      levelTwos = V.concatMap nodes levelOnes
-      allLogGroups = V.concatMap logGroups levelTwos
-   in V.map (\LogGroup{exampleLog, templateStr, logIds, template, frequency} -> DrainResult{templateTokens = template, ..}) allLogGroups
+getAllLogGroups = V.map logGroupResult . allLogGroups
+
+
+allLogGroups :: DrainTree -> V.Vector LogGroup
+allLogGroups = V.concatMap logGroups . V.concatMap nodes . children
+
+
+logGroupResult :: LogGroup -> DrainResult
+logGroupResult LogGroup{exampleLog, templateStr, logIds, template, frequency} = DrainResult{templateTokens = template, ..}
 
 
 looksLikeJson :: T.Text -> Bool
@@ -414,28 +424,48 @@ generateSummaryDrainTokens content =
 
 -- | Fold items into a DrainTree using a custom tokenizer. Tracks logIds in tree for later retrieval.
 buildDrainTree :: (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> DrainTree
-buildDrainTree tokenize logId sampleContent initial items now = fst $ buildDrainTreeWithMappingImpl True tokenize logId sampleContent initial items now
+buildDrainTree tokenize logId sampleContent initial items now =
+  V.foldl'
+    ( \tree item ->
+        let tokens = tokenize item
+         in if V.null tokens then tree else updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens (logId item) (sampleContent item) now
+    )
+    initial
+    items
 
 
--- | Like 'buildDrainTree' but also returns a vector of @(logId, matchedTemplateStr)@ pairs.
--- Does not accumulate logIds inside the tree — use 'buildDrainTree' when tree-internal logIds are needed.
+-- | Map each event to its final template within this batch, including groups
+-- evicted from the bounded tree. Event IDs are not retained in the cached tree.
 buildDrainTreeWithMapping :: (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> (DrainTree, V.Vector (Text, Text))
-buildDrainTreeWithMapping = buildDrainTreeWithMappingImpl False
+buildDrainTreeWithMapping tokenize logId sampleContent initial items now =
+  let (tree, patterns) = buildDrainBatch tokenize logId sampleContent initial items now
+      byId = Map.fromList [(lid, dp.templateStr) | dp <- V.toList patterns, lid <- V.toList dp.logIds]
+   in (tree, V.mapMaybe (\item -> let lid = logId item in (lid,) <$> Map.lookup lid byId) items)
 
 
-buildDrainTreeWithMappingImpl :: Bool -> (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> (DrainTree, V.Vector (Text, Text))
-buildDrainTreeWithMappingImpl trackIds tokenize logId sampleContent initial items now =
-  let (!finalTree, acc) =
-        V.foldl'
-          ( \(!tree, !xs) item ->
-              let tokens = tokenize item
-                  lid = logId item
-               in if V.null tokens
-                    then (tree, xs)
-                    else
-                      let (!tree', tpl) = updateTreeWithLogM trackIds tree (V.length tokens) (V.head tokens) tokens lid (sampleContent item) now
-                       in if T.null lid then (tree', xs) else (tree', (lid, tpl) : xs)
-          )
-          (initial, [])
-          items
-   in (finalTree, V.fromList $ reverse acc)
+-- | Batch results carry all event IDs (not the tree's capped diagnostic sample)
+-- and batch-only frequencies. Untouched templates remain with zero frequency so
+-- downstream merging can retain the established representative. Evicted groups
+-- are also emitted, ensuring every event can be tagged with a persisted pattern.
+buildDrainBatch :: (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> (DrainTree, V.Vector DrainResult)
+buildDrainBatch tokenize logId sampleContent initial items now =
+  let (!tree, members, evicted) = V.foldl' step (initial, Map.empty, []) items
+      active = V.map (\group' -> withMembers (Map.findWithDefault Seq.empty group'.groupId members) (logGroupResult group')) (allLogGroups tree)
+   in (tree, active <> V.fromList (reverse evicted))
+  where
+    withMembers :: Seq.Seq Text -> DrainResult -> DrainResult
+    withMembers ids dp = dp{logIds = V.fromList $ toList ids, frequency = Seq.length ids}
+    step (!tree, members, evicted) item =
+      let tokens = tokenize item
+          lid = logId item
+       in if V.null tokens
+            then (tree, members, evicted)
+            else
+              let (tree', change, group') = updateTreeWithLogM False tree (V.length tokens) (V.head tokens) tokens lid (sampleContent item) now
+                  (members', evicted') = case change of
+                    NewGroup -> (members, evicted)
+                    MatchedGroup -> (members, evicted)
+                    EvictedGroup old ->
+                      (Map.delete old.groupId members, withMembers (Map.findWithDefault Seq.empty old.groupId members) (logGroupResult old) : evicted)
+                  next = if T.null lid then members' else Map.insertWith (flip (<>)) group'.groupId (Seq.singleton lid) members'
+               in (tree', next, evicted')

@@ -1504,8 +1504,8 @@ generateOtelFacetsBatch projectIds _timestamp = do
 data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
-processBatchWithMapping :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector (Text, Text))
-processBatchWithMapping isSummary batch now initial = Drain.buildDrainTreeWithMapping tokenize logId sampleContent initial batch now
+processDrainBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector Drain.DrainResult)
+processDrainBatch isSummary batch now initial = Drain.buildDrainBatch tokenize logId sampleContent initial batch now
   where
     tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
     tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
@@ -2756,14 +2756,14 @@ seedFromPatterns
   -> Maybe UTCTime
   -> Eff es Drain.DrainTree
 seedFromPatterns shard key now texts maxSeen = do
-  let freshTree = fst $ processBatchWithMapping True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
+  let freshTree = fst $ processDrainBatch True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
       newEntry = ExtractionWorker.ServiceDrainTree{tree = freshTree, lastSeededAt = now, maxPatternSeenAt = maxSeen}
   liftIO $ atomicModifyIORef' shard.drainTrees \m -> (HM.insert key newEntry m, ())
   pure freshTree
 
 
 -- | Process a single drain-flush task: merge the batch through the current
--- (possibly stale) tree via `processBatchWithMapping`, persist patterns to
+-- (possibly stale) tree via `processDrainBatch`, persist patterns to
 -- `apis.log_patterns` + hourly stats, then issue UPDATE-2 to append each
 -- span's pattern hash tag to `otel_logs_and_spans.hashes`.
 flushDrainTask
@@ -2789,7 +2789,7 @@ flushDrainTask shard task
               [ NewEvent bs.spanCtxId bs.summary
               | bs <- task.spans
               ]
-          (!mergedTree, mapping) = processBatchWithMapping True events now seededTree
+          (!mergedTree, allPatternsRaw) = processDrainBatch True events now seededTree
 
       -- Swap the merged tree back. Preserve lastSeededAt/maxPatternSeenAt from
       -- the existing entry (async rehydration owns those fields).
@@ -2803,20 +2803,13 @@ flushDrainTask shard task
                 }
          in (HM.insert key newEntry m, ())
 
-      -- Build a spanCtxId → patternHash tag map so each row can have its own
-      -- tag appended in UPDATE-2. Also build patternHash → isError so any error
-      -- span hitting a pattern flags the whole pattern as error-bearing.
-      let tagFor lid = "pat:" <> toXXHash lid
+      -- Merge membership along with templates before deriving tags or error flags.
+      -- The same representative is now used for persisted patterns and events.
+      let allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
           tagByCtx :: HM.HashMap Text Text
-          tagByCtx = HM.fromList [(lid, tagFor tpl) | (lid, tpl) <- V.toList mapping]
+          tagByCtx = HM.fromList [(lid, "pat:" <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
           errByCtx :: HM.HashMap Text Bool
           errByCtx = HM.fromList [(bs.spanCtxId, bs.isError) | bs <- task.spans]
-          errByHash :: HM.HashMap Text Bool
-          errByHash = V.foldl' (\m (lid, tpl) -> HM.insertWith (||) (toXXHash tpl) (HM.lookupDefault False lid errByCtx) m) HM.empty mapping
-
-      -- Persist log patterns + hourly stats.
-      let allPatternsRaw = Drain.getAllLogGroups mergedTree
-          allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
                 patternHash = toXXHash dp.templateStr
@@ -2834,7 +2827,7 @@ flushDrainTask shard task
                           , traceId = Nothing
                           , sampleMessage = Just dp.exampleLog
                           , eventCount
-                          , isError = HM.lookupDefault False patternHash errByHash
+                          , isError = any (\lid -> HM.lookupDefault False lid errByCtx) dp.logIds
                           }
                       , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
                       )

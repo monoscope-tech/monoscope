@@ -14,11 +14,13 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Drain qualified as Drain
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, around, describe, it, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -28,6 +30,59 @@ pid = UUIDId UUID.nil
 spec :: Spec
 spec = around withTestResources do
   describe "Extraction Worker" do
+    it "batch membership survives generalization, merging, sample limits, and eviction" \_ -> do
+      let batch = V.fromList [("first", "Connected to database primary"), ("second", "Connected to database replica"), ("third", "Connected to database <*> <*>")]
+          build = Drain.buildDrainBatch (V.fromList . T.words . snd) fst (Just . snd)
+          (tree, patterns) = build Drain.emptyDrainTree batch frozenTime
+          merged = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold patterns
+      V.length merged `shouldBe` 1
+      concatMap (V.toList . (.logIds)) (V.toList merged) `shouldMatchList` ["first", "second", "third"]
+      sum (map (.frequency) $ V.toList merged) `shouldBe` 3
+      V.all (V.null . (.logIds)) (Drain.getAllLogGroups tree) `shouldBe` True
+      let (_, next) = build tree (V.singleton ("fourth", "Connected to database backup")) frozenTime
+      sum (map (.frequency) $ V.toList next) `shouldBe` 1
+      let evictionBatch = V.fromList [(show n, "event a" <> show n <> " b" <> show n <> " c" <> show n) | n <- [1 .. 1002 :: Int]]
+          (bounded, evicted) = build Drain.emptyDrainTree evictionBatch frozenTime
+      V.length (Drain.getAllLogGroups bounded) `shouldBe` 1000
+      concatMap (V.toList . (.logIds)) (V.toList evicted) `shouldMatchList` V.toList (V.map fst evictionBatch)
+      let repeated = V.fromList [(show n, "same event") | n <- [1 .. 600 :: Int]]
+          (_, fullMembership) = build Drain.emptyDrainTree repeated frozenTime
+      concatMap (V.toList . (.logIds)) (V.toList fullMembership) `shouldMatchList` V.toList (V.map fst repeated)
+
+    it "flush persists the same merged pattern used by every event tag and error flag" \tr -> do
+      worker <- ExtractionWorker.initWorkerState 1 100
+      let ctx = tr.trATCtx
+          pgOnly = tr{trATCtx = ctx{config = ctx.config{enableTimefusionWrites = False, enableHashUpdates = True}}}
+          service = "pattern-membership-regression"
+          spans =
+            [ ExtractionWorker.BufferedSpan "pattern-first" "pattern-trace" frozenTime "Connected to database primary" True
+            , ExtractionWorker.BufferedSpan "pattern-second" "pattern-trace" frozenTime "Connected to database replica" False
+            , ExtractionWorker.BufferedSpan "pattern-third" "pattern-trace" frozenTime "Connected to database <*> <*>" False
+            ]
+      for_ spans \span' ->
+        void
+          $ withPool tr.trPool
+          $ DBT.execute
+            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, context___span_id, context___trace_id)
+              VALUES (gen_random_uuid(), ?, ?, ?, 'span', ?, ?) |]
+            (pid.toText, frozenTime, frozenTime, span'.spanCtxId, span'.traceId)
+      for_ worker.shards \shard ->
+        runTestBg frozenTime pgOnly
+          $ BackgroundJobs.flushDrainTask
+            shard
+            ExtractionWorker.DrainFlushTask{projectId = pid, serviceName = service, spans, flushedAt = frozenTime}
+      rows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT lp.occurrence_count::int, lp.is_error, count(*)::int
+              FROM apis.log_patterns lp JOIN otel_logs_and_spans o
+                ON o.project_id = lp.project_id::text AND o.hashes @> ARRAY['pat:' || lp.pattern_hash]
+              WHERE lp.project_id = ? AND lp.service_name = ? AND o.context___trace_id = 'pattern-trace'
+              GROUP BY lp.pattern_hash, lp.occurrence_count, lp.is_error |]
+            (pid, service)
+          :: IO (V.Vector (Int, Bool, Int))
+      V.toList rows `shouldBe` [(3, True, 3)]
+
     it "parity: ingest spans → processEagerBatch produces endpoints + hashes" \tr -> do
       apiKey <- createTestAPIKey tr pid "ew-parity-key"
       -- Ingest several HTTP spans

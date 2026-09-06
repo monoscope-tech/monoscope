@@ -329,7 +329,7 @@ mergeByJaccard threshold results = V.fromList $ map (\(dr, _, _) -> dr) $ toList
                   >= threshold
         )
         acc of
-        Just idx -> let (a, aToks, aLen) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks, aLen) acc
+        Just idx -> let (a, aToks, aLen) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency, Drain.logIds = a.logIds <> x.logIds}, aToks, aLen) acc
         Nothing -> acc Seq.|> (x, xToks, xLen)
 
 
