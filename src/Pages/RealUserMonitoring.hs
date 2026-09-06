@@ -42,7 +42,6 @@ import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdo
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
-import Pages.Containers (showFFloat')
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -54,7 +53,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS)
+import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, showFFloat')
 
 
 data RumTab = Overview | Sessions | Performance
@@ -1199,7 +1198,9 @@ sessionsTable_ workspace links query sessionFilter sessions =
                 div_ [class_ "flex flex-wrap justify-end gap-1"] do
                   when (session.errors > 0) $ span_ [class_ "badge badge-sm badge-error gap-1"] $ faSprite_ "triangle-exclamation" "solid" "h-2.5 w-2.5" >> toHtml (show session.errors)
                   when session.hasReplay $ span_ [class_ "badge badge-sm badge-ghost gap-1"] $ faSprite_ "video" "regular" "h-2.5 w-2.5" >> "Replay"
-                unless (replayOnly session) $ span_ [class_ "mt-0.5 block truncate text-xs tabular-nums text-textWeak"] $ toHtml $ countNoun session.views "view" <> " · " <> countNoun session.events "event"
+                unless (replayOnly session) do
+                  let signals = countNoun session.views "view" <> " · " <> countNoun session.events "event"
+                  span_ [class_ "mt-0.5 block truncate text-xs tabular-nums text-textWeak", data_ "tippy-content" signals] $ toHtml signals
             )
               { Table.align = Just "text-right"
               }

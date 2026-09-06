@@ -40,7 +40,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, toUriStr)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat', toUriStr)
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -317,7 +317,7 @@ hostColumns pid window =
       faSprite_ "server" "regular" "h-3 w-3"
       toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
     metricCell getter = itemOnly $ utilizationCell . getter
-    numberCell getter = itemOnly $ plainCell . fmap (Containers.showFFloat' 2) . getter
+    numberCell getter = itemOnly $ plainCell . fmap (showFFloat' 2) . getter
     uptimeCell = itemOnly $ plainCell . fmap formatUptime . (.uptime)
     containersCell = itemOnly $ span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
     integrationsCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
@@ -427,7 +427,7 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
           [ ("CPU usage", pct host.cpuPct)
           , ("Memory usage", pct host.memoryPct)
           , ("Storage usage", pct host.storagePct)
-          , ("Load (1m)", maybe "—" (Containers.showFFloat' 2) host.load1)
+          , ("Load (1m)", maybe "—" (showFFloat' 2) host.load1)
           , ("Uptime", maybe "—" formatUptime host.uptime)
           , ("Containers", show host.containers)
           ]
@@ -723,7 +723,7 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
         , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-36 max-md:hidden"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-40 max-md:hidden"]
-        , col "Restarts" (plainCell . fmap (Containers.showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
+        , col "Restarts" (plainCell . fmap (showFFloat' 0) . (.restarts)) & withAttrs [class_ "w-20 text-right max-md:hidden"]
         ]
     , rows
     , features =
@@ -806,7 +806,7 @@ kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         , ("CPU", maybe "—" coresText row.cpuCores)
         , ("CPU / limit", maybe "—" pctText row.cpuPct)
         , ("Memory", maybe "—" formatBytes row.memoryBytes)
-        , ("Restarts", maybe "—" (Containers.showFFloat' 0) row.restarts)
+        , ("Restarts", maybe "—" (showFFloat' 0) row.restarts)
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
@@ -933,7 +933,7 @@ hostHex pid window fill enlarged host = div_ [class_ $ "flex flex-col items-cent
       , type_ "button"
       , style_ $ (if enlarged then "height:54px;width:49px;" else "height:44px;width:40px;") <> "clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"
       , term "data-tippy-content" $ host.name <> " · " <> maybe "No data" pctText value
-      , Aria.label_ $ host.name <> ", " <> fillLabel fill <> ": " <> maybe "no data" (\v -> Containers.showFFloat' 0 (v * 100) <> " percent") value
+      , Aria.label_ $ host.name <> ", " <> fillLabel fill <> ": " <> maybe "no data" (\v -> showFFloat' 0 (v * 100) <> " percent") value
       ]
         <> drawerLoadAttrs_ (hostDetailUrl pid window host.name)
     )
@@ -977,11 +977,11 @@ sumPresent getter = viaNonEmpty sum . mapMaybe getter
 -- | A 0–1 ratio as a whole-number percentage, and a core count. Every table cell, fact grid,
 -- and tooltip formats usage through these, so the same number never renders two ways.
 pctText :: Double -> Text
-pctText value = Containers.showFFloat' 0 (value * 100) <> "%"
+pctText value = showFFloat' 0 (value * 100) <> "%"
 
 
 coresText :: Double -> Text
-coresText value = Containers.showFFloat' 2 value <> " cores"
+coresText value = showFFloat' 2 value <> " cores"
 
 
 plainCell :: Maybe Text -> Html ()
@@ -1016,6 +1016,6 @@ statusBadge status = span_ [class_ $ "badge badge-sm whitespace-nowrap " <> case
 
 formatUptime :: Double -> Text
 formatUptime seconds
-  | seconds >= 86400 = Containers.showFFloat' 0 (seconds / 86400) <> "d"
-  | seconds >= 3600 = Containers.showFFloat' 0 (seconds / 3600) <> "h"
-  | otherwise = Containers.showFFloat' 0 (seconds / 60) <> "m"
+  | seconds >= 86400 = showFFloat' 0 (seconds / 86400) <> "d"
+  | seconds >= 3600 = showFFloat' 0 (seconds / 3600) <> "h"
+  | otherwise = showFFloat' 0 (seconds / 60) <> "m"
