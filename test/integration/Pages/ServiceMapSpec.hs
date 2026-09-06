@@ -73,13 +73,6 @@ rollAndRead tr ts = runTestBg ts tr do
 -- | Assert every needle is present, naming the ones that are not. A bare
 -- @shouldSatisfy (T.isInfixOf s)@ dumps the whole 100KB page and never says which string it
 -- was looking for.
-shouldContainAll :: Text -> [Text] -> Expectation
-shouldContainAll haystack needles =
-  case filter (not . (`T.isInfixOf` haystack)) needles of
-    [] -> pass
-    missing -> expectationFailure $ "missing from rendered page: " <> show missing
-
-
 edgePairs :: ServiceGraph -> [(Text, Text)]
 edgePairs g = L.sort [(e.source, e.target) | e <- V.toList g.edges]
 

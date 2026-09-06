@@ -81,12 +81,6 @@ renderPanel tr tab query sessionFilterM selected service panel = do
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
-shouldContainAll :: Text -> [Text] -> Expectation
-shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack)) needles of
-  [] -> pass
-  missing -> expectationFailure $ "missing from rendered page: " <> show missing
-
-
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do

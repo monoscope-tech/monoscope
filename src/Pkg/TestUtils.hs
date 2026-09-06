@@ -1,4 +1,5 @@
 module Pkg.TestUtils (
+  shouldContainAll,
   withSetup,
   withTestResources,
   fromRightShow,
@@ -189,6 +190,7 @@ import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
+import Test.Hspec (Expectation, expectationFailure)
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
@@ -1803,3 +1805,11 @@ slackPayloadViolations = go
     check ("image_url", AE.String u) | T.length u > 3000 = ["image_url over 3000 chars: " <> show (T.length u)]
     check ("text", AE.String t) | T.length t > 3000 = ["text over 3000 chars: " <> show (T.length t)]
     check _ = []
+
+
+-- | Assert every needle appears in a rendered page, reporting exactly which are missing —
+-- a bare @isInfixOf@ check dumps the whole document and never says which string failed.
+shouldContainAll :: HasCallStack => Text -> [Text] -> Expectation
+shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack)) needles of
+  [] -> pass
+  missing -> expectationFailure $ "missing from rendered page: " <> show missing

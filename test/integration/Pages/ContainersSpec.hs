@@ -201,15 +201,6 @@ containerNamed :: [(Text, ContainerRow)] -> Text -> IO ContainerRow
 containerNamed byName n = maybe (fail $ "no container named " <> toString n) pure (lookup n byName)
 
 
--- @shouldSatisfy (T.isInfixOf s)@ on a rendered page dumps the whole document and never says
--- which string was missing.
-shouldContainAll :: Text -> [Text] -> Expectation
-shouldContainAll haystack needles =
-  case filter (not . (`T.isInfixOf` haystack)) needles of
-    [] -> pass
-    missing -> expectationFailure $ "missing from rendered page: " <> show missing
-
-
 spec :: Spec
 -- Sequential and aroundAll: the fixture is ingested once and the later examples read it back
 -- through the handler, which is the point — they assert on the same rows a user would see.
