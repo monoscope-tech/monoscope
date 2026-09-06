@@ -715,10 +715,10 @@ cacheableRumResult = \case
 -- broken, so the first request renders the tab strip, time picker and a skeleton, and the
 -- panels arrive on the request the skeleton fires.
 rumSkeleton_ :: RumTab -> Html ()
-rumSkeleton_ Sessions =
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", role_ "status", Aria.label_ "Loading sessions"] do
-    section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] $ Components.tableSkeleton_ 8
-    section_ [class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"] mempty
+rumSkeleton_ Sessions = div_ [class_ "flex flex-col bg-bgBase xl:h-full xl:min-h-0"] do
+  div_ [class_ "flex shrink-0 items-center border-b border-strokeWeak px-4 py-1 max-md:px-3"]
+    $ div_ [class_ "h-8 w-full max-w-[22rem] rounded-lg skeleton-shimmer"] ""
+  sessionsSkeleton_
 rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
   div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
     $ replicateM_ 4
@@ -1299,8 +1299,26 @@ recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect 
   sessionsTable_ False page.links Nothing AllSessionRows Nothing (take 8 page.sessions)
 
 
+-- | Mirrors the split layout 'sessions_' renders — list left, replay workspace right — so
+-- neither the first paint nor the panel shell flashes a different frame than the content
+-- that replaces it. No fake search bar: the real one is already in the toolbar above.
+sessionsSkeleton_ :: Html ()
+sessionsSkeleton_ = div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", role_ "status", Aria.label_ "Loading sessions"] do
+  section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] do
+    div_ [class_ "flex items-center gap-1.5 border-b border-strokeWeak px-3 py-1.5"]
+      $ replicateM_ 3
+      $ div_ [class_ "h-5 w-20 rounded-full skeleton-shimmer"] ""
+    div_ [class_ "flex flex-col gap-3 p-3"]
+      $ replicateM_ 8
+      $ div_ [class_ "flex items-center gap-4"] do
+        div_ [class_ "h-3 grow rounded skeleton-shimmer"] ""
+        div_ [class_ "h-3 w-24 shrink-0 rounded skeleton-shimmer max-md:hidden"] ""
+        div_ [class_ "h-3 w-16 shrink-0 rounded skeleton-shimmer"] ""
+  section_ [class_ "min-w-0 bg-bgBase"] mempty
+
+
 sessions_ :: RumData -> Html ()
-sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
+sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
       selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]"] do
