@@ -90,7 +90,7 @@ spec = around withTestResources do
       let elevenAmUTC = UTCTime (fromGregorian 2025 1 1) (11 * 3600)
       (tzDateLabel, tzSubject, _) <-
         runTestBg frozenTime tr
-          $ Reports.renderWeeklyEmail Projects.RTWeekly "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC 0 0 0 0 V.empty V.empty V.empty V.empty False Nothing False
+          $ Reports.renderWeeklyEmail Projects.RTWeekly "p/x/reports" project{Projects.timeZone = "Pacific/Auckland"} "Ada" elevenAmUTC elevenAmUTC False (Email.HistoricalEvidence Email.HistoricalReportEvidence{totalEvents = 0, totalErrors = 0, anomalies = V.empty, performance = V.empty, slowQueries = V.empty})
       tzDateLabel `shouldBe` "2025-01-02"
       tzSubject `shouldNotBe` ""
 

@@ -25,6 +25,8 @@ module Pkg.EmailTemplates (
   issueAssignedEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
+  ReportEvidence (..),
+  HistoricalReportEvidence (..),
   monitorAlertEmail,
   monitorRecoveryEmail,
   freeTierUsageEmail,
@@ -51,14 +53,12 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, formatTime, fromGregorian)
 import Data.Time.Format (defaultTimeLocale)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Report qualified as Report
-import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Utils (formatWithCommas, kqlQuoted, showFFloat', toUriStr)
 
@@ -668,6 +668,22 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
 -- Weekly Report Template
 -- =============================================================================
 
+-- | Historical evidence retains the frozen pre-snapshot wire representation.
+-- Current reports have a complete typed snapshot and cannot carry conflicting legacy totals.
+data ReportEvidence = SystemEvidence Report.ReportSnapshot | HistoricalEvidence HistoricalReportEvidence
+  deriving stock (Generic)
+
+
+data HistoricalReportEvidence = HistoricalReportEvidence
+  { totalEvents :: Int
+  , totalErrors :: Int
+  , anomalies :: V.Vector Issues.IssueSummary
+  , performance :: V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
+  , slowQueries :: V.Vector (Text, Int, Int)
+  }
+  deriving stock (Generic)
+
+
 data WeeklyReportData = WeeklyReportData
   { reportType :: Projects.ReportType
   , userName :: Text
@@ -678,21 +694,7 @@ data WeeklyReportData = WeeklyReportData
   , endDate :: Text
   , eventsChartUrl :: Text
   , errorsChartUrl :: Text
-  , totalEvents :: Int
-  , totalErrors :: Int
-  , eventsChangePct :: Double
-  , errorsChangePct :: Double
-  , runtimeErrorsCount :: Int
-  , apiChangesCount :: Int
-  , alertsCount :: Int
-  , logPatternCount :: Int
-  , rateChangeCount :: Int
-  , anomalies :: V.Vector Issues.IssueSummary
-  , performance :: V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
-  , slowQueries :: V.Vector (Text, Int, Int)
-  , topPatterns :: V.Vector (Text, Int64, Text)
-  , freeTierExceeded :: Bool
-  , systemSnapshot :: Maybe Report.ReportSnapshot
+  , evidence :: ReportEvidence
   , fullReport :: Bool
   , timeZone :: Text
   , fromTime :: Text
@@ -711,7 +713,7 @@ weeklyReportEmail d =
         h1_ [style_ "margin:0 0 6px;font-size:26px;line-height:1.2;"] $ toHtml d.projectName
         reportNote $ reportTitle <> " · " <> d.startDate <> " – " <> d.endDate <> " · " <> d.timeZone
         p_ [style_ "margin:10px 0 24px;font-size:14px;"] $ a_ [target_ "_top", href_ d.reportUrl] "View full report"
-        when d.freeTierExceeded $ reportNotice "Daily ingestion cap reached" "The project reached its daily ingestion cap at report generation. Activity dropped after the cap is not included."
+        when freeTierExceeded $ reportNotice "Daily ingestion cap reached" "The project reached its daily ingestion cap at report generation. Activity dropped after the cap is not included."
         reportSection (if daily then "This day" else "This week") "Observed activity and the items that need review." do
           p_ [style_ "font-size:16px;line-height:1.5;margin:0 0 14px;"]
             $ toHtml
@@ -721,15 +723,15 @@ weeklyReportEmail d =
           reportMetrics
             [ ("Telemetry events", reportCount events, "Logs and spans")
             , ("Error events", reportCount errors, reportRatio errors events <> " of events")
-            , ("Services", show serviceCount, "Named services observed")
-            , ("Server requests", reportCount requests, "Server spans only")
+            , ("Services", maybe "Not recorded" (const $ show serviceCount) systemSnapshot, "Named services observed")
+            , ("Server requests", maybe "Not recorded" (const $ reportCount requests) systemSnapshot, "Server spans only")
             ]
-          forM_ d.systemSnapshot $ \snapshot -> case snapshot.issues of
+          forM_ systemSnapshot $ \snapshot -> case snapshot.issues of
             Report.Available issues -> p_ [style_ "margin:12px 0 0;font-size:14px;"] do
               a_ [target_ "_top", href_ $ d.projectUrl <> "/issues"] $ toHtml $ reportCount issues.openIssues <> " unacknowledged issues"
               toHtml $ "; " <> reportCount issues.criticalOpen <> " critical. " <> reportCount issues.newIssues <> " issues created in this period."
             Report.Unavailable -> reportNote "Issue status is unavailable for this report."
-        forM_ d.systemSnapshot $ \snapshot -> do
+        forM_ systemSnapshot $ \snapshot -> do
           case snapshot.issues of
             Report.Available issues | issues.criticalOpen > 0 -> reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
             _ -> pass
@@ -739,7 +741,7 @@ weeklyReportEmail d =
           case snapshot.infrastructure of
             Report.Available infra | infra.unready > 0 -> reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
             _ -> pass
-        case d.systemSnapshot of
+        case systemSnapshot of
           Nothing -> reportNotice "Historical report" "Service, infrastructure and monitor snapshots were not recorded for this report. The original metrics and issue list are shown below."
           Just snapshot -> do
             reportSection "Services" "Ordered by error events, then activity. Compare with the preceding equal-length period." do
@@ -797,12 +799,13 @@ weeklyReportEmail d =
                     m.status
                     [("Last value", maybe "Not evaluated" reportDecimal m.value, maybe "No evaluation recorded" (\t -> "Evaluated " <> reportTime t <> " UTC") m.lastEvaluated)]
                 when (not d.fullReport && length monitors.observations > 4) $ reportMore (d.projectUrl <> "/monitors") (length monitors.observations - 4) "monitors"
-        when (isNothing d.systemSnapshot && not (V.null d.anomalies))
-          $ reportSection "Recorded issues" "Issues retained in this historical report."
-          $ forM_ (V.take 10 d.anomalies)
-          $ \i -> reportItem (d.projectUrl <> "/issues/" <> i.id.toText) (reportClip 180 $ stripSummaryBadges i.title) "" []
-        case d.systemSnapshot of
-          Just snapshot -> do
+        forM_ historicalEvidence $ \historical ->
+          unless (V.null historical.anomalies)
+            $ reportSection "Recorded issues" "Issues retained in this historical report."
+            $ forM_ (V.take 10 historical.anomalies)
+            $ \i -> reportItem (d.projectUrl <> "/issues/" <> i.id.toText) (reportClip 180 $ stripSummaryBadges i.title) "" []
+        case d.evidence of
+          SystemEvidence snapshot -> do
             reportSection "HTTP endpoint performance" "Highest-volume server HTTP requests, with the preceding period for comparison."
               $ reportObserved snapshot.performance
               $ \rows -> do
@@ -837,27 +840,27 @@ weeklyReportEmail d =
                     td_ [style_ "padding:6px 0;"] $ a_ [target_ "_top", href_ $ queryUrl $ "kind == " <> kqlQuoted w.kind] $ toHtml $ T.toTitle w.kind
                     td_ [style_ "padding:6px 0;"] $ toHtml $ reportCount w.events
                     td_ [style_ "padding:6px 0;"] $ toHtml $ maybe "—" reportMs w.averageMs
-          Nothing -> do
+          HistoricalEvidence historical -> do
             reportSection "HTTP endpoint performance" "Highest-volume HTTP operations. Latency is the average recorded span duration." do
-              when (V.null d.performance) $ reportNote "No HTTP endpoint spans recorded in this period."
-              forM_ (V.take 8 d.performance) $ \(host, method, path, durationNs, change, count, _) ->
+              when (V.null historical.performance) $ reportNote "No HTTP endpoint spans recorded in this period."
+              forM_ (V.take 8 historical.performance) $ \(host, method, path, durationNs, change, count, _) ->
                 reportItem
                   (d.projectUrl <> "/log_explorer" <> windowQuery)
                   (method <> " " <> reportClip 140 path)
                   host
                   [("Operations", reportCount count, "HTTP spans"), ("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Change", reportDecimal change <> "%", "Versus previous period")]
             reportSection "Slow database operations" "Queries averaging more than 500 ms, ordered by average duration." do
-              when (V.null d.slowQueries) $ reportNote "No database queries above this threshold were recorded."
-              forM_ d.slowQueries $ \(statement, durationNs, count) ->
+              when (V.null historical.slowQueries) $ reportNote "No database queries above this threshold were recorded."
+              forM_ historical.slowQueries $ \(statement, durationNs, count) ->
                 reportItem
                   (d.projectUrl <> "/log_explorer" <> windowQuery)
                   (reportClip 180 statement)
                   ""
                   [("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Operations", reportCount $ fromIntegral count, "Recorded spans")]
-        forM_ d.systemSnapshot $ \snapshot -> when (snapshot.topPatterns == Report.Unavailable) $ reportNotice "Log patterns unavailable" "This section could not be loaded for the report."
-        unless (V.null d.topPatterns)
+        forM_ systemSnapshot $ \snapshot -> when (snapshot.topPatterns == Report.Unavailable) $ reportNotice "Log patterns unavailable" "This section could not be loaded for the report."
+        unless (V.null topPatterns)
           $ reportSection "Log patterns" "Most frequent stored patterns. Counts are lifetime totals, not limited to this reporting period."
-          $ forM_ (V.take 5 d.topPatterns)
+          $ forM_ (V.take 5 topPatterns)
           $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (reportClip 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
           unless (T.null d.eventsChartUrl) $ chartBlock "Telemetry events" d.eventsChartUrl
@@ -876,9 +879,15 @@ weeklyReportEmail d =
     reportTitle = if daily then "Daily system report" else "Weekly system report"
     reportRows :: Int -> [a] -> [a]
     reportRows n rows = if d.fullReport then rows else take n rows
-    currentServices = maybe [] (mapMaybe (.current) . (.services)) d.systemSnapshot
-    events = maybe (fromIntegral d.totalEvents) (const $ sum $ map (.events) currentServices) d.systemSnapshot
-    errors = maybe (fromIntegral d.totalErrors) (const $ sum $ map (.errorEvents) currentServices) d.systemSnapshot
+    systemSnapshot = case d.evidence of SystemEvidence snapshot -> Just snapshot; HistoricalEvidence _ -> Nothing
+    historicalEvidence = case d.evidence of HistoricalEvidence historical -> Just historical; SystemEvidence _ -> Nothing
+    freeTierExceeded = maybe False ((== Just True) . (.ingestionCapped)) systemSnapshot
+    topPatterns = case systemSnapshot of
+      Just snapshot -> case snapshot.topPatterns of Report.Available rows -> V.fromList rows; Report.Unavailable -> V.empty
+      Nothing -> V.empty
+    currentServices = maybe [] (mapMaybe (.current) . (.services)) systemSnapshot
+    events = case d.evidence of SystemEvidence _ -> sum $ map (.events) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalEvents
+    errors = case d.evidence of SystemEvidence _ -> sum $ map (.errorEvents) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalErrors
     requests = sum $ map (.serverRequests) currentServices
     serviceCount = length $ ordNub $ mapMaybe (.service) currentServices
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
@@ -1078,27 +1087,7 @@ sampleWeeklyReport eventsChart errorsChart =
       , endDate = "2025-01-08"
       , eventsChartUrl = eventsChart
       , errorsChartUrl = errorsChart
-      , totalEvents = 125000
-      , totalErrors = 342
-      , eventsChangePct = 12.5
-      , errorsChangePct = -8.3
-      , runtimeErrorsCount = 3
-      , apiChangesCount = 1
-      , alertsCount = 1
-      , logPatternCount = 1
-      , rateChangeCount = 1
-      , anomalies =
-          V.fromList
-            [ Issues.IssueSummary (UUIDId UUID.nil) "TypeError: Cannot read property 'map'" True Issues.Critical Issues.RuntimeException (Just [0, 2, 5, 12, 8, 3, 1])
-            , Issues.IssueSummary (UUIDId UUID.nil) "New endpoint detected: POST /api/orders" False Issues.Warning Issues.ApiChange (Just [0, 0, 0, 1, 0, 0, 0])
-            , Issues.IssueSummary (UUIDId UUID.nil) "Connection timeout pattern detected" False Issues.Info Issues.LogPattern (Just [1, 3, 2, 0, 1, 4, 2])
-            , Issues.IssueSummary (UUIDId UUID.nil) "Request rate spike on /api/users" False Issues.Warning Issues.LogPatternRateChange (Just [0, 1, 1, 5, 12, 3, 0])
-            ]
-      , performance = V.fromList [("api.example.com", "GET", "/api/v1/users", 245000000, -12.5, 5000, 8.3), ("api.example.com", "POST", "/api/v1/orders", 890000000, 45.2, 1200, -3.1)]
-      , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 1250000000, 3400 :: Int)]
-      , topPatterns = V.fromList [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]
-      , freeTierExceeded = False
-      , systemSnapshot = Just sampleSystemSnapshot
+      , evidence = SystemEvidence sampleSystemSnapshot
       , fullReport = False
       , timeZone = "UTC"
       , fromTime = "2025-01-01T00:00:00Z"
@@ -1143,7 +1132,7 @@ sampleSystemSnapshot =
             4
             [Report.IssueObservation "sample-issue" "Payment authorization failed: upstream timeout" (Just "checkout-api") "critical" "runtime_exception" 220, Report.IssueObservation "sample-db" "Database connection pool exhausted" (Just "payment-worker") "warning" "runtime_exception" 50]
     , generatedAt = end
-    , topPatterns = Report.Available []
+    , topPatterns = Report.Available [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]
     , performance = Report.Available [Report.EndpointComparison (Report.EndpointStats (Just "checkout-api") (Just "production") "api.example.com" "POST" "/api/v1/orders" (Just 890) 1200) (Just $ Report.EndpointStats (Just "checkout-api") (Just "production") "api.example.com" "POST" "/api/v1/orders" (Just 613) 1238)]
     , databases = Report.Available [Report.DatabaseStats (Just "checkout-api") "SELECT * FROM users WHERE email = $1" 1250 3400]
     , workloads = Report.Available [Report.WorkloadStats "server" 80000 (Just 245), Report.WorkloadStats "consumer" 2000 (Just 70), Report.WorkloadStats "client" 5000 (Just 80)]
