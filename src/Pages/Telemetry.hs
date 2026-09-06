@@ -667,7 +667,7 @@ overViewTabs pid filters tab =
 
 metricsToolbar_ :: Projects.ProjectId -> Text -> MetricFilters -> Html () -> Html ()
 metricsToolbar_ pid tab filters status =
-  div_ [id_ "metrics-toolbar", class_ "sticky top-0 z-20 bg-bgBase py-2 border-b border-strokeWeak flex flex-wrap items-center gap-3"] do
+  div_ [id_ "metrics-toolbar", class_ "sticky top-0 z-20 bg-bgBase py-1 border-b border-strokeWeak flex flex-wrap items-center gap-3"] do
     overViewTabs pid filters tab
     form_
       [ id_ "metric-filters"
@@ -742,12 +742,10 @@ serviceOptionsLimit = 50
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> MetricFilters -> Int -> Maybe Text -> Html ()
 chartsPage pid metricList labels inactive filters activeCount nextUrl =
-  div_ [class_ "flex flex-col gap-4 px-4 pb-4", term "hx-preload:inherited" "false"] do
+  div_ [class_ "flex flex-col gap-2 px-4 pb-4", term "hx-preload:inherited" "false"] do
     metricsToolbar_ pid "charts" filters
       $ span_ [class_ "text-xs text-textWeak tabular-nums", role_ "status"]
-      $ toHtml
-      $ show activeCount
-      <> " matching metrics · seen in 7d"
+      $ toHtml (show activeCount <> " matching metrics · seen in 7d")
     if V.null metricList && V.null inactive
       then
         if hasMetricFilters filters

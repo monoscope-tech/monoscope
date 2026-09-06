@@ -63,7 +63,7 @@ serviceMapGetH pid fromM toM sinceM envM = do
 
 
 serviceMapPage_ :: ServiceMapPageData -> Html ()
-serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 flex flex-col gap-3"] do
+serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 pt-1 flex flex-col gap-3"] do
   div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
     faSprite_ "diagram-project" "regular" "w-3.5 h-3.5 text-iconNeutral"
     toHtml
