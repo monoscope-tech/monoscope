@@ -3161,7 +3161,7 @@ sendReportForProject pid rType = do
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
   let prv = case rType of
-        Projects.RTWeekly -> 6 * 86400
+        Projects.RTWeekly -> 7 * 86400
         Projects.RTDaily -> 86400
 
   let startTime = addUTCTime (negate prv) currentTime
@@ -3215,7 +3215,10 @@ sendReportForProject pid rType = do
         eventsChange = RP.pctChange totalEvents totalEventsPrev
         spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
         endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
+    patterns <- LogPatterns.getLogPatterns pid 10 0
+    let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
+    systemSnapshot <- RP.collectSystemReport pid startTime currentTime (V.toList topPatterns)
+    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies' (Just systemSnapshot)
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
@@ -3269,6 +3272,7 @@ sendReportForProject pid rType = do
                   slowDbQueries
                   topPatterns
                   freeTierExceeded
+                  (Just systemSnapshot)
               sendRenderedEmail (CI.original user.email) subj rendered
       Log.logInfo "Completed sending report notifications for" pid
 
@@ -4839,13 +4843,14 @@ evaluateQueryMonitor monitor startWall = do
       lookbackMins = monitor.timeWindowMins
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
-      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins}
+      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins, metricJsonAsVariant = tfEnabled}
   freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
     Right (_, qc) -> maybe (throwIO $ CE.ErrorCall "monitor query produced no alert SQL") pure qc.finalAlertQuery
     Left err -> throwIO $ CE.ErrorCall $ "monitor KQL parse failed: " <> toString err
-  let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
-  results <- Hasql.withHasqlTimefusion (tfEnabled && isOtelQuery) $ Hasql.interp (rawSql freshSql)
+  -- Both supported KQL sources (spans and metrics) follow the telemetry read
+  -- backend. Metrics must use the same backend as their generated expressions.
+  results <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp (rawSql freshSql)
   end <- liftIO $ getTime Monotonic
 
   -- No rows in the lookback window:
@@ -4853,7 +4858,7 @@ evaluateQueryMonitor monitor startWall = do
   --   * otherwise skip, to avoid spuriously firing (triggerLessThan=True) or
   --     spuriously recovering when data is simply missing.
   let durationNs = toNanoSecs (diffTimeSpec end start)
-  case results :: [Double] of
+  case catMaybes (results :: [Maybe Double]) of
     []
       | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
           evaluateWithResults monitor startWall title 0 durationNs

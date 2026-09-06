@@ -1,0 +1,25 @@
+active: true
+alert_recovery_threshold: null
+alert_threshold: 80.0
+check_interval_mins: 5
+email_all: false
+emails:
+- anthony@talstack.com
+message: MemBuffer pressure above 80% of budget for 2+ min — flush is lagging. Leading
+  indicator of insert rejections (Memory limit exceeded).
+notify_after_mins: null
+query: metrics | where metric_name == "timefusion.mem_buffer.pressure_pct" | summarize
+  max(value)
+severity: warning
+slack_channels: []
+stop_after_count: null
+subject: TimeFusion approaching buffer memory hard limit
+teams: []
+threshold_sustained_for_mins: 2
+time_window_mins: 10
+title: 'TF warn: MemBuffer pressure > 80%'
+trigger_less_than: false
+visualization_type: timeseries
+warning_recovery_threshold: null
+warning_threshold: null
+
