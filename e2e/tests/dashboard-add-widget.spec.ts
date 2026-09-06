@@ -76,7 +76,11 @@ async function deleteDashboard(page: Page, dash: Dash) {
   await expect
     .poll(
       async () => {
-        await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+        // The handler's own post-DELETE redirect can still be in flight, and a goto that
+        // collides with it aborts (net::ERR_ABORTED) — which threw out of the poll and
+        // failed the whole test. A failed navigation just polls again.
+        const resp = await page.goto(`/p/${DEMO_PROJECT}/dashboards`).catch(() => null);
+        if (!resp) return -1;
         return page.getByText(dash.title).count();
       },
       { timeout: 20000 },
