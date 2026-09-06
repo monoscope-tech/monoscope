@@ -401,8 +401,9 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
     // the data-derived bounds, including streamed updates, with room for labels.
     const values = Object.values(thresholds);
     const bounds = ({ min, max }: { min: number; max: number }) => {
-      const low = Math.min(0, min, ...values);
-      const high = Math.max(max, ...values);
+      // ECharts passes ±Infinity extents for an empty dataset; NaN bounds break the axis.
+      const low = Math.min(0, Number.isFinite(min) ? min : 0, ...values);
+      const high = Math.max(Number.isFinite(max) ? max : 0, ...values);
       const padding = (high - low || 1) * 0.05;
       return { min: low < 0 ? low - padding : 0, max: high + padding };
     };

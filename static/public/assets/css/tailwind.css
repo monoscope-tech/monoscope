@@ -195,7 +195,7 @@
   }
 
   @keyframes fadeSlideIn {
-    from { opacity: 0; transform: translateY(8px); }
+    from { opacity: 0; transform: translateY(2px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
@@ -504,11 +504,18 @@
     transition: opacity 100ms ease-out;
   }
   .htmx-settling > * {
-    animation: fadeSlideIn 150ms var(--ease-out-expo) forwards;
+    animation: fadeSlideIn 120ms var(--ease-out-expo) forwards;
   }
   /* Dashboard tabs already arrive with their final GridStack geometry. Moving
      the swapped grid during hydration makes a stable layout look unstable. */
   #dashboard-tabs-content.htmx-settling > * {
+    animation: none;
+  }
+  /* A table's deferred stats fill-in (and event refreshes) self-swap the same
+     container the rows already live in; replaying the entry animation makes a
+     filled-in number read as a reload. First paint still animates — it arrives
+     via the page-level swap, not this container. */
+  .table-refresh.htmx-settling > * {
     animation: none;
   }
   /* Opt-in class for containers that want smoother HTMX transitions */

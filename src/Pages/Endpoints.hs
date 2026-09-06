@@ -358,7 +358,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                         , description = "Once you integrate an SDK, your endpoints appear here automatically."
                         , action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"
                         }
-                , header = Just $ div_ [class_ "mb-4"] $ maybe "Endpoints" (\h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)) hostM
+                , header = Just $ div_ [class_ "mb-2"] $ maybe "Endpoints" (\h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)) hostM
                 }
           }
   addRespHeaders

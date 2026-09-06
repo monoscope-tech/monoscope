@@ -68,6 +68,11 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(option.yAxis.min(extent)).toBeLessThanOrEqual(lower);
     expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual(Object.values(thresholds));
     expect(option.series[0].markLine.data[0].label.position).toBe('insideEndTop');
+    // An empty dataset makes ECharts pass ±Infinity extents; bounds must stay finite
+    // or the axis (and everything drawn against it) breaks.
+    const empty = { min: Infinity, max: -Infinity };
+    expect(Number.isFinite(option.yAxis.min(empty))).toBe(true);
+    expect(Number.isFinite(option.yAxis.max(empty))).toBe(true);
   });
 
   test('holds fetch slots until streaming bodies finish', async () => {

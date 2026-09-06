@@ -235,7 +235,7 @@ hostsTable pid window filters grouping hosts allHosts =
           , addPadding = True
           , renderAsTable = True
           , bulkActionsInHeader = Just 0
-          , containerClasses = "w-full mx-auto space-y-4 group/columns"
+          , containerClasses = "w-full mx-auto space-y-2 group/columns"
           }
     , columns = hostColumns pid window
     , rows = hostEntries grouping hosts

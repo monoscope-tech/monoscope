@@ -171,7 +171,7 @@ data Config = Config
   -- cheap shell (rows without expensive stats) and fill it in afterwards, so a slow
   -- aggregate never blocks first paint. Like 'refreshOnEvent', requires 'containerId'.
   , renderAsTable :: Bool -- True for table mode, False for list mode
-  , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
+  , addPadding :: Bool -- When True, wraps table in div with px-4 pt-2 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
   , noDividers :: Bool -- When True, removes divide-y separators between rows
@@ -328,7 +328,7 @@ instance Default Config where
       { tableClasses = "table table-sm w-full relative"
       , thClasses = "text-left bg-bgAlternate sticky top-0 overflow-hidden"
       , tdClasses = "px-4 py-4"
-      , containerClasses = "w-full mx-auto space-y-4"
+      , containerClasses = "w-full mx-auto space-y-2"
       , showHeader = True
       , elemID = "tableContainer"
       , containerId = Nothing
@@ -492,7 +492,7 @@ renderTable tbl =
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
-      paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-4 pb-2"] tableContent else tableContent
+      paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-2 pb-2"] tableContent else tableContent
       -- A deferred fill-in wins over the event refresh: the response it swaps in carries
       -- its own refreshOnEvent, so the listener is re-established rather than lost.
       refreshAttrs cid = case (tbl.config.deferredUrl, tbl.config.refreshOnEvent) of
@@ -501,7 +501,7 @@ renderTable tbl =
         (Nothing, Nothing) -> []
         where
           swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid]
-   in maybe paddedContent (\cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
+   in maybe paddedContent (\cid -> div_ ([class_ "w-full table-refresh", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
 
 
 renderRows :: Table a -> Html ()
