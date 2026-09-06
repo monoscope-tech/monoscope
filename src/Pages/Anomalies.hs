@@ -292,35 +292,20 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       -- trace_id scan (a full-table scan on TF; see 2026-07-21 crash).
       let isFirst = isJust firstM
       mTraceRef <- case Issues.issuePayload issue of
-        -- Every trace lookup on this page pins a +/-5min window to this timestamp, so the
-        -- id and the time have to be a matched pair. `updated_at` is bumped by activity
-        -- that does not set a new `recent_trace_id` — on the reference issue the recent
-        -- trace is from 09-02 08:04 while `updated_at` reads 09-04 00:15, and the trace
-        -- exists nowhere near it. That mismatch is what makes the waterfall report
-        -- "couldn't load this trace" on an issue whose trace is present and readable.
-        --
-        -- There is no `recent_trace_at` column to consult, so the sound pairing is only
-        -- recoverable when the recent trace *is* the first one — which is the common case,
-        -- and is exact. When they genuinely differ the old timestamp is kept: still
-        -- approximate, but no worse than before. See F13.
         Just (Issues.RuntimeExceptionP _) -> case errorM of
           Nothing -> pure Nothing
           Just errL -> do
+            refs <- enriching "trace_references" Nothing $ ErrorPatterns.selectErrorTraceRefs pid issue.targetHash
             let base = errL.base
-                createdU = zonedTimeToUTC base.createdAt
-            if isFirst
-              then pure $ (,createdU) <$> base.firstTraceId
-              else do
-                -- `recent_trace_at` (migration 0145) is written in the same throttled
-                -- branch as `recent_trace_id`, so it is the timestamp that genuinely goes
-                -- with that id. `updated_at` is not: it moves on every occurrence while
-                -- the id moves at most every five minutes, which is how the pair came to
-                -- aim +/-5min lookups at a window the trace was not in. Rows that have not
-                -- recurred since the migration have no value yet, so the old approximation
-                -- stays as the fallback.
-                recentAt <- enriching "recent_trace_at" Nothing $ ErrorPatterns.selectRecentTraceAt pid issue.targetHash
-                let fallback = bool (zonedTimeToUTC base.updatedAt) createdU (base.recentTraceId == base.firstTraceId)
-                pure $ (,fromMaybe fallback recentAt) <$> base.recentTraceId
+                (selectedTraceId, capturedAt) = case refs of
+                  Just r -> if isFirst then (r.firstTraceId, r.firstTraceAt) else (r.recentTraceId, r.recentTraceAt)
+                  Nothing -> (if isFirst then base.firstTraceId else base.recentTraceId, Nothing)
+                -- Historical rows can recover an exact time only when stored error
+                -- data describes the selected trace. Otherwise retain the bounded
+                -- legacy approximation; do not turn an unknown time into a broad scan.
+                recordedAt = guard (isJust selectedTraceId && selectedTraceId == base.errorData.traceId) $> base.errorData.when
+                approximateAt = zonedTimeToUTC $ if isFirst || selectedTraceId == base.firstTraceId then base.createdAt else base.updatedAt
+            pure $ (,fromMaybe approximateAt (recordedAt <|> capturedAt)) <$> selectedTraceId
         Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
         Just (Issues.QueryAlertP _) -> pure Nothing
         Just (Issues.LogPatternP _) -> pure Nothing
@@ -854,7 +839,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
       -- h2: the page shell's breadcrumb already owns h1. This was an h3 sitting
       -- \*below* empty-state h2s, so a screen reader heard "No stack trace in this
       -- event" outrank the incident it was reporting.
-      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong pr-8 break-words"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+      let detailTitle = case Issues.issuePayload issue of
+            Just (Issues.QueryAlertP alertData) | not (T.null $ T.strip alertData.queryName) -> alertData.queryName
+            _ -> issue.title
+      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong pr-8 break-words"] $ if "⇒" `T.isInfixOf` detailTitle then renderSummaryText_ detailTitle else toHtml detailTitle
       unless (Issues.isBoilerplateAction issue.recommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction

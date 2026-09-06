@@ -1000,6 +1000,18 @@ spec = sequential $ aroundAll withTestResources do
       patM2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "empty-trace-hash"
       fmap (.recentTraceId) patM2 `shouldBe` Just (Just "abc123")
       fmap (.firstTraceId) patM2 `shouldBe` Just (Just "abc123")
+      refs <- runTestBg frozenTime tr $ ErrorPatterns.selectErrorTraceRefs pid "empty-trace-hash"
+      fmap (.firstTraceAt) refs `shouldBe` Just (Just frozenTime)
+      fmap (.recentTraceAt) refs `shouldBe` Just (Just frozenTime)
+      -- A delayed, later event moves the recent pair together and preserves the first.
+      let nextEvent = addUTCTime 60 frozenTime
+          nextFlush = addUTCTime 800 frozenTime
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton err{ErrorPatterns.traceId = Just "def456", ErrorPatterns.when = nextEvent}) nextFlush
+      nextRefs <- runTestBg frozenTime tr $ ErrorPatterns.selectErrorTraceRefs pid "empty-trace-hash"
+      fmap (.firstTraceId) nextRefs `shouldBe` Just (Just "abc123")
+      fmap (.firstTraceAt) nextRefs `shouldBe` Just (Just frozenTime)
+      fmap (.recentTraceId) nextRefs `shouldBe` Just (Just "def456")
+      fmap (.recentTraceAt) nextRefs `shouldBe` Just (Just nextEvent)
 
     -- Regression guards for the four notification paths. `canonical_id` used to gate
     -- exactly one of them, so merging a pattern after its issue existed silenced

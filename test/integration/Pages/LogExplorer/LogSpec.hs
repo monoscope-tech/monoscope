@@ -996,7 +996,7 @@ spec = around withTestResources do
       case traceDetails of
         TelemetryPage.TraceDetails{} -> pass
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
-        TelemetryPage.TraceDetailsNotFound _ _ _ -> expectationFailure "expected TimeFusion trace details"
+        TelemetryPage.TraceDetailsUnavailable _ _ _ _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
       -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
       -- The placeholder div still carries the panel id — `hx-swap: outerHTML` has to have

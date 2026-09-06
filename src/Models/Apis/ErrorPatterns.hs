@@ -12,7 +12,8 @@ module Models.Apis.ErrorPatterns (
   propagateMergedCountsBatch,
   updateErrorPatternState,
   getErrorPatternLByHash,
-  selectRecentTraceAt,
+  ErrorTraceRefs (..),
+  selectErrorTraceRefs,
   bulkCalculateAndUpdateBaselines,
   UpsertOutcome (..),
   batchUpsertErrorPatterns,
@@ -191,20 +192,22 @@ getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Er
 getErrorPatternByHash pid eHash = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND hash = #{eHash} |])
 
 
--- | When the recent trace was captured, for pairing with @recent_trace_id@.
---
--- Read on its own rather than added to 'ErrorPattern': that record is decoded
--- positionally from explicit column lists in several queries, so widening it means
--- touching all of them on the error-ingest hot path to serve one page.
---
--- Nullable until the pattern next recurs (migration 0145 backfills nothing — the
--- value is only knowable at write time), so callers keep their old approximation
--- as a fallback.
-selectRecentTraceAt :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe UTCTime)
-selectRecentTraceAt pid h =
-  join
-    <$> Hasql.interpOne
-      [HI.sql| SELECT recent_trace_at FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{h} LIMIT 1 |]
+-- | Read each sampled trace ID and its event timestamp from the same row version.
+data ErrorTraceRefs = ErrorTraceRefs
+  { firstTraceId :: Maybe Text
+  , firstTraceAt :: Maybe UTCTime
+  , recentTraceId :: Maybe Text
+  , recentTraceAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+selectErrorTraceRefs :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorTraceRefs)
+selectErrorTraceRefs pid h =
+  Hasql.interpOne
+    [HI.sql| SELECT first_trace_id, first_trace_at, recent_trace_id, recent_trace_at
+             FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{h} LIMIT 1 |]
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
@@ -464,18 +467,19 @@ batchUpsertErrorPatterns pid errors now =
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
             environment, service, runtime, error_data,
-            first_trace_id, recent_trace_id, recent_trace_at,
+            first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data,
-                 u.trace_id, u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN #{now} END, u.cnt, u.cnt, u.cnt, u.cnt
+                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
+                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
                        unnest(#{stacktraces}::text[]) AS stacktrace, unnest(#{hashes}::text[]) AS hash,
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
                        unnest(#{isFrameworks}::bool[]) AS is_framework,
                        unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
                        unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data,
-                       unnest(#{traceIds}::text[]) AS trace_id, unnest(#{counts}::bigint[]) AS cnt) u
+                       unnest(#{traceIds}::text[]) AS trace_id, unnest(#{eventTimes}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
@@ -506,9 +510,11 @@ batchUpsertErrorPatterns pid errors now =
             recent_trace_at = CASE
               WHEN EXCLUDED.recent_trace_id IS NOT NULL
                 AND apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
-                THEN #{now}
+                THEN EXCLUDED.recent_trace_at
               ELSE apis.error_patterns.recent_trace_at
             END,
+            first_trace_at = CASE WHEN apis.error_patterns.first_trace_id IS NULL
+              THEN EXCLUDED.first_trace_at ELSE apis.error_patterns.first_trace_at END,
             first_trace_id = COALESCE(apis.error_patterns.first_trace_id, EXCLUDED.first_trace_id),
             is_framework = EXCLUDED.is_framework,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
@@ -544,6 +550,7 @@ batchUpsertErrorPatterns pid errors now =
     -- '' would persist and pass every Maybe check downstream, sending the issue
     -- page off to fetch "trace ''" — every trace-less row in the window.
     traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
+    eventTimes = V.map (.when) errs
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

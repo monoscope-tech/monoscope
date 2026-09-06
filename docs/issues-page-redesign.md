@@ -1192,3 +1192,34 @@ Its inspected plan uses a project index with the timestamp window as a filter; n
 The native PostgreSQL comparison avoids per-row UUID-to-text conversion.
 Planner artifacts are `/private/tmp/pattern-update-plan.log` and `/private/tmp/pattern-update-pg-plan.log`.
 The application and integration-test builds completed successfully. Deployment verification remains pending.
+
+## 21. Trace fallback and event-time provenance
+
+The reference payment issue returns an empty trace result quickly, but the fallback claimed a timeout.
+The trace fragment now distinguishes empty results, timeouts, and read failures with a typed reason.
+Each state keeps a working retry and an Explorer link scoped to the trace ID and lookup window.
+The embedded fallback can grow with its text on small screens.
+Historical query-alert headings now use the recorded monitor name when present.
+
+Pattern ingestion previously paired trace IDs with processing time, which can differ from delayed events by hours.
+The writer now stores the selected error's event time with its recent trace ID.
+Migration 0147 adds a nullable first-trace timestamp, preserved with the first captured ID.
+The issue reader fetches both pairs from one row version and can recover a historical time from matching stored error data.
+Other historical rows retain their bounded approximation; the migration invents no timestamps and performs no backfill.
+Regression checks cover empty versus timed-out reads, monitor-name headings, and delayed ingestion preserving both sampled pairs.
+Application and integration builds completed. All 57 targeted integration examples pass (30 error-pattern, 26 issue-detail, 1 trace-read).
+Four browser cases pass in light/dark themes at 390px and 1440px, including retry, event-time recovery, scoped Explorer navigation, and monitor-name headings.
+The embedded fallback uses the shared compact style: measured height falls from 366–370px to 283px, with no overflow.
+Settled mobile and desktop screenshots were reviewed. Production verification remains pending.
+
+## 22. Dashboard error-recovery test gate
+
+Run `34056881997` passed builds, doctests, unit tests, and integration tests with real TimeFusion.
+The extraction parity regression passed with the required `pat:` tag.
+Deployment was skipped because the previously observed dashboard error-banner browser case failed (69 passed, 5 skipped, 1 failed).
+Its failure route was installed after navigation, allowing initial prefetch and lazy mounting to consume a successful response.
+The test now installs that route before navigation.
+An initial repeat run then caught a second invalid assumption: the real recovery query can itself fail.
+The captured page correctly showed `Query execution failed`, so hiding its banner would have been a product bug.
+The UI test now supplies both failure and successful completion responses explicitly, then checks that refresh clears the banner and loading state.
+All ten repetitions pass with two browser workers. No sleeps, retries, or weaker banner assertions were added.

@@ -156,6 +156,17 @@ test.describe("every widget type on a dashboard canvas", () => {
   });
 
   test("a failed chart shows a local error and a successful refresh clears it", async ({ page }) => {
+    // Intercept before navigation: initial prefetch and lazy chart mounting can
+    // otherwise consume a successful response after the failure route is installed.
+    let failRequests = true;
+    const to = Date.now();
+    const recovered = { from: to - 60000, to, headers: ["timestamp", "count"], dataset: [[to - 30000, 3]], rows_per_min: 3, stats: { count: 3, max: 3, max_group_sum: 3 } };
+    await page.route("**/chart_data/stream?**", route => route.fulfill({
+      contentType: "application/x-ndjson",
+      body: JSON.stringify(failRequests
+        ? { type: "error", error: "deterministic backend failure" }
+        : { type: "complete", data: recovered }) + "\n",
+    }));
     await openDashboard(page, "All Widget Types");
     const chart = page.locator("[data-chart-widget]").first();
     await chart.scrollIntoViewIfNeeded();
@@ -163,16 +174,14 @@ test.describe("every widget type on a dashboard canvas", () => {
     expect(chartId).toBeTruthy();
     const banner = page.locator(`[id="${chartId}_error"]`);
 
-    await page.route("**/chart_data/stream?**", route => route.fulfill({
-      contentType: "application/x-ndjson",
-      body: JSON.stringify({ type: "error", error: "deterministic backend failure" }) + "\n",
-    }));
-    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("deterministic backend failure");
 
-    await page.unroute("**/chart_data/stream?**");
+    // A backend query failure is not a successful refresh. Supply success explicitly
+    // so this tests banner recovery rather than the query service's availability.
+    failRequests = false;
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query")));
     await expect(banner).toBeHidden();
+    await expect(chart).toHaveAttribute("aria-busy", "false");
   });
 });

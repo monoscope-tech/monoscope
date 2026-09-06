@@ -647,6 +647,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The two numbers that were compared, and the direction, are all on the page.
+      html `shouldSatisfy` T.isInfixOf ">checkout throughput</h2>"
       html `shouldSatisfy` T.isInfixOf "Recorded evaluation"
       html `shouldSatisfy` T.isInfixOf "Recorded value"
       html `shouldSatisfy` T.isInfixOf "At or below"
@@ -735,8 +736,17 @@ spec = sequential $ aroundAll withTestResources do
       let starved = tr{trATCtx = (tr.trATCtx){env = (tr.trATCtx.env){traceViewTimeoutSecs = 0}}}
       (_, starvedFrag) <- testServant starved $ Trace.traceH testPid traceIdText (Just frozenTime) Nothing Nothing (Just "true") Nothing
       case starvedFrag of
-        Trace.TraceDetailsNotFound _ retryUrl _ -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
-        _ -> expectationFailure "expected a starved trace fetch to yield the retryable not-found state"
+        Trace.TraceDetailsUnavailable retryUrl _ _ Trace.TraceTimedOut -> retryUrl `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
+        _ -> expectationFailure "expected a starved trace fetch to yield a timeout state"
+      renderPage starvedFrag `shouldSatisfy` T.isInfixOf "Trace loading timed out"
+      (_, emptyFrag) <- testServant tr $ Trace.traceH testPid "missing-trace" (Just frozenTime) Nothing Nothing (Just "true") Nothing
+      case emptyFrag of
+        Trace.TraceDetailsUnavailable _ _ _ Trace.TraceEmpty -> pass
+        _ -> expectationFailure "expected an empty trace read to yield an empty state"
+      let emptyHtml = renderPage emptyFrag
+      emptyHtml `shouldSatisfy` T.isInfixOf "No spans found for this trace"
+      emptyHtml `shouldSatisfy` T.isInfixOf "Open Log Explorer"
+      emptyHtml `shouldSatisfy` not . T.isInfixOf "timed out"
 
     -- Regression: every runtime exception without frames (151 of 151 in the demo
     -- project — OTel's exception event carries message and type, and the Go SDKs

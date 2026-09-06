@@ -18,6 +18,7 @@ module Pages.Telemetry (
   traceH,
   traceFragmentUrl,
   TraceDetailsGet (..),
+  TraceUnavailableReason (..),
   tracePage,
   spanDetailAttrs_,
   DetailLoading (..),
@@ -120,7 +121,10 @@ data TraceDetailsGet
   | -- | Carries the URL that produced it, so Retry re-issues the same request from
     -- whatever container it landed in — the overlay's @loadTrace@ event only exists
     -- in the log explorer, and reached nothing anywhere else.
-    TraceDetailsNotFound Projects.ProjectId Text Bool
+    TraceDetailsUnavailable Text Text Bool TraceUnavailableReason
+
+
+data TraceUnavailableReason = TraceEmpty | TraceTimedOut | TraceReadFailed
 
 
 data SpanMin = SpanMin
@@ -258,13 +262,14 @@ instance ToHtml TraceDetailsGet where
       -- skeleton, so a re-fired preload can't wipe rendered details back to a loader.
       div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
-  toHtml (TraceDetailsNotFound pid selfUrl embedded) =
+  toHtml (TraceDetailsUnavailable selfUrl explorerUrl embedded reason) =
     -- The id is what Retry swaps: `closest div` would only replace the button row.
-    div_ [id_ "trace-fallback", class_ $ bool "min-h-screen" "h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
+    div_ [id_ "trace-fallback", class_ $ bool "min-h-screen" "min-h-48" embedded <> " flex items-center justify-center bg-bgBase p-6"]
       $ toHtml
       $ Components.emptyState_
         def
           { icon = Just "circle-exclamation"
+          , size = if embedded then Components.ESCompact else Components.ESFull
           , action = ESCustom do
               div_ [class_ "flex flex-wrap justify-center gap-2"] do
                 -- Re-issue the very request that produced this fallback, replacing it in
@@ -280,11 +285,14 @@ instance ToHtml TraceDetailsGet where
                       [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
                     ]
                     "Back to search results"
-              unless embedded
-                $ a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
+              a_ [href_ explorerUrl, class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
           }
-        "Couldn't load this trace"
-        "A slow or unavailable read timed out. Retrying often works — the second read is warm."
+        (case reason of TraceEmpty -> "No spans found for this trace"; TraceTimedOut -> "Trace loading timed out"; TraceReadFailed -> "Couldn't load this trace")
+        ( case reason of
+            TraceEmpty -> "No spans matched this trace in the lookup window. They may be outside this window or no longer retained."
+            TraceTimedOut -> "The trace read exceeded its time limit. Retry the read or inspect related events in Log Explorer."
+            TraceReadFailed -> "The trace read failed. Retry the read or inspect related events in Log Explorer."
+        )
   toHtmlRaw = toHtml
 
 
@@ -616,7 +624,13 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
       -- whenever the clicked span sits past it. Take the clamp maximum instead —
       -- still bounded, and the trace is warm by the time anyone navigates it.
       lookupLimit = Just 5000
-      notFound = TraceDetailsNotFound pid (traceFragmentUrl pid trId timestamp embedded spansM spanIdM) embedded
+      explorerUrl =
+        "/p/"
+          <> pid.toText
+          <> "/log_explorer?query="
+          <> toUriStr ("context___trace_id==" <> decodeUtf8 @Text (AE.encode trId))
+          <> maybe "&since=3D" (\ts -> "&from=" <> formatUTC (addUTCTime (-300) ts) <> "&to=" <> formatUTC (addUTCTime 300 ts)) timestamp
+      unavailable = TraceDetailsUnavailable (traceFragmentUrl pid trId timestamp embedded spansM spanIdM) explorerUrl embedded
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
@@ -624,7 +638,7 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
         spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now lookupLimit
         let bySpanId i = V.find (\x -> (x.context >>= (.span_id)) == Just i) spanRecords'
         case (spanIdM >>= bySpanId) <|> spanRecords' V.!? 0 of
-          Nothing -> addRespHeaders notFound
+          Nothing -> addRespHeaders $ unavailable TraceEmpty
           Just clicked -> do
             let sdkNear =
                   V.find
@@ -638,12 +652,12 @@ traceH pid trId timestamp spanIdM nav embedM spansM = do
         -- instead of a 504 — 'try' outside 'timeout', since timeout signals by
         -- throwing into this thread and an inner catch-all would swallow it.
         res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView useTf pid trId timestamp now (Just loaded)
-        let unavailable evt extra = notFound <$ Log.logAttention evt (AE.object $ ["project_id" AE..= pid, "trace_id" AE..= trId] <> extra)
+        let loggedUnavailable reason evt extra = unavailable reason <$ Log.logAttention evt (AE.object $ ["project_id" AE..= pid, "trace_id" AE..= trId] <> extra)
         addRespHeaders
           =<< case res of
-            Left e -> unavailable "TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
-            Right Nothing -> unavailable "TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= env.traceViewTimeoutSecs]
-            Right (Just Nothing) -> pure notFound
+            Left e -> loggedUnavailable TraceReadFailed "TRACE_FETCH_FAILED" ["error" AE..= show @Text e]
+            Right Nothing -> loggedUnavailable TraceTimedOut "TRACE_FETCH_TIMEOUT" ["budget_secs" AE..= env.traceViewTimeoutSecs]
+            Right (Just Nothing) -> pure $ unavailable TraceEmpty
             -- Doubling rather than +page: each pull is one request, and a viewer
             -- who needs more than the first page usually needs a lot more.
             Right (Just (Just (traceItem, spans, hasMore))) ->
