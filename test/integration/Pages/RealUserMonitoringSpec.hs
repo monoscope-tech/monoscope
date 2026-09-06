@@ -81,6 +81,14 @@ renderPanel tr tab query sessionFilterM selected service panel = do
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
+-- | Both cache layers: the shared rum_panel_cache table outlives a memory purge by design,
+-- which is exactly what these examples must not inherit from each other.
+purgeRumCaches :: TestResources -> IO ()
+purgeRumCaches tr = do
+  Cache.purge tr.trATCtx.rumCache
+  withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM rum_panel_cache"
+
+
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
@@ -165,7 +173,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Panels are cached for 15s across requests, and earlier examples already populated the
       -- unscoped key. Without this the assertions below read a snapshot taken before the span
       -- this example ingests.
-      Cache.purge tr.trATCtx.rumCache
+      purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-service-key"
       -- Reuses the session that already has a recording, so the scoped page can be checked
       -- for the replay badge as well as the rows.
@@ -195,7 +203,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The OpenTelemetry browser SDKs leave telemetry.sdk.language unset, and RUM used to
       -- filter on that alone. Every browser application in production was therefore invisible:
       -- no page views, no sessions, and an empty service picker with nothing to narrow to.
-      Cache.purge tr.trATCtx.rumCache
+      purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-otel-browser-key"
       otelBrowserSpan apiKey "40000000000000000000000000000004" "4000000000000001" "session-otel" "checkout-web" tr
 
@@ -210,7 +218,7 @@ spec = sequential $ aroundAll withTestResources do
     it "sessionLastPage_isTheLatestPageView_notALexicographicResourceUrl" \tr -> do
       -- MAX(path) over every browser span used to pick the alphabetically largest URL: on
       -- real traffic that is a third-party font fetched by the page, shown as the page.
-      Cache.purge tr.trATCtx.rumCache
+      purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-lastpage-key"
       browserSpanAt apiKey "50000000000000000000000000000005" "5000000000000001" [("url.path", "/alpha")] "Pageview · /alpha" "session-lastpage" Nothing "storefront" (addUTCTime (-120) frozenTime) tr
       browserSpanAt apiKey "50000000000000000000000000000005" "5000000000000002" [("url.full", "https://zzz-fonts.example/css2")] "HTTP GET" "session-lastpage" Nothing "storefront" (addUTCTime (-60) frozenTime) tr
@@ -223,7 +231,7 @@ spec = sequential $ aroundAll withTestResources do
     it "replayOnlySessions_sayWhatTheyAre_insteadOfUnknownPageAndZeroCounts" \tr -> do
       -- A recording whose session id never appears on a span is a real session; stacking
       -- "Unknown page" over "0 views · 0 events" reads as broken data, not as what it is.
-      Cache.purge tr.trATCtx.rumCache
+      purgeRumCaches tr
       let replayOnlyUuid = [uuid|00000000-0000-0000-0000-000000000045|]
       withResource tr.trPool \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 1, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at" (replayOnlyUuid, testPid, frozenTime, addUTCTime 45 frozenTime, "Replay only user" :: Text)
@@ -235,7 +243,7 @@ spec = sequential $ aroundAll withTestResources do
     it "browserErrors_groupBySignature_withOccurrenceAndSessionCounts" \tr -> do
       -- Twenty copies of the loudest error used to fill the whole panel; issues with masked
       -- identifiers keep every distinct failure visible with its blast radius.
-      Cache.purge tr.trATCtx.rumCache
+      purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-errors-key"
       browserSpan apiKey "60000000000000000000000000000006" "6000000000000001" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 123")] "TypeError" "session-err-a" Nothing "storefront" tr
       browserSpan apiKey "60000000000000000000000000000006" "6000000000000002" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 456")] "TypeError" "session-err-b" Nothing "storefront" tr
@@ -244,8 +252,26 @@ spec = sequential $ aroundAll withTestResources do
       -- Grouped, not listed: the message renders once for the pair.
       T.count "Cannot read cart item" panel `shouldBe` 1
 
-    it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
+    it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
+      -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must
+      -- still answer, proven by deleting the underlying rows so a recompute could not.
+      apiKey <- createTestAPIKey tr testPid "rum-l2-key"
+      browserSpan apiKey "80000000000000000000000000000008" "8000000000000001" [("url.path", "/l2-cached")] "Pageview · /l2-cached" "session-l2" Nothing "storefront" tr
+      -- A window no earlier example used, so the shared table has no entry yet for this key.
+      let renderPages since = do
+            (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1")
+            pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+      firstRender <- renderPages "6H"
+      firstRender `shouldContainAll` ["/l2-cached"]
+      -- Memory only — the shared table entry is exactly what a fresh replica would find.
       Cache.purge tr.trATCtx.rumCache
+      withResource tr.trPool \conn ->
+        void $ PG.execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ? AND attributes___session___id = ?" (testPid, "session-l2" :: Text)
+      secondRender <- renderPages "6H"
+      secondRender `shouldContainAll` ["/l2-cached"]
+
+    it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
+      purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-audience-key"
       let chromeUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
           iphoneUa = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"

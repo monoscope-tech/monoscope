@@ -11,12 +11,18 @@ module Models.Telemetry.RUM (
   RumQueryResult (..),
   RumQuery (..),
   RumCacheKey (..),
+  rumPanelCacheGet,
+  rumPanelCacheSet,
 ) where
 
+import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
+import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (AesonText (..), DB)
 import Relude
 
 
@@ -32,7 +38,7 @@ data RumPage = RumPage
   , lastSeen :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data RumError = RumError
@@ -44,7 +50,7 @@ data RumError = RumError
   , path :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 -- | One user agent's traffic. The user agent string is classified into browser, OS and
@@ -56,7 +62,7 @@ data RumBreakdown = RumBreakdown
   , errors :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data ReplaySession = ReplaySession
@@ -68,7 +74,7 @@ data ReplaySession = ReplaySession
   , userEmail :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data RumSession = RumSession
@@ -86,7 +92,7 @@ data RumSession = RumSession
   , hasReplay :: Bool
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data VitalTrendPoint = VitalTrendPoint
@@ -95,7 +101,7 @@ data VitalTrendPoint = VitalTrendPoint
   , p75 :: Double
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data PageVitalPoint = PageVitalPoint
@@ -105,7 +111,7 @@ data PageVitalPoint = PageVitalPoint
   , samples :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data VitalSample = VitalSample
@@ -114,7 +120,7 @@ data VitalSample = VitalSample
   , samples :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data RumQueryResult
@@ -127,6 +133,8 @@ data RumQueryResult
   | VitalsDetailResult [VitalTrendPoint] [PageVitalPoint]
   | ServicesResult [Text]
   | BreakdownResult [RumBreakdown]
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data RumQuery
@@ -157,3 +165,26 @@ data RumCacheKey = RumCacheKey
   }
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
+
+
+-- | Shared L2 for panel results, keyed by the hashed memory-cache key. The in-memory cache
+-- is per replica; without this layer every replica paid each panel's cold scan once per
+-- TTL (the vitals-detail scan alone costs ~25s), and the first visitor after every expiry
+-- always ate one.
+rumPanelCacheGet :: DB es => Text -> Eff es (Maybe RumQueryResult)
+rumPanelCacheGet key =
+  fmap (\(HI.OneColumn (AesonText value)) -> value)
+    . listToMaybe
+    <$> Hasql.interp [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|]
+
+
+rumPanelCacheSet :: DB es => Text -> Int64 -> RumQueryResult -> Eff es ()
+rumPanelCacheSet key ttlSeconds value = do
+  let payload = AesonText value
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO rum_panel_cache (cache_key, payload, expires_at)
+      VALUES (#{key}, #{payload}, now() + make_interval(secs => #{ttlSeconds}::double precision))
+      ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at|]
+  -- Expired rows are pruned on write: writes are rare (one per cold panel per TTL), and it
+  -- keeps the table from needing its own cleanup job.
+  Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '1 hour'|]

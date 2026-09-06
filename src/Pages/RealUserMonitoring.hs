@@ -38,7 +38,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), VitalSample (..), VitalTrendPoint (..))
+import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), VitalSample (..), VitalTrendPoint (..), rumPanelCacheGet, rumPanelCacheSet)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
@@ -48,12 +48,12 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Relude
-import System.Clock (TimeSpec (TimeSpec))
+import System.Clock (TimeSpec (..))
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, showFFloat')
+import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -714,10 +714,23 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         Just PanelSessions -> [sessionsQ, replaysQ]
         Just PanelAudience -> [breakdownQ]
         Nothing -> []
+      -- Memory first, then the shared rum_panel_cache table, then the store. A miss at both
+      -- layers computes once and fills both, so a cold panel is paid at most once per TTL
+      -- across every replica rather than once per replica.
       runQuery (label, key, ttl, action) =
         tryAny
-          ( liftIO (Cache.lookup appCtx.rumCache key)
-              >>= maybe (action >>= \fresh -> fresh <$ when (cacheableRumResult fresh) (liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key fresh)) pure
+          ( liftIO (Cache.lookup appCtx.rumCache key) >>= \case
+              Just hit -> pure hit
+              Nothing -> do
+                let dbKey = toXXHash $ show key
+                rumPanelCacheGet dbKey >>= \case
+                  Just shared -> shared <$ liftIO (Cache.insert' appCtx.rumCache (Just ttl) key shared)
+                  Nothing -> do
+                    fresh <- action
+                    when (cacheableRumResult fresh) do
+                      liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key fresh
+                      rumPanelCacheSet dbKey ttl.sec fresh
+                    pure fresh
           )
           >>= either (\err -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)) (pure . Right)
       deferredUrl =
