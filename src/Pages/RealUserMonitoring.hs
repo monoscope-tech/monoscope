@@ -648,7 +648,7 @@ cacheableRumResult = \case
 -- panels arrive on the request the skeleton fires.
 rumSkeleton_ :: RumTab -> Html ()
 rumSkeleton_ Sessions =
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]", role_ "status", Aria.label_ "Loading sessions"] do
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]", role_ "status", Aria.label_ "Loading sessions"] do
     section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] $ Components.tableSkeleton_ 8
     section_ [class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"] mempty
 rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
@@ -885,6 +885,7 @@ sessionSearch_ page = form_
   ]
   do
     input_ [type_ "hidden", name_ "tab", value_ "sessions"]
+    input_ [type_ "hidden", name_ "session", value_ $ fromMaybe "" page.selectedSession]
     TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
     forM_ page.links.service $ \service -> input_ [type_ "hidden", name_ "service", value_ service]
     forM_ (sessionFilterParam page.sessionFilter) $ \f -> input_ [type_ "hidden", name_ "filter", value_ f]
@@ -1222,16 +1223,16 @@ audienceColumn_ title rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
 
 recentSessions_ :: RumData -> Html ()
 recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect its correlated telemetry" (Just ("View all sessions", sessionsUrl page.links Nothing AllSessionRows Nothing)) do
-  sessionsTable_ False page.links Nothing AllSessionRows (take 8 page.sessions)
+  sessionsTable_ False page.links Nothing AllSessionRows Nothing (take 8 page.sessions)
 
 
 sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]"] do
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 border-strokeWeak xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:border-e max-xl:border-b"]
-      $ sessionsTable_ True page.links page.query page.sessionFilter filtered
+      $ sessionsTable_ True page.links page.query page.sessionFilter page.selectedSession filtered
     section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
 
 
@@ -1257,50 +1258,70 @@ sessionFilterLabel = \case
 -- a row swaps only that panel instead of re-rendering the page around it, and the shared
 -- Table contributes the filter tabs and the zero state. The Overview's recent list
 -- has no panel to swap, so its rows navigate and it carries none of the chrome.
-sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> [RumSession] -> Html ()
-sessionsTable_ workspace links query sessionFilter sessions =
+sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> [RumSession] -> Html ()
+sessionsTable_ workspace links query sessionFilter selectedSession sessions =
   toHtml
     Table.Table
-      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[32rem]"}
+      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[34rem]"}
       , columns =
-          [ ( Table.col "User / session" \session -> do
-                a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
-                span_ [class_ "block truncate font-mono text-xs text-textWeak"] $ toHtml session.id
+          [ ( Table.col "Session" \session -> do
+                a_
+                  ( sessionLinkAttrs session.id
+                      <> [ class_ "rum-session-link block truncate font-medium text-textStrong hover:text-textBrand aria-[current=true]:text-textBrand focus-visible:outline-none"
+                         , data_ "session-id" session.id
+                         , term "aria-current" $ bool "false" "true" (selectedSession == Just session.id)
+                         , Aria.label_ $ bool "Open session for " "Watch replay for " session.hasReplay <> sessionIdentity session
+                         , title_ $ sessionIdentity session
+                         , onkeydown_ "if (event.key === 'Enter') event.stopPropagation()"
+                         ]
+                  )
+                  $ toHtml
+                  $ if sessionIdentity session == session.id then "Session " <> T.take 8 session.id else sessionIdentity session
+                when (sessionIdentity session /= session.id) $ span_ [class_ "mt-0.5 block font-mono text-xs text-textWeak", title_ session.id] $ toHtml $ T.take 8 session.id
             )
-              { Table.attrs = [class_ "w-[32%]"]
+              { Table.attrs = [class_ "w-[34%] py-2.5"]
+              , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
           , ( Table.col "Last page" \session -> do
-                -- A recording with no correlated spans is a real session, not a mystery: say
-                -- what it is instead of stacking "Unknown page" over "0 views · 0 events".
-                span_ [class_ $ "block truncate text-xs " <> bool "text-textStrong" "text-textWeak" (replayOnly session)] $ toHtml $ fromMaybe (bool "No page views in this range" "Recording only — no telemetry events" (replayOnly session)) session.lastPage
-                forM_ session.service $ span_ [class_ "block truncate text-xs text-textWeak"] . toHtml
+                -- Display the distinguishing path; keep the full URL available on hover.
+                span_ [class_ "block truncate text-sm text-textStrong", title_ $ fromMaybe "" session.lastPage]
+                  $ toHtml
+                  $ maybe (bool "No page views" "Recording only" (replayOnly session)) pageLabel session.lastPage
+                forM_ session.service $ \service -> span_ [class_ "mt-0.5 block truncate text-xs text-textWeak", title_ service] $ toHtml service
             )
-              { Table.attrs = [class_ "w-[30%]"]
+              { Table.attrs = [class_ "w-[28%] py-2.5"]
               }
-          , ( Table.col "Signals" \session -> do
-                div_ [class_ "flex flex-wrap justify-end gap-1"] do
-                  when (session.errors > 0) $ span_ [class_ "badge badge-sm badge-error gap-1"] $ faSprite_ "triangle-exclamation" "solid" "h-2.5 w-2.5" >> toHtml (show session.errors)
-                  when session.hasReplay $ span_ [class_ "badge badge-sm badge-ghost gap-1"] $ faSprite_ "video" "regular" "h-2.5 w-2.5" >> "Replay"
-                unless (replayOnly session) do
-                  let signals = countNoun session.views "view" <> " · " <> countNoun session.events "event"
-                  span_ [class_ "mt-0.5 block truncate text-xs tabular-nums text-textWeak", data_ "tippy-content" signals] $ toHtml signals
+          , ( Table.col "Activity" \session -> do
+                when (session.errors > 0) $ span_ [class_ "mb-0.5 flex items-center gap-1 text-xs font-medium text-textError"] do
+                  faSprite_ "triangle-exclamation" "solid" "h-3 w-3 shrink-0"
+                  toHtml $ countNoun session.errors "error"
+                if replayOnly session
+                  then span_ [class_ "text-xs text-textWeak"] "No telemetry"
+                  else do
+                    span_ [class_ "block text-xs tabular-nums text-textStrong"] $ toHtml $ countNoun session.views "view"
+                    span_ [class_ "mt-0.5 block text-xs tabular-nums text-textWeak"] $ toHtml $ countNoun session.events "event"
             )
-              { Table.align = Just "text-right"
+              { Table.attrs = [class_ "w-[22%] py-2.5"]
               }
-          , (rightCol "Duration" $ toHtml . formatSessionDuration){Table.attrs = [class_ "w-16 text-xs"]}
-          , ( Table.col "" \session ->
+          , ( Table.col "Duration" \session -> do
+                span_ [class_ "block text-sm tabular-nums text-textStrong"] $ toHtml $ formatSessionDuration session
                 if session.hasReplay
-                  then a_ (sessionLinkAttrs session.id <> [class_ "btn btn-ghost btn-xs", Aria.label_ $ "Watch replay for " <> sessionIdentity session, data_ "tippy-content" "Watch replay"]) $ faSprite_ "circle-play" "regular" "h-4 w-4"
-                  else a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-ghost btn-xs", Aria.label_ $ "Inspect telemetry for " <> sessionIdentity session, data_ "tippy-content" "Inspect telemetry"] $ faSprite_ "arrow-up-right" "regular" "h-3.5 w-3.5"
+                  then span_ [class_ "mt-0.5 flex items-center gap-1 text-xs text-textWeak"] do
+                    faSprite_ "circle-play" "regular" "h-3 w-3 shrink-0"
+                    "Replay"
+                  else span_ [class_ "mt-0.5 block text-xs text-textWeak"] "No replay"
             )
-              { Table.attrs = [class_ "w-11 px-1"]
-              , Table.align = Just "text-right"
+              { Table.attrs = [class_ "w-[16%] py-2.5"]
               }
           ]
       , rows = V.fromList sessions
       , features =
           def
-            { Table.header =
+            { Table.rowAttrs = Just $ \_ ->
+                [ class_ " cursor-pointer [&:has(a[aria-current=true])]:bg-fillBrand-weak [&:has(a:focus-visible)]:outline-2 [&:has(a:focus-visible)]:-outline-offset-2 [&:has(a:focus-visible)]:outline-strokeFocus"
+                , onclick_ "if (!event.target.closest('a, button, input, select, textarea') && !window.getSelection()?.toString()) { const link = this.querySelector('.rum-session-link'); if (event.ctrlKey || event.metaKey) window.open(link.href, '_blank', 'noopener'); else link.click(); }"
+                ]
+            , Table.header =
                 guard workspace
                   $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-2"] do
                     toHtml
@@ -1324,6 +1345,7 @@ sessionsTable_ workspace links query sessionFilter sessions =
                   -- hx-select found nothing and the outerHTML swap deleted the workspace.
                   hxGet_ $ url <> "&panel=sessions&deferred=1"
                 , hxTarget_ "#rum-replay-workspace"
+                , term "hx-on::after:request" "if (event.detail.ctx.response.status >= 200 && event.detail.ctx.response.status < 300) { document.querySelectorAll('.rum-session-link').forEach(link => link.setAttribute('aria-current', String(link.dataset.sessionId === this.dataset.sessionId))); document.getElementById('rum-session-search').form.elements.session.value = this.dataset.sessionId; }"
                 , hxSelect_ "#rum-replay-workspace"
                 , hxSwap_ "outerHTML"
                 , hxPushUrl_ url

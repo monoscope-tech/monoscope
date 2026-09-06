@@ -97,7 +97,7 @@ spec = sequential $ aroundAll withTestResources do
       toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
       (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]", "skeleton-shimmer"]
+      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
 
@@ -236,7 +236,7 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 1, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at" (replayOnlyUuid, testPid, frozenTime, addUTCTime 45 frozenTime, "Replay only user" :: Text)
       rows <- renderPanel tr (Just "sessions") (Just "Replay only user") Nothing Nothing Nothing (Just "sessions")
-      rows `shouldContainAll` ["Replay only user", "Recording only — no telemetry events"]
+      rows `shouldContainAll` ["Replay only user", "Recording only", "No telemetry"]
       T.isInfixOf "Unknown page" rows `shouldBe` False
       T.isInfixOf "0 views" rows `shouldBe` False
 
