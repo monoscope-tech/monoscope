@@ -48,6 +48,28 @@ describe('Log Explorer chart auto-refresh', () => {
     history.replaceState({}, '', '/');
   });
 
+  test.each([
+    { thresholds: { alertThreshold: 5 }, lower: 0, upper: 5 },
+    { thresholds: { warningThreshold: -5 }, lower: -5, upper: 1 },
+    { thresholds: { alertThreshold: 0 }, lower: 0, upper: 1 },
+  ])('keeps $thresholds visible outside the series range', async ({ thresholds, lower, upper }) => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="threshold-series" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    (window as any).chartWidget({ ...widget('threshold-series'), ...thresholds });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+    const option = instance.setOption.mock.calls.at(-1)![0];
+    const extent = { min: 0, max: 1 };
+    expect(option.yAxis.max(extent)).toBeGreaterThan(upper);
+    expect(option.yAxis.min(extent)).toBeLessThanOrEqual(lower);
+    expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual(Object.values(thresholds));
+    expect(option.series[0].markLine.data[0].label.position).toBe('insideEndTop');
+  });
+
   test('holds fetch slots until streaming bodies finish', async () => {
     const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
     document.body.innerHTML = Array.from({ length: 5 }, (_, i) => `<div id="prefetch-${i}" data-chart-widget></div>`).join('');

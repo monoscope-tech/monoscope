@@ -393,10 +393,21 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   // Merge threshold markLines into first series to avoid a second setOption call
   const thresholds: Record<string, number> = {};
-  if (widgetData.alertThreshold != null && !isNaN(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
-  if (widgetData.warningThreshold != null && !isNaN(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
+  if (widgetData.alertThreshold != null && Number.isFinite(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
+  if (widgetData.warningThreshold != null && Number.isFinite(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
   if (Object.keys(thresholds).length > 0 && opt.series?.length) {
     opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) };
+    // ECharts excludes markLines from automatic extents. Include thresholds in
+    // the data-derived bounds, including streamed updates, with room for labels.
+    const values = Object.values(thresholds);
+    const bounds = ({ min, max }: { min: number; max: number }) => {
+      const low = Math.min(0, min, ...values);
+      const high = Math.max(max, ...values);
+      const padding = (high - low || 1) * 0.05;
+      return { min: low < 0 ? low - padding : 0, max: high + padding };
+    };
+    opt.yAxis.min = (data: { min: number; max: number }) => bounds(data).min;
+    opt.yAxis.max = (data: { min: number; max: number }) => bounds(data).max;
   }
 
   return opt;
@@ -1217,7 +1228,7 @@ const createThresholdMarkLines = (thresholds: Record<string, number>) => {
     .map(([type, value]) => ({
       yAxis: value,
       name: type,
-      label: { formatter: thresholdStyles[type]?.formatter || `${type}: {c}`, position: 'end' },
+      label: { formatter: thresholdStyles[type]?.formatter || `${type}: {c}`, position: 'insideEndTop' },
       lineStyle: { color: thresholdStyles[type]?.color || styles.textColor, width: 2, type: 'dashed' },
     }));
 };
