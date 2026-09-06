@@ -19,7 +19,7 @@ module Pages.RealUserMonitoring (
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
-import Data.Char (isDigit)
+import Data.Char (isDigit, isLower)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -1384,11 +1384,17 @@ pageLabel url
 -- "/products/:id"
 -- >>> pageRoute "/api/v2/cart"
 -- "/api/v2/cart"
+--
+-- Host-style or wordy segments keep their identity even when they contain a digit:
+--
+-- >>> pageRoute "l2.example/cached"
+-- "l2.example/cached"
 pageRoute :: Text -> Text
 pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`notElem` ("?#" :: String)) . pageLabel
   where
     maskSegment seg
-      | replaceAllFormats seg /= seg && (T.length seg >= 8 || T.all isDigit seg) = ":id"
+      | replaceAllFormats seg `elem` ["{uuid}", "{integer}", "{hex}", "{sha1}", "{sha256}", "{md5}"] = ":id"
+      | T.length seg >= 8 && T.any isDigit seg && not (T.any isLower seg) = ":id"
       | otherwise = seg
 
 
