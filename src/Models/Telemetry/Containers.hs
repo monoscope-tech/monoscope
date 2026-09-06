@@ -159,10 +159,26 @@ resourcePath = blobPath "resource"
 
 -- | The same accessor for the datapoint @attributes@ blob. hostmetrics dimensions its series
 -- there — CPU by logical core and mode, memory by state — so the pivot has to read it.
+--
+-- Both spellings of a dotted OTel key are read — nested (@{"cpu":{"mode":..}}@) and flat
+-- (@{"cpu.mode":..}@) — because the two stores and ingest paths have not historically agreed
+-- on which one a datapoint carries, and a missed spelling silently reads as "no metrics":
+-- every host row on the Infrastructure page showed dashes while the data sat in the blob.
+--
+-- >>> import qualified Data.Text.IO as TIO
+-- >>> TIO.putStrLn $ blobPath "attributes" False ["cpu", "mode"]
+-- COALESCE(attributes #>> '{cpu,mode}', attributes ->> 'cpu.mode')
+-- >>> TIO.putStrLn $ blobPath "attributes" True ["cpu", "mode"]
+-- COALESCE(variant_get(attributes,'cpu.mode','Utf8'), attributes ->> 'cpu.mode')
 blobPath :: Text -> Bool -> [Text] -> Text
 blobPath col useTimefusion path
-  | useTimefusion = "variant_get(" <> col <> ",'" <> T.intercalate "." path <> "','Utf8')"
-  | otherwise = col <> " #>> '{" <> T.intercalate "," path <> "}'"
+  -- On TimeFusion `->>` with a dotted literal reads the flat single key (the wire operator
+  -- is rewritten to a bracket-quoted variant_get), while variant_get with a dotted path
+  -- string reads the nested shape.
+  | useTimefusion = "COALESCE(variant_get(" <> col <> ",'" <> dotted <> "','Utf8'), " <> col <> " ->> '" <> dotted <> "')"
+  | otherwise = "COALESCE(" <> col <> " #>> '{" <> T.intercalate "," path <> "}', " <> col <> " ->> '" <> dotted <> "')"
+  where
+    dotted = T.intercalate "." path
 
 
 -- | Split a tag off an image reference. docker_stats sends the whole @repo:tag@ string as
@@ -340,7 +356,9 @@ containersInWindow useTimefusion pid fromTime' toTime =
           <> [HI.sql| THEN NULL ELSE resource___k8s___namespace___name END AS namespace,
           CASE WHEN |]
           <> raw isHost
-          <> [HI.sql| THEN resource___host___name ELSE COALESCE(|]
+          <> [HI.sql| THEN |]
+          <> raw hostNameExpr
+          <> [HI.sql| ELSE COALESCE(|]
           <> raw (resourcePath useTimefusion ["k8s", "node", "name"])
           <> [HI.sql|, resource___host___name) END AS node_name,
           -- No receiver emits k8s.cluster.name: a cluster has no name in the API, so it
@@ -481,15 +499,29 @@ containersInWindow useTimefusion pid fromTime' toTime =
     isPod = "metric_name LIKE 'k8s.pod.%'"
     isContainer = "NOT (" <> isHost <> " OR " <> isPod <> ")"
     scopeExpr = "CASE WHEN " <> isHost <> " THEN 'host' WHEN " <> isPod <> " THEN 'pod' ELSE 'container' END"
+    -- A collector agent running inside Kubernetes reports @host.name@ as its own pod's
+    -- hostname, and the node it is actually measuring in @k8s.node.name@ — production's
+    -- hostmetrics rows carry exactly that shape. Preferring the node name keeps the host's
+    -- system.* series grouped with the node's containers instead of forming a phantom
+    -- "otel-collector-…" host while the real nodes show no metrics at all. The blob read is
+    -- the last resort for rows whose ingest leg missed the flattened column.
+    hostNameExpr =
+      "COALESCE("
+        <> resourcePath useTimefusion ["k8s", "node", "name"]
+        <> ", resource___host___name, "
+        <> resourcePath useTimefusion ["host", "name"]
+        <> ")"
     identityExpr =
       "CASE WHEN "
         <> isHost
-        <> " THEN resource___host___name WHEN "
+        <> " THEN "
+        <> hostNameExpr
+        <> " WHEN "
         <> isPod
         <> " THEN resource___k8s___pod___name ELSE COALESCE(resource___k8s___container___name, resource___container___name) END"
     -- A pod's identity is already unique, so only a container needs the pod or host appended
     -- to separate same-named containers across pods and Swarm nodes.
-    groupKeyExpr = "CASE WHEN " <> isHost <> " THEN resource___host___name ELSE COALESCE(resource___k8s___pod___name, resource___host___name) END"
+    groupKeyExpr = "CASE WHEN " <> isHost <> " THEN " <> hostNameExpr <> " ELSE COALESCE(resource___k8s___pod___name, resource___host___name) END"
     cpuMode = blobPath "attributes" useTimefusion ["cpu", "mode"]
     cpuNum = blobPath "attributes" useTimefusion ["cpu", "logical_number"]
     memState = blobPath "attributes" useTimefusion ["system", "memory", "state"]

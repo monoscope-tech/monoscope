@@ -1218,9 +1218,7 @@ sessionsTable_ workspace links query sessionFilter sessions =
           def
             { Table.search = guard workspace $> Table.ClientSide
             , Table.searchPlaceholder = Just "User, session, page, or service"
-            , -- `Features.tabs` is declared but never rendered by the component; every caller
-              -- (Monitors, Anomalies) renders the TabFilter itself, so this table does too.
-              Table.header =
+            , Table.header =
                 guard workspace
                   $> toHtml
                     Table.TabFilter

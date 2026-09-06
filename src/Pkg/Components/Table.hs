@@ -110,7 +110,6 @@ data Features a = Features
   , bulkActions :: [BulkAction]
   , search :: Maybe SearchMode
   , searchPlaceholder :: Maybe Text
-  , tabs :: Maybe TabFilter
   , sort :: Maybe SortConfig
   , sortableColumns :: Maybe SortableConfig -- HTMX-powered column sorting
   , tableHeaderActions :: Maybe TableHeaderActions -- Sort/filter dropdowns in header

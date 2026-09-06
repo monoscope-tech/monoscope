@@ -172,6 +172,15 @@ ingestFixture tr key = do
   forM_ ([("used", 2147483648), ("free", 1073741824), ("cached", 1073741824)] :: [(Text, Double)]) \(st, v) ->
     emitDim host [mkAttr "system.memory.state" st] ("system.memory.usage", v)
 
+  -- hostmetrics from a collector agent running inside the cluster: @host.name@ is the
+  -- agent pod's own hostname, and the node it is measuring only in @k8s.node.name@ —
+  -- production's exact shape. These must land on the node's host row, not create a
+  -- phantom "otel-collector-…" host while every real node shows no metrics.
+  let agentHost = [mkAttr "host.name" "otel-collector-77cd857677-qb24l", mkAttr "k8s.node.name" "vps-d6d7e318"]
+  forM_ (["cpu0", "cpu1"] :: [Text]) \core -> do
+    emitDim agentHost (cpuDp core "idle") ("system.cpu.utilization", 0.75)
+    emitDim agentHost (cpuDp core "user") ("system.cpu.utilization", 0.25)
+
   -- A Docker Swarm task. docker_stats reports the task name and no service attribute, so the
   -- service has to be read back out of the name.
   forM_
@@ -236,6 +245,7 @@ spec = sequential $ aroundAll withTestResources do
                           , "postgres"
                           , "frontend-544d9b6f4-2xk7z"
                           , "vps-bare-01"
+                          , "vps-d6d7e318"
                           , "srv-captain--redpanda-0.1.tt13bkp5"
                           , "srv-captain--api.2.wcxx3mlmh1q1jpwk9ohyjjv7c"
                           ]
@@ -320,11 +330,11 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ containersPage noContainerFilters
       let Containers.ContainersPage (PageCtx _ body) = page
       table <- deferredBody body
-      V.length table.rows `shouldBe` 7
+      V.length table.rows `shouldBe` 8
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
           cacheKey = (testPid, Nothing, Nothing, Just "5M") :: ContainerSnapshotKey
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
-      V.length <$> cached `shouldBe` Just 7
+      V.length <$> cached `shouldBe` Just 8
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
       html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "flex min-w-0 items-center text-textStrong max-md:hidden", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
       T.isInfixOf "group/summary" html `shouldBe` False
@@ -357,7 +367,7 @@ spec = sequential $ aroundAll withTestResources do
       listWith (containersPage noContainerFilters{cluster = Just "otel-demo"}) >>= (`shouldBe` ["checkout"])
       listWith (containersPage noContainerFilters{cluster = Just clusterUid}) >>= (`shouldMatchList` ["coredns", "postgres", "frontend-544d9b6f4-2xk7z"])
       -- A bare node is its own runtime, so it is reachable and does not pollute the others.
-      listWith (containersPage noContainerFilters{runtime = Just "host"}) >>= (`shouldBe` ["vps-bare-01"])
+      listWith (containersPage noContainerFilters{runtime = Just "host"}) >>= (`shouldMatchList` ["vps-bare-01", "vps-d6d7e318"])
 
     -- Keep both identity columns readable when image and workload names are long.
     it "longContainerMetadata_doesNotOverlapPodColumn" \tr -> do
@@ -380,8 +390,14 @@ spec = sequential $ aroundAll withTestResources do
 
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
       (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
-      LT.toStrict (Lucid.renderText $ Lucid.toHtml hosts)
+      let hostsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hosts
+      hostsHtml
         `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "/infrastructure/hosts/detail?since=5M"]
+      -- The in-cluster agent's system.* series (host.name = its own pod, node only in
+      -- k8s.node.name) attributes to the node it measures — 0.5 busy cores of 2 is 25% —
+      -- and never forms a host row named after the agent pod.
+      hostsHtml `shouldContainAll` ["vps-d6d7e318", "25%"]
+      hostsHtml `shouldNotSatisfy` T.isInfixOf "otel-collector-77cd857677-qb24l"
       Icons.lookupIcon "solid" "download" `shouldSatisfy` isJust
       Icons.lookupIcon "regular" "cube" `shouldSatisfy` isJust
 
@@ -441,7 +457,9 @@ spec = sequential $ aroundAll withTestResources do
       filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1"]
 
     it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
-      (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-d6d7e318") Nothing Nothing Nothing
+      -- The Docker host: containers report against it but no system.* series does.
+      -- (vps-d6d7e318 no longer qualifies — the in-cluster agent gives it host CPU.)
+      (_, hostWithoutMetrics) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "0ce201583b04") Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostWithoutMetrics
       html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Metrics coverage: 0 of 4"]
       html `shouldNotSatisfy` T.isInfixOf "host-cpu"
