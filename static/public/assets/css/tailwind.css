@@ -2682,3 +2682,25 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
 @media (min-width: 2400px) {
   .container-usage-chart { aspect-ratio: 6 / 1; }
 }
+
+/* Keep the custom calendar separate from presets, including in short viewports. */
+.time-range-popover {
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
+}
+.time-range-popover:has(.time-range-custom:not(.hidden)) > ul {
+  display: none;
+}
+.time-range-custom .easepick-wrapper {
+  display: block;
+  width: 100%;
+}
+@media (max-width: 767px) {
+  .time-range-popover[popover] {
+    position: fixed;
+    position-area: none;
+    inset: auto 0 0;
+    margin: 0.5rem auto;
+    width: min(24rem, calc(100vw - 1rem));
+  }
+}

@@ -141,26 +141,35 @@ timepicker_ submitForm currentRange targetIdM = do
     , style_ $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
     , onclick_ "event.stopPropagation()"
-    , class_ "flex min-h-8 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
+    , class_ "flex min-w-0 max-w-full min-h-8 max-md:min-h-11 items-center gap-2 max-md:gap-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
     , data_ "live-range" $ bool "false" "true" isLive
     ]
     do
       when isLive $ span_ [class_ "rounded bg-fillSuccess-strong px-1.5 py-0.5 text-xs font-semibold leading-none text-textInverse-strong", data_ "live-badge" ""] "LIVE"
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral max-md:hidden"
       let attrs = maybe [] (\(s, e) -> [data_ "start" s, data_ "end" e]) currentRange
-      span_ (attrs ++ [class_ "inline-block leading-none whitespace-nowrap", id_ $ targetPr <> "-currentRange"]) $ toHtml displayRange
+      span_ (attrs ++ [class_ "inline-block min-w-0 leading-snug text-left whitespace-normal md:whitespace-nowrap", id_ $ targetPr <> "-currentRange"]) $ toHtml displayRange
       span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   div_ [class_ "contents"] do
     div_
-      [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgRaised shadow-lg"
+      [ class_ "time-range-popover border dropdown dropdown-end menu w-96 rounded-box bg-bgRaised shadow-lg"
       , term "popover" "manual"
       , id_ $ targetPr <> "-timepicker-popover"
       , style_ $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
       ]
       do
-        div_ [class_ "absolute top-0 left-0 z-50 hidden", id_ $ targetPr <> "-timepickerSidebar", [__| on click halt|]] $ div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
+        div_ [class_ "time-range-custom hidden", id_ $ targetPr <> "-timepickerSidebar"] do
+          button_
+            [ type_ "button"
+            , class_ "flex items-center gap-2 px-3 py-2 min-h-11 text-sm text-textBrand"
+            , term "_" [text|on click add .hidden to #$targetPr-timepickerSidebar then call #$targetPr-customRangeTrigger.focus()|]
+            ]
+            do
+              faSprite_ "arrow-left" "regular" "h-4 w-4"
+              "Preset ranges"
+          div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
           let action = submitVia "window.setQueryParamAndReload('since', my @data-value)"
@@ -176,7 +185,8 @@ timepicker_ submitForm currentRange targetIdM = do
                 span_ [class_ "text-xs text-textWeak"] $ toHtml val
           li_ $ button_
             [ class_ "w-full text-left"
-            , term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
+            , id_ $ targetPr <> "-customRangeTrigger"
+            , term "_" [text| on click remove .hidden from #$targetPr-timepickerSidebar then call #$targetPr-timepickerSidebar.querySelector('button').focus() |]
             ]
             do
               faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"

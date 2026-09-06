@@ -938,7 +938,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
                     -- widget's own value slot, hoisted into the header this card owns
                     -- because `naked` suppresses the widget's. Same number as the chart
                     -- by construction — there is no second query to disagree with it.
-                    picker = div_ [class_ "flex items-center gap-2"] do
+                    picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
                       TimePicker.timepicker_ (Just refreshId) currentRange Nothing
                       TimePicker.refreshButton_
                     -- Sentry and Datadog both make this the largest number on the page; it
@@ -949,7 +949,7 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
                       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
                       Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
                 div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
-                detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto"] picker)} chartTitle
+                detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto max-md:w-full"] picker)} chartTitle
                   $ div_ [class_ heightCls]
                   $ Widget.widget_
                     (def :: Widget.Widget)

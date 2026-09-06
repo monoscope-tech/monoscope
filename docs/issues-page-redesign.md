@@ -988,4 +988,39 @@ The Retry button successfully replaced a failed lookup with a captured event.
 An exclusive telemetry-table lock exposed a limitation in the original application-only timeout: the sample response waited 10.8 seconds.
 With the database statement limit, the page returned in 19ms and the failed sample returned in 4.02 seconds, while the lock remained held.
 The panel retained the stored sample and offered Retry.
-Deployment of this change remains pending.
+Deployment run `34049237508` passed all CI stages and deployed successfully.
+The production sample endpoint returned HTTP 200 with the correct empty-range fallback in 705ms.
+All seven production reference pages passed again without JavaScript errors or overflow; shell responses measured 216–839ms.
+
+## 15. Mobile time range control
+
+At 320px, the absolute range button extended beyond the issue card.
+The custom calendar also covered preset choices, leaving both visible at once.
+
+The issue chart now gives the range button its own row on phones.
+Dates wrap, while transport controls remain available below.
+The popup stays within the mobile viewport and scrolls in short landscape views.
+Custom selection hides the presets and provides a Preset ranges button to return.
+
+A browser preview passed at 320px, 390px, 667px landscape, and 1440px.
+Checks covered popup bounds, custom selection, returning to presets, and applying Last hour.
+The application build and CSS build passed. The compiled page passed all four viewport checks without JavaScript errors.
+The final check also selected two custom dates, verified the resulting one-day interval, and returned to Last hour.
+Switching views moves focus to the new view and restores the calendar scroll position.
+The browser verified focus in both directions and a zero scroll offset when the calendar opened.
+Deployment of the mobile control change remains pending.
+
+### Follow-up: warning threshold provenance
+
+`notifyQueryMonitorStatusChange` always passes `monitor.alertThreshold` to the issue constructor.
+The caller also invokes it for warning transitions.
+This can record an alert threshold beside a value that only crossed the warning threshold.
+The reference monitor overview shows warning > 2 and alert > 5; the issue records actual 3 against threshold 5.
+This supports the warning-path explanation, though historical configuration changes remain possible.
+
+### Follow-up: absolute range timezone labels
+
+`parseTimeRange` formats absolute display values without a timezone suffix.
+`initTimeDisplay` passes those values to `new Date`, which interprets them in the browser's local timezone.
+This can label UTC bounds as local clock times without applying the offset.
+Verify the rendered label against the URL bounds in a non-UTC browser before changing the format contract.
