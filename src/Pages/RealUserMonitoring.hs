@@ -19,6 +19,7 @@ module Pages.RealUserMonitoring (
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
+import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -1358,26 +1359,36 @@ pageLabel url
   | otherwise = url
 
 
--- | Collapse page URLs into routes: query and fragment dropped, ids masked with the same
--- 'replaceAllFormats' masks error grouping uses — "/checkout/<uuid>" pages become one row,
--- the collapse Datadog performs into view names.
+-- | Collapse page URLs into routes, the grouping Datadog performs into view names: query
+-- and fragment dropped, and any path segment 'replaceAllFormats' finds variable content in
+-- (uuid, number, hash — the masks error grouping uses) becomes @:id@ wholesale, so SKUs
+-- like @2ZYFJ3GM2N@ don't leave partial-mask confetti. Short segments such as @v2@ stay
+-- literal.
 --
 -- >>> pageRoute "https://shop.example/cart/checkout/c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd?order=x"
--- "/cart/checkout/{uuid}"
+-- "/cart/checkout/:id"
+-- >>> pageRoute "/product/2ZYFJ3GM2N"
+-- "/product/:id"
 -- >>> pageRoute "/products/12345"
--- "/products/{integer}"
--- >>> pageRoute "/cart"
--- "/cart"
+-- "/products/:id"
+-- >>> pageRoute "/api/v2/cart"
+-- "/api/v2/cart"
 pageRoute :: Text -> Text
-pageRoute = replaceAllFormats . T.takeWhile (`notElem` ("?#" :: String)) . pageLabel
+pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`notElem` ("?#" :: String)) . pageLabel
+  where
+    maskSegment seg
+      | replaceAllFormats seg /= seg && (T.length seg >= 8 || T.all isDigit seg) = ":id"
+      | otherwise = seg
 
 
 -- | Explorer filter for a masked route: exact path match when nothing was masked, else a
 -- prefix match on the static part before the first mask.
 routeKql :: Text -> Text
-routeKql route = case T.breakOn "{" route of
-  (_, "") -> pagePathKql route
-  (prefix, _) -> "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
+routeKql route
+  | prefix == route = pagePathKql route
+  | otherwise = "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
+  where
+    prefix = fst $ T.breakOn ":id" route
 
 
 -- | Traffic-weighted room for improvement, after Sentry's "Opportunity" ranking: sample
