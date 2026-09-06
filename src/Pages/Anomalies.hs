@@ -207,16 +207,16 @@ anomalyBulkActionsPostH pid action durationM items = do
       addRespHeaders Bulk
 
 
-anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueById pid issueId
+anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueById pid issueId
 
 
-anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM sinceM \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
+anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailHashGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
-anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailCore pid firstM sinceM fetchIssue = do
+anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailCore pid firstM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue pid
   now <- Time.currentTime
@@ -255,9 +255,11 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
           bracketAround t = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) t) (Just $ isoT $ addUTCTime 7200 t)
           lastActive = zonedTimeToUTC issue.updatedAt
-          tp = case (sinceM, Issues.issuePayload issue) of
-            (Just s, _) -> TimePicker.TimePicker (Just s) Nothing Nothing
-            (_, Just (Issues.QueryAlertP d)) -> bracketAround d.triggeredAt
+          -- The URL's range drives the picker, sample lookup and log links together.
+          -- Previously only widgets saw absolute dates; the server silently used defaults.
+          tp = case Issues.issuePayload issue of
+            _ | any (maybe False (not . T.null)) [requestedRange.since, requestedRange.from, requestedRange.to] -> requestedRange
+            Just (Issues.QueryAlertP d) -> bracketAround d.triggeredAt
             _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
             _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
           (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
@@ -847,11 +849,13 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
       -- standalone chart widgets read the same window the picker shows. A query
       -- alert defaults to an absolute from/to around its trigger, so seeding
       -- `since` unconditionally (as this used to) would have overridden it.
-      let seedParams = case (tp.since, tp.from, tp.to) of
-            (Just s, _, _) -> [fmt|since:'{s}'|]
-            (_, Just f, Just t) -> [fmt|from:'{f}',to:'{t}'|] :: Text
-            _ -> "since:'1H'"
-      script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since')&&!new URLSearchParams(location.search).get('from'))window.setParams({{{seedParams}}})}});|]
+      let seedParams =
+            T.replace "<" "\\u003c"
+              $ decodeUtf8 @Text
+              $ AE.encode
+              $ AE.object
+                [key AE..= value | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
+      script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({seedParams})}});|]
       -- Volume chart + issue type content
       -- @thresholdM@ draws the alert's own breach line on the chart, so a reader can
       -- see the crossing rather than being told about it in the title. @heightCls@
@@ -1071,7 +1075,16 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
                 h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
               div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
-                let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
+                let rangeParams = [(key, value) | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
+                    aUrl first =
+                      "/p/"
+                        <> pid.toText
+                        <> "/issues/"
+                        <> issueId
+                        <> "?"
+                        <> T.intercalate
+                          "&"
+                          [key <> "=" <> toUriStr value | (key, value) <- [("first_occurrence", "true") | first] <> rangeParams]
                     navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
                     -- Radio inside the label, panel shown by a CSS variant off
                     -- #error-details-container's group: no JS, and the choice
@@ -1082,10 +1095,12 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp sampleOve
                 -- occurrence* you are looking at, the other picks *how* you look at it. Sentry
                 -- and Datadog both name this control ("First | Last | Recommended", "Error
                 -- sample") rather than leaving the reader to infer the grouping.
-                span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mr-1 max-md:hidden"] "Occurrence"
-                forM_ ([(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured", "First"), (aUrl, not isFirst, "Show recent trace the error occured", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
-                span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-                forM_ ([("err-tab-trace", "Trace", not isLogPatternIssue), ("err-tab-logs", "Logs", isLogPatternIssue)] :: [(Text, Text, Bool)]) tabBtn
+                unless isLogPatternIssue do
+                  span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mr-1 max-md:hidden"] "Occurrence"
+                  forM_ ([(aUrl True, isFirst, "Show the first occurrence", "First"), (aUrl False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
+                  span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
+                when (isJust traceRef) $ tabBtn ("err-tab-trace", "Trace", True)
+                tabBtn ("err-tab-logs", "Logs", isNothing traceRef)
                 span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
                 -- Icon state is CSS-driven off the container's fullscreen class; the click only
                 -- sends the event. tippy, not daisyUI: the card is `overflow-hidden`, which clips

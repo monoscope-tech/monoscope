@@ -408,20 +408,67 @@ spec = sequential $ aroundAll withTestResources do
                       'SERVER', '200', '{}') |]
             (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
-      (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
+      (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing Nothing Nothing
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
-      (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
+      (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing
       -- The reader's chosen range still drives the page: it seeds the URL the charts
       -- read and it is the time picker's selected value. It is deliberately no longer
       -- in the Logs tab's own URL — a trace-scoped query is about the trace's instant,
       -- not the page's range, and pinning it to +/-2h cost 35.9s for the same 14 rows.
       let hashHtml = renderPage pageByHash
-      hashHtml `shouldSatisfy` T.isInfixOf "since:'14D'"
+      hashHtml `shouldSatisfy` T.isInfixOf "\"since\":\"14D\""
       hashHtml `shouldSatisfy` T.isInfixOf "data-start=\"14D\""
+
+      -- Shared absolute ranges must reach server-rendered controls on both routes,
+      -- even when the issue's latest activity falls outside that window.
+      let from = "2026-09-02T06:04:43Z"
+          to = "2026-09-02T10:04:43Z"
+      forM_
+        [ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing (Just from) (Just to)
+        , AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to)
+        ]
+        \handler -> do
+          (_, absolutePage) <- testServant tr handler
+          let html = renderPage absolutePage
+          html `shouldSatisfy` T.isInfixOf "data-start=\"2026-09-02 06:04:43\""
+          html `shouldSatisfy` T.isInfixOf "data-end=\"2026-09-02 10:04:43\""
+          html `shouldSatisfy` T.isInfixOf ("\"from\":\"" <> from <> "\"")
+          html `shouldSatisfy` T.isInfixOf ("\"to\":\"" <> to <> "\"")
+          html `shouldSatisfy` T.isInfixOf "first_occurrence=true&amp;from=2026-09-02T06"
+
+    it "log-pattern evidence uses the shared absolute range" \tr -> do
+      patternHash <- DataUUID.toText <$> UUID.nextRandom
+      let selectedAt = addUTCTime (-86400) frozenTime
+          iso = toText . formatTime defaultTimeLocale "%FT%TZ"
+          from = iso $ addUTCTime (-60) selectedAt
+          to = iso $ addUTCTime 60 selectedAt
+          payload = Issues.LogPatternData patternHash "payment failed <*>" Nothing Nothing (Just "checkout") "body" selectedAt 2
+      issueId <- withResource tr.trPool \conn -> do
+        forM_ [(selectedAt, "selected occurrence" :: Text), (frozenTime, "outside occurrence")] \(at, message) ->
+          void
+            $ PGS.execute
+              conn
+              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary)
+                  VALUES (gen_random_uuid(), ?, ?, ?, 'log', ARRAY[?], ARRAY[?]) |]
+              (testPid, at, at, "pat:" <> patternHash, message)
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
+                  VALUES (?, 'log_pattern', 'payment pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
+            (testPid, patternHash, AE.encode payload, selectedAt, frozenTime)
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to)
+      let html = renderPage page
+      html `shouldSatisfy` T.isInfixOf "selected occurrence"
+      html `shouldSatisfy` not . T.isInfixOf "outside occurrence"
+      html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
+      html `shouldSatisfy` not . T.isInfixOf "class=\"sr-only err-tab-trace\""
+      html `shouldSatisfy` T.isInfixOf "class=\"sr-only err-tab-logs\" checked"
 
     -- Regression: an issue that never captured a trace id used to render the logs tab as
     -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
@@ -439,7 +486,7 @@ spec = sequential $ aroundAll withTestResources do
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
                   VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
             (testPid, noTraceHash, frozenTime, frozenTime)
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
       -- must be clipped by the drawer, or it creates a page-level horizontal scroll range.
@@ -473,7 +520,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
           headings = [T.toLower t | t <- ["H1", "H2", "H3"], ("<" <> t) `T.isInfixOf` T.toUpper html]
       -- Exactly one h1, and it is not the issue title (the page shell owns it).
@@ -530,7 +577,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- Your frame is shown by function and file:line.
       html `shouldSatisfy` T.isInfixOf "doWork"
@@ -580,7 +627,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The two numbers that were compared, and the direction, are all on the page.
       html `shouldSatisfy` T.isInfixOf "Threshold Breach"
@@ -641,7 +688,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- The page ships a shell that fetches the waterfall itself — no span read
       -- inline, so a slow trace can no longer delay (or 504) the issue.
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
@@ -704,7 +751,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
       html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."

@@ -884,3 +884,52 @@ Deferred, and why: per-event Tags table (P3 covers the higher-value aggregate
 first); release/commit on first-seen (no release tracking wired yet);
 `query_id` `show`-blob repair (needs a migration + tolerant read — worth doing,
 but it is a data bug, not a page design one).
+
+## 13. September 6 reference-page inspection
+
+The inspection covered all seven URLs in the current brief on production.
+All seven returned HTTP 200 without browser JavaScript errors during the observation period.
+Main-document response times ranged from 217ms to 958ms. These measurements exclude deferred evidence requests.
+Desktop pages had no document-level horizontal overflow. The mobile log-pattern page also had no document-level overflow.
+
+The browser report is `/private/tmp/issue-details-inspection.json`.
+Screenshots use `/private/tmp/issue-<first eight ID characters>.png`.
+These are temporary local artifacts, not repository fixtures.
+
+### Current fixes, pending validation and deployment
+
+- Both issue routes discarded absolute `from` and `to` parameters.
+  Widgets read the browser URL, but server sample queries used an independent default window.
+  The handler now passes the requested `TimePicker` through to samples, controls, and log links.
+- First/Recent links discarded the selected range. They now preserve that range.
+- Log-pattern pages offered First/Recent and Trace controls without corresponding trace data.
+  They now show Logs. Other issues without a trace also select Logs initially.
+- The inline range object now uses JSON encoding and escapes HTML script delimiters.
+
+Regression coverage includes both issue routes and two log occurrences on different days.
+The selected absolute range must show only its matching occurrence.
+
+### Remaining findings
+
+- F11 is closed in the observed production pages: empty log results now leave the loading state.
+- Stackless errors still allocate a large empty panel above the trace evidence.
+  Activity height also leaves unused space beside that panel.
+- Empty activity sections consume substantial mobile space before Investigation.
+- The mobile absolute-range label clips inside its control despite the absence of document overflow.
+- Several historical log patterns still show stored samples without matching retained events.
+  The sample needs clear provenance, and the pattern/hash mismatch needs further investigation.
+- Query alert `459e5987` displays actual value 2 beside an above-5 threshold.
+  The stored payload and alert lifecycle need investigation before the page describes this as a breach.
+
+### Additional prior art
+
+[Better Stack's incident guide](https://betterstack.com/docs/uptime/working-with-incidents/)
+puts lifecycle, evidence, and comments in the incident detail experience.
+Its [AI investigation guide](https://betterstack.com/docs/ai-sre/analyzing-data/incidents/)
+provides entry points in the incident timeline and near the page title.
+
+[Sentry's issue details](https://docs.sentry.io/product/issues/issue-details/)
+distinguish aggregate tag values from individual event context.
+[Datadog's explorer](https://docs.datadoghq.com/tracing/error_tracking/explorer/)
+places triage information near the top and provides diagnostic context for each error sample.
+These patterns support moving available evidence ahead of empty panels and making sample scope explicit.
