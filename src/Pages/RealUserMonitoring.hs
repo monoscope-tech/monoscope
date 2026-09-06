@@ -895,7 +895,7 @@ slot_ page panel skeleton content
 rumPage_ :: RumData -> Html ()
 rumPage_ page = div_ [id_ "rum-page", class_ $ "bg-bgBase " <> if page.tab == Sessions then "flex flex-col xl:h-full xl:min-h-0 [&>#rum-panel-sessions]:flex-1 [&>#rum-panel-sessions]:min-h-0" else "min-h-full"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
-  div_ [class_ "flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-strokeWeak px-4 py-2 max-md:px-3 [&>#rum-panel-services]:w-auto [&>#rum-panel-services]:max-w-full"] do
+  div_ [class_ "flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-strokeWeak px-4 py-1 max-md:px-3 [&>#rum-panel-services]:w-auto [&>#rum-panel-services]:max-w-full"] do
     slot_ page PanelServices mempty $ servicePicker_ page
     when (page.tab == Sessions) $ sessionSearch_ page
   case page.tab of
@@ -1392,7 +1392,7 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
                 ]
             , Table.header =
                 guard workspace
-                  $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-2"] do
+                  $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-1"] do
                     nav_ [class_ "tabs tabs-box tabs-outline tabs-xs items-center", Aria.label_ "Filter sessions"] $ forM_ [minBound .. maxBound] $ \value -> do
                       let url = sessionsUrl links query value selectedSession
                           filterValue = fromMaybe "" $ sessionFilterParam value
