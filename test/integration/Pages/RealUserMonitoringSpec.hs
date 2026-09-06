@@ -265,13 +265,14 @@ spec = sequential $ aroundAll withTestResources do
             (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1")
             pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
       firstRender <- renderPages "6H"
-      firstRender `shouldContainAll` ["l2.example/cached"]
+      -- Top pages renders path-only routes ('pageRoute'), so the host is stripped.
+      firstRender `shouldContainAll` ["/cached"]
       -- Memory only — the shared table entry is exactly what a fresh replica would find.
       Cache.purge tr.trATCtx.rumCache
       withResource tr.trPool \conn ->
         void $ PG.execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ? AND attributes___session___id = ?" (testPid, "session-l2" :: Text)
       secondRender <- renderPages "6H"
-      secondRender `shouldContainAll` ["l2.example/cached"]
+      secondRender `shouldContainAll` ["/cached"]
 
     it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
       purgeRumCaches tr
