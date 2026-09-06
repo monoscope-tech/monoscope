@@ -483,8 +483,9 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
         toHtml $ maybe intro (const ("This error is still firing in your " :: Text)) ongoingForM
         b_ $ toHtml projectName
         "."
-      forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM]) \t ->
-        p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text t
+      forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM])
+        $ p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"]
+        . toHtml @Text
       emailDivider
       forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
         errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err

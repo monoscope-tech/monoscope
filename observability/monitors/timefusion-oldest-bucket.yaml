@@ -1,0 +1,26 @@
+active: true
+alert_recovery_threshold: null
+alert_threshold: 1200.0
+check_interval_mins: 5
+email_all: false
+emails:
+- anthony@talstack.com
+message: Oldest bucket older than 2x flush interval (1200s) for 5+ min. Data is not
+  reaching Delta; ingest will eventually reject. Check flush task / S3 connectivity
+  / lock convoy.
+notify_after_mins: null
+query: metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds"
+  | summarize max(value)
+severity: critical
+slack_channels: []
+stop_after_count: null
+subject: TimeFusion MemBuffer not flushing
+teams: []
+threshold_sustained_for_mins: 5
+time_window_mins: 10
+title: 'TF page: MemBuffer oldest bucket age > 2x flush interval'
+trigger_less_than: false
+visualization_type: timeseries
+warning_recovery_threshold: null
+warning_threshold: null
+

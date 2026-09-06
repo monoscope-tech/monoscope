@@ -3004,12 +3004,12 @@ getStripeInvoices apiKey subId = do
     pure
       [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
       | inv <- v ^.. AL.key "data" . AL.values
-      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
-      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
       , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
             status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
             hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
             number = inv ^? AL.key "number" . AL._String
+      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
+      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
       ]
 
 
@@ -4839,13 +4839,14 @@ evaluateQueryMonitor monitor startWall = do
       lookbackMins = monitor.timeWindowMins
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
-      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins}
+      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins, metricJsonAsVariant = tfEnabled}
   freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
     Right (_, qc) -> maybe (throwIO $ CE.ErrorCall "monitor query produced no alert SQL") pure qc.finalAlertQuery
     Left err -> throwIO $ CE.ErrorCall $ "monitor KQL parse failed: " <> toString err
-  let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
-  results <- Hasql.withHasqlTimefusion (tfEnabled && isOtelQuery) $ Hasql.interp (rawSql freshSql)
+  -- Both supported KQL sources (spans and metrics) follow the telemetry read
+  -- backend. Metrics must use the same backend as their generated expressions.
+  results <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp (rawSql freshSql)
   end <- liftIO $ getTime Monotonic
 
   -- No rows in the lookback window:
@@ -4853,7 +4854,7 @@ evaluateQueryMonitor monitor startWall = do
   --   * otherwise skip, to avoid spuriously firing (triggerLessThan=True) or
   --     spuriously recovering when data is simply missing.
   let durationNs = toNanoSecs (diffTimeSpec end start)
-  case results :: [Double] of
+  case catMaybes (results :: [Maybe Double]) of
     []
       | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
           evaluateWithResults monitor startWall title 0 durationNs
@@ -5600,7 +5601,7 @@ maskCollapsesDistinctShapes mask rows =
     byMasked =
       HM.fromListWith
         S.union
-        [ (EF.applyErrorMasks [mask] (EF.normalizeMessage msg), S.singleton shp)
+        [ (EF.applyErrorMasks [mask] (EF.normalizeMessage msg), one shp)
         | (msg, shp) <- rows
         , not (T.null shp)
         ]

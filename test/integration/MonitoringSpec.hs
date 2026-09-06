@@ -369,6 +369,18 @@ spec = sequential $ aroundAll withTestResources do
       m <- fetchMonitor tr skipMonId
       m.currentStatus `shouldBe` Monitors.MSNormal
 
+    it "metrics monitors evaluate sample values through the telemetry backend" \tr -> do
+      let metricMonitorId = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 901
+      apiKey <- createTestAPIKey tr testPid "monitor-metric-values"
+      now <- getCurrentTime
+      ingestMetric tr apiKey [] [] "monitor.regression.pressure" 28 (addUTCTime (-2) now)
+      ingestMetric tr apiKey [] [] "monitor.regression.pressure" 80 (addUTCTime (-1) now)
+      insertPipelineMonitor tr metricMonitorId "" 70 Nothing "above" Nothing Nothing
+      setMonitorQuery tr metricMonitorId "metrics | where metric_name == \"monitor.regression.pressure\" | summarize max(value)"
+      evalMonitorsAt now tr
+      monitor <- fetchMonitor tr metricMonitorId
+      (monitor.currentValue, monitor.currentStatus) `shouldBe` (80, Monitors.MSAlerting)
+
     -- The guard against an infinite re-evaluation loop: a monitor whose query throws must
     -- still have its watermark advanced, or every tick re-picks it and hammers whatever
     -- backend is already failing. checkTriggeredQueryMonitors catches per monitor and

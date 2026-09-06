@@ -1,0 +1,24 @@
+active: true
+alert_recovery_threshold: null
+alert_threshold: 1.0
+check_interval_mins: 5
+email_all: false
+emails:
+- anthony@talstack.com
+message: Flush failures detected — Delta commits erroring. Check S3/R2 connectivity
+  and commit coordination. Leading indicator of the bucket-age page.
+notify_after_mins: null
+query: severity.severity_text == "error" and body has "flush failed"
+severity: warning
+slack_channels: []
+stop_after_count: null
+subject: TimeFusion Delta flush cycles erroring
+teams: []
+threshold_sustained_for_mins: 0
+time_window_mins: 15
+title: 'TF warn: flush failures'
+trigger_less_than: false
+visualization_type: timeseries
+warning_recovery_threshold: null
+warning_threshold: null
+

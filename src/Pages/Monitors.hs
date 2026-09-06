@@ -615,7 +615,7 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM =
-  monitorActionH (\p' -> Monitors.monitorMuteByIds p' durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+  monitorActionH (`Monitors.monitorMuteByIds` durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))

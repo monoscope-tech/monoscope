@@ -347,7 +347,7 @@ buildTraceTree colIdxMap queryResultCount rows
 -- >>> colsFitRows (HM.fromList [("id",0)]) V.empty
 -- False
 colsFitRows :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> Bool
-colsFitRows colIdxMap rows = maybe False (\w -> all (< w) (HM.elems colIdxMap)) (V.length <$> rows V.!? 0)
+colsFitRows colIdxMap rows = maybe False (\row -> all (< V.length row) (HM.elems colIdxMap)) (rows V.!? 0)
 
 
 -- | Detect query-result spans whose parent_id is missing from the result and
@@ -873,7 +873,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
 recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [Section] -> ATAuthCtx ()
 recordExploration pid uid stepsDone queryAST = do
   unless (V.elem "explored_logs" stepsDone)
-    $ void
     $ void (Projects.completeOnboardingStep pid "explored_logs")
   Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
 

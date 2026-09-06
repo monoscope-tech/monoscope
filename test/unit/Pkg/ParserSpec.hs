@@ -148,7 +148,20 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       alertSql "| summarize count(*) by bin_auto(timestamp)" `shouldSatisfy` T.isInfixOf "timestamp >= NOW() - INTERVAL '60 minutes'"
       alertSql "| summarize count(*) by bin_auto(timestamp)" `shouldNotSatisfy` T.isInfixOf "time_bucket"
       -- a non-time grouping survives; the largest group is the one evaluated
-      alertSql "| summarize count(*) by bin_auto(timestamp), kind" `shouldSatisfy` T.isInfixOf "GROUP BY kind ORDER BY GREATEST( count(*)::float8) DESC LIMIT 1"
+      alertSql "| summarize count(*) by bin_auto(timestamp), kind" `shouldSatisfy` T.isInfixOf "GROUP BY kind ORDER BY GREATEST(count(*)::float)::float8 DESC LIMIT 1"
+
+    it "alert queries evaluate requested aggregates instead of counting samples" do
+      let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
+          alertSql q = T.toLower $ normT $ fromMaybe "" $ snd (fromRight' $ parseQueryToComponents cfg q) & (.finalAlertQuery)
+      forM_ ["max(value)", "peak=max(value)", "max(value) by resource.service.name"] \aggregation -> do
+        let sql = alertSql $ "metrics | summarize " <> aggregation
+        sql `shouldSatisfy` T.isInfixOf "max("
+        sql `shouldNotSatisfy` T.isInfixOf "count(*)"
+        sql `shouldNotSatisfy` T.isInfixOf " as "
+      let havingSql = snd $ T.breakOn "having" $ alertSql "metrics | summarize peak=max(value) | where peak > 80"
+      havingSql `shouldSatisfy` T.isInfixOf "max((value)::float)"
+      havingSql `shouldSatisfy` T.isInfixOf "> 80"
+      havingSql `shouldNotSatisfy` T.isInfixOf "peak"
 
     it "summarize with arithmetic division by bin_auto()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() / 5.0 by bin_auto(timestamp)"

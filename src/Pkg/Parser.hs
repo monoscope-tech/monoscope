@@ -496,9 +496,14 @@ sqlFromQueryComponents sqlCfg qc =
     -- planner, which is what actually runs alert SQL over spans.
     alertTail =
       buildGroupBy nq.nqExtendedColumns qc.groupByClause
+        <> " "
+        <> havingClause
         <> if null qc.groupByClause then "" else " ORDER BY " <> alertAggregate <> " DESC LIMIT 1"
-    -- FIXME: render the selection from the aggregations, but without the aliases
-    alertAggregate = "GREATEST( count(*)::float8)" :: Text
+    -- Evaluate the requested measures, not the number of samples. Aliases are
+    -- output labels and cannot appear inside GREATEST. The monitor decoder
+    -- expects float8 even when an aggregate produces float4.
+    alertAggregate =
+      "GREATEST(" <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
     alertQuery =
       [fmt|
           SELECT {alertAggregate} FROM {fromTable}

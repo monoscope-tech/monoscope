@@ -1,0 +1,30 @@
+active: true
+alert_recovery_threshold: null
+alert_threshold: 0.0
+check_interval_mins: 5
+email_all: false
+emails:
+- anthony@talstack.com
+message: A flush sort failed and wrote its group with no sorting_columns footer. The
+  reader's derive_common_ordering is all-or-nothing, so ONE such file voids the declared
+  ordering for every scan touching that partition — DedupExec drops to its unbounded
+  full-set seen-set (2 GiB/query cap) and the streaming top-N pushdown goes inert.
+  Nothing re-sorts a converged file, so this never heals on its own. Metric doc says
+  PAGE if > 0. Check flush_sort pool pressure and group sizes; repair with the off-box
+  timefusion optimize CLI.
+notify_after_mins: null
+query: metrics | where metric_name == "timefusion.flush.sort_unsorted_fallbacks" |
+  summarize max(value)
+severity: critical
+slack_channels: []
+stop_after_count: null
+subject: TimeFusion wrote an unsorted parquet file
+teams: []
+threshold_sustained_for_mins: 0
+time_window_mins: 60
+title: 'TF page: flush sort fell back to writing an UNSORTED file'
+trigger_less_than: false
+visualization_type: timeseries
+warning_recovery_threshold: null
+warning_threshold: null
+
