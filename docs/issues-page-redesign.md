@@ -1,6 +1,9 @@
 # Issue detail page — findings, comparison, and plan
 
-Working doc. Scope: `/p/:pid/issues/:id` (`Pages.Anomalies.anomalyDetailPage`).
+Scope: `/p/:pid/issues/:id` (`Pages.Anomalies.anomalyDetailPage`).
+
+**Current status, 2026-09-06:** implemented, deployed, and production-verified through `b8b32b94`.
+All seven reference pages pass the final production sweep. Later checkpoints below supersede earlier OPEN or pending labels.
 
 ## 1. What we render today
 
@@ -1245,3 +1248,17 @@ The frontend build passes, as do 11 trace-hierarchy checks.
 Browser previews at 320px, 390px, 768px, and 1440px verify that ruler labels stay inside the plot and do not overlap.
 These previews load the changed chart code into a test browser using the real trace; production assets remain unchanged until deployment.
 The full frontend build used a temporary output directory to preserve assets used by concurrent local Haskell builds.
+
+
+## 24. Final verification
+
+Release `b8b32b94` passed deployment run [34061395983](https://github.com/monoscope-tech/monoscope/actions/runs/34061395983).
+Every required build and test stage passed, including the browser suite.
+The actual production ruler passes at 320px, 390px, 768px, and 1440px: labels neither overlap nor extend beyond the plot.
+The mobile production screenshot was reviewed after rendering settled.
+A final sweep of all seven reference pages returned HTTP 200, with no JavaScript errors or page overflow.
+Observed initial shell navigation times were 140–762ms in that pass; supporting trace reads remain deferred.
+The recovered payment traces and their preceding events are now available for investigation.
+
+Final artifacts: `/private/tmp/issue-final-ruler-release-sweep.log`, `/private/tmp/issue-details-deployed.json`,
+`/private/tmp/issue-ruler-production-browser.log`, and `/private/tmp/trace-ruler-production-390.png`.
