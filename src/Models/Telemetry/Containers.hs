@@ -153,7 +153,7 @@ containerListLimit = 500
 -- JSONB; neither understands the other's accessor, and on TimeFusion the alternatives all
 -- fail outright (@get_field@ and a @::jsonb@ cast both error, and @variant_get@ rejects the
 -- type name @'string'@ — it wants an Arrow type).
-resourcePath :: Bool -> [Text] -> Text
+resourcePath :: [Text] -> Text
 resourcePath = blobPath "resource"
 
 
@@ -165,20 +165,23 @@ resourcePath = blobPath "resource"
 -- on which one a datapoint carries, and a missed spelling silently reads as "no metrics":
 -- every host row on the Infrastructure page showed dashes while the data sat in the blob.
 --
+-- One spelling serves both stores. The @->@/@->>@ chain is native JSONB on Postgres, and
+-- TimeFusion rewrites the operators onto its Variant with a numeric-leaf cast — where a
+-- direct @variant_get(col, 'a.b', 'Utf8')@ silently returns NULL for a numeric leaf like
+-- @cpu.logical_number@, which is exactly what blanked every host's CPU while memory (a
+-- string-keyed dimension) worked.
+--
 -- >>> import qualified Data.Text.IO as TIO
--- >>> TIO.putStrLn $ blobPath "attributes" False ["cpu", "mode"]
--- COALESCE(attributes #>> '{cpu,mode}', attributes ->> 'cpu.mode')
--- >>> TIO.putStrLn $ blobPath "attributes" True ["cpu", "mode"]
--- COALESCE(variant_get(attributes,'cpu.mode','Utf8'), attributes ->> 'cpu.mode')
-blobPath :: Text -> Bool -> [Text] -> Text
-blobPath col useTimefusion path
-  -- On TimeFusion `->>` with a dotted literal reads the flat single key (the wire operator
-  -- is rewritten to a bracket-quoted variant_get), while variant_get with a dotted path
-  -- string reads the nested shape.
-  | useTimefusion = "COALESCE(variant_get(" <> col <> ",'" <> dotted <> "','Utf8'), " <> col <> " ->> '" <> dotted <> "')"
-  | otherwise = "COALESCE(" <> col <> " #>> '{" <> T.intercalate "," path <> "}', " <> col <> " ->> '" <> dotted <> "')"
-  where
-    dotted = T.intercalate "." path
+-- >>> TIO.putStrLn $ blobPath "attributes" ["cpu", "mode"]
+-- COALESCE(attributes -> 'cpu' ->> 'mode', attributes ->> 'cpu.mode')
+-- >>> TIO.putStrLn $ blobPath "attributes" ["system", "memory", "state"]
+-- COALESCE(attributes -> 'system' -> 'memory' ->> 'state', attributes ->> 'system.memory.state')
+blobPath :: Text -> [Text] -> Text
+blobPath col path = case nonEmpty path of
+  Nothing -> col
+  Just keys ->
+    let chain = col <> foldMap (\key -> " -> '" <> key <> "'") (init keys) <> " ->> '" <> last keys <> "'"
+     in "COALESCE(" <> chain <> ", " <> col <> " ->> '" <> T.intercalate "." path <> "')"
 
 
 -- | Split a tag off an image reference. docker_stats sends the whole @repo:tag@ string as
@@ -359,7 +362,7 @@ containersInWindow useTimefusion pid fromTime' toTime =
           <> [HI.sql| THEN |]
           <> raw hostNameExpr
           <> [HI.sql| ELSE COALESCE(|]
-          <> raw (resourcePath useTimefusion ["k8s", "node", "name"])
+          <> raw (resourcePath ["k8s", "node", "name"])
           <> [HI.sql|, resource___host___name) END AS node_name,
           -- No receiver emits k8s.cluster.name: a cluster has no name in the API, so it
           -- only exists if the collector's resource processor sets it. Fall back to the
@@ -367,33 +370,33 @@ containersInWindow useTimefusion pid fromTime' toTime =
           CASE WHEN |]
           <> raw isHost
           <> [HI.sql| THEN NULL ELSE COALESCE(|]
-          <> raw (resourcePath useTimefusion ["k8s", "cluster", "name"])
+          <> raw (resourcePath ["k8s", "cluster", "name"])
           <> [HI.sql|, |]
-          <> raw (resourcePath useTimefusion ["k8s", "cluster", "uid"])
+          <> raw (resourcePath ["k8s", "cluster", "uid"])
           <> [HI.sql|) END AS cluster,
           |]
-          <> raw (resourcePath useTimefusion ["cloud", "provider"])
+          <> raw (resourcePath ["cloud", "provider"])
           <> [HI.sql| AS provider,
           |]
-          <> raw (resourcePath useTimefusion ["cloud", "region"])
+          <> raw (resourcePath ["cloud", "region"])
           <> [HI.sql| AS region,
           |]
-          <> raw (resourcePath useTimefusion ["os", "type"])
+          <> raw (resourcePath ["os", "type"])
           <> [HI.sql| AS os_type,
           |]
-          <> raw (resourcePath useTimefusion ["host", "arch"])
+          <> raw (resourcePath ["host", "arch"])
           <> [HI.sql| AS architecture,
           -- Only a container has an image. A pod rollup covers every container in the pod and
           -- a host none at all, so both must read blank rather than borrow one.
           CASE WHEN |]
           <> raw isContainer
           <> [HI.sql| THEN |]
-          <> raw (resourcePath useTimefusion ["container", "image", "name"])
+          <> raw (resourcePath ["container", "image", "name"])
           <> [HI.sql| END AS image,
           CASE WHEN |]
           <> raw isContainer
           <> [HI.sql| THEN |]
-          <> raw (resourcePath useTimefusion ["container", "image", "tag"])
+          <> raw (resourcePath ["container", "image", "tag"])
           <> [HI.sql| END AS image_tag,
           -- k8sattributes names the controller after its kind, so a Deployment is the only
           -- kind our own shipped config could ever produce. Ladder every kind a pod can
@@ -404,7 +407,7 @@ containersInWindow useTimefusion pid fromTime' toTime =
           CASE WHEN |]
           <> raw isHost
           <> [HI.sql| THEN NULL ELSE COALESCE(|]
-          <> raw (T.intercalate ", " [resourcePath useTimefusion ["k8s", k, "name"] | k <- ["deployment", "statefulset", "daemonset", "cronjob", "job", "replicaset"]])
+          <> raw (T.intercalate ", " [resourcePath ["k8s", k, "name"] | k <- ["deployment", "statefulset", "daemonset", "cronjob", "job", "replicaset"]])
           <> [HI.sql|) END AS workload,
           metric_name, value,
           |]
@@ -507,9 +510,9 @@ containersInWindow useTimefusion pid fromTime' toTime =
     -- the last resort for rows whose ingest leg missed the flattened column.
     hostNameExpr =
       "COALESCE("
-        <> resourcePath useTimefusion ["k8s", "node", "name"]
+        <> resourcePath ["k8s", "node", "name"]
         <> ", resource___host___name, "
-        <> resourcePath useTimefusion ["host", "name"]
+        <> resourcePath ["host", "name"]
         <> ")"
     identityExpr =
       "CASE WHEN "
@@ -522,9 +525,9 @@ containersInWindow useTimefusion pid fromTime' toTime =
     -- A pod's identity is already unique, so only a container needs the pod or host appended
     -- to separate same-named containers across pods and Swarm nodes.
     groupKeyExpr = "CASE WHEN " <> isHost <> " THEN " <> hostNameExpr <> " ELSE COALESCE(resource___k8s___pod___name, resource___host___name) END"
-    cpuMode = blobPath "attributes" useTimefusion ["cpu", "mode"]
-    cpuNum = blobPath "attributes" useTimefusion ["cpu", "logical_number"]
-    memState = blobPath "attributes" useTimefusion ["system", "memory", "state"]
+    cpuMode = blobPath "attributes" ["cpu", "mode"]
+    cpuNum = blobPath "attributes" ["cpu", "logical_number"]
+    memState = blobPath "attributes" ["system", "memory", "state"]
 
 
 -- $setup
