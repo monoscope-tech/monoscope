@@ -19,6 +19,7 @@ module Pages.Infrastructure (
 ) where
 
 import Data.Default (def)
+import Data.List.Extra (firstJust)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -69,10 +70,6 @@ infraSnapshot pid window = do
 -- snapshot order, so @firstJust@ over them picks the most recently seen row.
 groupRows :: Ord k => (a -> Maybe k) -> V.Vector a -> [(k, [a])]
 groupRows key = M.toAscList . V.foldl' (\acc r -> maybe acc (\k -> M.insertWith (<>) k [r] acc) (key r)) M.empty
-
-
-firstJust :: (a -> Maybe b) -> [a] -> Maybe b
-firstJust f = listToMaybe . mapMaybe f
 
 
 -- | An absent or empty selection matches every row; otherwise the row has to carry the value.
