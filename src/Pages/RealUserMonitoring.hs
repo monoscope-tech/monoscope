@@ -1322,7 +1322,9 @@ vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 per interval wit
     else div_ [class_ "grid grid-cols-2 gap-3 p-3 max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
       -- Where two emitters report the same vital in a bucket, the worse P75 is shown.
       let series = sortWith fst $ M.toList $ M.fromListWith max [(p.bucket, p.p75) | p <- points, vitalKey p.metricName == vital.name]
-          sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (floor $ utcTimeToPOSIXSeconds bucketTime :: Int64, value) | (bucketTime, value) <- series]
+          -- Milliseconds, matching what the chart endpoint serves (Charts.convertTimestampsToMs):
+          -- the axis reads epoch-ms, and seconds silently render as a 1970 timeline.
+          sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (1000 * (floor $ utcTimeToPOSIXSeconds bucketTime :: Int64), value) | (bucketTime, value) <- series]
       unless (null series)
         $ div_ [class_ "h-52 min-h-52"]
         $ Widget.widget_
