@@ -648,9 +648,9 @@ cacheableRumResult = \case
 -- panels arrive on the request the skeleton fires.
 rumSkeleton_ :: RumTab -> Html ()
 rumSkeleton_ Sessions =
-  div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase", role_ "status", Aria.label_ "Loading sessions"] do
-    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak max-xl:col-span-5"] $ Components.tableSkeleton_ 8
-    section_ [class_ "col-span-3 min-w-0 bg-bgBase max-xl:col-span-5"] mempty
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]", role_ "status", Aria.label_ "Loading sessions"] do
+    section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] $ Components.tableSkeleton_ 8
+    section_ [class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"] mempty
 rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
   div_ [class_ "grid grid-cols-4 gap-px border-y border-strokeWeak bg-bgBase max-md:grid-cols-2"]
     $ replicateM_ 4
@@ -800,7 +800,7 @@ instance ToHtml RumData where
 -- @hx-select@ discards them, so rendering the surrounding layout costs nothing.
 slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
 slot_ page panel skeleton content
-  | page.panel == Just panel = div_ [id_ $ panelId panel, class_ "w-full"] content
+  | page.panel == Just panel = div_ [id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] content
   | otherwise =
       Components.deferredShell_
         (panelId panel)
@@ -821,9 +821,11 @@ slot_ page panel skeleton content
 
 
 rumPage_ :: RumData -> Html ()
-rumPage_ page = main_ [id_ "rum-page", class_ "min-h-full bg-bgBase"] do
+rumPage_ page = div_ [id_ "rum-page", class_ $ "bg-bgBase " <> if page.tab == Sessions then "flex flex-col xl:h-full xl:min-h-0 [&>#rum-panel-sessions]:flex-1 [&>#rum-panel-sessions]:min-h-0" else "min-h-full"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
-  slot_ page PanelServices mempty $ servicePicker_ page
+  div_ [class_ "flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-strokeWeak px-4 py-2 max-md:px-3 [&>#rum-panel-services]:w-auto [&>#rum-panel-services]:max-w-full"] do
+    slot_ page PanelServices mempty $ servicePicker_ page
+    when (page.tab == Sessions) $ sessionSearch_ page
   case page.tab of
     Overview -> overview_ page
     Sessions -> sessions_ page
@@ -842,17 +844,19 @@ servicePicker_ page
   | otherwise = form_
       [ method_ "get"
       , action_ $ "/p/" <> page.links.pid.toText <> "/rum"
-      , class_ "flex flex-wrap items-center gap-2 border-b border-strokeWeak bg-bgBase px-4 py-2 max-md:px-3"
+      , class_ "flex max-w-full flex-wrap items-center gap-2"
       ]
       do
         input_ [type_ "hidden", name_ "tab", value_ $ tabParam page.tab]
         TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
+        when (page.tab == Sessions) $ input_ [type_ "hidden", name_ "q", value_ $ fromMaybe "" page.query]
+        forM_ (sessionFilterParam page.sessionFilter) $ \f -> input_ [type_ "hidden", name_ "filter", value_ f]
         label_ [Lucid.for_ "rum-service", class_ "text-xs text-textWeak"] "Service"
         select_
           [ id_ "rum-service"
           , name_ "service"
-          , class_ "select select-sm min-w-52 cursor-pointer border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11"
-          , onchange_ "this.form.requestSubmit()"
+          , class_ "select select-sm w-56 max-w-full cursor-pointer border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11"
+          , onchange_ "const search = document.getElementById('rum-session-search'); if (search) this.form.elements.q.value = search.value; this.form.requestSubmit()"
           ]
           do
             option_ ([value_ ""] <> [selected_ "" | isNothing page.links.service]) "All services"
@@ -860,8 +864,50 @@ servicePicker_ page
             -- so the select cannot silently jump the user back to "All services".
             forM_ (ordNub $ page.services <> maybeToList page.links.service) \name ->
               option_ ([value_ name] <> [selected_ "" | page.links.service == Just name]) $ toHtml name
-        whenJust page.links.service \name ->
+        whenJust (guard (page.tab /= Sessions) *> page.links.service) \name ->
           span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Every panel below is scoped to " <> name <> "."
+
+
+-- | Keep search outside the scrolling list. HTMX replaces only the list, so typing
+-- never interrupts the recording. The GET form also works without JavaScript.
+sessionSearch_ :: RumData -> Html ()
+sessionSearch_ page = form_
+  [ method_ "get"
+  , action_ route
+  , hxGet_ route
+  , hxTrigger_ "input changed delay:300ms, submit"
+  , hxTarget_ "#rum-sessions-list"
+  , hxSelect_ "#rum-sessions-list"
+  , hxSwap_ "outerHTML"
+  , term "hx-sync" "this:replace"
+  , term "hx-vals" "{\"panel\":\"sessions\",\"deferred\":\"1\"}"
+  , class_ "flex min-w-0 flex-[1_1_22rem] items-center gap-2"
+  ]
+  do
+    input_ [type_ "hidden", name_ "tab", value_ "sessions"]
+    TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
+    forM_ page.links.service $ \service -> input_ [type_ "hidden", name_ "service", value_ service]
+    forM_ (sessionFilterParam page.sessionFilter) $ \f -> input_ [type_ "hidden", name_ "filter", value_ f]
+    label_ [class_ "input input-sm flex min-w-0 flex-1 items-center gap-2 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"] do
+      faSprite_ "magnifying-glass" "regular" "h-4 w-4 shrink-0 text-textWeak"
+      input_
+        [ id_ "rum-session-search"
+        , type_ "search"
+        , name_ "q"
+        , value_ $ fromMaybe "" page.query
+        , placeholder_ "User, session, page, or service"
+        , Aria.label_ "Search sessions"
+        , term "aria-keyshortcuts" "/"
+        , class_ "min-w-0 grow"
+        , onkeydown_ "if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.blur(); }"
+        , term "_" "on keydown[key == '/' and not ctrlKey and not metaKey and not altKey and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <dialog[open]/> and no <[popover]:popover-open/>] from window halt the event then call me.focus() end"
+        ]
+      kbd_ [class_ "kbd kbd-xs text-textWeak max-sm:hidden", title_ "Press / to focus search"] "/"
+    button_ [type_ "submit", class_ "btn btn-sm gap-2 max-sm:min-h-11"] do
+      "Search"
+      kbd_ [class_ "kbd kbd-xs text-textWeak max-sm:hidden"] "Enter"
+  where
+    route = "/p/" <> page.links.pid.toText <> "/rum"
 
 
 -- | A service filter that matched nothing is not an uninstrumented project. The unscoped
@@ -1184,10 +1230,10 @@ sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
   let filtered = filterSessions page.query page.sessionFilter page.sessions
       selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
-  div_ [class_ "grid min-h-[calc(100vh-7.5rem)] grid-cols-5 bg-bgBase"] do
-    section_ [class_ "col-span-2 min-w-0 border-r border-strokeWeak p-3 max-xl:col-span-5 max-xl:border-b max-xl:border-r-0"]
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]"] do
+    section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 border-strokeWeak xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:border-e max-xl:border-b"]
       $ sessionsTable_ True page.links page.query page.sessionFilter filtered
-    section_ [id_ "rum-replay-workspace", class_ "col-span-3 min-w-0 bg-bgBase max-xl:col-span-5", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
+    section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
 
 
 filterSessions :: Maybe Text -> SessionFilter -> [RumSession] -> [RumSession]
@@ -1210,13 +1256,13 @@ sessionFilterLabel = \case
 
 -- | @workspace@ marks the Sessions tab, where the replay panel sits beside the table: there
 -- a row swaps only that panel instead of re-rendering the page around it, and the shared
--- Table contributes search, the filter tabs and the zero state. The Overview's recent list
+-- Table contributes the filter tabs and the zero state. The Overview's recent list
 -- has no panel to swap, so its rows navigate and it carries none of the chrome.
 sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> [RumSession] -> Html ()
 sessionsTable_ workspace links query sessionFilter sessions =
   toHtml
     Table.Table
-      { config = rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace
+      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0"}
       , columns =
           [ ( Table.col "User / session" \session -> do
                 a_ (sessionLinkAttrs session.id <> [class_ "block truncate font-medium text-textStrong hover:text-textBrand"]) $ toHtml $ sessionIdentity session
@@ -1255,18 +1301,17 @@ sessionsTable_ workspace links query sessionFilter sessions =
       , rows = V.fromList sessions
       , features =
           def
-            { Table.search = guard workspace $> Table.ClientSide
-            , Table.searchPlaceholder = Just "User, session, page, or service"
-            , Table.header =
+            { Table.header =
                 guard workspace
-                  $> toHtml
-                    Table.TabFilter
-                      { current = sessionFilterLabel sessionFilter
-                      , currentURL = sessionsUrl links query sessionFilter Nothing
-                      , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
-                      }
-            , Table.resultSummary = guard workspace $> countNoun (length sessions) "session"
-            , Table.zeroState = Just $ tableZero_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows)
+                  $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-2"] do
+                    toHtml
+                      Table.TabFilter
+                        { current = sessionFilterLabel sessionFilter
+                        , currentURL = sessionsUrl links query sessionFilter Nothing
+                        , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
+                        }
+                    span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ countNoun (length sessions) "session"
+            , Table.zeroState = Just $ tableZero_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows || maybe False (not . T.null) query)
             }
       }
   where

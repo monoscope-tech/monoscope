@@ -97,7 +97,7 @@ spec = sequential $ aroundAll withTestResources do
       toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
       (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["grid-cols-5", "skeleton-shimmer"]
+      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(32rem,2fr)_minmax(0,3fr)]", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
 
