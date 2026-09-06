@@ -604,6 +604,22 @@ spec = around withTestResources do
       length seen `shouldBe` 5
       length (ordNub seen) `shouldBe` 5
 
+    it "metric table summaries preserve scalar values and group labels" \tr -> do
+      pid <- createTestProject tr "metric-table-summary"
+      apiKey <- createTestAPIKey tr pid "metric-table-summary-key"
+      now <- getCurrentTime
+      ingestMetric tr apiKey [] [] "summary.pressure" 28 (addUTCTime (-2) now)
+      ingestMetric tr apiKey [] [] "summary.pressure" 80 (addUTCTime (-1) now)
+      let fromTime = Just $ toText $ iso8601Show $ addUTCTime (-60) now
+          toTime = Just $ toText $ iso8601Show $ addUTCTime 60 now
+          query suffix = runAsBase tr $ Log.queryEvents pid (Just $ "metrics | summarize peak=max(value)" <> suffix) Nothing fromTime toTime Nothing Nothing Nothing Nothing
+      scalar <- query ""
+      scalar.cols `shouldBe` ["peak"]
+      scalar.logsData `shouldBe` V.singleton (V.singleton $ AE.Number 80)
+      grouped <- query " by metric_name"
+      grouped.cols `shouldBe` ["metric_name", "peak"]
+      grouped.logsData `shouldBe` V.singleton (V.fromList [AE.String "summary.pressure", AE.Number 80])
+
     -- v1/CLI events API (queryEvents): --with-children must not silently truncate.
     it "events API with-children pagination visits every matched root (no silent truncation)" \tr -> do
       apiKey <- createTestAPIKey tr testPid "events-children-key"

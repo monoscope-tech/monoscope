@@ -352,6 +352,11 @@ sqlFromQueryComponents sqlCfg qc =
     -- groups (or aggregates the whole set, where a bare HAVING is still valid).
     havingClause = nq.nqHaving
     sortOrder = nq.nqOrderBy
+    groupedAggregateCols = map (resolveExtendedColumn (Map.fromList nq.nqExtendedColumns)) qc.groupByClause <> qc.aggregations
+    tableColumns = case qc.finalSummarizeQuery of
+      Just _ -> "timestamp" : filter (not . T.isInfixOf "time_bucket") (if null qc.aggregations then qc.select else qc.aggregations)
+      Nothing -> if null qc.aggregations then nq.nqSelectCols else groupedAggregateCols
+    aggregateSortOrder = if null qc.groupByClause && isNothing qc.sortFields then "" else sortOrder
     limitClause = nq.nqLimit
     whereCondition = nq.nqWhere
 
@@ -395,10 +400,10 @@ sqlFromQueryComponents sqlCfg qc =
                 , True
                 )
           Nothing
-            | not (null qc.aggregations) && not (null qc.groupByClause) ->
-                ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause qc.aggregations) <> ", " <> countOver)} FROM {fromTable}
+            | not (null qc.aggregations) ->
+                ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause groupedAggregateCols) <> ", " <> countOver)} FROM {fromTable}
                    WHERE {buildWhere}
-                   {groupByClause} {havingClause} {sortOrder} {limitClause} |]
+                   {groupByClause} {havingClause} {aggregateSortOrder} {limitClause} |]
                 , True
                 )
             | otherwise ->
@@ -513,7 +518,7 @@ sqlFromQueryComponents sqlCfg qc =
    in
     ( finalSqlQuery
     , qc
-        { finalColumns = listToColNames nq.nqSelectCols
+        { finalColumns = listToColNames tableColumns
         , finalSqlQuery = finalSqlQuery
         , hasCountOver = countOverIncluded
         , whereClause = Just whereCondition

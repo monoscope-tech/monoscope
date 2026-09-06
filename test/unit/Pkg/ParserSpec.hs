@@ -80,6 +80,17 @@ spec = do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*)"
       fromMaybe "" c.finalSummarizeQuery `shouldNotSatisfy` T.isInfixOf "::text"
 
+    it "table summaries return aggregate columns rather than default event fields" do
+      let parse q = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) q
+          (scalarSql, scalar) = parse "metrics | summarize peak=max(value)"
+          (groupedSql, grouped) = parse "metrics | summarize peak=max(value) by metric_name"
+      scalarSql `shouldSatisfy` T.isInfixOf "max((value)::float)"
+      scalarSql `shouldNotSatisfy` T.isInfixOf "context___trace_id"
+      scalarSql `shouldNotSatisfy` T.isInfixOf "ORDER BY timestamp"
+      scalar.toColNames `shouldBe` ["peak"]
+      groupedSql `shouldSatisfy` T.isInfixOf "jsonb_build_array(metric_name,max((value)::float)"
+      grouped.toColNames `shouldBe` ["metric_name", "peak"]
+
     it "grouped summarize casts to text and projects the group column" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*) by name"
           sql = fromMaybe "" c.finalSummarizeQuery
@@ -107,7 +118,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       -- ORDER BY uses GROUP BY column (kind) since timestamp is not in GROUP BY
       let expected =
             [text|
-      SELECT jsonb_build_array(count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY kind ORDER BY kind desc limit 500 |]
+      SELECT jsonb_build_array(kind,count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY kind ORDER BY kind desc limit 500 |]
       normT query `shouldBe` normT expected
     it "summarize with sort by and take" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"

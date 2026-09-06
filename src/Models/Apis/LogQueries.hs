@@ -269,7 +269,7 @@ validateSqlQuery query =
 selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment = do
   now <- Time.currentTime
-  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment}) queryAST
+  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment, metricJsonAsVariant = useTimefusion}) queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
   Log.logTrace
