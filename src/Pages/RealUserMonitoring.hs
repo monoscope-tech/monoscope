@@ -41,7 +41,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), VitalSample (..), VitalTrendPoint (..), rumPanelCacheGet, rumPanelCacheSet)
+import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalSample (..), VitalTrendPoint (..), rumPanelCacheGet, rumPanelCacheSet)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
@@ -62,10 +62,6 @@ import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, replaceAllFormats,
 
 data RumTab = Overview | Sessions | Performance
   deriving stock (Bounded, Enum, Eq, Read, Show)
-
-
-data SessionFilter = AllSessionRows | ErrorSessionRows | ReplaySessionRows
-  deriving stock (Bounded, Enum, Eq)
 
 
 renderBucket :: RumBucket -> Text
@@ -353,7 +349,12 @@ argmaxPayload = T.drop 1 . T.dropWhile (/= '|')
 
 
 otelSessions :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumSession]
-otelSessions scope =
+otelSessions scope = otelSessionRows scope (SessionText Nothing) AllSessionRows
+
+
+-- Text is matched against complete sessions before LIMIT, preserving their event totals.
+otelSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
+otelSessionRows scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
     $ map (\s -> s{lastPage = argmaxPayload <$> s.lastPage})
     <$> Hasql.interp
@@ -378,8 +379,36 @@ otelSessions scope =
         WHERE |]
           <> browserScope scope
           <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
-        GROUP BY attributes___session___id ORDER BY MAX(timestamp) DESC LIMIT 200|]
+        GROUP BY attributes___session___id HAVING |]
+          <> sessionMatchPredicate match
+          <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
+          <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
       )
+
+
+-- The same lookup mode is used for both stores so recordings can enrich matched
+-- telemetry, and recording-only identities can discover their associated spans.
+data SessionMatch = SessionText (Maybe Text) | SessionIds [Text]
+
+
+searchPattern :: Text -> Text
+searchPattern query = "%" <> T.replace "_" "\\_" (T.replace "%" "\\%" (T.replace "\\" "\\\\" query)) <> "%"
+
+
+sessionMatchPredicate :: SessionMatch -> HI.Sql
+sessionMatchPredicate (SessionIds ids) = [HI.sql| attributes___session___id = ANY(#{ids}) |]
+sessionMatchPredicate (SessionText Nothing) = [HI.sql| true |]
+sessionMatchPredicate (SessionText (Just query)) =
+  let needle = searchPattern query
+   in [HI.sql| COUNT(*) FILTER (WHERE
+          attributes___session___id ILIKE #{needle}
+          OR attributes___user___id ILIKE #{needle}
+          OR attributes___user___full_name ILIKE #{needle}
+          OR attributes___user___email ILIKE #{needle}
+          OR resource___service___name ILIKE #{needle}
+          OR (|]
+        <> pagePath
+        <> [HI.sql|) ILIKE #{needle}) > 0 |]
 
 
 -- | P75 of each vital per time bucket AND per page, from one scan. These are two views of
@@ -491,18 +520,55 @@ classifyUserAgent ua = (browser, os, device)
 
 
 replaySessions :: DB es => RumScope -> Eff es [ReplaySession]
-replaySessions scope =
+replaySessions scope = replaySessionRows scope (SessionText Nothing)
+
+
+replaySessionRows :: DB es => RumScope -> SessionMatch -> Eff es [ReplaySession]
+replaySessionRows scope match =
   let projectId = scope.pid
       fromTime = scope.fromTime
       toTime = scope.toTime
    in Hasql.interp
-        [HI.sql|
+        ( [HI.sql|
           SELECT session_id, created_at, last_event_at, user_id, user_name, user_email
           FROM projects.replay_sessions
           WHERE project_id = #{projectId} AND last_event_at >= #{fromTime} AND created_at <= #{toTime}
             AND (event_file_count > 0 OR cardinality(file_keys) > 0 OR cardinality(shard_keys) > 0)
+          AND |]
+            <> replayMatchPredicate match
+            <> [HI.sql|
           ORDER BY last_event_at DESC LIMIT 200
         |]
+        )
+
+
+replayMatchPredicate :: SessionMatch -> HI.Sql
+replayMatchPredicate (SessionIds ids) = [HI.sql| CAST(session_id AS TEXT) = ANY(#{ids}) |]
+replayMatchPredicate (SessionText Nothing) = [HI.sql| true |]
+replayMatchPredicate (SessionText (Just query)) =
+  let needle = searchPattern query
+   in [HI.sql| (CAST(session_id AS TEXT) ILIKE #{needle}
+        OR user_id ILIKE #{needle} OR user_name ILIKE #{needle} OR user_email ILIKE #{needle}) |]
+
+
+searchSessions :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Maybe Text -> SessionFilter -> Eff es [RumSession]
+searchSessions scope query sessionFilter = do
+  spans <- otelSessionRows scope (SessionText query) sessionFilter
+  recordings <- if sessionFilter == ErrorSessionRows then pure [] else replaySessionRows scope (SessionText query)
+  let recordingIds = map (UUID.toText . (.id)) recordings
+      spanIds = map (.id) spans
+  -- Cross-enrich by exact id: filtering each store independently otherwise turns a
+  -- page match into "No replay", or a recording-name match into "No telemetry".
+  extraSpans <- if null recordingIds then pure [] else otelSessionRows scope (SessionIds recordingIds) sessionFilter
+  extraRecordings <- if null spanIds then pure [] else replaySessionRows scope (SessionIds spanIds)
+  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.service (extraSpans <> spans) (recordings <> extraRecordings)
+
+
+sessionDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Text -> Eff es (Maybe RumSession)
+sessionDetail scope sid = do
+  spans <- otelSessionRows scope (SessionIds [sid]) AllSessionRows
+  recordings <- replaySessionRows scope (SessionIds [sid])
+  pure $ listToMaybe $ mergeSessions scope.service spans recordings
 
 
 -- A recent 2,000-point sample keeps field-vital navigation bounded. Returning the previous
@@ -615,6 +681,7 @@ data RumData = RumData
   , services :: [Text]
   , sessionFilter :: SessionFilter
   , selectedSession :: Maybe Text
+  , selectedSessionData :: Maybe RumSession
   , degradedPanels :: [Text]
   }
 
@@ -636,6 +703,7 @@ cacheableRumResult = \case
   ErrorsResult rows -> not $ null rows
   SessionsResult rows -> not $ null rows
   ReplaySessionsResult rows -> not $ null rows
+  SessionDetailResult row -> isJust row
   VitalSamplesResult rows -> not $ null rows
   VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
   ServicesResult names -> not $ null names
@@ -648,7 +716,7 @@ cacheableRumResult = \case
 -- panels arrive on the request the skeleton fires.
 rumSkeleton_ :: RumTab -> Html ()
 rumSkeleton_ Sessions =
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]", role_ "status", Aria.label_ "Loading sessions"] do
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", role_ "status", Aria.label_ "Loading sessions"] do
     section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] $ Components.tableSkeleton_ 8
     section_ [class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"] mempty
 rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "status", Aria.label_ "Loading real user monitoring"] do
@@ -671,6 +739,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
   let tab = parseTab tabM
       panel = panelM >>= parsePanel
       sessionFilter = parseSessionFilter sessionFilterM
+      searchQuery = queryM >>= \q -> guard (not $ T.null $ T.strip q) $> T.strip q
       since = sinceM <|> Just "24H"
       window = TimePicker.mkTimeWindow now fromM toM since
       environment = session.environment
@@ -689,6 +758,8 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       errorsQ = ("errors" :: Text, cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
       sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessions scope)
       replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessions scope)
+      sessionSearchQ = ("sessions" :: Text, cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
+      sessionDetailQs = [("session" :: Text, cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
       vitalsQ = ("web vitals" :: Text, cacheKey VitalSamplesQuery, panelTtl, VitalSamplesResult <$> vitalSamples scope)
       -- Held longer than the panel TTL: this is the heaviest scan on the page, and per-page
       -- P75s move on deploys, not by the minute.
@@ -715,7 +786,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         Just PanelVitals -> [vitalsQ]
         Just PanelVitalTrend -> [vitalsDetailQ]
         Just PanelErrors -> [errorsQ]
-        Just PanelSessions -> [sessionsQ, replaysQ]
+        Just PanelSessions -> (if tab == Sessions then [sessionSearchQ] else [sessionsQ, replaysQ]) <> sessionDetailQs
         Just PanelAudience -> [breakdownQ]
         Nothing -> []
       -- Memory first, then the shared rum_panel_cache table, then the store. A miss at both
@@ -749,12 +820,13 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
         sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
+        selectedSessionData = asum [value | SessionDetailResult value <- results]
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
         vitalTrend = fold [value | VitalsDetailResult value _ <- results]
         pageVitals = fold [value | VitalsDetailResult _ value <- results]
         services = fold [value | ServicesResult value <- results]
         breakdown = fold [value | BreakdownResult value <- results]
-    pure RumData{links, tab, panel, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, degradedPanels}
+    pure RumData{links, tab, panel, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
   let conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -872,7 +944,8 @@ servicePicker_ page
 -- never interrupts the recording. The GET form also works without JavaScript.
 sessionSearch_ :: RumData -> Html ()
 sessionSearch_ page = form_
-  [ method_ "get"
+  [ id_ "rum-session-search-form"
+  , method_ "get"
   , action_ route
   , hxGet_ route
   , hxTrigger_ "input delay:300ms, submit"
@@ -888,7 +961,7 @@ sessionSearch_ page = form_
     input_ [type_ "hidden", name_ "session", value_ $ fromMaybe "" page.selectedSession]
     TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
     forM_ page.links.service $ \service -> input_ [type_ "hidden", name_ "service", value_ service]
-    forM_ (sessionFilterParam page.sessionFilter) $ \f -> input_ [type_ "hidden", name_ "filter", value_ f]
+    input_ [id_ "rum-session-filter", type_ "hidden", name_ "filter", value_ $ fromMaybe "" $ sessionFilterParam page.sessionFilter]
     label_ [class_ "input input-sm flex min-w-0 flex-1 items-center gap-2 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"] do
       faSprite_ "magnifying-glass" "regular" "h-4 w-4 shrink-0 text-textWeak"
       input_
@@ -1228,23 +1301,19 @@ recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect 
 
 sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions (Components.tableSkeleton_ 8) do
-  let filtered = filterSessions page.query page.sessionFilter page.sessions
-      selected = page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]"] do
+  let filtered = page.sessions
+      selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 border-strokeWeak xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:border-e max-xl:border-b"]
       $ sessionsTable_ True page.links page.query page.sessionFilter page.selectedSession filtered
     section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
 
 
-filterSessions :: Maybe Text -> SessionFilter -> [RumSession] -> [RumSession]
-filterSessions query sessionFilter = filter (\s -> matchesQuery s && matchesFilter s)
-  where
-    needle = T.toCaseFold $ fromMaybe "" query
-    matchesQuery session = T.null needle || any (T.isInfixOf needle . T.toCaseFold) (session.id : catMaybes [session.userId, session.userName, session.userEmail, session.service, session.lastPage])
-    matchesFilter session = case sessionFilter of
-      AllSessionRows -> True
-      ErrorSessionRows -> session.errors > 0
-      ReplaySessionRows -> session.hasReplay
+filterSessions :: SessionFilter -> [RumSession] -> [RumSession]
+filterSessions sessionFilter = filter $ \session -> case sessionFilter of
+  AllSessionRows -> True
+  ErrorSessionRows -> session.errors > 0
+  ReplaySessionRows -> session.hasReplay
 
 
 sessionFilterLabel :: SessionFilter -> Text
@@ -1262,7 +1331,7 @@ sessionsTable_ :: Bool -> RumLinks -> Maybe Text -> SessionFilter -> Maybe Text 
 sessionsTable_ workspace links query sessionFilter selectedSession sessions =
   toHtml
     Table.Table
-      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[34rem]"}
+      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[28rem]"}
       , columns =
           [ ( Table.col "Session" \session -> do
                 a_
@@ -1279,17 +1348,17 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
                   $ if sessionIdentity session == session.id then "Session " <> T.take 8 session.id else sessionIdentity session
                 when (sessionIdentity session /= session.id) $ span_ [class_ "mt-0.5 block font-mono text-xs text-textWeak", title_ session.id] $ toHtml $ T.take 8 session.id
             )
-              { Table.attrs = [class_ "w-[34%] py-2.5"]
+              { Table.attrs = [class_ "w-[36%] px-2 py-2.5"]
               , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
           , ( Table.col "Last page" \session -> do
                 -- Display the distinguishing path; keep the full URL available on hover.
-                span_ [class_ "block truncate text-sm text-textStrong", title_ $ fromMaybe "" session.lastPage]
+                span_ [class_ $ "block text-sm text-textStrong" <> bool "" " truncate" (isJust session.lastPage), title_ $ fromMaybe "" session.lastPage]
                   $ toHtml
                   $ maybe (bool "No page views" "Recording only" (replayOnly session)) pageLabel session.lastPage
                 forM_ session.service $ \service -> span_ [class_ "mt-0.5 block truncate text-xs text-textWeak", title_ service] $ toHtml service
             )
-              { Table.attrs = [class_ "w-[28%] py-2.5"]
+              { Table.attrs = [class_ "w-[24%] px-2 py-2.5"]
               }
           , ( Table.col "Activity" \session -> do
                 when (session.errors > 0) $ span_ [class_ "mb-0.5 flex items-center gap-1 text-xs font-medium text-textError"] do
@@ -1301,7 +1370,7 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
                     span_ [class_ "block text-xs tabular-nums text-textStrong"] $ toHtml $ countNoun session.views "view"
                     span_ [class_ "mt-0.5 block text-xs tabular-nums text-textWeak"] $ toHtml $ countNoun session.events "event"
             )
-              { Table.attrs = [class_ "w-[22%] py-2.5"]
+              { Table.attrs = [class_ "w-[22%] px-2 py-2.5"]
               }
           , ( Table.col "Duration" \session -> do
                 span_ [class_ "block text-sm tabular-nums text-textStrong"] $ toHtml $ formatSessionDuration session
@@ -1311,7 +1380,7 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
                     "Replay"
                   else span_ [class_ "mt-0.5 block text-xs text-textWeak"] "No replay"
             )
-              { Table.attrs = [class_ "w-[16%] py-2.5"]
+              { Table.attrs = [class_ "w-[18%] px-2 py-2.5"]
               }
           ]
       , rows = V.fromList sessions
@@ -1324,13 +1393,27 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
             , Table.header =
                 guard workspace
                   $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-2"] do
-                    toHtml
-                      Table.TabFilter
-                        { current = sessionFilterLabel sessionFilter
-                        , currentURL = sessionsUrl links query sessionFilter Nothing
-                        , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
-                        }
-                    span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ countNoun (length sessions) "session"
+                    nav_ [class_ "tabs tabs-box tabs-outline tabs-xs items-center", Aria.label_ "Filter sessions"] $ forM_ [minBound .. maxBound] $ \value -> do
+                      let url = sessionsUrl links query value selectedSession
+                          filterValue = fromMaybe "" $ sessionFilterParam value
+                      a_
+                        [ href_ url
+                        , hxGet_ $ "/p/" <> links.pid.toText <> "/rum"
+                        , term "hx-include" "#rum-session-search-form"
+                        , term "hx-vals" $ "{\"panel\":\"sessions\",\"deferred\":\"1\",\"filter\":\"" <> filterValue <> "\"}"
+                        , hxTarget_ "#rum-sessions-list"
+                        , hxSelect_ "#rum-sessions-list"
+                        , hxSwap_ "outerHTML"
+                        , hxPushUrl_ url
+                        , term "hx-sync" "#rum-session-search-form:replace"
+                        , data_ "filter" filterValue
+                        , term "hx-on::after:request" "if (event.detail.ctx.response.status === 200) document.getElementById('rum-session-filter').value = this.dataset.filter"
+                        , term "aria-current" $ bool "false" "page" (value == sessionFilter)
+                        , class_ $ "tab h-auto! " <> bool "" "tab-active text-textStrong" (value == sessionFilter)
+                        ]
+                        $ toHtml
+                        $ sessionFilterLabel value
+                    span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ (if length sessions == 200 then "Newest " else "") <> countNoun (length sessions) "session"
             , Table.zeroState = Just $ tableZero_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows || maybe False (not . T.null) query)
             }
       }

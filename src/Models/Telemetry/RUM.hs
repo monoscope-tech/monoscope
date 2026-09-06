@@ -5,6 +5,7 @@ module Models.Telemetry.RUM (
   RumBreakdown (..),
   ReplaySession (..),
   RumSession (..),
+  SessionFilter (..),
   VitalSample (..),
   VitalTrendPoint (..),
   PageVitalPoint (..),
@@ -77,6 +78,11 @@ data ReplaySession = ReplaySession
   deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
+data SessionFilter = AllSessionRows | ErrorSessionRows | ReplaySessionRows
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
+  deriving anyclass (Hashable)
+
+
 data RumSession = RumSession
   { id :: Text
   , startedAt :: UTCTime
@@ -129,6 +135,7 @@ data RumQueryResult
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]
   | ReplaySessionsResult [ReplaySession]
+  | SessionDetailResult (Maybe RumSession)
   | VitalSamplesResult [VitalSample]
   | VitalsDetailResult [VitalTrendPoint] [PageVitalPoint]
   | ServicesResult [Text]
@@ -143,6 +150,8 @@ data RumQuery
   | ErrorsQuery
   | SessionsQuery
   | ReplaySessionsQuery
+  | SessionSearchQuery (Maybe Text) SessionFilter
+  | SessionDetailQuery Text
   | VitalSamplesQuery
   | VitalsDetailQuery RumBucket
   | ServicesQuery

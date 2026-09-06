@@ -97,7 +97,7 @@ spec = sequential $ aroundAll withTestResources do
       toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
       (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(34rem,2fr)_minmax(0,3fr)]", "skeleton-shimmer"]
+      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
 
@@ -284,3 +284,28 @@ spec = sequential $ aroundAll withTestResources do
       browserSpan apiKey "70000000000000000000000000000007" "7000000000000003" [("url.path", "/b"), ("user_agent.original", iphoneUa)] "Pageview · /b" "session-ua-3" Nothing "storefront" tr
       panel <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "audience")
       panel `shouldContainAll` ["Audience", "Chrome", "Windows", "Safari", "iOS", "Mobile", "Desktop", "2 sessions"]
+
+    it "sessionSearch_matchesBeforeLimits_andKeepsCrossStoreContext" \tr -> do
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-search-limit-key"
+      let oldId = "00000000-0000-0000-000b-000000000001"
+          oldTime = addUTCTime (-3600) frozenTime
+          recentId n = "00000000-0000-0000-000a-" <> T.justifyRight 12 '0' (show n)
+      browserSpanAt apiKey "e0000000000000000000000000000001" "e000000000000001" [("url.path", "/needle%_path")] "documentLoad" oldId Nothing "bulk-ui" oldTime tr
+      browserSpanAt apiKey "e0000000000000000000000000000001" "e000000000000002" [("url.path", "/checkout"), ("exception.type", "TypeError")] "documentLoad" oldId Nothing "bulk-ui" (addUTCTime 1 oldTime) tr
+      forM_ [1 .. 201 :: Int] $ \n ->
+        browserSpan apiKey ("f" <> T.justifyRight 31 '0' (show n)) (T.justifyRight 16 '0' (show n)) [("url.path", "/recent")] "documentLoad" (recentId n) Nothing "bulk-ui" tr
+      withResource tr.trPool $ \conn -> do
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Archive analyst')" (oldId, testPid, oldTime, addUTCTime 60 oldTime)
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) SELECT ('00000000-0000-0000-000a-' || lpad(i::text, 12, '0'))::uuid, ?, ?, ?, 1, 'Recent shopper' FROM generate_series(1, 201) i" (testPid, frozenTime, addUTCTime 60 frozenTime)
+      -- Both a historical page and recording-only identity must find the old session,
+      -- retain all its events, and attach its recording, despite 201 newer rows.
+      forM_ ["needle%_path", "ARCHIVE ANALYST", oldId] $ \query -> do
+        rows <- renderPanel tr (Just "sessions") (Just query) Nothing Nothing (Just "bulk-ui") (Just "sessions")
+        rows `shouldContainAll` ["Archive analyst", "2 views", "2 events", "Replay", "/checkout"]
+        T.count "class=\"rum-session-link" rows `shouldBe` 1
+      errors <- renderPanel tr (Just "sessions") Nothing (Just "errors") Nothing (Just "bulk-ui") (Just "sessions")
+      errors `shouldContainAll` ["Archive analyst", "1 error"]
+      -- Selecting an old deep link does not depend on it surviving the list's limit.
+      detail <- renderPanel tr (Just "sessions") Nothing Nothing (Just oldId) (Just "bulk-ui") (Just "sessions")
+      detail `shouldContainAll` ["Newest 200 sessions", "initialSession=\"" <> oldId <> "\""]
