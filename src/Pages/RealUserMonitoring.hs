@@ -1220,13 +1220,16 @@ sessionsTable_ workspace links query sessionFilter sessions =
           def
             { Table.search = guard workspace $> Table.ClientSide
             , Table.searchPlaceholder = Just "User, session, page, or service"
-            , Table.tabs =
+            , -- `Features.tabs` is declared but never rendered by the component; every caller
+              -- (Monitors, Anomalies) renders the TabFilter itself, so this table does too.
+              Table.header =
                 guard workspace
-                  $> Table.TabFilter
-                    { current = sessionFilterLabel sessionFilter
-                    , currentURL = sessionsUrl links query sessionFilter Nothing
-                    , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
-                    }
+                  $> toHtml
+                    Table.TabFilter
+                      { current = sessionFilterLabel sessionFilter
+                      , currentURL = sessionsUrl links query sessionFilter Nothing
+                      , options = [Table.TabFilterOpt (sessionFilterLabel value) Nothing | value <- [minBound .. maxBound]]
+                      }
             , Table.resultSummary = guard workspace $> countNoun (length sessions) "session"
             , Table.zeroState = Just $ tableZero_ $ bool "No sessions in this time range" "No sessions match this filter" (sessionFilter /= AllSessionRows)
             }
