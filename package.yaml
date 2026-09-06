@@ -292,6 +292,7 @@ tests:
       - base # System.ServerSpec imports Control.Concurrent/Exception directly (not via relude)
       - hs-opentelemetry-instrumentation-auto
       - hspec
+      - langchain-hs
       - relude >= 1.2.0.0
       - aeson
       # Pkg.WidgetLazySpec builds a Widget and renders it
