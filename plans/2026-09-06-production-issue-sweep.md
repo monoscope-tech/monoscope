@@ -435,3 +435,12 @@ Next: poll 33918, fix any parser failures, run Monitoring integration tests on
 isolated build with an actual test database/TF, integrate latest origin/master
 without rolling back other sessions, deploy, confirm actual monitor values.
 Other catalogued issues, including embedding configuration, remain in scope.
+
+
+## 21:34 UTC review and validation checkpoint
+
+PR #507 review identified unrelated reporting edits accidentally captured from the shared working directory. The follow-up removes those edits; the incident branch now retains only monitor behavior changes, regression tests, monitor definitions, this journal, and behavior-preserving fixes for 17 inherited HLint hints. No lint suppression was added. The HAVING regression now checks aggregate expansion and removal of the alias reference.
+
+The monitor integration suite passed all 12 examples against local PostgreSQL and real TimeFusion before this cleanup. A clean-branch rebuild is still running; no application deployment has occurred. Full-source HLint left two Charts hints, now corrected with a clean targeted HLint result. CI on the original commit failed; the follow-up must pass checks before deployment.
+
+All 132 actual ERROR-level entries in the captured TimeFusion Docker log concern DEALLOCATE ALL compatibility. This remains unresolved. Four metrics monitors were temporarily muted while their corrected queries still run through the old count-based evaluator; inspect and renew only for a bounded interval while checking metrics directly. The alert implementation must be deployed and verified before normal evaluation resumes.

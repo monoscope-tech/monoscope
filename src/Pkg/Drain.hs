@@ -467,5 +467,5 @@ buildDrainBatch tokenize logId sampleContent initial items now =
                     MatchedGroup -> (members, evicted)
                     EvictedGroup old ->
                       (Map.delete old.groupId members, withMembers (Map.findWithDefault Seq.empty old.groupId members) (logGroupResult old) : evicted)
-                  next = if T.null lid then members' else Map.insertWith (flip (<>)) group'.groupId (Seq.singleton lid) members'
+                  next = if T.null lid then members' else Map.insertWith (flip (<>)) group'.groupId (one lid) members'
                in (tree', next, evicted')

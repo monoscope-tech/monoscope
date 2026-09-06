@@ -440,7 +440,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item (\m -> "tab=tab-req&subtab=" <> m) tab
+  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=tab-req&subtab=" <>) tab
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])

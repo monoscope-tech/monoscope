@@ -539,7 +539,7 @@ streamQuery_ conn (Query sql) emit = run `E.onException` cancel
   where
     cancel = PGI.withConnection conn \handle -> do
       token <- PQ.getCancel handle
-      forM_ token \c -> void $ PQ.cancel c
+      forM_ token PQ.cancel
     run = do
       PGI.withConnection conn \handle -> do
         sent <- PQ.sendQuery handle sql
@@ -560,7 +560,7 @@ streamQuery_ conn (Query sql) emit = run `E.onException` cancel
         else PQ.getResult handle
     loop =
       next >>= \case
-        Nothing -> pure ()
+        Nothing -> pass
         Just result -> do
           status <- PQ.resultStatus result
           case status of
@@ -573,7 +573,7 @@ streamQuery_ conn (Query sql) emit = run `E.onException` cancel
                 Errors [] -> throwIO $ ConversionFailed "" Nothing "" "" "Chart row decoder failed without an error"
                 Errors [err] -> throwIO err
                 Errors errors -> throwIO $ PGI.SomePostgreSqlException $ ManyErrors errors
-            PQ.TuplesOk -> pure ()
+            PQ.TuplesOk -> pass
             _ -> PGI.throwResultError "chart stream" result status
           loop
 
@@ -622,7 +622,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
                           (chunkFrom, chunkTo) = chunkCfg.dateRange
-                      result <- readMetrics (Just $ const $ pure ()) (maybeToMonoid chunkParts.finalSummarizeQuery) chunkFrom chunkTo
+                      result <- readMetrics (Just $ const pass) (maybeToMonoid chunkParts.finalSummarizeQuery) chunkFrom chunkTo
                       either throwIO pure result
                 case (actual, chunkableChart ast', start, end) of
                   (DTMetric, True, Just a, Just b) | QC.chunkIntervalSupported key.binInterval && b > addUTCTime 86400 a -> do

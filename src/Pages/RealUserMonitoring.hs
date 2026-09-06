@@ -1404,10 +1404,12 @@ sessionsTable_ workspace links query sessionFilter selectedSession sessions =
       , rows = V.fromList sessions
       , features =
           def
-            { Table.rowAttrs = Just $ \_ ->
-                [ class_ " cursor-pointer [&:has(a[aria-current=true])]:bg-fillBrand-weak [&:has(a:focus-visible)]:outline-2 [&:has(a:focus-visible)]:-outline-offset-2 [&:has(a:focus-visible)]:outline-strokeFocus"
-                , onclick_ "if (!event.target.closest('a, button, input, select, textarea') && !window.getSelection()?.toString()) { const link = this.querySelector('.rum-session-link'); if (event.ctrlKey || event.metaKey) window.open(link.href, '_blank', 'noopener'); else link.click(); }"
-                ]
+            { Table.rowAttrs =
+                Just
+                  $ const
+                    [ class_ " cursor-pointer [&:has(a[aria-current=true])]:bg-fillBrand-weak [&:has(a:focus-visible)]:outline-2 [&:has(a:focus-visible)]:-outline-offset-2 [&:has(a:focus-visible)]:outline-strokeFocus"
+                    , onclick_ "if (!event.target.closest('a, button, input, select, textarea') && !window.getSelection()?.toString()) { const link = this.querySelector('.rum-session-link'); if (event.ctrlKey || event.metaKey) window.open(link.href, '_blank', 'noopener'); else link.click(); }"
+                    ]
             , Table.header =
                 guard workspace
                   $> div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak bg-bgBase px-3 py-1"] do
@@ -1642,7 +1644,7 @@ vitalsTable_ page = do
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ formatVitalThreshold vital vital.poorAt
         td_ $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle vital.rating).badgeClass] do
           span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle vital.rating).fillClass, Aria.hidden_ "true"] ""
-          toHtml $ (ratingStyle vital.rating).label
+          toHtml (ratingStyle vital.rating).label
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ show vital.samples
 
 

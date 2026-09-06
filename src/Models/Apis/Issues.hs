@@ -394,8 +394,8 @@ insertIssue = void . insertIssueReturningId
 -- | Return the persisted identity, including when this insert updates an open issue.
 insertIssueReturningId :: DB es => Issue -> Eff es IssueId
 insertIssueReturningId (i :: Issue) =
-  fmap HI.getOneRow
-    $ Hasql.interp
+  HI.getOneRow
+    <$> Hasql.interp
       [HI.sql|
 INSERT INTO apis.issues (
   id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,

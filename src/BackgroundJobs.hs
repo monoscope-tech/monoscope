@@ -3004,12 +3004,12 @@ getStripeInvoices apiKey subId = do
     pure
       [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
       | inv <- v ^.. AL.key "data" . AL.values
-      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
-      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
       , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
             status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
             hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
             number = inv ^? AL.key "number" . AL._String
+      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
+      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
       ]
 
 
@@ -3161,7 +3161,7 @@ sendReportForProject pid rType = do
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
   let prv = case rType of
-        Projects.RTWeekly -> 7 * 86400
+        Projects.RTWeekly -> 6 * 86400
         Projects.RTDaily -> 86400
 
   let startTime = addUTCTime (negate prv) currentTime
@@ -3215,10 +3215,7 @@ sendReportForProject pid rType = do
         eventsChange = RP.pctChange totalEvents totalEventsPrev
         spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
         endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    patterns <- LogPatterns.getLogPatterns pid 10 0
-    let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
-    systemSnapshot <- RP.collectSystemReport pid startTime currentTime (V.toList topPatterns)
-    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies' (Just systemSnapshot)
+    let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
@@ -3272,7 +3269,6 @@ sendReportForProject pid rType = do
                   slowDbQueries
                   topPatterns
                   freeTierExceeded
-                  (Just systemSnapshot)
               sendRenderedEmail (CI.original user.email) subj rendered
       Log.logInfo "Completed sending report notifications for" pid
 
@@ -5605,7 +5601,7 @@ maskCollapsesDistinctShapes mask rows =
     byMasked =
       HM.fromListWith
         S.union
-        [ (EF.applyErrorMasks [mask] (EF.normalizeMessage msg), S.singleton shp)
+        [ (EF.applyErrorMasks [mask] (EF.normalizeMessage msg), one shp)
         | (msg, shp) <- rows
         , not (T.null shp)
         ]

@@ -158,7 +158,10 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
         sql `shouldSatisfy` T.isInfixOf "max("
         sql `shouldNotSatisfy` T.isInfixOf "count(*)"
         sql `shouldNotSatisfy` T.isInfixOf " as "
-      alertSql "metrics | summarize peak=max(value) | where peak > 80" `shouldSatisfy` T.isInfixOf "having"
+      let havingSql = snd $ T.breakOn "having" $ alertSql "metrics | summarize peak=max(value) | where peak > 80"
+      havingSql `shouldSatisfy` T.isInfixOf "max((value)::float)"
+      havingSql `shouldSatisfy` T.isInfixOf "> 80"
+      havingSql `shouldNotSatisfy` T.isInfixOf "peak"
 
     it "summarize with arithmetic division by bin_auto()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() / 5.0 by bin_auto(timestamp)"

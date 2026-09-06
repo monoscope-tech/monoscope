@@ -268,7 +268,7 @@ saveMonitor pid mid existingM inp = do
 
 
 apiMonitorCreate :: Projects.ProjectId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorCreate pid inp = Monitors.QueryMonitorId <$> UUID.genUUID >>= \mid -> saveMonitor pid mid Nothing inp
+apiMonitorCreate pid inp = UUID.genUUID >>= \uuid -> saveMonitor pid (Monitors.QueryMonitorId uuid) Nothing inp
 
 
 apiMonitorUpdate :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor

@@ -734,7 +734,7 @@ servicePicker_ pid current =
         , hxPushUrl_ "false"
         , name_ "service_search"
         ]
-      div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ current (if current == "all" then [] else [current])
+      div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ current ([current | current /= "all"])
       p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
 
 
