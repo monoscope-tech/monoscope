@@ -406,8 +406,10 @@ spec = sequential $ aroundAll withTestResources do
         `shouldContainAll` ["Images", "ghcr.io/open-telemetry/demo", "docker.redpanda.com/redpandadata/redpanda", "SBOM unavailable", "/infrastructure/images/detail", "role=\"button\""]
 
       (_, kubernetes) <- testServant tr $ Infrastructure.kubernetesGetH testPid (Just "pods") Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      -- A cluster known only by uid renders as a compact label, never 36 hex characters
+      -- repeated down the column; the full uid stays in the tooltip for filtering fidelity.
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubernetes)
-        `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail"]
+        `shouldContainAll` ["Pods", "Clusters", "Namespaces", "Workloads", "Nodes", "checkout-7fb5b4f859-nlcjs", "Not ready", "CPU limit used", "Memory limit used", "whitespace-nowrap", "Showing ", " resources", "/infrastructure/kubernetes/detail", "cluster-9b1deb4d", "data-tippy-content=\"" <> clusterUid <> "\""]
 
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap

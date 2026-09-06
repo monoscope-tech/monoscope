@@ -21,6 +21,7 @@ module Pages.Infrastructure (
 import Data.Default (def)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
@@ -712,9 +713,9 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
   Table
     { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
     , columns =
-        [ col (resourceLabel resource) (\row -> div_ [class_ "flex items-center gap-2"] $ faSprite_ (if resource `elem` [KubeClusters, KubeNodes] then "server" else "cube") "solid" "h-3.5 w-3.5 text-iconNeutral" >> span_ [class_ "font-medium text-textStrong"] (toHtml row.name)) & withAttrs [class_ "min-w-56 w-full"]
+        [ col (resourceLabel resource) (\row -> div_ [class_ "flex items-center gap-2"] $ faSprite_ (if resource `elem` [KubeClusters, KubeNodes] then "server" else "cube") "solid" "h-3.5 w-3.5 text-iconNeutral" >> span_ [class_ "font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
-        , col "Cluster" (plainCell . (.cluster)) & withAttrs [class_ "w-36 max-lg:hidden"]
+        , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-lg:hidden"]
         , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
         , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-xl:hidden"]
         , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right"]
@@ -985,6 +986,20 @@ coresText value = Containers.showFFloat' 2 value <> " cores"
 
 plainCell :: Maybe Text -> Html ()
 plainCell = maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong tabular-nums", term "data-tippy-content" value] $ toHtml value)
+
+
+-- | A cluster known only by its uid gets a compact label — 36 hex characters repeated down
+-- a column identify nothing. A real name (a collector that sets @k8s.cluster.name@) passes
+-- through untouched; the full uid stays in the cell tooltip.
+--
+-- >>> clusterLabel "13269e1e-e624-4d51-a30d-86524c5041f5"
+-- "cluster-13269e1e"
+-- >>> clusterLabel "prod-eu"
+-- "prod-eu"
+clusterLabel :: Text -> Text
+clusterLabel value
+  | isJust $ UUID.fromText value = "cluster-" <> T.take 8 value
+  | otherwise = value
 
 
 utilizationCell :: Maybe Double -> Html ()
