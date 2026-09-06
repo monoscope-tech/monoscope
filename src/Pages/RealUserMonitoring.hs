@@ -55,7 +55,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, showFFloat', toXXHash)
+import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -1358,6 +1358,28 @@ pageLabel url
   | otherwise = url
 
 
+-- | Collapse page URLs into routes: query and fragment dropped, ids masked with the same
+-- 'replaceAllFormats' masks error grouping uses — "/checkout/<uuid>" pages become one row,
+-- the collapse Datadog performs into view names.
+--
+-- >>> pageRoute "https://shop.example/cart/checkout/c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd?order=x"
+-- "/cart/checkout/{uuid}"
+-- >>> pageRoute "/products/12345"
+-- "/products/{integer}"
+-- >>> pageRoute "/cart"
+-- "/cart"
+pageRoute :: Text -> Text
+pageRoute = replaceAllFormats . T.takeWhile (`notElem` ("?#" :: String)) . pageLabel
+
+
+-- | Explorer filter for a masked route: exact path match when nothing was masked, else a
+-- prefix match on the static part before the first mask.
+routeKql :: Text -> Text
+routeKql route = case T.breakOn "{" route of
+  (_, "") -> pagePathKql route
+  (prefix, _) -> "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
+
+
 -- | Traffic-weighted room for improvement, after Sentry's "Opportunity" ranking: sample
 -- count times how far each vital's P75 sits past its "good" threshold, normalized per
 -- vital so CLS (unitless) and the millisecond vitals weigh equally.
@@ -1382,7 +1404,7 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "P75 per page, bi
     Table.Table
       { config = rumTableConfig "rumPageVitals"
       , columns =
-          (Table.col "Page" \(page, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> pagePathKql page), class_ "block truncate font-medium text-textBrand", data_ "tippy-content" page] $ toHtml $ pageLabel page){Table.attrs = [class_ "w-[28%]"]}
+          (Table.col "Page" \(route, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> routeKql route), class_ "block truncate font-medium text-textBrand", data_ "tippy-content" route] $ toHtml route){Table.attrs = [class_ "w-[28%]"]}
             : [rightCol (T.toUpper vital.name) (\(_, byVital, _) -> vitalCell vital byVital) | vital <- vitalDefinitions]
               <> [rightCol "Samples" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
       , rows = V.fromList pageRows
@@ -1402,7 +1424,7 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "P75 per page, bi
         $ sortWith (\(_, byVital, sampleTotal) -> Down (score byVital sampleTotal, sampleTotal))
         $ map (\(page, cells) -> (page, M.fromListWith max [(vitalKey p.metricName, p.p75) | p <- cells], sum $ map (.samples) cells))
         $ M.toList
-        $ M.fromListWith (<>) [(p.page, [p]) | p <- points]
+        $ M.fromListWith (<>) [(pageRoute p.page, [p]) | p <- points]
 
 
 vitalsTable_ :: RumData -> Html ()
