@@ -1190,7 +1190,7 @@ sessionsTable_ workspace links query sessionFilter sessions =
           , ( Table.col "Last page" \session -> do
                 -- A recording with no correlated spans is a real session, not a mystery: say
                 -- what it is instead of stacking "Unknown page" over "0 views · 0 events".
-                span_ [class_ $ "block truncate text-xs " <> bool "text-textStrong" "text-textWeak" (replayOnly session)] $ toHtml $ fromMaybe (bool "Unknown page" "Recording only — no telemetry events" (replayOnly session)) session.lastPage
+                span_ [class_ $ "block truncate text-xs " <> bool "text-textStrong" "text-textWeak" (replayOnly session)] $ toHtml $ fromMaybe (bool "No page views in this range" "Recording only — no telemetry events" (replayOnly session)) session.lastPage
                 forM_ session.service $ span_ [class_ "block truncate text-xs text-textWeak"] . toHtml
             )
               { Table.attrs = [class_ "w-[30%]"]
