@@ -39,6 +39,7 @@ module Utils (
   displayTimestamp,
   utcTimeToNanoseconds,
   getDurationNSMS,
+  countNoun,
   toUriStr,
   toXXHash,
   getServiceColors,
@@ -633,6 +634,16 @@ listToIndexHashMap list = HM.fromList $ zip list [0 ..]
 
 utcTimeToNanoseconds :: UTCTime -> Integer
 utcTimeToNanoseconds = round . (* 1e9) . utcTimeToPOSIXSeconds
+
+
+-- | A count with its noun, pluralized.
+--
+-- >>> countNoun (1 :: Int) "view"
+-- "1 view"
+-- >>> countNoun (3 :: Int) "view"
+-- "3 views"
+countNoun :: (Eq n, Num n, Show n) => n -> Text -> Text
+countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
 
 
 getDurationNSMS :: Integer -> Text

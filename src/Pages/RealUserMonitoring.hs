@@ -54,7 +54,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny)
-import Utils (faSprite_, fmtDate)
+import Utils (countNoun, faSprite_, fmtDate, getDurationNSMS)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -996,15 +996,14 @@ tableZero_ title = Table.ZeroState{icon = "web", title, description = "", action
 
 
 topPages_ :: RumLinks -> [RumPage] -> Html ()
-topPages_ links pages = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Top pages" "Traffic and real-user load latency" $ Just ("Explore all events", logsUrl links browserPageViewKql)
+topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latency" (Just ("Explore all events", logsUrl links browserPageViewKql)) do
   toHtml
     Table.Table
       { config = rumTableConfig "rumTopPages"
       , columns =
           [ (Table.col "Page" \page -> a_ [href_ $ logsUrl links (browserPageViewKql <> " and " <> pagePathKql page.path), class_ "block truncate font-medium text-textBrand"] $ toHtml page.path){Table.attrs = [class_ "w-[46%]"]}
           , rightCol "Views" $ toHtml . show . (.views)
-          , rightCol "P75 load" $ toHtml . maybe "—" formatMilliseconds . (.p75LoadMs)
+          , rightCol "P75 load" $ toHtml . maybe "—" (getDurationNSMS . round . (* 1e6)) . (.p75LoadMs)
           , (rightCol "Last seen" $ toHtml . fmtDate "%d %b %H:%M" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
           ]
       , rows = V.fromList pages
@@ -1013,8 +1012,7 @@ topPages_ links pages = section_ [class_ "overflow-hidden rounded-lg border bord
 
 
 vitalsPanel_ :: [Vital] -> Html ()
-vitalsPanel_ vitals = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Core Web Vitals" "P75 of the most recent samples against Google's thresholds" Nothing
+vitalsPanel_ vitals = rumPanel_ "Core Web Vitals" "P75 of the most recent samples against Google's thresholds" Nothing do
   div_ [class_ "divide-y divide-strokeWeak"] $ forM_ vitals vitalRow_
 
 
@@ -1071,8 +1069,7 @@ groupErrors errors =
 
 
 recentErrors_ :: RumLinks -> [RumError] -> Html ()
-recentErrors_ links errors = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Browser errors" "Grouped by signature; counts and sessions are within this range" $ Just ("View errors", logsUrl links (browserKql <> " and status_code == \"ERROR\""))
+recentErrors_ links errors = rumPanel_ "Browser errors" "Grouped by signature; counts and sessions are within this range" (Just ("View errors", logsUrl links (browserKql <> " and status_code == \"ERROR\""))) do
   if null errors
     then div_ [class_ "flex items-center gap-2 px-3 py-5 text-sm text-textWeak"] $ faSprite_ "circle-check" "regular" "h-4 w-4 text-textSuccess" >> "No browser errors in this range"
     else ul_ [class_ "divide-y divide-strokeWeak"] $ forM_ (take 6 $ groupErrors errors) \issue -> li_ [class_ "px-3 py-2.5"] do
@@ -1114,8 +1111,7 @@ audienceBy pick rows =
 -- | Who the traffic is: the first question of "is this bug Safari-only?" and "is mobile
 -- slower?", which an aggregate summary cannot answer. Every RUM product leads with this.
 audiencePanel_ :: [RumBreakdown] -> Html ()
-audiencePanel_ breakdown = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Audience" "Sessions by browser, operating system, and device class — errors highlight where failures concentrate" Nothing
+audiencePanel_ breakdown = rumPanel_ "Audience" "Sessions by browser, operating system, and device class — errors highlight where failures concentrate" Nothing do
   if null breakdown
     then panelEmpty_ "No user agent data in this time range"
     else div_ [class_ "grid grid-cols-3 divide-x divide-strokeWeak max-md:grid-cols-1 max-md:divide-x-0 max-md:divide-y"] do
@@ -1143,8 +1139,7 @@ audienceColumn_ title rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
 
 
 recentSessions_ :: RumData -> Html ()
-recentSessions_ page = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Recent sessions" "Open a recording or inspect its correlated telemetry" $ Just ("View all sessions", sessionsUrl page.links Nothing AllSessionRows Nothing)
+recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect its correlated telemetry" (Just ("View all sessions", sessionsUrl page.links Nothing AllSessionRows Nothing)) do
   sessionsTable_ False page.links Nothing AllSessionRows (take 8 page.sessions)
 
 
@@ -1294,8 +1289,7 @@ performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
 -- as the strip turning amber mid-window — visible in a way two aggregate numbers never are.
 -- Where two emitters report the same vital in a bucket, the worse P75 is shown.
 vitalTrendPanel_ :: [VitalTrendPoint] -> Html ()
-vitalTrendPanel_ points = section_ [class_ "rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Web Vitals over time" "P75 per interval, colored by Google's thresholds" Nothing
+vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 per interval, colored by Google's thresholds" Nothing do
   if null points
     then panelEmpty_ "No web vital samples in this time range"
     else div_ [class_ "grid grid-cols-2 gap-px bg-strokeWeak max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
@@ -1336,8 +1330,7 @@ pageLabel url
 -- | Sentry's signature vitals view: one row per page, P75 per vital, each judged on its
 -- own thresholds. Rows are ordered by sample count so the busiest pages lead.
 pageVitalsTable_ :: [PageVitalPoint] -> Html ()
-pageVitalsTable_ points = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-  panelHeader_ "Web Vitals by page" "P75 per page — a site-wide average hides the page that regressed" Nothing
+pageVitalsTable_ points = rumPanel_ "Web Vitals by page" "P75 per page — a site-wide average hides the page that regressed" Nothing do
   toHtml
     Table.Table
       { config = rumTableConfig "rumPageVitals"
@@ -1365,8 +1358,7 @@ pageVitalsTable_ points = section_ [class_ "overflow-hidden rounded-lg border bo
 
 vitalsTable_ :: RumData -> Html ()
 vitalsTable_ page = do
-  section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-    panelHeader_ "Web Vitals field performance" "P75 of the most recent samples — what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing
+  rumPanel_ "Web Vitals field performance" "P75 of the most recent samples — what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing do
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
       thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ [class_ "text-right"] "Samples"
       tbody_ $ forM_ page.vitals \vital -> tr_ do
@@ -1382,12 +1374,9 @@ vitalsTable_ page = do
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ show vital.samples
 
 
-panelHeader_ :: Text -> Text -> Maybe (Text, Text) -> Html ()
-panelHeader_ title subtitle action = header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
-  div_ [class_ "min-w-0"] do
-    h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-    p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml subtitle
-  forM_ action $ \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
+-- | Every RUM card is the shared 'Components.panel_' flush-card variant.
+rumPanel_ :: Text -> Text -> Maybe (Text, Text) -> Html () -> Html ()
+rumPanel_ title subtitle action = Components.panel_ def{Components.flushCard = True, Components.subtitle = Just subtitle, Components.action = action} title
 
 
 panelEmpty_ :: Text -> Html ()
@@ -1403,14 +1392,6 @@ replayOnly :: RumSession -> Bool
 replayOnly session = session.hasReplay && session.events == 0
 
 
--- | >>> countNoun (1 :: Int) "view"
--- "1 view"
--- >>> countNoun (3 :: Int) "view"
--- "3 views"
-countNoun :: (Eq n, Num n, Show n) => n -> Text -> Text
-countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
-
-
 formatSessionDuration :: RumSession -> Text
 formatSessionDuration session
   | seconds < 1 = "<1s"
@@ -1421,19 +1402,13 @@ formatSessionDuration session
     seconds = realToFrac (diffUTCTime session.endedAt session.startedAt) :: Double
 
 
-formatMilliseconds :: Double -> Text
-formatMilliseconds value
-  | value >= 1000 = showFFloat' 2 (value / 1000) <> " s"
-  | otherwise = showFFloat' 0 value <> " ms"
-
-
 formatVital :: Vital -> Text
 formatVital vital = maybe "No data" (formatVitalThreshold vital) vital.value
 
 
 formatVitalThreshold :: Vital -> Double -> Text
 formatVitalThreshold vital value
-  | vital.unit == "ms" = formatMilliseconds value
+  | vital.unit == "ms" = getDurationNSMS $ round $ value * 1e6
   | otherwise = showFFloat' 3 value
 
 

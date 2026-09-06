@@ -66,7 +66,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -878,9 +878,7 @@ inactiveMetricsList pid source metrics = do
   details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak mt-4"] do
     summary_ [class_ "collapse-title font-medium text-sm text-textWeak"]
       $ toHtml
-      $ show (V.length metrics)
-      <> " inactive metric"
-      <> bool "s" "" (V.length metrics == 1)
+      $ countNoun (V.length metrics) "inactive metric"
       <> " (no data in 7 days)"
     div_ [class_ "collapse-content"] do
       div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
@@ -970,9 +968,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
                         $ "View "
-                        <> toHtml (prettyPrintCount $ V.length moreSources)
-                        <> " more source"
-                        <> bool "s" "" (V.length moreSources == 1)
+                        <> toHtml (countNoun (V.length moreSources) "more source")
                         <> " in details"
                 )
                 & Table.withAttrs [class_ "w-48"]

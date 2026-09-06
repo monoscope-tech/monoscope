@@ -748,18 +748,29 @@ data PanelCfg = PanelCfg
   , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
   , sectionId :: Maybe Text -- id attribute on the details element
   , raised :: Bool -- surface-raised card wrapper
+  , flushCard :: Bool -- bordered card with a header strip and unpadded body, for panels whose content is a table or chart that sits flush
+  , action :: Maybe (Text, Text) -- (label, url) link at the header's right edge
   }
   deriving stock (Generic)
   deriving anyclass (Default)
 
 
 panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
+panel_ cfg title content
+  | cfg.flushCard = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
+      header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
+        div_ [class_ "min-w-0"] do
+          h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+          whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
+        forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
+      content
 panel_ cfg title content = case cfg.collapsible of
   Nothing -> wrapper do
     header do
       whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
       toHtml title
       whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
+      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "ml-auto text-xs font-medium text-textBrand hover:underline"] $ toHtml label
     content
     where
       wrapper = if cfg.raised then div_ [class_ "surface-raised rounded-2xl p-4 relative"] else div_ [class_ "space-y-4"]

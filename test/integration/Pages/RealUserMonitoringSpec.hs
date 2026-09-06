@@ -125,7 +125,7 @@ spec = sequential $ aroundAll withTestResources do
       isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid RUMData.VitalSamplesQuery Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
       -- The numbers and activity chart are dashboard Widget components that fetch their own
       -- data through the chart pipeline; the page ships their queries, not their values.
-      overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.20 s", "/checkout", "Ada Lovelace"]
+      overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
 
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data

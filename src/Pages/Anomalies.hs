@@ -94,7 +94,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -663,7 +663,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
-      span_ [class_ "text-2xs text-textWeak"] $ toHtml $ show total <> " event" <> bool "s" "" (total == 1) <> " before error"
+      span_ [class_ "text-2xs text-textWeak"] $ toHtml $ countNoun total "event" <> " before error"
     div_ [class_ "max-h-80 overflow-y-auto py-1"]
       $ traverse_ (uncurry renderCrumb) (zip [0 :: Int ..] crumbList)
 
