@@ -808,7 +808,7 @@ weeklyReportEmail d =
                 forM_ (reportRows 6 rows) $ \comparison -> do
                   let e = comparison.current
                   reportItem
-                    (queryUrl $ serviceFilter e.service e.environment <> " and kind == \"server\" and attributes.http.request.method == " <> show e.method <> " and attributes.url.path == " <> show e.path)
+                    (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> show e.method <> " and attributes.url.path == " <> show e.path)
                     (e.method <> " " <> reportClip 140 e.path)
                     (T.intercalate " · " $ catMaybes [e.service, e.environment, Just e.host])
                     [("Requests", reportCount e.requests, "Server spans"), ("Avg duration", maybe "Not measured" reportMs e.averageMs, reportChange e.averageMs (comparison.previous >>= (.averageMs)))]
@@ -819,7 +819,7 @@ weeklyReportEmail d =
                 when (null rows) $ reportNote "No database queries above this threshold were recorded."
                 forM_ (reportRows 4 rows) $ \q ->
                   reportItem
-                    (queryUrl $ serviceFilter q.service Nothing <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> show q.statement else " and duration > 500000000")
+                    (queryUrl $ servicePredicate q.service <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> show q.statement else " and duration > 500000000")
                     (reportClip 180 q.statement)
                     (fromMaybe "Unnamed service" q.service)
                     [("Avg duration", reportMs q.averageMs, ""), ("Operations", reportCount q.operations, "Recorded spans")]
@@ -882,7 +882,9 @@ weeklyReportEmail d =
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
     queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
     serviceUrl service environment = queryUrl $ serviceFilter service environment
-    serviceFilter service environment = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> show name) service <> maybe "" (\e -> " and resource.deployment.environment.name == " <> show e) environment
+    servicePredicate service = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> show name) service
+    serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> show e) environment
+    endpointHostFilter host = " and (attributes.server.address == " <> show host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> show host) <> "))"
 
 
 reportFinding :: Text -> Text -> Html ()

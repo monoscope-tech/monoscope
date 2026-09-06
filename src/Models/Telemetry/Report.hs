@@ -181,14 +181,14 @@ endpointStats useTf pid start end =
   Hasql.withHasqlTimefusion useTf
     $ Hasql.interp
       [HI.sql|
-    SELECT resource___service___name, resource___deployment___environment___name,
+    SELECT NULLIF(resource___service___name, ''), NULLIF(resource___deployment___environment___name, ''),
       COALESCE(attributes___server___address, resource___service___name, ''),
       attributes___http___request___method, COALESCE(attributes___url___path, ''),
       (AVG(duration) / 1000000.0)::float8, COUNT(*)::bigint
     FROM otel_logs_and_spans
     WHERE project_id = #{pid.toText} AND timestamp >= #{start} AND timestamp < #{end}
       AND kind = 'server' AND attributes___http___request___method IS NOT NULL
-    GROUP BY resource___service___name, resource___deployment___environment___name, COALESCE(attributes___server___address, resource___service___name, ''),
+    GROUP BY NULLIF(resource___service___name, ''), NULLIF(resource___deployment___environment___name, ''), COALESCE(attributes___server___address, resource___service___name, ''),
       attributes___http___request___method, COALESCE(attributes___url___path, '')
     ORDER BY COUNT(*) DESC
   |]
