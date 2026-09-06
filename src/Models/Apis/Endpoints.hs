@@ -17,6 +17,8 @@ module Models.Apis.Endpoints (
   HostQuery (..),
   HostArchiveOp (..),
   setHostsArchived,
+  hostTrafficSince,
+  hostRetentionSweep,
   endpointRequestStatsByProject,
   listEndpointsPaged,
   getEndpointById,
@@ -507,6 +509,9 @@ setHostsArchived pid dirM op hosts =
       UPDATE apis.hosts
          SET archived_at = CASE WHEN #{archiving} THEN NOW() ELSE NULL END,
              archived_by = CASE WHEN #{archiving} THEN #{byM} ELSE NULL END,
+             -- Unarchiving a still-quiet host buys a fresh 30-day observation
+             -- window; otherwise the retention sweep re-archives it next run.
+             last_seen_at = CASE WHEN #{archiving} THEN last_seen_at ELSE NOW() END,
              updated_at = NOW()
        WHERE project_id = #{pid}
          AND host = ANY(#{hosts}::text[])
@@ -515,6 +520,65 @@ setHostsArchived pid dirM op hosts =
     (archiving, byM) = case op of
       ArchiveBy uid -> (True, Just uid)
       Unarchive -> (False, Nothing)
+
+
+-- | Latest traffic per (host, outgoing) over the last 48 hours, attributed exactly as
+-- 'dependenciesAndEventsCount' attributes it (server.address, kind = client ⇒ outgoing).
+-- 48h rather than 24h so one missed daily sweep cannot lose a day of traffic.
+hostTrafficSince :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es [(Text, Bool, UTCTime)]
+hostTrafficSince useTf pid start =
+  map (\(h, o, ts) -> (h, o, zonedTimeToUTC ts))
+    <$> Hasql.withHasqlTimefusion
+      useTf
+      ( Hasql.interp
+          [HI.sql|
+            SELECT COALESCE(s.attributes___server___address, '') AS host,
+                   (s.kind = 'client') AS outgoing,
+                   MAX(s.timestamp) AS last_seen
+            FROM otel_logs_and_spans s
+            WHERE s.project_id = #{pid}::text
+              AND s.timestamp > ^{tsLit start}
+              AND s.attributes___http___request___method IS NOT NULL
+            GROUP BY 1, 2|]
+      )
+
+
+-- | Daily retention pass over one project's hosts:
+--
+-- 1. bump @last_seen_at@ from fresh traffic (monotonic, so replays are harmless),
+-- 2. lift the system archive (@archived_by IS NULL@ — a manual archive stays put)
+--    off hosts that saw traffic again, returning them for the notification digest,
+-- 3. system-archive active hosts idle for 30 days.
+--
+-- A manual 'Unarchive' also bumps @last_seen_at@, so unarchiving a still-quiet
+-- host buys a fresh 30-day observation window instead of re-archiving tomorrow.
+hostRetentionSweep :: DB es => Projects.ProjectId -> [(Text, Bool, UTCTime)] -> Eff es (V.Vector Text, Int64)
+hostRetentionSweep pid traffic = do
+  unless (null traffic)
+    $ Hasql.interpExecute_
+      [HI.sql|
+        UPDATE apis.hosts h
+           SET last_seen_at = GREATEST(h.last_seen_at, t.ts)
+          FROM unnest(#{hs}::text[], #{os}::bool[], #{tss}::timestamptz[]) AS t(host, outgoing, ts)
+         WHERE h.project_id = #{pid} AND h.host = t.host AND h.outgoing = t.outgoing|]
+  unarchived <-
+    Hasql.interp
+      [HI.sql|
+        UPDATE apis.hosts
+           SET archived_at = NULL, updated_at = NOW()
+         WHERE project_id = #{pid} AND archived_at IS NOT NULL AND archived_by IS NULL
+           AND last_seen_at > archived_at
+        RETURNING host|]
+  archivedCount <-
+    Hasql.interpExecute
+      [HI.sql|
+        UPDATE apis.hosts
+           SET archived_at = NOW(), archived_by = NULL, updated_at = NOW()
+         WHERE project_id = #{pid} AND archived_at IS NULL
+           AND last_seen_at < NOW() - INTERVAL '30 days'|]
+  pure (V.map HI.getOneColumn unarchived, archivedCount)
+  where
+    (hs, os, tss) = V.unzip3 $ V.fromList traffic
 
 
 -- | Count of endpoints under a (project, direction), under the same row filters as

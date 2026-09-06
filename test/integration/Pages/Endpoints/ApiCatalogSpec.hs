@@ -2,6 +2,8 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.UUID.V4 (nextRandom)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Text qualified as T
@@ -592,3 +594,43 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         insertSpan "/new" 120
       stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d}
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]
+
+    it "hostRetentionSweep_systemArchivesIdle_wakesOnTraffic_withEmailDigest" \(tr, testPid) -> do
+      now <- getCurrentTime
+      apiKey <- createTestAPIKey tr testPid "retention-key"
+      let mkHostRow h = (def :: Endpoints.Endpoint){Endpoints.projectId = testPid, Endpoints.host = h, Endpoints.outgoing = False}
+          hostState h =
+            V.head
+              <$> ( withPool tr.trPool
+                      $ DBT.query [sql|SELECT archived_at IS NOT NULL, archived_by IS NULL FROM apis.hosts WHERE project_id = ? AND host = ? AND NOT outgoing|] (testPid, h :: Text)
+                      :: IO (V.Vector (Bool, Bool))
+                  )
+          sweep at = fst <$> runTestBackgroundWithNotifications at tr.trLogger tr.trATCtx (BackgroundJobs.runHostRetentionSweep tr.trATCtx testPid)
+          ingestFor h at = do
+            spanId <- T.take 16 . T.filter (/= '-') . UUID.toText <$> nextRandom
+            ingestSpanReq tr $ mkSpanRequest (T.replicate 32 "a") spanId Nothing "GET /ping" [] Nothing [mkAttr "server.address" h, mkAttr "http.request.method" "GET", mkAttr "url.path" "/ping"] (mkResource apiKey []) at
+      runQueryEffect tr $ Endpoints.bulkInsertHosts $ V.fromList [mkHostRow "idle.retention.example", mkHostRow "manual.retention.example"]
+      void $ withPool tr.trPool $ DBT.execute [sql|UPDATE apis.hosts SET last_seen_at = ? WHERE project_id = ? AND host LIKE '%.retention.example'|] (addUTCTime (-40 * 86400) now, testPid)
+      users <- runTestBg now tr $ Projects.usersByProjectId testPid
+      runQueryEffect tr $ void $ Endpoints.setHostsArchived testPid Nothing (Endpoints.ArchiveBy (maybe (error "project has no users") ((.id) . head) (nonEmpty users))) ["manual.retention.example"]
+
+      -- Sweep 1: the idle host is archived as a system action; no wake-up email.
+      notifs1 <- sweep now
+      hostState "idle.retention.example" >>= (`shouldBe` (True, True))
+      any (\case EmailNotification{} -> True; _ -> False) notifs1 `shouldBe` False
+
+      -- Traffic returns for both — stamped after the archive moment, as returning
+      -- traffic is in production. Only the system-archived host wakes; the manual
+      -- archive is a user decision the sweep must never override.
+      ingestFor "idle.retention.example" (addUTCTime 120 now)
+      ingestFor "manual.retention.example" (addUTCTime 120 now)
+      notifs2 <- sweep now
+      hostState "idle.retention.example" >>= (`shouldBe` (False, True))
+      hostState "manual.retention.example" >>= (`shouldBe` (True, False))
+      notifs2 `shouldSatisfy` any (\case EmailNotification d -> "idle.retention.example" `T.isInfixOf` d.htmlBody; _ -> False)
+      notifs2 `shouldSatisfy` all (\case EmailNotification d -> not ("manual.retention.example" `T.isInfixOf` d.htmlBody); _ -> True)
+
+      -- The wake bumped recency, so an immediate re-sweep must not re-archive.
+      notifs3 <- sweep now
+      hostState "idle.retention.example" >>= (`shouldBe` (False, True))
+      any (\case EmailNotification{} -> True; _ -> False) notifs3 `shouldBe` False

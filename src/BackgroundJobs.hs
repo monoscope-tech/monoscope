@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -183,6 +183,10 @@ data BgJobs
     -- where processed_at IS NULL through the same submitBatch path as live
     -- ingestion.
     SafetyNetReprocess Projects.ProjectId
+  | -- | Daily host retention pass: bump last_seen_at from fresh traffic,
+    -- system-archive hosts idle 30 days, wake system-archived hosts whose
+    -- traffic returned and email the project a digest about them.
+    HostRetentionSweep Projects.ProjectId
   | -- | Per-batch odd-job fired from the extraction worker's eager track, carrying
     -- the error vector it decoded in-memory. Separated from the worker so
     -- createJob failure aborts UPDATE-1 and safety-net retries the whole batch,
@@ -351,6 +355,7 @@ processBackgroundJob authCtx bgJob =
     DailyReports pid -> sendReportForProject pid Projects.RTDaily
     WeeklyReports pid -> sendReportForProject pid Projects.RTWeekly
     ReportUsage pid -> reportProjectUsage authCtx pid
+    HostRetentionSweep pid -> runHostRetentionSweep authCtx pid
     TrialEndingReminder pid scheduledDaysLeft -> sendTrialEndingReminder authCtx pid scheduledDaysLeft
     CleanupDemoProject ->
       -- ReadCommitted is sufficient: we need atomicity across the three deletes,
@@ -932,6 +937,7 @@ runDailyJobScheduling authCtx =
           then Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
           else liftIO $ withResource authCtx.jobsPool \conn -> do
             void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+            void $ createJob conn "background_jobs" $ BackgroundJobs.HostRetentionSweep p
             let sched = seedJobs conn currentTime
             -- Derived-table maintenance jobs read from `apis.*` tables, not
             -- the hypertable, and are unaffected by the derivation path.
@@ -3469,6 +3475,27 @@ newEndpointAlertsPerHour = 10
 -- read-then-write check and double-send. Issues over the hourly budget are left
 -- unclaimed rather than dropped — they keep @last_notified_at IS NULL@ and the
 -- next run picks them up.
+-- | Daily per-project host retention: bump traffic recency, archive 30-day-idle
+-- hosts as a system action, and wake system-archived hosts whose traffic returned
+-- (see 'Endpoints.hostRetentionSweep'). One digest email per project per sweep.
+runHostRetentionSweep :: Config.AuthContext -> Projects.ProjectId -> ATBackgroundCtx ()
+runHostRetentionSweep authCtx pid = do
+  now <- Time.currentTime
+  traffic <- Endpoints.hostTrafficSince authCtx.env.enableTimefusionReads pid (addUTCTime (-48 * 3600) now)
+  (unarchivedRaw, archivedCount) <- Endpoints.hostRetentionSweep pid traffic
+  let unarchived = ordNub $ V.toList unarchivedRaw
+  when (archivedCount > 0) $ Log.logInfo "Hosts auto-archived after 30 idle days" ("project_id", pid.toText, "count", archivedCount)
+  unless (null unarchived) do
+    Log.logInfo "System-archived hosts unarchived after traffic returned" ("project_id", pid.toText, "hosts", unarchived)
+    projectM <- Projects.projectById pid
+    whenJust projectM \project -> unless authCtx.config.pauseNotifications do
+      users <- Projects.usersByProjectId pid
+      let catalogUrl = projectUrl authCtx pid <> "/api_catalog"
+      forM_ users \u -> do
+        let (subj, html) = ET.hostsUnarchivedEmail u.firstName project.title catalogUrl unarchived
+        sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+
+
 sendNewEndpointAlerts :: Projects.ProjectId -> Text -> [(Issues.IssueId, ET.EndpointAlertRow)] -> ATBackgroundCtx ()
 sendNewEndpointAlerts _ _ [] = pass
 sendNewEndpointAlerts pid alertHash candidates = do

@@ -21,6 +21,7 @@ module Pkg.EmailTemplates (
   errorSpikesEmail,
   digestEmail,
   anomalyEndpointEmail,
+  hostsUnarchivedEmail,
   issueAssignedEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
@@ -605,6 +606,27 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
     )
     "Explore the Endpoint"
     anomalyUrl
+
+
+-- | Digest for hosts the retention sweep just unarchived because traffic returned.
+-- One email per project per sweep, however many hosts woke up.
+hostsUnarchivedEmail :: Text -> Text -> Text -> [Text] -> (Text, Html ())
+hostsUnarchivedEmail userName projectName catalogUrl hosts =
+  ctaEmail
+    ("[···] Archived hosts are receiving traffic again on \"" <> projectName <> "\"")
+    True
+    ( do
+        emailGreeting (Just userName)
+        p_ do
+          "These hosts on your "
+          b_ $ toHtml projectName
+          " project had been auto-archived after 30 days without traffic, but are now receiving events again, so we unarchived them:"
+        div_ [class_ "highlight-box"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+          $ forM_ hosts (tr_ . td_ [style_ "padding: 3px 0;"] . span_ [class_ "monoscope-code"] . toHtml)
+    )
+    "Open the API Catalog"
+    catalogUrl
 
 
 -- =============================================================================
