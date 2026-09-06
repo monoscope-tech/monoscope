@@ -3,6 +3,7 @@ module Data.Effectful.LLM (
   callLLM,
   callAgenticChat,
   embedDocuments,
+  openAIEmbeddings,
   callOpenAIAPI,
   modelAndEffort,
   runLLMReal,
@@ -57,6 +58,20 @@ type instance DispatchOf LLM = 'Dynamic
 
 
 makeEffect ''LLM
+
+
+-- | Configure the embedding client from the application settings. Langchain
+-- appends /embeddings verbatim, so the base must have no trailing slash.
+-- Accept the official host root as its versioned API base; custom proxy paths
+-- are already API bases and must retain their path.
+openAIEmbeddings :: Text -> Text -> EmbOAI.OpenAIEmbeddings
+openAIEmbeddings apiKey baseUrl =
+  EmbOAI.defaultOpenAIEmbeddings
+    { EmbOAI.apiKey = apiKey
+    , EmbOAI.baseUrl = Just $ if T.null baseUrl || normalized == "https://api.openai.com" then "https://api.openai.com/v1" else toString normalized
+    }
+  where
+    normalized = T.dropWhileEnd (== '/') baseUrl
 
 
 -- | Real interpreter that makes actual OpenAI API calls

@@ -3878,11 +3878,7 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
-embeddingConfig ctx =
-  Langchain.Embeddings.OpenAI.defaultOpenAIEmbeddings
-    { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
-    , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (toString ctx.config.openaiBaseUrl)
-    }
+embeddingConfig ctx = ELLM.openAIEmbeddings ctx.config.openaiApiKey ctx.config.openaiBaseUrl
 
 
 -- Endpoint template discovery ---------------------------------------------------
