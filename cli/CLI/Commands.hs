@@ -1301,10 +1301,8 @@ runDashboardRender cfg opts mode = do
         catMaybes
           [ ("tab",) <$> opts.tab
           , ("widget",) <$> opts.widget
-          , Just ("since", fromMaybe "1h" opts.since)
-          , ("from",) <$> opts.from
-          , ("to",) <$> opts.to
           ]
+          <> timeRangeParams opts.since opts.from opts.to
           <> [("var-" <> k, v) | (k, v) <- opts.vars]
   repeatEvery opts.watch $ withAPIResult cfg ("/api/v1/dashboards/" <> opts.dashboardId <> "/data") params \val ->
     case (mode, AE.fromJSON @Dash.DashboardData val) of
@@ -1316,10 +1314,24 @@ runDashboardRender cfg opts mode = do
 
 
 metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
-metricsParams expr mSince mFrom mTo =
+metricsParams expr mSince mFrom mTo = ("query", expr) : timeRangeParams mSince mFrom mTo
+
+
+-- | An explicit bound must not acquire a default relative range: the server
+-- gives `since` precedence over `from`/`to`.
+--
+-- >>> timeRangeParams Nothing (Just "2026-09-06T21:00:00Z") (Just "2026-09-06T22:00:00Z")
+-- [("from","2026-09-06T21:00:00Z"),("to","2026-09-06T22:00:00Z")]
+-- >>> timeRangeParams Nothing Nothing (Just "2026-09-06T22:00:00Z")
+-- [("to","2026-09-06T22:00:00Z")]
+-- >>> timeRangeParams Nothing Nothing Nothing
+-- [("since","1h")]
+-- >>> timeRangeParams (Just "10m") (Just "2026-09-06T21:00:00Z") Nothing
+-- [("since","10m"),("from","2026-09-06T21:00:00Z")]
+timeRangeParams :: Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
+timeRangeParams mSince mFrom mTo =
   catMaybes
-    [ Just ("query", expr)
-    , Just ("since", fromMaybe "1h" mSince)
+    [ ("since",) <$> (mSince <|> if isNothing mFrom && isNothing mTo then Just "1h" else Nothing)
     , ("from",) <$> mFrom
     , ("to",) <$> mTo
     ]
