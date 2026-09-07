@@ -744,11 +744,15 @@ spec = around withTestResources do
         `shouldSatisfy` maybe False (T.isInfixOf "overflow-hidden")
 
   describe "Query editor skeleton" do
-    it "apiLogH_rendersAnEmptyQueryAsAMutedPlaceholder" \tr -> do
+    it "apiLogH_rendersAnEmptyQueryAsANativePlaceholder" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
-      find (T.isInfixOf "level ==") (T.splitOn "<" html)
-        `shouldSatisfy` maybe False (T.isInfixOf "opacity-60")
+      let input = find (T.isInfixOf "data-query-input") (T.splitOn "<" html)
+      input `shouldSatisfy` maybe False (T.isPrefixOf "textarea ")
+      input `shouldSatisfy` maybe False (T.isInfixOf "placeholder=\"level == &quot;ERROR&quot;\"")
+      -- The example belongs in the placeholder, never in the editable value
+      -- that the query editor adopts when its JavaScript loads.
+      input `shouldSatisfy` maybe False (T.isSuffixOf ">")
   describe "Trace Tree" do
     -- Regression: startNs was folded with a 0 seed, so every synthetic orphan
     -- header started at 0 and its duration spanned from the epoch to the last span.

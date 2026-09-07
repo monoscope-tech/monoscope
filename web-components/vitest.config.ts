@@ -1,7 +1,9 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Browser benchmarks run through bench/playwright.config.ts.
+    exclude: [...configDefaults.exclude, 'bench/**'],
     // jsdom has better compatibility with Monaco Editor
     environment: 'jsdom',
     globals: true,
