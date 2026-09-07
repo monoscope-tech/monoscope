@@ -495,25 +495,25 @@ integrationsBody IntegrationsConfig{..} = do
               ]
                 :: [(Text, Settings.TestChannel, Text, Bool, Html (), Html ())]
 
-        div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-          forM_ integrations \(val, testCh, title, configured, icon, content) ->
-            renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
-
-        div_ [class_ "mt-6"] do
+        div_ [class_ "sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-strokeWeak bg-bgBase py-3", id_ "integrations-save-bar"] do
+          div_ [class_ "min-w-0"] do
+            p_ [class_ "font-medium text-sm text-textStrong"] "Notification settings"
+            p_ [id_ "integrations-save-status", class_ "text-sm text-textWeak", term "role" "status", term "aria-live" "polite"] "Save changes to apply your settings."
           button_
-            ( [ class_ "btn btn-sm btn-ghost"
+            ( [ class_ "btn btn-primary shrink-0"
+              , type_ "button"
+              , id_ "integrations-save"
               , hxPost_ [text|/p/$pid/notifications-channels|]
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
-              , -- Same intent as Components.dirtyFormSaveAttr_, but that one listens on
-                -- `closest <form/>` and this control lives in a plain div (#notifsForm is
-                -- a div, not a form — the button hx-posts with hx-vals rather than
-                -- submitting). Swapping the classes rather than assigning className keeps
-                -- any other class on the button intact.
-                [__| on change from closest <div/> remove .btn-ghost from me then add .btn-primary to me |]
+              , [__| on input or change from #notifsForm put 'Unsaved changes' into #integrations-save-status |]
               ]
                 <> integrationsSwapAttrs_
             )
-            "Save"
+            "Save changes"
+
+        div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
+          forM_ integrations \(val, testCh, title, configured, icon, content) ->
+            renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
