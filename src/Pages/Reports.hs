@@ -353,10 +353,10 @@ startLivePreview pid token = do
           Right Nothing -> Report.PreviewFailed <$ Log.logAttention "Live report generation timed out" pid
           Left err -> Report.PreviewFailed <$ Log.logAttention "Live report generation failed" (pid, displayException err)
         Report.finishPreview pid token status
-      guarded = UnliftIO.tryAny worker >>= either (\err -> Log.logAttention "Live report worker failed" (pid, displayException err)) pure
+      guardedWorker = UnliftIO.tryAny worker >>= either (\err -> Log.logAttention "Live report worker failed" (pid, displayException err)) pure
   case ctx.backgroundScope of
-    Just scope -> void $ forkWithCtx scope guarded
-    Nothing -> void $ forkIO guarded
+    Just scope -> void $ forkWithCtx scope guardedWorker
+    Nothing -> void $ forkIO guardedWorker
 
 
 reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
@@ -444,7 +444,7 @@ instance ToHtml ReportsGet where
   toHtml (ReportsGetSingle (PageCtx conf content)) = toHtml $ PageCtx conf $ singleReportPage content
   toHtml (ReportsGetSingle' content) = toHtml $ singleReportPage content
   toHtml (ReportsGetLive (PageCtx conf view)) = toHtml $ PageCtx conf $ liveReportPage view
-  toHtml (ReportsGetLive' view) = liveReportPage view
+  toHtml (ReportsGetLive' view) = toHtml $ liveReportPage view
   toHtmlRaw = toHtml
 
 

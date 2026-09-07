@@ -192,7 +192,7 @@ rumPanelCacheGet key =
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for
 -- the fleet. @rawKey@ is hashed, so callers pass a readable @show@n key.
-withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es, Typeable a) => Text -> Int64 -> Eff es a -> Eff es a
+withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff es a -> Eff es a
 withSharedCache rawKey ttl compute = do
   let key = toXXHash rawKey
   rumPanelCacheGet key >>= flip maybe pure do
