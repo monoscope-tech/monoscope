@@ -1,6 +1,7 @@
 module Pkg.KafkaConsumerSpec (spec) where
 
 import Control.Concurrent.STM (check, stateTVar)
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful (Eff, IOE, (:>))
@@ -17,7 +18,7 @@ import Relude
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, runBackground)
 import Test.Hspec
-import UnliftIO.Async (race_)
+import UnliftIO.Async (Async, race_, wait, withAsync)
 import UnliftIO.Concurrent (forkIO, threadDelay)
 
 
@@ -73,30 +74,29 @@ runMockProducer bVar = interpret \_ -> \case
 -- (offset order), and commit records the high-water offset per (topic, 0).
 runMockConsumer :: IOE :> es => [Text] -> TVar Broker -> Eff (KafkaConsumer ': es) a -> Eff es a
 runMockConsumer topics bVar = interpret \_ -> \case
-  PollMessageBatch _ (K.BatchSize n) -> do
-    batch <- atomically do
-      b <- readTVar bVar
-      let pull (acc, st) topic
-            | length acc >= n = (acc, st)
-            | otherwise =
-                let c = Map.findWithDefault 0 (topic, 0) st -- records are all partition 0 (appendRecord)
-                    taken = take (n - length acc) (drop c (Map.findWithDefault [] topic b.logs))
-                 in (acc <> taken, Map.insert (topic, 0) (c + length taken) st)
-          (recs, cursor') = foldl' pull ([], b.cursor) topics
-      writeTVar bVar b{cursor = cursor'}
-      pure recs
-    when (null batch) (threadDelay 20_000) -- don't busy-spin once drained
-    pure (map Right batch)
+  PollMessage _ -> viaNonEmpty head <$> pullBatch 1
+  PollMessageBatch _ (K.BatchSize n) -> map Right <$> pullBatch n
   CommitPartitionsOffsets _ tps -> atomically $ modifyTVar' bVar \b -> b{committed = foldl' recordTp b.committed tps}
-  -- Seek rewinds the per-topic read cursor so the offsets from the target are
-  -- re-delivered on the next poll — models librdkafka redelivering uncommitted
-  -- offsets only after a seek (never mid-session otherwise).
   SeekPartitions tps _ -> atomically $ modifyTVar' bVar \b -> b{cursor = foldl' seekCursor b.cursor tps}
   PausePartitions _ -> pass
   ResumePartitions _ -> pass
   Assignment -> pure $ Map.fromList [(K.TopicName t, [K.PartitionId 0]) | t <- topics]
   _ -> error "runMockConsumer: unmocked consumer op"
   where
+    pullBatch n = do
+      batch <- atomically do
+        b <- readTVar bVar
+        let pull (acc, st) topic
+              | length acc >= n = (acc, st)
+              | otherwise =
+                  let c = Map.findWithDefault 0 (topic, 0) st -- records are all partition 0 (appendRecord)
+                      taken = take (n - length acc) (drop c (Map.findWithDefault [] topic b.logs))
+                   in (acc <> taken, Map.insert (topic, 0) (c + length taken) st)
+            (recs, cursor') = foldl' pull ([], b.cursor) topics
+        writeTVar bVar b{cursor = cursor'}
+        pure recs
+      when (null batch) (threadDelay 20_000) -- don't busy-spin once drained
+      pure batch
     recordTp m (K.TopicPartition (K.TopicName t) (K.PartitionId p) (K.PartitionOffset o)) = Map.insertWith max (t, p) o m
     recordTp m _ = m
     seekCursor c (K.TopicPartition (K.TopicName t) (K.PartitionId p) (K.PartitionOffset o)) = Map.insert (t, fromIntegral p) (fromIntegral o) c
@@ -142,6 +142,59 @@ seedTopicDue bVar topic dueEpoch offs =
 
 spec :: Spec
 spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broker)" do
+  it "bounds a large count-based poll by bytes without consuming the remaining offsets" \tr -> do
+    let raw = BS.replicate (8 * 1024 * 1024) 0
+    bVar <- newTVarIO $ foldl' (\b _ -> appendRecord "otlp_logs" (Just raw) (K.headersFromList []) b) emptyBroker [1 .. 32 :: Int]
+    batch <-
+      runBackground tr.trLogger tr.trATCtx tr.trTracerProvider
+        $ runErrorNoCallStack @K.KafkaError
+        $ runMockProducer bVar
+        $ runMockConsumer ["otlp_logs"] bVar
+        $ Queue.pollKafkaBatch 5000
+    fmap (map (fmap (.crOffset))) batch `shouldBe` Right (map (Right . K.Offset) [0 .. 7])
+    b <- readTVarIO bVar
+    Map.lookup ("otlp_logs", 0) b.cursor `shouldBe` Just 8
+    b.committed `shouldBe` mempty
+
+  it "admits an oversized metadata record alone and still honors the count limit" \tr -> do
+    let headers = K.headersFromList [("large", BS.replicate (64 * 1024 * 1024) 0)]
+    forM_ ([(headers, 5000, 1), (K.headersFromList [], 2, 2)] :: [(K.Headers, Int, Int)]) \(hdrs, countLimit, expected) -> do
+      bVar <- newTVarIO $ foldl' (\b _ -> appendRecord "otlp_logs" (Just "x") hdrs b) emptyBroker [1 .. 3 :: Int]
+      batch <-
+        runBackground tr.trLogger tr.trATCtx tr.trTracerProvider
+          $ runErrorNoCallStack @K.KafkaError
+          $ runMockProducer bVar
+          $ runMockConsumer ["otlp_logs"] bVar
+          $ Queue.pollKafkaBatch countLimit
+      fmap length batch `shouldBe` Right expected
+      b <- readTVarIO bVar
+      Map.lookup ("otlp_logs", 0) b.cursor `shouldBe` Just expected
+
+  it "shares processing capacity across consumers and resumes both without losing offsets" \tr -> do
+    large <- newTVarIO $ appendRecord "otlp_logs" (Just $ BS.replicate (64 * 1024 * 1024) 0) (K.headersFromList []) emptyBroker
+    small <- newTVarIO emptyBroker
+    seedTopic small "otlp_logs" [0]
+    entered <- newEmptyMVar
+    resumed <- newEmptyMVar
+    release <- newEmptyMVar
+    let largeFn tuples _ = do
+          liftIO $ putMVar entered () >> takeMVar release
+          pure (Right (map fst tuples, []))
+        smallFn tuples _ = do
+          liftIO $ putMVar resumed ()
+          pure (Right (map fst tuples, []))
+        committed bVar = readTVar bVar >>= \b -> check (Map.lookup ("otlp_logs", 0) b.committed == Just 1)
+    withAsync (drive tr large ["otlp_logs"] Queue.KafkaPrimary largeFn (committed large)) \largeWorker -> do
+      timeout 2_000_000 (takeMVar entered) `shouldReturn` Just ()
+      withAsync (drive tr small ["otlp_logs"] Queue.KafkaPrimary smallFn (committed small)) \smallWorker -> do
+        timeout 2_000_000 (atomically $ readTVar small >>= \b -> check (Map.lookup ("otlp_logs", 0) b.cursor == Just 1)) `shouldReturn` Just ()
+        timeout 100_000 (takeMVar resumed) `shouldReturn` Nothing
+        putMVar release ()
+        timeout 2_000_000 (takeMVar resumed) `shouldReturn` Just ()
+        forM_ ([largeWorker, smallWorker] :: [Async Broker]) \worker -> do
+          b <- wait worker
+          Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 1
+
   it "drains a poll batch through processing and commits the contiguous offset watermark" \tr -> do
     bVar <- newTVarIO emptyBroker
     seedTopic bVar "otlp_logs" [0 .. 4]
@@ -220,8 +273,8 @@ spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broke
     let testFn tuples _ = do
           atomically $ modifyTVar' receivedVar (<> map snd tuples)
           pure (Right (map fst tuples, [])) -- the write leg is healthy: ack everything we're given
-    -- 1s in (after the first poll skipped 0..4 as not-yet-due), already-due
-    -- messages land behind them on the log
+          -- 1s in (after the first poll skipped 0..4 as not-yet-due), already-due
+          -- messages land behind them on the log
     _ <- forkIO do
       threadDelay 1_000_000
       seedTopicDue bVar "otlp_deadletter" (now - 1) [5 .. 9]

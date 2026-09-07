@@ -30,6 +30,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
+import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
@@ -433,6 +434,7 @@ data AuthContext = AuthContext
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
+  , ingestBudget :: IngestBudget.IngestBudget
   , metricCatalogBuffer :: Telemetry.MetricCatalogBuffer
   , liveTail :: LiveTail.Runtime
   -- ^ Live Tail's subscription cache, local hub and emit callback. Assembled at startup
@@ -523,6 +525,7 @@ configToEnv config = do
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
+  ingestBudget <- liftIO IngestBudget.newIngestBudget
   metricCatalogBuffer <- liftIO Telemetry.newMetricCatalogBuffer
   -- The emit callback is the local hub by default. Server startup replaces it with the Kafka
   -- producer when the deployment is split; wiring it here means a context built outside the
@@ -571,6 +574,7 @@ configToEnv config = do
       , extractionWorker
       , traceSessionCache
       , tfCircuit
+      , ingestBudget
       , metricCatalogBuffer
       , liveTail
       , config
