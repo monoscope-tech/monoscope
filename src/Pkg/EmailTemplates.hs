@@ -1004,7 +1004,8 @@ chartBlock label url = do
   p_ [style_ "margin: 20px 0 8px; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml label
   themedImages (appearance "light") (appearance "dark") [class_ "report-chart", alt_ $ label <> " chart", width_ "600", style_ "width:100%;max-width:600px;box-sizing:border-box;height:auto;display:block;border:1px solid #dee2e7; border-radius: 8px;"]
   where
-    appearance mode = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode
+    -- PNG responses are immutable in the CDN; a renderer revision needs fresh URLs.
+    appearance mode = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "appearance=" <> mode <> "&render=2"
 
 
 -- Separate wrappers keep Outlook's inline fallback and dark-mode CSS predictable.

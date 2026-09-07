@@ -269,3 +269,9 @@ The first production browser check opened saved report
 `447647ba-f56e-47dd-9de1-0773c908fe86` in 0.607 seconds, verified both logo themes,
 and confirmed the explicit live action displays its waiting state. Final PNG and
 hover verification follows the packaging/preload rollout.
+
+The CDN confirmed a HIT on old PNGs with a one-year immutable lifetime. Chart
+URLs now carry `render=2`. Publish this URL revision after every replica has the
+newly compiled renderer, so mixed-version rollout cannot cache an old image
+under the new URL. All seven report tests pass with this revision and the hover
+preloading regression.
