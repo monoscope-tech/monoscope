@@ -153,6 +153,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
@@ -836,6 +837,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
+  ingestBudget <- IngestBudget.newIngestBudget
   metricCatalogBuffer <- Telemetry.newMetricCatalogBuffer
   -- Tests are a single process, so the local hub is the honest transport: a test that
   -- registers a subscription and ingests a batch sees the row without a broker.
@@ -868,6 +870,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           extractionWorker
           traceSessionCache
           tfCircuit
+          ingestBudget
           metricCatalogBuffer
           liveTail
           ( envConfig

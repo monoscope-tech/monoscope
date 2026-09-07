@@ -3,6 +3,7 @@ module Pkg.Queue (
   kafkaService,
   KafkaRole (..),
   decoupledLoop,
+  pollKafkaBatch,
   ConsumerEff,
   publishJSONToKafka,
   publishToDeadLetterQueue,
@@ -60,6 +61,7 @@ import Log qualified as LogBase
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.IngestBudget qualified as IngestBudget
 import Relude
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
@@ -316,16 +318,20 @@ chunksByBytes target size = go [] 0
       | otherwise = go (x : acc) (n + size x) xs
 
 
--- | Per-sub-chunk payload-byte target. One sub-chunk becomes one bulk INSERT /
--- Delta write; sizing by bytes (not record count) bounds write granularity and
--- keeps Delta file sizes off the small-files OOM path.
-kafkaChunkTargetBytes :: Int
-kafkaChunkTargetBytes = 64 * 1024 * 1024
+-- | Divide the shared processing budget among the configured workers. Under
+-- backlog, full chunks can run concurrently without multiplying decoded input
+-- by the number of consumers. A larger indivisible record still runs alone.
+--
+-- >>> kafkaChunkTargetBytes 4
+-- 16777216
+-- >>> kafkaChunkTargetBytes 0
+-- 67108864
+kafkaChunkTargetBytes :: Int -> Int
+kafkaChunkTargetBytes concurrency = max 1 (IngestBudget.ingestByteLimit `div` max 1 concurrency)
 
 
--- | Bounded hand-off between poller and workers. At ~kafkaChunkTargetBytes per
--- item this caps in-flight work at ~4 GiB; the poller blocks on a full queue,
--- which (with the high-water pause) is the backpressure ceiling.
+-- | Secondary count bound for tiny per-partition chunks. Byte admission is
+-- controlled independently by the poller's high-water pause.
 workQueueBound :: Natural
 workQueueBound = 64
 
@@ -509,6 +515,30 @@ kafkaService appLogger appCtx tp role label dlqBase kafkaTopics batchSize fn = c
 type ConsumerEff = Eff (KE.KafkaConsumer ': KE.KafkaProducer ': Error K.KafkaError ': ATBackgroundEffects)
 
 
+-- | Stop fetching when either count or bytes reach their limit. A count-only
+-- bulk poll can materialize hundreds of MiB before the poller's backpressure
+-- check gets another turn. One record may cross the byte limit; it must remain
+-- in this batch because polling already advanced its partition position.
+pollKafkaBatch :: Int -> ConsumerEff [Either K.KafkaError (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString))]
+pollKafkaBatch batchSize = go (max 1 batchSize) 0 [] (K.Timeout 100)
+  where
+    go !remaining !bytes acc pollTimeout
+      | remaining == 0 || bytes >= IngestBudget.ingestByteLimit = pure (reverse acc)
+      | otherwise = do
+          result <- tryError @K.KafkaError $ KE.pollMessage pollTimeout
+          case result of
+            Right Nothing -> pure (reverse acc)
+            Left (_, err) -> go (remaining - 1) bytes (Left err : acc) (K.Timeout 0)
+            Right (Just record) -> go (remaining - 1) (bytes + consumerRecordBytes record) (Right record : acc) (K.Timeout 0)
+
+
+consumerRecordBytes :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Int
+consumerRecordBytes record =
+  maybe 0 BC.length record.crValue
+    + maybe 0 BC.length record.crKey
+    + sum [BC.length key + BC.length value | (key, value) <- K.headersToList record.crHeaders]
+
+
 -- | The Kafka consumer loop (primary ingest + DLQ replay), over the
 -- 'KE.KafkaConsumer' effect. Three Ki threads share one effect env: workers
 -- drain a bounded queue and process sub-chunks; the poll thread never blocks on
@@ -531,8 +561,8 @@ decoupledLoop
   -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg])))
   -> ConsumerEff ()
 decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
-  let highWaterBytes = 4 * kafkaChunkTargetBytes
-      lowWaterBytes = kafkaChunkTargetBytes
+  let highWaterBytes = 4 * IngestBudget.ingestByteLimit
+      lowWaterBytes = IngestBudget.ingestByteLimit
   workQ <- liftIO (newTBQueueIO workQueueBound :: IO (TBQueue WorkItem))
   trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
@@ -544,28 +574,29 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
   let assigned = KE.assignment <&> \m -> [(t, p) | (t, ps) <- Map.toList m, p <- ps]
       worker = forever do
         w <- atomically (readTBQueue workQ)
-        let topic = fst w.tpKey
-            attrs = attrsFor topic w.recc
-        -- `inject` lifts the ATBackgroundCtx processing action into the
-        -- KafkaConsumer-extended stack; workers never touch the Kafka effect.
-        result <-
-          tryAny
-            $ inject
-            $ runBatchSpan
-              "kafka.process_batch"
-              [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length w.payloads)), ("client_id", OA.toAttribute clientId)]
-              (fn w.payloads attrs)
-        acks <- routeBatchOutcome dlqBase "kafka-service" topic w.payloads attrs result
-        atomically do
-          -- No-ack (transient write/DLQ failure → routeBatchOutcome []): the chunk's
-          -- offsets won't advance the commit base, yet the poll position has already
-          -- moved past them and librdkafka won't redeliver uncommitted offsets
-          -- in-session — so base pins forever (the 2026-06-25 DLQ commit-starvation
-          -- wedge). Record the lowest un-acked offset for the poll thread to reseek.
-          if null acks
-            then modifyTVar' reseekVar (Map.insertWith min w.tpKey (minimum w.offsets))
-            else modifyTVar' trackerVar (Map.adjust (completeOffsets w.offsets) w.tpKey)
-          modifyTVar' inflightVar (subtract w.bytes)
+        IngestBudget.withIngestBytes appCtx.ingestBudget (fromIntegral w.bytes) do
+          let topic = fst w.tpKey
+              attrs = attrsFor topic w.recc
+          -- `inject` lifts the ATBackgroundCtx processing action into the
+          -- KafkaConsumer-extended stack; workers never touch the Kafka effect.
+          result <-
+            tryAny
+              $ inject
+              $ runBatchSpan
+                "kafka.process_batch"
+                [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length w.payloads)), ("client_id", OA.toAttribute clientId)]
+                (fn w.payloads attrs)
+          acks <- routeBatchOutcome dlqBase "kafka-service" topic w.payloads attrs result
+          atomically do
+            -- No-ack (transient write/DLQ failure → routeBatchOutcome []): the chunk's
+            -- offsets won't advance the commit base, yet the poll position has already
+            -- moved past them and librdkafka won't redeliver uncommitted offsets
+            -- in-session — so base pins forever (the 2026-06-25 DLQ commit-starvation
+            -- wedge). Record the lowest un-acked offset for the poll thread to reseek.
+            if null acks
+              then modifyTVar' reseekVar (Map.insertWith min w.tpKey (minimum w.offsets))
+              else modifyTVar' trackerVar (Map.adjust (completeOffsets w.offsets) w.tpKey)
+            modifyTVar' inflightVar (subtract w.bytes)
       committer = forever do
         threadDelay 1_000_000
         asg <- assigned
@@ -627,7 +658,11 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
           ps <- assigned
           unless (null ps) $ KE.resumePartitions ps
           atomically (writeTVar pausedVar False)
-        (pollErrs, rs) <- partitionEithers <$> KE.pollMessageBatch (K.Timeout 100) (K.BatchSize batchSize)
+        -- Callback polling runs on kafka-client's dedicated async thread, so
+        -- heartbeats/rebalances continue while data admission is paused.
+        isPaused <- readTVarIO pausedVar
+        batch <- if isPaused then threadDelay 100_000 $> [] else pollKafkaBatch batchSize
+        let (pollErrs, rs) = partitionEithers batch
         unless (null pollErrs) $ LogBase.logAttention "Kafka poll returned errors" (AE.object ["error_count" AE..= length pollErrs, "errors" AE..= map show pollErrs])
         nowEpoch <- floor . utcTimeToPOSIXSeconds <$> Time.currentTime
         let byTP = Map.fromListWith (<>) [((r.crTopic.unTopicName, r.crPartition), r :| []) | r <- rs]
@@ -636,7 +671,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
             -- 'writeTargetFor' with the writer keeps the leg semantics in one
             -- place and batches both-failed/normal together (both → WriteBoth).
             dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
-            subChunks = subChunksFor role dlqGroupKey nowEpoch byTP
+            subChunks = subChunksFor (kafkaChunkTargetBytes appCtx.config.kafkaGroupConcurrency) role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do
             -- (const id) keeps the existing watermark if the partition is already
@@ -743,23 +778,24 @@ topicToCeType = \case
 --
 -- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show (due::Int)))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
--- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay (const "x") 10 m]
+-- >>> [w.offsets | w <- subChunksFor (kafkaChunkTargetBytes 4) KafkaDlqReplay (const "x") 10 m]
 -- [[0,1]]
 subChunksFor
   :: Ord k
-  => KafkaRole
+  => Int
+  -> KafkaRole
   -> (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> k)
   -> Int
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
   -> [WorkItem]
-subChunksFor role dlqGroupKey nowEpoch byTP =
-  [ WorkItem tpKey hdr (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
+subChunksFor chunkTarget role dlqGroupKey nowEpoch byTP =
+  [ WorkItem tpKey hdr (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (consumerRecordBytes <$> chunk))
   | (tpKey, recs) <- Map.toList byTP
   , let sorted = sortOn (.crOffset) (toList recs)
   , grp <- case role of
       KafkaPrimary -> [sorted]
       KafkaDlqReplay -> sortOn (.crOffset) <$> Map.elems (Map.fromListWith (<>) [(dlqGroupKey r, [r]) | r <- takeWhile (isDue nowEpoch) sorted])
-  , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes grp
+  , chunk <- chunksByBytes chunkTarget consumerRecordBytes grp
   , -- headers come from the partition head (primary: one topic) or the chunk head
   -- (DLQ: chunks are per-ce-type slices of interleaved source topics)
   let hdr = case chunk of
@@ -769,9 +805,6 @@ subChunksFor role dlqGroupKey nowEpoch byTP =
   where
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
-
-    recordBytes :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Int
-    recordBytes = maybe 0 BC.length . (.crValue)
 
 
 -- | Publish failed messages to dead letter queue. Returns the first Left if

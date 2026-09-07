@@ -269,6 +269,7 @@ library
       Pkg.Git
       Pkg.Icons
       Pkg.Icons.TH
+      Pkg.IngestBudget
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
@@ -873,6 +874,7 @@ test-suite test-dev
       Pkg.Git
       Pkg.Icons
       Pkg.Icons.TH
+      Pkg.IngestBudget
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
@@ -1224,6 +1226,7 @@ test-suite unit-tests
       Pages.OnboardingSpec
       Pkg.DrainSpec
       Pkg.GitSpec
+      Pkg.IngestBudgetSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       Pkg.WidgetLazySpec
