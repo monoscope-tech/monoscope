@@ -55,6 +55,15 @@ RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
     cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
+# The dependency image is a cache, not the authority for npm versions. Install
+# from this checkout's lockfiles in a separately cached layer so new frontend
+# dependencies are available without waiting for that image to be rebuilt.
+COPY package.json package-lock.json ./
+COPY web-components/package.json web-components/package-lock.json ./web-components/
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline --no-audit && \
+    npm ci --prefix web-components --prefer-offline --no-audit
+
 # Copy source code
 COPY package.yaml ./
 COPY src ./src
@@ -62,7 +71,7 @@ COPY test ./test
 COPY app ./app
 COPY proto ./proto
 
-# Build frontend assets (npm deps already installed in deps image).
+# Build frontend assets using the lockfile dependencies installed above.
 # Pkg.DeriveUtils reads Vite's manifest through Template Haskell. Its object
 # can survive in the persistent dist-newstyle cache even though Vite emitted a
 # new entry hash, producing HTML that requests a chunk absent from the image.
