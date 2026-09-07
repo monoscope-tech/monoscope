@@ -813,14 +813,23 @@ buildSearchParams opts =
 -- >>> map (foldFiltersIntoQuery "" []) [Just "warn", Just "WARN"]
 -- ["severity.severity_text==\"warn\"","severity.severity_text==\"warn\""]
 -- >>> foldFiltersIntoQuery "errors > 0" ["web"] (Just "error")
--- "resource.service.name==\"web\" and severity.severity_text==\"error\" and (errors > 0)"
+-- "resource.service.name==\"web\" and severity.severity_text==\"error\" | errors > 0"
 -- >>> foldFiltersIntoQuery "POISON_ROW_DROPPED" [] Nothing
 -- "body has \"POISON_ROW_DROPPED\" or summary has \"POISON_ROW_DROPPED\""
+--
+-- Shorthand filters must run before the user's pipeline, including a leading pipe.
+-- >>> import Pkg.Parser.Stats (parseQueryToAST)
+-- >>> let withError q = parseQueryToAST (foldFiltersIntoQuery q [] (Just "error"))
+-- >>> let expected = parseQueryToAST "severity.severity_text==\"error\" | summarize count()"
+-- >>> map withError ["summarize count()", "| summarize count()"] == replicate 2 expected && isRight expected
+-- True
+-- >>> withError "body has \"a|b\" | summarize count()" == parseQueryToAST "severity.severity_text==\"error\" | body has \"a|b\" | summarize count()"
+-- True
 foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Text
 foldFiltersIntoQuery query services mLevel
   | T.null prefix = rewritten
   | T.null rewritten = prefix
-  | otherwise = prefix <> " and (" <> rewritten <> ")"
+  | otherwise = prefix <> " | " <> T.stripStart (fromMaybe rewritten $ T.stripPrefix "|" rewritten)
   where
     q v = "\"" <> T.replace "\"" "\\\"" v <> "\""
     eq field val = field <> "==" <> q val
