@@ -6,6 +6,8 @@ module Models.Telemetry.Report (
   claimPreview,
   getPreview,
   finishPreview,
+  TrendPoint (..),
+  trendStats,
   EndpointStats (..),
   EndpointComparison (..),
   DatabaseStats (..),
@@ -62,11 +64,49 @@ data ReportSnapshot = ReportSnapshot
   , databases :: ReportSection [DatabaseStats]
   , workloads :: ReportSection [WorkloadStats]
   , ingestionCapped :: Maybe Bool
+  , trends :: Maybe (ReportSection [TrendPoint])
   , startTime :: UTCTime
   , endTime :: UTCTime
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Hourly counts saved with the report, so opening an email does not scan
+-- telemetry again. Missing trends identify snapshots written before this field.
+data TrendPoint = TrendPoint
+  { epochSeconds :: Int64
+  , events :: Int64
+  , errors :: Int64
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
+-- | Bound each scan to one day while retaining the complete requested period.
+-- Adjacent slices can share an hourly bucket; add their disjoint counts.
+trendStats :: forall es. (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [TrendPoint]
+trendStats useTf pid start end = do
+  points <- concat <$> traverse fetch (takeWhile (< end) $ iterate (addUTCTime 86400) start)
+  pure [TrendPoint epoch events errors | (epoch, (events, errors)) <- M.toAscList $ M.fromListWith (\(a, b) (c, d) -> (a + c, b + d)) [(p.epochSeconds, (p.events, p.errors)) | p <- points]]
+  where
+    fetch :: UTCTime -> Eff es [TrendPoint]
+    fetch sliceStart =
+      let sliceEnd = min end (addUTCTime 86400 sliceStart)
+       in Hasql.withHasqlTimefusion useTf
+            $ Hasql.interp
+              [HI.sql|
+          SELECT extract(epoch from time_bucket('1 hour', timestamp))::bigint,
+            COUNT(*)::bigint,
+            COUNT(*) FILTER (WHERE status_code = 'ERROR'
+              OR coalesce(attributes___exception___type,
+                jsonb_path_query_first(events, '$[*] ? (@.event_name == "exception").event_attributes.exception.type') #>> '{}') IS NOT NULL
+              OR severity___severity_number >= 17 OR lower(level) IN ('error', 'fatal'))::bigint
+          FROM otel_logs_and_spans
+          WHERE project_id = #{pid.toText} AND timestamp >= #{sliceStart} AND timestamp < #{sliceEnd}
+          GROUP BY time_bucket('1 hour', timestamp)
+          ORDER BY time_bucket('1 hour', timestamp)
+        |]
 
 
 -- | All events and server spans have deliberately separate denominators. Latency

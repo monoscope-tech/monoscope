@@ -1211,7 +1211,11 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
-  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+  -- The signature covers the dataset as well as the query. Saved report charts
+  -- carry their measured data, and must remain usable after telemetry expires.
+  processedWidget <- case widget.dataset of
+    Just _ -> pure widget
+    Nothing -> Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
 
   let input =
         AE.encode

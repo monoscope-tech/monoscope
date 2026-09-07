@@ -1,10 +1,13 @@
 module Pages.ReportsSpec (spec) where
 
 import BackgroundJobs qualified
+import Codec.Compression.GZip qualified as GZip
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
+import Data.ByteString.Base64.URL qualified as B64URL
 import Data.Default (def)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
 import Data.Pool (withResource)
@@ -147,6 +150,22 @@ spec = around withTestResources do
       let comparisons = Report.compareServices current previous
       (find (isNothing . (.service)) comparisons >>= (.previous)) `shouldBe` Nothing
       (find ((== Just "api") . (.service)) comparisons >>= (.previous) <&> (.serverLatencyMs)) `shouldBe` Just (Just 100)
+      -- A non-aligned slice boundary shares an hourly bucket. Its disjoint
+      -- counts must be combined without duplicating the boundary event.
+      let trendStart = addUTCTime 1 start
+          boundary = addUTCTime 86400 trendStart
+      addRow (addUTCTime (-1) boundary) (Just "api") Nothing "log" "OK" 0
+      addRow boundary (Just "api") Nothing "log" "OK" 0
+      void $ withResource tr.trPool $ \conn ->
+        PGS.execute
+          conn
+          [sql|UPDATE otel_logs_and_spans
+          SET events = '[{"event_name":"exception","event_attributes":{"exception":{"type":"EmbeddedError"}}}]'::jsonb
+          WHERE project_id = ? AND timestamp = ?|]
+          (testPid, boundary)
+      trends <- runTestBg frozenTime tr $ Report.trendStats False testPid trendStart frozenTime
+      (sum $ map (.events) trends, sum $ map (.errors) trends) `shouldBe` (4, 2)
+      length (map (.epochSeconds) trends) `shouldBe` length (ordNub $ map (.epochSeconds) trends)
 
     it "queries HTTP, database, and workload evidence without mixing their duration units" \tr -> do
       let start = addUTCTime (-(7 * 86400)) frozenTime
@@ -222,9 +241,14 @@ spec = around withTestResources do
                       Nothing
               , Report.workloads = Report.Available [Report.WorkloadStats kind 10000 (Just 100) | kind <- ["server", "client", "consumer", "producer", "internal", "unspecified", "log"]]
               , Report.topPatterns = Report.Available $ replicate 5 (T.replicate 100 "pattern ", 100000, "body")
+              , Report.trends = Just $ Report.Available [Report.TrendPoint 1735689600 100 7]
               }
           json = Reports.buildReportJson' snapshot
       AET.parseEither (AE.withObject "report" (AE..: "systemSnapshot")) json `shouldBe` Right snapshot
+      let withoutTrends = case AE.toJSON snapshot of
+            AE.Object fields -> AE.Object $ KM.delete "trends" fields
+            value -> value
+      AE.fromJSON withoutTrends `shouldBe` AE.Success snapshot{Report.trends = Nothing}
       -- Both replicas may request the same preview; exactly one owns generation.
       (firstClaim, secondClaim) <-
         concurrently
@@ -252,14 +276,20 @@ spec = around withTestResources do
       toText (renderText $ toHtml failedPage) `shouldContainAll` ["The report could not be prepared", "every 60s", "View saved reports"]
       (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot
       (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
+      charts <- forM (drop 1 $ T.splitOn "widgetZ=" email) $ \suffix -> do
+        compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
+        either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
+      map (.query) charts `shouldBe` [Nothing, Nothing]
+      map (fmap (.source) . (.dataset)) charts
+        `shouldBe` [Just [aesonQQ|[["Time","Events"],[1735689600000,100]]|], Just [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]
       email `shouldContainAll` ["View 22 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 24 more endpoints"]
       email `shouldSatisfy` (not . T.isInfixOf "<script>")
       BS.length (encodeUtf8 email) `shouldSatisfy` (< 80000)
       full `shouldSatisfy` (not . T.isInfixOf "View 22 more service comparisons")
       T.count "Avg request" full `shouldBe` 30
       T.count "Avg request" email `shouldBe` 8
-      (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable}
-      partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Services"]
+      (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable, Report.trends = Just Report.Unavailable}
+      partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Activity trends unavailable", "Services"]
       let quiet =
             emptySnapshot
               { Report.services = []

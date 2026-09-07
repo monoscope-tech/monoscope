@@ -29,6 +29,7 @@ import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
@@ -257,8 +258,9 @@ collectSystemReport pid start end = do
           )
       )
   project <- Projects.projectById pid
+  trends <- Just <$> optionalReportSection pid "activity trends" (Report.trendStats useTf pid start end)
   let ingestionCapped = project <&> \p -> Projects.isFreeTier p.paymentPlan && fromIntegral (sum $ map (.recentDayEvents) current) >= freeTierDailyMaxEvents
-  pure Report.ReportSnapshot{services = Report.compareServices current previous, infrastructure, monitors, issues, generatedAt = end, startTime = start, endTime = end, topPatterns, performance, databases, workloads, ingestionCapped}
+  pure Report.ReportSnapshot{services = Report.compareServices current previous, infrastructure, monitors, issues, generatedAt = end, startTime = start, endTime = end, topPatterns, performance, databases, workloads, ingestionCapped, trends}
 
 
 optionalReportSection :: (IOE :> es, Log :> es) => Projects.ProjectId -> Text -> Eff es a -> Eff es (Report.ReportSection a)
@@ -281,8 +283,26 @@ renderWeeklyEmail reportType reportUrl project userName startTime endTime fullRe
       (dayStart, dayEnd) = reportDayLabels project.timeZone startTime endTime
       stmTxt = formatUTCMicros startTime
       endTxt = formatUTCMicros endTime
-  eventsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
-  errorsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
+      savedTrends = case evidence of ET.SystemEvidence snapshot -> snapshot.trends; ET.HistoricalEvidence _ -> Nothing
+      chartUrl label value widget = case savedTrends of
+        Just Report.Unavailable -> pure ""
+        _ ->
+          let prepared = case savedTrends of
+                Just (Report.Available points) ->
+                  widget
+                    { Widget.query = Nothing
+                    , Widget.dataset =
+                        Just
+                          def
+                            { Widget.source = AE.toJSON $ AE.toJSON (["Time", label] :: [Text]) : [AE.toJSON ([p.epochSeconds * 1000, value p] :: [Int64]) | p <- points]
+                            , Widget.from = Just $ floor $ utcTimeToPOSIXSeconds startTime * 1000
+                            , Widget.to = Just $ floor $ utcTimeToPOSIXSeconds endTime * 1000
+                            }
+                    }
+                _ -> widget
+           in Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid prepared Nothing (Just stmTxt) (Just endTxt)
+  eventsUrl <- chartUrl ("Events" :: Text) (.events) eventsWidget
+  errorsUrl <- chartUrl "Errors" (.errors) errorsWidget
   let projectUrl = hostPath ctx.env.hostUrl ("p/" <> pid.toText)
       reportData =
         ET.WeeklyReportData

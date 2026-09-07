@@ -863,6 +863,7 @@ weeklyReportEmail d =
           $ forM_ (V.take 5 topPatterns)
           $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (reportClip 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
+          forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
           unless (T.null d.eventsChartUrl) $ chartBlock "Telemetry events" d.eventsChartUrl
           unless (T.null d.errorsChartUrl) $ chartBlock "Error events" d.errorsChartUrl
         reportSection "Coverage and next steps" "This report describes the telemetry Monoscope received." do
@@ -1137,6 +1138,7 @@ sampleSystemSnapshot =
     , databases = Report.Available [Report.DatabaseStats (Just "checkout-api") "SELECT * FROM users WHERE email = $1" 1250 3400]
     , workloads = Report.Available [Report.WorkloadStats "server" 80000 (Just 245), Report.WorkloadStats "consumer" 2000 (Just 70), Report.WorkloadStats "client" 5000 (Just 80)]
     , ingestionCapped = Just False
+    , trends = Nothing
     , startTime = addUTCTime (-(7 * 86400)) end
     , endTime = end
     }
