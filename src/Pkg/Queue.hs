@@ -4,6 +4,7 @@ module Pkg.Queue (
   KafkaRole (..),
   decoupledLoop,
   pollKafkaBatch,
+  parseKafkaFetchQueues,
   ConsumerEff,
   publishJSONToKafka,
   publishToDeadLetterQueue,
@@ -28,6 +29,8 @@ import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AKM
+import Data.Aeson.Types qualified as AET
 import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
@@ -480,6 +483,9 @@ kafkaService appLogger appCtx tp role label dlqBase kafkaTopics batchSize fn = c
         <> K.groupId (K.ConsumerGroupId groupId)
         <> K.clientId (K.ClientId clientId)
         <> foldMap (uncurry K.extraProp) (kafkaSaslExtraProps cfg)
+        -- Native fetch queues are outside the application byte budget and GHC heap.
+        <> K.extraProp "statistics.interval.ms" "30000"
+        <> K.setCallback (K.statsCallback (logKafkaFetchQueues appLogger clientId))
         <> K.extraProp "session.timeout.ms" "45000"
         <> K.extraProp "heartbeat.interval.ms" "3000"
         -- 30 min: backlog-drain batches can legitimately process for >5 min
@@ -505,6 +511,40 @@ kafkaService appLogger appCtx tp role label dlqBase kafkaTopics batchSize fn = c
         -- member never rejoins in-process — the group sat at 0 members while
         -- the supervised thread looked alive. Dynamic members just rejoin.
         <> K.logLevel K.KafkaLogInfo
+
+
+-- | Aggregate only queue sizes, without logging topic names or broker metadata.
+-- A malformed sample is reported separately instead of being mistaken for zero.
+logKafkaFetchQueues :: Logger -> Text -> ByteString -> IO ()
+logKafkaFetchQueues logger clientId raw = runLogT "kafka-service" logger LogInfo
+  $ case parseKafkaFetchQueues raw of
+    Left _ -> LogBase.logAttention "kafka.consumer.native_metrics_invalid" (AE.object ["client_id" AE..= clientId])
+    Right (sampleTime, queueBytes, queueMessages, partitions) ->
+      LogBase.logInfo "kafka.consumer.native_metrics"
+        $ AE.object
+          [ "client_id" AE..= clientId
+          , "sample_time" AE..= sampleTime
+          , "fetch_queue_bytes" AE..= queueBytes
+          , "fetch_queue_messages" AE..= queueMessages
+          , "partitions" AE..= partitions
+          ]
+
+
+-- | Decode a native sample into timestamp, byte count, message count, and partition count.
+parseKafkaFetchQueues :: ByteString -> Either String (Int64, Natural, Natural, Int)
+parseKafkaFetchQueues raw = do
+  (sampleTime, queues) <- AE.eitherDecodeStrict' raw >>= AET.parseEither parseFetchQueues
+  pure (sampleTime, sum (fst <$> queues), sum (snd <$> queues), length queues)
+  where
+    parseFetchQueues :: AE.Value -> AET.Parser (Int64, [(Natural, Natural)])
+    parseFetchQueues = AE.withObject "Kafka statistics" \obj -> do
+      sampleTime <- obj AE..: "time"
+      topics <- obj AE..: "topics"
+      queues <- forM (AKM.elems topics) $ AE.withObject "Kafka topic statistics" \topic -> do
+        partitions <- topic AE..: "partitions"
+        forM (AKM.elems partitions) $ AE.withObject "Kafka partition statistics" \partition ->
+          (,) <$> partition AE..: "fetchq_size" <*> partition AE..: "fetchq_cnt"
+      pure (sampleTime, concat queues)
 
 
 -- | The consumer loop's effect stack: ATBackgroundCtx plus the kafka-effectful
