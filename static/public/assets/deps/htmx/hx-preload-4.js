@@ -38,7 +38,13 @@
             let form = elt.form || elt.closest("form");
             let body = api.collectFormData(elt, form, evt.submitter);
             let valsResult = api.getAttributeObject(elt, 'hx-vals', obj => {
-                for (let key in obj) body.set(key, obj[key]);
+                // Preloads bypass config:request, so mirror the compatibility
+                // extension's repeated-field encoding here too.
+                for (let key in obj) {
+                    body.delete(key);
+                    const values = Array.isArray(obj[key]) ? obj[key] : [obj[key]];
+                    for (const value of values) body.append(key, value);
+                }
             });
             if (valsResult) await valsResult;
 

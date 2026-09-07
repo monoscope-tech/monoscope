@@ -83,6 +83,17 @@
             maybeRetriggerEvent(elt, "htmx:beforeTransition", detail);
         },
         htmx_config_request: function (elt, detail) {
+            // LOCAL PATCH: v4 uses FormData.set(key, array), joining values with
+            // commas. Restore v2's repeated fields before URL encoding (including
+            // omitting empty arrays). Keep ctx.vals intact for json-enc.
+            const { ctx } = detail;
+            if (ctx.request.body instanceof FormData) {
+                for (const [key, value] of Object.entries(ctx.vals ?? {})) {
+                    if (!Array.isArray(value)) continue;
+                    ctx.request.body.delete(key);
+                    for (const item of value) ctx.request.body.append(key, item);
+                }
+            }
             maybeRetriggerEvent(elt, "htmx:configRequest", detail);
         },
         htmx_before_history_restore: function (elt, detail) {

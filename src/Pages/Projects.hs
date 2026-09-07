@@ -356,6 +356,9 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
+validateNotificationChannels _ enabledChannels _
+  | any (`notElem` allChannels) enabledChannels =
+      pure $ Left "Invalid notification channels. Reload this page and try again."
 validateNotificationChannels pid enabledChannels phones = do
   discord <- requireIntegration "discord" "You need to connect Discord to this project first." enabledChannels (getDiscordDataByProjectId pid)
   slack <- requireIntegration "slack" "You need to connect Slack to this project first." enabledChannels (getProjectSlackData pid)

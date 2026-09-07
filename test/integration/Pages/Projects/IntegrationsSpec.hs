@@ -219,6 +219,10 @@ spec = sequential $ aroundAll withTestResources $ do
 
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack", "email"] [] [] [])
         disabled `shouldReturn` ["discord", "pagerduty", "phone"]
+        -- HTMX 4 used to serialize checked channels as one comma-joined value.
+        -- Reject that request without changing the previously enabled channels.
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["email,slack"] [] [] [])
+        disabled `shouldReturn` ["discord", "pagerduty", "phone"]
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [])
         disabled `shouldReturn` ["discord", "email", "pagerduty", "phone", "slack"]
 
