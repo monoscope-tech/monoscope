@@ -100,7 +100,7 @@ curl -s https://api.monoscope.tech/api/v1/mcp \
     "params": {
       "name": "search_events",
       "arguments": {
-        "body": { "query": "severity.text==\"error\"", "since": "1h" }
+        "body": { "query": "severity.severity_text==\"error\"", "since": "1h" }
       }
     }
   }' | jq

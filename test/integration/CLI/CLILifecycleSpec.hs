@@ -81,7 +81,7 @@ spec = around withTestResources do
       writeFileText yamlPath
         $ unlines
           [ "title: Lifecycle error-rate alert"
-          , "query: 'severity.text == \"ERROR\"'"
+          , "query: 'severity.severity_text == \"error\"'"
           , "alert_threshold: 10"
           , "trigger_less_than: false"
           , "check_interval_mins: 5"

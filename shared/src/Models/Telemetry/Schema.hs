@@ -53,7 +53,7 @@ telemetrySchema =
           , ("kind", FieldInfo "string" "Type of telemetry data (logs, span, request)" (Just ["logs", "span", "request"]))
           , ("status_code", FieldInfo "string" "Status code of the span" (Just ["OK", "ERROR", "UNSET"]))
           , ("status_message", FieldInfo "string" "Status message" Nothing)
-          , ("level", FieldInfo "string" "Log level (same as severity text)" (Just ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]))
+          , ("level", FieldInfo "string" "Log level (uppercase)" (Just ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]))
           , ("body", FieldInfo "object" "Body content of the log/span" Nothing)
           , ("duration", FieldInfo "duration" "Duration of the span in nanoseconds" Nothing)
           , ("start_time", FieldInfo "string" "Start time of the span" Nothing)
@@ -64,8 +64,8 @@ telemetrySchema =
           , ("date", FieldInfo "string" "Date" Nothing)
           , -- Severity fields (flattened)
             ("severity", FieldInfo "object" "Severity information" Nothing)
-          , ("severity.text", FieldInfo "string" "Text representation of severity" (Just ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]))
-          , ("severity.number", FieldInfo "string" "Numeric representation of severity" Nothing)
+          , ("severity.severity_text", FieldInfo "string" "Text representation of severity" (Just ["trace", "debug", "info", "warn", "error", "fatal"]))
+          , ("severity.severity_number", FieldInfo "number" "Numeric representation of severity" Nothing)
           , -- Context fields (flattened)
             ("context", FieldInfo "object" "Context information" Nothing)
           , ("context.trace_id", FieldInfo "string" "Unique identifier for the trace" Nothing)
@@ -296,6 +296,14 @@ popularOtelQueriesJson = AE.toJSON popularOtelQueries
 -- >>> let advertises f = Map.member f (deriveSchema mempty).fields
 -- >>> map advertises ["summary", "errors", "message_size_bytes", "service", "span_name", "url_path"]
 -- [True,True,True,True,True,True]
+--
+-- Severity metadata distinguishes the uppercase level from the lowercase enum:
+-- >>> Map.lookup "level" telemetrySchema.fields >>= (.examples)
+-- Just ["TRACE","DEBUG","INFO","WARN","ERROR","FATAL"]
+-- >>> Map.lookup "severity.severity_text" telemetrySchema.fields >>= (.examples)
+-- Just ["trace","debug","info","warn","error","fatal"]
+-- >>> (.fieldType) <$> Map.lookup "severity.severity_number" telemetrySchema.fields
+-- Just "number"
 --
 -- A dotted hand-coded entry with no matching live column is still dropped:
 -- >>> map advertises ["severity.text", "attribute"]

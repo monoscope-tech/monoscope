@@ -157,7 +157,7 @@ chart — an unavailable panel and a quiet one are not the same thing.
 monoscope open trace a1b2c3d4                    # the trace waterfall in the UI
 monoscope open issue <issue-id>
 monoscope open dashboard <dashboard-id>
-monoscope open logs 'severity.text=="ERROR"' --since 6h
+monoscope open logs 'severity.severity_text=="error"' --since 6h
 monoscope open monitors
 monoscope open project --print                   # print the link, don't launch
 ```
@@ -207,7 +207,7 @@ Options:
 | `--to <timestamp>` | End time (ISO 8601) |
 | `--kind log\|trace` | Filter by event kind (mapped to the `source` query param) |
 | `--service <name>` | Shorthand for `resource.service.name=="<name>"`. **Repeatable** — `--service a --service b` expands to `in (a, b)` |
-| `--level <level>` | Shorthand for `severity.text=="<LEVEL>"` (auto-uppercased) |
+| `--level <level>` | Shorthand for `severity.severity_text=="<level>"` (converted to lowercase) |
 | `--limit/-n <N>` | Max results to return |
 | `--fields <f1,f2>` | Comma-separated columns to keep in JSON / table output |
 | `--cursor <value>` | Pagination: pass the `cursor` field from a previous response |
@@ -644,7 +644,7 @@ monoscope facets
 
 # Drill into a single field
 monoscope facets resource.service.name
-monoscope facets severity.text --top 5
+monoscope facets severity.severity_text --top 5
 
 # Widen the lookback (default 24h)
 monoscope facets --since 7d
@@ -664,7 +664,7 @@ Response shape:
     { "value": "payments",     "count":  812 },
     ...
   ],
-  "severity.text": [...],
+  "severity.severity_text": [...],
   "attributes.http.response.status_code": [...]
 }
 ```
@@ -855,7 +855,7 @@ JSON is the default when stdout is not a TTY or `CI` is set. Use `jq` for script
 
 ```bash
 # Error-rate gate in CI (count of error-level events in the last 30 min)
-monoscope metrics query 'summarize count() | where severity.text=="error"' --since 30m --assert '< 100'
+monoscope metrics query 'where severity.severity_text=="error" | summarize count()' --since 30m --assert '< 100'
 
 # Get open issue count
 monoscope issues list --status open -o json | jq '.data | length'
