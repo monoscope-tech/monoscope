@@ -43,7 +43,7 @@ import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (forConcurrently)
+import Effectful.Concurrent.Async (concurrently_, forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -3733,9 +3733,12 @@ patternEmbeddingAndMerge pid = do
   ctx <- ask @Config.AuthContext
   if T.null ctx.config.openaiApiKey
     then Log.logAttention "OpenAI API key not configured, skipping pattern embedding" pid
-    else do
-      tryStep "errorPatternEmbedding" $ embedAndMergeErrors pid ctx
-      tryStep "logPatternEmbedding" $ embedAndMergeLogPatterns pid ctx
+    -- Each stage saves completed batches independently. A large error backlog
+    -- can consume the whole job timeout; log patterns must still make progress.
+    else
+      concurrently_
+        (tryStep "errorPatternEmbedding" $ embedAndMergeErrors pid ctx)
+        (tryStep "logPatternEmbedding" $ embedAndMergeLogPatterns pid ctx)
 
 
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()

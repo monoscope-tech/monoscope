@@ -676,6 +676,7 @@ test-suite integration-tests
       Pages.ServiceMapSpec
       Pages.ShareSpec
       Pages.TelemetrySpec
+      Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec
@@ -962,6 +963,7 @@ test-suite test-dev
       Pages.ServiceMapSpec
       Pages.ShareSpec
       Pages.TelemetrySpec
+      Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec
