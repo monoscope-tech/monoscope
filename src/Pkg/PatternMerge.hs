@@ -300,7 +300,8 @@ contentTokens = S.fromList . filter (not . isPlaceholderToken) . words
 jaccardOnSets :: S.Set Text -> S.Set Text -> Double
 jaccardOnSets tokA tokB =
   let inter = S.size $ S.intersection tokA tokB
-      union_ = S.size $ S.union tokA tokB
+      -- Cardinality needs no union tree: |A union B| = |A| + |B| - |A intersect B|.
+      union_ = S.size tokA + S.size tokB - inter
    in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
 
 
