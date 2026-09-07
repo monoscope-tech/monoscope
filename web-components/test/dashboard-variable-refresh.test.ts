@@ -42,6 +42,18 @@ test('ticks keep options and selection usable, coalesce requests and append only
   expect(tagify.settings.whitelist).toBe(merged);
 });
 
+test('variable refresh uses the rendered project instead of URL query parameters', async () => {
+  const { input } = mount();
+  input.dataset.projectId = '87576849-4941-49d3-a15d-680fef88a1a8';
+  history.replaceState({}, '', '/p/87576849-4941-49d3-a15d-680fef88a1a8/dashboards/overview?pid=stale&since=6h');
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response([]));
+  vi.stubGlobal('fetch', fetch);
+  await reload(input);
+  const params = new URL(fetch.mock.calls[0][0], location.origin).searchParams;
+  expect(params.get('pid')).toBe(input.dataset.projectId);
+  expect(params.get('since')).toBe('6h');
+});
+
 test.each(['offline', 'http', 'query'])('%s failure preserves options and permits a later retry', async (failure) => {
   const { input, tagify } = mount();
   vi.spyOn(console, 'error').mockImplementation(() => {});

@@ -564,6 +564,7 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
   if (!tgfy) return Promise.resolve();
   const params = new URLSearchParams({
     ...Object.fromEntries(new URLSearchParams(location.search)),
+    pid: input.dataset.projectId || '',
     query,
     query_sql: querySql,
     data_type: 'text',

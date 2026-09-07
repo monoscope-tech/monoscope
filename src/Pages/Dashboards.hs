@@ -292,6 +292,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             $ [ type_ "text"
               , name_ var.key
               , class_ "dash-variable-input"
+              , data_ "project-id" pidText
               , data_ "tagify" ""
               , data_ "tagify-whitelist" whitelist
               , data_ "tagify-enforce-whitelist" ""
