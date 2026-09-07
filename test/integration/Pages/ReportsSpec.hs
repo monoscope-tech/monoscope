@@ -14,6 +14,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Lucid (renderText, toHtml)
 import Models.Apis.Issues (ReportListItem (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
@@ -29,6 +30,7 @@ import Pkg.Parser (parseQueryToAST)
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
+import UnliftIO.Async (concurrently)
 import Utils (formatWithCommas)
 
 
@@ -120,7 +122,7 @@ spec = around withTestResources do
         _ -> fail "the legacy report detail did not load"
 
     it "counts the complete service period, separates request metrics, and retains missing baselines" \tr -> do
-      let start = addUTCTime (-7 * 86400) frozenTime
+      let start = addUTCTime (-(7 * 86400)) frozenTime
           addRow at service env kind status duration = withResource tr.trPool $ \conn ->
             void
               $ PGS.execute
@@ -136,7 +138,7 @@ spec = around withTestResources do
       addRow (addUTCTime 2 start) Nothing Nothing "log" "ERROR" 0
       addRow frozenTime (Just "api") (Just "prod") "server" "ERROR" 990000000
       current <- runTestBg frozenTime tr $ Report.serviceStats False testPid start frozenTime
-      previous <- runTestBg frozenTime tr $ Report.serviceStats False testPid (addUTCTime (-7 * 86400) start) start
+      previous <- runTestBg frozenTime tr $ Report.serviceStats False testPid (addUTCTime (-(7 * 86400)) start) start
       let api = find ((== Just "api") . (.service)) current
           unnamed = find (isNothing . (.service)) current
       fmap (\r -> (r.events, r.errorEvents, r.serverRequests, r.serverErrors, r.serverLatencyMs)) api `shouldBe` Just (2, 1, 1, 1, Just 250)
@@ -147,7 +149,7 @@ spec = around withTestResources do
       (find ((== Just "api") . (.service)) comparisons >>= (.previous) <&> (.serverLatencyMs)) `shouldBe` Just (Just 100)
 
     it "queries HTTP, database, and workload evidence without mixing their duration units" \tr -> do
-      let start = addUTCTime (-7 * 86400) frozenTime
+      let start = addUTCTime (-(7 * 86400)) frozenTime
       void $ withResource tr.trPool $ \conn ->
         PGS.execute
           conn
@@ -178,7 +180,7 @@ spec = around withTestResources do
 
     it "persists the snapshot and bounds email details while retaining full report evidence" \tr -> do
       project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
-      emptySnapshot <- runTestBg frozenTime tr $ Reports.collectSystemReport testPid (addUTCTime (-7 * 86400) frozenTime) frozenTime
+      emptySnapshot <- runTestBg frozenTime tr $ Reports.collectSystemReport testPid (addUTCTime (-(7 * 86400)) frozenTime) frozenTime
       let stats n = Report.ServiceStats (Just $ "service-" <> show n) (Just "production") 10 1 0 10 1 10 (Just 125)
           snapshot =
             emptySnapshot
@@ -223,6 +225,31 @@ spec = around withTestResources do
               }
           json = Reports.buildReportJson' snapshot
       AET.parseEither (AE.withObject "report" (AE..: "systemSnapshot")) json `shouldBe` Right snapshot
+      -- Both replicas may request the same preview; exactly one owns generation.
+      (firstClaim, secondClaim) <-
+        concurrently
+          (runTestBg frozenTime tr $ Report.claimPreview testPid)
+          (runTestBg frozenTime tr $ Report.claimPreview testPid)
+      token <- case catMaybes [firstClaim, secondClaim] of
+        [owner] -> pure owner
+        _ -> fail "preview generation was not claimed exactly once"
+      (_, pendingPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      toText (renderText $ toHtml pendingPage) `shouldContainAll` ["Preparing your system report", "every 2s", "live-report-preview"]
+      runTestBg frozenTime tr $ Report.finishPreview testPid token (Report.PreviewReady snapshot)
+      runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just (Report.PreviewReady snapshot))
+      runTestBg frozenTime tr (Report.getPreview $ UUIDId $ UUID.fromWords 9 8 7 6) >>= (`shouldBe` Nothing)
+      (_, readyPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      let readyHtml = toText $ renderText $ toHtml readyPage
+      readyHtml `shouldContainAll` ["live-report-preview", "srcdoc", "Infrastructure", "Monitors"]
+      readyHtml `shouldSatisfy` (not . T.isInfixOf "every 2s")
+      void $ withResource tr.trPool $ \conn -> PGS.execute conn [sql|UPDATE apis.report_previews SET expires_at = now() - interval '1 second' WHERE project_id = ?|] (PGS.Only testPid)
+      retryToken <- maybe (fail "expired preview could not be retried") pure =<< runTestBg frozenTime tr (Report.claimPreview testPid)
+      -- An old worker finishing after a retry must not overwrite the new lease.
+      runTestBg frozenTime tr $ Report.finishPreview testPid token (Report.PreviewReady snapshot)
+      runTestBg frozenTime tr (Report.getPreview testPid) >>= (`shouldBe` Just Report.PreviewBuilding)
+      runTestBg frozenTime tr $ Report.finishPreview testPid retryToken Report.PreviewFailed
+      (_, failedPage) <- testServant tr $ Reports.reportsLiveGetH testPid (Just "true")
+      toText (renderText $ toHtml failedPage) `shouldContainAll` ["The report could not be prepared", "every 60s", "View saved reports"]
       (_, _, email) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot
       (_, _, full) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
       email `shouldContainAll` ["View 22 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 24 more endpoints"]
@@ -249,7 +276,7 @@ spec = around withTestResources do
       quietEmail `shouldContainAll` ["No telemetry events", "No HTTP server spans", "No infrastructure metrics observed", "No monitors configured"]
 
     it "counts issue lifecycle states before selecting the highest-priority evidence" \tr -> do
-      let start = addUTCTime (-7 * 86400) frozenTime
+      let start = addUTCTime (-(7 * 86400)) frozenTime
       void $ withResource tr.trPool $ \conn ->
         PGS.execute
           conn

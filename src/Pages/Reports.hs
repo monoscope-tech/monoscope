@@ -34,13 +34,14 @@ import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, type (:>))
+import Effectful.Concurrent (forkIO)
 import Effectful.Concurrent.Async (Concurrent, concurrently)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
@@ -55,8 +56,10 @@ import Pkg.EmailTemplates qualified as ET
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
+import System.Tracing (forkWithCtx)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders, addSuccessToast)
 import UnliftIO (tryAny)
+import UnliftIO qualified
 import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, freeTierDailyMaxEvents, hostPath, loadingIndicatorWith_)
 
 
@@ -339,12 +342,22 @@ dropSubject :: (Text, Text, Text) -> (Text, Text)
 dropSubject (dateLabel, _, html) = (dateLabel, html)
 
 
--- | Build the live seven-day email preview. Returns (dateLabel, emailHtml)
-buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
-buildLiveReportEmailHtml pid project userName = do
-  currentTime <- Time.currentTime
-  snapshot <- collectSystemReport pid (addUTCTime (-(7 * 86400)) currentTime) currentTime
-  dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project userName True snapshot
+-- | Generation runs in the app-lifetime scope, not the HTTP request. A database
+-- lease deduplicates work across replicas; shutdown leaves a recoverable lease.
+startLivePreview :: Projects.ProjectId -> UTCTime -> ATAuthCtx ()
+startLivePreview pid token = do
+  ctx <- ask @AuthContext
+  let worker = do
+        result <- UnliftIO.tryAny $ UnliftIO.timeout (300 * 1_000_000) $ collectSystemReport pid (addUTCTime (-(7 * 86400)) token) token
+        status <- case result of
+          Right (Just snapshot) -> pure $ Report.PreviewReady snapshot
+          Right Nothing -> Report.PreviewFailed <$ Log.logAttention "Live report generation timed out" pid
+          Left err -> Report.PreviewFailed <$ Log.logAttention "Live report generation failed" (pid, displayException err)
+        Report.finishPreview pid token status
+      guarded = UnliftIO.tryAny worker >>= either (\err -> Log.logAttention "Live report worker failed" (pid, displayException err)) pure
+  case ctx.backgroundScope of
+    Just scope -> void $ forkWithCtx scope guarded
+    Nothing -> void $ forkIO guarded
 
 
 reportsPostH :: Projects.ProjectId -> Projects.ReportType -> ATAuthCtx (RespHeaders ReportsPost)
@@ -384,10 +397,22 @@ singleReportGetH pid rid hxRequestM = do
 reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsLiveGetH pid hxRequestM = do
   (sess, project, bw) <- mkPageCtx pid
-  (dateLabel, emailHtml) <- buildLiveReportEmailHtml pid project sess.user.firstName
+  claimed <- Report.claimPreview pid
+  view <- case claimed of
+    Just token -> LiveReportBuilding pid <$ startLivePreview pid token
+    Nothing ->
+      Report.getPreview pid >>= \case
+        Just (Report.PreviewReady snapshot) -> do
+          (dateLabel, emailHtml) <- dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project sess.user.firstName True snapshot
+          pure $ LiveReportReady ("weekly", dateLabel, emailHtml)
+        Just Report.PreviewFailed -> pure $ LiveReportFailed pid
+        _ -> pure $ LiveReportBuilding pid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
-  let content = ("weekly" :: Text, dateLabel, emailHtml)
-  wrapSingleResponse bw freeTierStatus "Reports" hxRequestM content
+  addRespHeaders
+    $ maybe
+      (ReportsGetLive $ PageCtx bw{pageTitle = "Reports", menuItem = Just "Reports", freeTierStatus} view)
+      (const $ ReportsGetLive' view)
+      hxRequestM
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -410,6 +435,8 @@ data ReportsGet
   | ReportsGetList Projects.ProjectId (V.Vector Issues.ReportListItem) (Maybe Text)
   | ReportsGetSingle (PageCtx (Text, Text, Text))
   | ReportsGetSingle' (Text, Text, Text)
+  | ReportsGetLive (PageCtx LiveReportView)
+  | ReportsGetLive' LiveReportView
 
 
 instance ToHtml ReportsGet where
@@ -417,7 +444,31 @@ instance ToHtml ReportsGet where
   toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
   toHtml (ReportsGetSingle (PageCtx conf content)) = toHtml $ PageCtx conf $ singleReportPage content
   toHtml (ReportsGetSingle' content) = toHtml $ singleReportPage content
+  toHtml (ReportsGetLive (PageCtx conf view)) = toHtml $ PageCtx conf $ liveReportPage view
+  toHtml (ReportsGetLive' view) = liveReportPage view
   toHtmlRaw = toHtml
+
+
+data LiveReportView = LiveReportBuilding Projects.ProjectId | LiveReportFailed Projects.ProjectId | LiveReportReady (Text, Text, Text)
+
+
+liveReportPage :: LiveReportView -> Html ()
+liveReportPage view = div_ ([id_ "live-report-preview", class_ "w-full h-full min-h-0"] <> polling) $ case view of
+  LiveReportReady content -> singleReportPage content
+  LiveReportBuilding _ -> div_ [class_ "flex h-full flex-col items-center justify-center gap-3 p-6 text-center", role_ "status"] do
+    span_ [class_ "loading loading-spinner text-textBrand"] ""
+    h3_ [class_ "font-medium text-textStrong"] "Preparing your system report"
+    p_ [class_ "text-sm text-textWeak max-w-md"] "Collecting the last seven days across your services, infrastructure, issues, and monitors. This page will update when the report is ready."
+  LiveReportFailed pid -> div_ [class_ "flex h-full flex-col items-center justify-center gap-3 p-6 text-center", role_ "status"] do
+    h3_ [class_ "font-medium text-textStrong"] "The report could not be prepared"
+    p_ [class_ "text-sm text-textWeak max-w-md"] "Some report data could not be collected. We’ll retry in a minute. Your saved reports are still available."
+    a_ [href_ $ "/p/" <> pid.toText <> "/reports", class_ "text-sm text-textBrand underline"] "View saved reports"
+  where
+    polling = case view of
+      LiveReportReady{} -> []
+      LiveReportBuilding pid -> poll pid "every 2s"
+      LiveReportFailed pid -> poll pid "every 60s"
+    poll pid trigger = [hxGet_ $ "/p/" <> pid.toText <> "/reports/live", hxTrigger_ trigger, hxTarget_ "this", hxSelect_ "#live-report-preview", hxSwap_ "outerHTML"]
 
 
 -- | (reportType, dateLabel, emailHtml)

@@ -1,6 +1,6 @@
 # Weekly system report: research, design, and delivery
 
-Status: implementation and PR validation complete; merged into production master. Deployment succeeded; live verification found a telemetry backend failure that remains unresolved. Earlier entries below are a chronological iteration record.
+Status: implementation and PR validation complete; merged into production master. Deployment succeeded. Storage metadata has recovered, but the public live-report route still exceeds the gateway timeout; production iteration continues. Earlier entries below are a chronological iteration record.
 
 ## Objective and audience
 
@@ -167,3 +167,16 @@ The first full CI run passed build, doctests, unit tests, CLI tests, formatting,
 - Production event `9c90df9a-1589-5cc2-894e-217da1994815` at `2026-09-06T23:39:57.343198Z` records database-performance collection failing because a referenced Parquet object in the demo project’s 2026-09-06 partition returns S3 `NoSuchKey` / HTTP 404. Event `64cdae94-dc7e-51ea-be64-b35464d15f85` confirms the same missing object on the previous request. Workload cancellation cleanup also reports the pre-existing pgwire `Prepared statement all does not exist` error. Backend recovery and live latency verification remain required.
 
 Read-only storage verification confirms this is current metadata damage: Delta version `528425` still includes the missing path among 24 active demo-project files for 2026-09-06, and a direct S3 HEAD returns 404. Bucket versioning is not enabled and listing versions for the exact key finds no recoverable version. Evidence: `/tmp/weekly-report-storage-check.json`. No metadata or telemetry objects were changed.
+
+### Resumed production review (7 September morning)
+
+- Latest Delta snapshot `534284` no longer references the previously missing object; the earlier recovery blocker has changed. No storage mutation was performed in this task.
+- A direct production-origin request returned HTTP 200 in **43.982 seconds**, with 547,174 bytes of outer HTML, the new system report, and no unavailable section text. Artifact: `/tmp/weekly-report-direct-origin.html`.
+- Public Playwright requests still returned 504. A separate public curl request confirmed HTTP 504 after **60.261 seconds**. The app gateway config has no report-specific timeout override. The current report service queries scan substantial weekly data (observed 6,720 MB and 4,274 MB file selections); this is a fresh-generation latency issue requiring further work, not a reason to restore the old narrow report.
+- Origin visual/chart verification is running separately from the public-route check. Do not use origin success as proof that the normal user-facing route is reliable.
+
+### Live-preview timeout correction
+
+The synchronous live endpoint exceeded the public gateway’s 60-second timeout after storage recovered. The follow-up uses an app-lifetime background task and a shared PostgreSQL preview record keyed by project. Requests authorize as before, atomically claim an expired lease, and immediately return a loading view. HTMX polls only the preview section. Generation retains the complete seven-day snapshot and all full-report sections; successful results are reused for five minutes across replicas. Failures display an explicit retry state, and a six-minute lease permits recovery after worker restart. A generation timestamp prevents an older worker from replacing a newer result. No notifications or saved report history are created by preview generation.
+
+Added regression coverage for simultaneous claim deduplication, immediate polling responses, cached full rendering, project isolation, expired leases, stale-worker completion, and failure state. Compile/test/CI and post-deploy public-route verification remain pending for this follow-up.
