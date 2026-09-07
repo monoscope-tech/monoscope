@@ -19,7 +19,7 @@ test('click opens the full-width custom dropdown and reopens it after Escape', a
   await expect(popup).toBeVisible();
   await expect(popup.getByText('Type a field name, then an operator and value', { exact: false })).toBeVisible();
   await expect(popup.getByText('More Fields', { exact: true })).toBeVisible();
-  expect(await popup.locator('completion-section').first().evaluate(el => getComputedStyle(el).paddingTop)).toBe('8px');
+  expect(await popup.locator('completion-section').first().evaluate(el => getComputedStyle(el).paddingTop)).toBe('6px');
   await expect(popup.getByRole('link', { name: 'Syntax guide ↗' })).toBeVisible();
   await expect(popup.locator('.query-completion-help')).toContainText('to navigate');
   const editorBox = await page.locator('.cm-editor').boundingBox();

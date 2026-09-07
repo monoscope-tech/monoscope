@@ -89,7 +89,6 @@ const darkHighlightStyle = HighlightStyle.define([
 const editorTheme = EditorView.theme({
   '&': { width: '100%', color: 'inherit', backgroundColor: 'transparent', fontSize: '14px' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-content:focus-visible': { outline: '2px solid var(--color-strokeBrand-strong, Highlight)', outlineOffset: '-2px' },
   '.cm-scroller': {
     fontFamily: 'var(--font-mono, monospace)',
     lineHeight: '20px',
@@ -274,7 +273,7 @@ export class QueryEditorComponent extends LitElement {
           language.data.of({ closeBrackets: { brackets: ['(', '[', '"'] } }),
           this.theme.of(this.themeExtensions()),
           placeholder('level == "ERROR"'),
-          EditorView.contentAttributes.of({ 'aria-label': 'Query', 'data-query-input': '' }),
+          EditorView.contentAttributes.of({ 'aria-label': 'Query', 'data-query-input': '', class: 'no-focus-ring' }),
           autocompletion({
             override: [this.complete],
             activateOnTypingDelay: 40,
