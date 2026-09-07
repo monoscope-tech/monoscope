@@ -64,7 +64,7 @@ import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens qualified as AL
 import Data.ByteString qualified as BS
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.HashMap.Strict qualified as HM
@@ -589,8 +589,8 @@ validateEventsOpts opts = do
 
 
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).
--- When --at TIMESTAMP is given, uses GET /api/v1/events/{id}/time/{ts} for an
--- O(1) timeseries point lookup. Without --at, falls back to a KQL search over
+-- When --at TIMESTAMP is given, event UUIDs use the point lookup endpoint;
+-- trace IDs use a search restricted to the exact timestamp. Without --at, searches
 -- --since (default 90d).
 -- An unparseable --at value is rejected up front so the user gets an immediate
 -- error instead of a slow range-scan fallback that hides the typo.
@@ -598,12 +598,13 @@ runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Event
 runEventsGet cfg opts mode = do
   validateDurationOrDie "--since" opts.since
   case opts.at of
-    Nothing -> rangeScan
+    Nothing -> rangeScan Nothing
     Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
       Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
       Just t
         | T.any (`elem` ("/?#%" :: [Char])) opts.eventId ->
             printError "event id must not contain any of '/', '?', '#', '%'" >> liftIO exitFailure
+        | isTraceId -> rangeScan (Just t)
         | otherwise -> do
             -- Direct O(1) lookup: both id and timestamp known → single-partition query.
             -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
@@ -611,13 +612,17 @@ runEventsGet cfg opts mode = do
             let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
             withAPIResult cfg path [] (renderJSON . applyProjection opts)
   where
-    rangeScan = do
+    isTraceId = T.length opts.eventId == 32 && T.all isHexDigit opts.eventId
+    rangeScan at = do
       -- Fallback scan, also matching trace_id so bare trace IDs work.
       let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
           q
             | opts.showTree = "context.trace_id==\"" <> eid <> "\""
             | otherwise = "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
-          params = [("query", q), ("since", fromMaybe "90d" opts.since)] <> [("with_children", "true") | opts.showTree]
+          bounds = case at of
+            Nothing -> [("since", fromMaybe "90d" opts.since)]
+            Just t -> [("from", toText $ iso8601Show t), ("to", toText $ iso8601Show t)]
+          params = [("query", q)] <> bounds <> [("with_children", "true") | opts.showTree]
       withAPIResult cfg "/api/v1/events" params $ \val ->
         if opts.showTree
           then renderTraceTree val
