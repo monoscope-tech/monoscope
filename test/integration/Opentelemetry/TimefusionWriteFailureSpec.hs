@@ -6,26 +6,30 @@
 module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
 import Control.Exception (ErrorCall (..))
+import Control.Lens ((%~), (.~))
+import Data.Effectful.Hasql qualified as EHasql
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
 import Data.ProtoLens (encodeMessage)
 import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
-import Data.Effectful.Hasql qualified as EHasql
 import Database.PostgreSQL.Simple (Query, execute_)
 import Hasql.Errors qualified as HE
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HP
-import UnliftIO.Exception (finally, throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool, rawSql)
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
+import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
+import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (SpecWith, around, beforeWith, describe, expectationFailure, it, shouldBe)
+import UnliftIO.Exception (finally, throwIO, try)
 
 
 -- | A closed loopback port. Pool acquire fails with ECONNREFUSED so we
@@ -95,7 +99,7 @@ countDemoSpans tr ackId =
 withTfEnabled :: TestResources -> TestResources
 withTfEnabled tr =
   let ctx = tr.trATCtx
-   in tr {trATCtx = ctx {env = ctx.env {enableTimefusionWrites = True}, config = ctx.config {enableTimefusionWrites = True}}}
+   in tr{trATCtx = ctx{env = ctx.env{enableTimefusionWrites = True}, config = ctx.config{enableTimefusionWrites = True}}}
 
 
 withBrokenTf :: TestResources -> (TestResources -> IO ()) -> IO ()
@@ -105,10 +109,10 @@ withBrokenTf tr k = do
       ctx =
         origCtx
           { hasqlTimefusionPool = badPool
-          , env = origCtx.env {enableTimefusionWrites = True}
-          , config = origCtx.config {enableTimefusionWrites = True}
+          , env = origCtx.env{enableTimefusionWrites = True}
+          , config = origCtx.config{enableTimefusionWrites = True}
           }
-  k tr {trATCtx = ctx}
+  k tr{trATCtx = ctx}
 
 
 -- | Override the main Hasql pool with one that can't connect. Pins down "PG
@@ -121,10 +125,10 @@ withBrokenPg tr k = do
       ctx =
         origCtx
           { hasqlPool = badPool
-          , env = origCtx.env {enableTimefusionWrites = True}
-          , config = origCtx.config {enableTimefusionWrites = True}
+          , env = origCtx.env{enableTimefusionWrites = True}
+          , config = origCtx.config{enableTimefusionWrites = True}
           }
-  k tr {trATCtx = ctx}
+  k tr{trATCtx = ctx}
 
 
 -- | A TimeFusion pool that is fully reachable and accepts inserts WITHOUT
@@ -155,10 +159,10 @@ withSilentTf tr k = do
       ctx =
         origCtx
           { hasqlTimefusionPool = silentPool
-          , env = origCtx.env {enableTimefusionWrites = True}
-          , config = origCtx.config {enableTimefusionWrites = True}
+          , env = origCtx.env{enableTimefusionWrites = True}
+          , config = origCtx.config{enableTimefusionWrites = True}
           }
-  k tr {trATCtx = ctx}
+  k tr{trATCtx = ctx}
     `finally` withResource tr.trPool \c -> void (execute_ c "DROP TRIGGER IF EXISTS test_silent_tf ON otel_logs_and_spans")
 
 
@@ -178,7 +182,9 @@ expectLeftMatching what predicate = \case
   Right (acks, poison) ->
     expectationFailure
       $ toString
-      $ "expected " <> what <> " (Left WriteFailure); got Right with acks="
+      $ "expected "
+      <> what
+      <> " (Left WriteFailure); got Right with acks="
       <> show acks
       <> " poison="
       <> show (map (\(a, _, _) -> a) poison)
@@ -187,7 +193,10 @@ expectLeftMatching what predicate = \case
     | otherwise ->
         expectationFailure
           $ toString
-          $ "expected " <> what <> "; got Left with summary: " <> Telemetry.writeFailureSummary wf
+          $ "expected "
+          <> what
+          <> "; got Left with summary: "
+          <> Telemetry.writeFailureSummary wf
 
 
 -- | The exact 2026-06-21 prod failure shape: a server-sent statement error with
@@ -230,6 +239,22 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       readIORef counter >>= (`shouldBe` 1)
 
   describe "processList Either contract (dual-write outcome surfaces to Pkg.Queue)" do
+    it "persists a project-ID-only batch without an API key" \(tr, _) -> do
+      let ackId = "ack-project-id-only"
+          req =
+            createOtelLogAtTime "" ["valid record from " <> ackId] frozenTime
+              & LSF.resourceLogs
+              %~ map (PLF.resource . PRF.attributes .~ [mkAttr "at-project-id" demoProjectId.toText])
+      before <- countDemoSpans tr ackId
+      res <- runTestBg frozenTime tr $ OtlpServer.processList [(ackId, encodeMessage req)] logsAttrs
+      case res of
+        Right (acks, poison) -> do
+          acks `shouldBe` [ackId]
+          poison `shouldBe` []
+        Left wf -> expectationFailure $ toString (Telemetry.writeFailureSummary wf)
+      after <- countDemoSpans tr ackId
+      after - before `shouldBe` 1
+
     it "writes succeed → Right (acks, no poison)" \(tr, key) -> do
       let msgs = [validLogMsg key "ack-good-1", validLogMsg key "ack-good-2"]
       res <- runTestBg frozenTime tr $ OtlpServer.processList msgs logsAttrs
@@ -239,7 +264,8 @@ spec = around withTestResources $ beforeWith mkResWithKey do
           poison `shouldBe` []
         Left wf ->
           expectationFailure
-            $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
+            $ "expected Right; got Left "
+            <> toString (Telemetry.writeFailureSummary wf)
 
     it "TF down → Left (That tfErr) — TF-only failure" \(tr, key) ->
       withBrokenTf tr \tr' -> do
@@ -293,10 +319,10 @@ spec = around withTestResources $ beforeWith mkResWithKey do
             origCtx
               { hasqlPool = badPool1
               , hasqlTimefusionPool = badPool2
-              , env = origCtx.env {enableTimefusionWrites = True}
-              , config = origCtx.config {enableTimefusionWrites = True}
+              , env = origCtx.env{enableTimefusionWrites = True}
+              , config = origCtx.config{enableTimefusionWrites = True}
               }
-          tr' = tr {trATCtx = ctx}
+          tr' = tr{trATCtx = ctx}
       res <- try @_ @SomeException $ runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-1"] logsAttrs
       case res of
         Left _ -> pass
@@ -337,7 +363,8 @@ spec = around withTestResources $ beforeWith mkResWithKey do
           map (\(a, _, _) -> a) poison `shouldBe` ["ack-poison"]
         Left wf ->
           expectationFailure
-            $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
+            $ "expected Right; got Left "
+            <> toString (Telemetry.writeFailureSummary wf)
 
   -- DLQ replay must rewrite ONLY the leg that originally failed: the durable leg
   -- already holds the row and PG inserts aren't idempotent, so a dual-write

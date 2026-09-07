@@ -477,7 +477,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !atIds = concatMap extractIds [req | (_, _, Right req) <- decodedMsgs]
 
     (!keyToIdMap, !projectCachesMap) <-
-      if V.null uniqueProjectKeys
+      if V.null uniqueProjectKeys && null atIds
         then pure (HM.empty, HM.empty)
         -- A single transient blip (dropped conn / empty-SQLSTATE pgdog reset) on
         -- these read-side lookups used to dead-letter the whole batch before the
