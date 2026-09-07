@@ -304,7 +304,8 @@ upsertHourlyStatBatch rows =
     deduped = Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
 
 
--- | Batch: computes median + MAD for all patterns in one query.
+-- | Baseline inputs for unmerged patterns with recent hourly statistics.
+-- Includes first-seen time so callers never need to paginate full pattern records.
 -- Joins on (source_field, pattern_hash) — pattern_hash alone is NOT unique across source fields.
 data BatchPatternStats = BatchPatternStats
   { sourceField :: Text
@@ -313,6 +314,7 @@ data BatchPatternStats = BatchPatternStats
   , hourlyMADScaled :: Double
   , totalHours :: Int
   , totalEvents :: Int64
+  , firstSeenAt :: UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -341,10 +343,13 @@ getBatchPatternStats pid now hoursBack =
         )
         -- 1.4826 = consistency factor (1/Φ⁻¹(3/4)) to convert MAD to std-dev equivalent under normality
         SELECT mc.source_field, mc.pattern_hash, COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
-          t.total_hours, t.total_events
+          t.total_hours, t.total_events, lp.first_seen_at
         FROM median_calc mc
         JOIN mad_calc mad ON mc.source_field = mad.source_field AND mc.pattern_hash = mad.pattern_hash
         JOIN totals t ON mc.source_field = t.source_field AND mc.pattern_hash = t.pattern_hash
+        JOIN apis.log_patterns lp ON lp.project_id = #{pid}
+          AND lp.source_field = mc.source_field AND lp.pattern_hash = mc.pattern_hash
+          AND lp.canonical_id IS NULL
       |]
 
 

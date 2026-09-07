@@ -5036,23 +5036,14 @@ calculateLogPatternBaselines pid = do
   Log.logTrace "Calculating log pattern baselines" pid
   now <- Time.currentTime
   allStats <- LogPatterns.getBatchPatternStats pid now baselineWindowHours
-  let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
-      go offset totalProcessed totalEstablished = do
-        patterns <- LogPatterns.getLogPatterns pid baselinePageSize offset
-        let ageDays lp = realToFrac (diffUTCTime now (zonedTimeToUTC lp.firstSeenAt)) / 86400 :: Double
-            updates = V.fromList $ flip mapMaybe patterns \lp ->
-              HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
-                let est = stats.hourlyMedian > minMedianForEstablished || ageDays lp >= minAgeDaysForEstablished
-                 in (lp.sourceField, lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
-            established = V.length $ V.filter (\(_, _, s, _, _, _) -> s == BSEstablished) updates
-        void $ LogPatterns.updateBaselineBatch pid updates
-        let newTotal = totalProcessed + length patterns
-            newEstablished = totalEstablished + established
-        if length patterns == baselinePageSize
-          then go (offset + baselinePageSize) newTotal newEstablished
-          else pure (newTotal, newEstablished)
-  (total, established) <- go 0 0 0
-  Log.logTrace "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
+  establishedCounts <- forM (chunksOf baselinePageSize allStats) \statsBatch -> do
+    let updates = V.fromList $ flip map statsBatch \stats ->
+          let ageDays = realToFrac (diffUTCTime now stats.firstSeenAt) / 86400 :: Double
+              established = stats.hourlyMedian > minMedianForEstablished || ageDays >= minAgeDaysForEstablished
+           in (stats.sourceField, stats.patternHash, bool BSLearning BSEstablished established, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
+    void $ LogPatterns.updateBaselineBatch pid updates
+    pure $ V.length $ V.filter (\(_, _, baselineState, _, _, _) -> baselineState == BSEstablished) updates
+  Log.logTrace "Finished calculating log pattern baselines" ("patterns" :: Text, length allStats, "established" :: Text, sum establishedCounts)
 
 
 -- | Pure spike/drop detection for a single pattern.
