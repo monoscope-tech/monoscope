@@ -71,7 +71,8 @@ COPY test ./test
 COPY app ./app
 COPY proto ./proto
 
-# Build frontend assets using the lockfile dependencies installed above.
+# Build frontend assets and the PNG renderer from this checkout. The renderer
+# in the dependency image is only a cache and may predate chart source changes.
 # Pkg.DeriveUtils reads Vite's manifest through Template Haskell. Its object
 # can survive in the persistent dist-newstyle cache even though Vite emitted a
 # new entry hash, producing HTML that requests a chunk absent from the image.
@@ -81,7 +82,8 @@ COPY config ./config
 COPY static ./static
 COPY web-components ./web-components
 RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
-  cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
+  cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
+  NODE_ENV=production npx vite build --mode production --sourcemap false && \
   cd .. && \
   entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
   printf 'module Pkg.AssetManifestFingerprint (assetManifestFingerprint) where\n\nimport Relude (String)\n\nassetManifestFingerprint :: String\nassetManifestFingerprint = "%s"\n' "$entry" \

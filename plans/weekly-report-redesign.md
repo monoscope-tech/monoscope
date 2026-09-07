@@ -260,3 +260,12 @@ it tried to import that separate browser test. Final checks and deployment pendi
 The report detail links and empty-history live action explicitly disable inherited
 hover preloading. Hover must not start live snapshot collection; the production
 browser check exercises hover before click.
+
+Production verification found that Dockerfile copied the chart binary from the
+prebuilt dependency image. The application image now compiles `chart-cli.ts`
+from the checked-out source before copying the runtime artifact. A standalone
+local `bun build --compile` renderer produced both PNG palettes successfully.
+The first production browser check opened saved report
+`447647ba-f56e-47dd-9de1-0773c908fe86` in 0.607 seconds, verified both logo themes,
+and confirmed the explicit live action displays its waiting state. Final PNG and
+hover verification follows the packaging/preload rollout.
