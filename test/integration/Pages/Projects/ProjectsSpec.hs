@@ -1,7 +1,10 @@
 module Pages.Projects.ProjectsSpec (spec) where
 
 import Data.Generics.Labels ()
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as LT
 import Data.Vector qualified as V
+import Lucid qualified
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
@@ -12,7 +15,6 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
-
 
 
 spec :: Spec
@@ -45,7 +47,9 @@ spec = around withTestResources do
       length projects `shouldBe` 2
       let projectIds = map (.id.toText) (V.toList projects)
       projectIds `shouldContain` [testPid.toText] -- test project from testSessionHeader
-      -- TODO: add more checks for the info we we display on list page
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml pg
+      html `shouldSatisfy` (not . T.isInfixOf "id=\"mobile-nav-toggle\"")
+      html `shouldSatisfy` (not . T.isInfixOf "for=\"mobile-nav-toggle\"")
     it "Should update project with new details and verify in list" \tr -> do
       -- Section 1: Update the project
       let createPForm =

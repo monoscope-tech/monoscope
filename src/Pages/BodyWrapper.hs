@@ -387,7 +387,8 @@ bodyWrapper bcfg child = do
           -- Command palette (shell rendered inline, dynamic items lazy-loaded)
           whenJust bcfg.currProject \p -> CommandPalette.paletteShell_ p.id
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
-          input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
+          when (isJust bcfg.currProject)
+            $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
           section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
             foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) (if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem)) bcfg.currProject
             section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
@@ -425,7 +426,8 @@ bodyWrapper bcfg child = do
                     $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
 
       -- Mobile nav backdrop (at body level, after section, so it paints on top)
-      label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
+      when (isJust bcfg.sessM && isJust bcfg.currProject)
+        $ label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
       when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
       when isProd $ script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
