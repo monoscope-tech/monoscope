@@ -622,11 +622,6 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       receivedPartial = !!data.dataset?.length;
       if (subtitle) subtitle.textContent = receivedPartial ? 'Loading partial results…' : 'Loading…';
       if (data.dataset?.length) chart.hideLoading();
-      else {
-        const styles = getChartStyles();
-        chart.showLoading({ text: 'Searching for matching events…', color: styles.brandColor,
-          textColor: styles.tooltipTextColor, maskColor: styles.chartMask, zlevel: 0 });
-      }
       hideNoDataOverlay(chartId);
       applyChartResponse(chart, opt, widgetData, data);
       // Keep incomplete totals out of stat tiles. The loading state distinguishes
@@ -975,13 +970,6 @@ const chartWidget = (widgetData: WidGetData) => {
 
   let dataObserver: IntersectionObserver | undefined;
   if (!opt.dataset.source && chartEl) {
-    chart.showLoading({
-      text: 'Loading chart…',
-      color: styles.brandColor,
-      textColor: styles.tooltipTextColor,
-      maskColor: styles.chartMask,
-      zlevel: 0,
-    });
     dataObserver = new IntersectionObserver(
       (entries, observer) =>
         entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData, controller.signal), observer.disconnect())
