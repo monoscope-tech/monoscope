@@ -12,7 +12,7 @@ beforeAll(() => {
   XPathExpression.prototype.evaluate = function (node, type = 0, result = null) {
     return evaluate.call(this, node, type, result);
   };
-  const source = readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js'), 'utf8');
+  const source = readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-4.0.0.min.js'), 'utf8');
   htmx = new Function(`${source}; return htmx;`)();
   (window as any).htmx = htmx;
   new Function(readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-2-compat.js'), 'utf8'))();

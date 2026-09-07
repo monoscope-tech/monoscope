@@ -6,7 +6,7 @@ import { logPage, serverTransport, ids } from './log-list-harness';
 
 // Run the shipped HTMX morph algorithm: mocked DOM events miss its extension-only
 // morph hooks and cannot reproduce the loss of Lit's light-DOM part markers.
-const htmxSource = readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js'), 'utf8');
+const htmxSource = readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-4.0.0.min.js'), 'utf8');
 let htmx: any;
 beforeAll(async () => {
   // HTMX installs its transition stylesheet; jsdom does not implement adoption.

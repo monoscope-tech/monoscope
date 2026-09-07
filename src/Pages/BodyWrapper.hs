@@ -251,7 +251,7 @@ bodyWrapper bcfg child = do
 
       mapM_
         deferScript
-        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
+        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js"
           , -- Must load immediately after htmx: restores implicit attribute inheritance
             -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
             -- listeners use v4 event names directly, so the shim's legacy-name replay is

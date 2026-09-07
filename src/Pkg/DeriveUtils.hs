@@ -458,7 +458,7 @@ hashedAssetPath path h = case T.breakOnEnd "." path of
 -- Just ("public/assets/js/main.js","2c58501e")
 -- >>> stripAssetHash "public/assets/js/main.js"
 -- Nothing
--- >>> stripAssetHash "public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
+-- >>> stripAssetHash "public/assets/deps/htmx/htmx-4.0.0.min.js"
 -- Nothing
 stripAssetHash :: Text -> Maybe (Text, Text)
 stripAssetHash p = do
