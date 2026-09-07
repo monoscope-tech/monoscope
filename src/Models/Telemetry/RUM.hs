@@ -13,6 +13,7 @@ module Models.Telemetry.RUM (
   RumQuery (..),
   RumCacheKey (..),
   rumPanelCacheGet,
+  withSharedCache,
   rumPanelCacheSet,
 ) where
 
@@ -25,6 +26,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB)
 import Relude
+import Utils (toXXHash)
 
 
 data RumBucket = FiveMinutes | OneHour | SixHours
@@ -176,18 +178,30 @@ data RumCacheKey = RumCacheKey
   deriving anyclass (Hashable)
 
 
--- | Shared L2 for panel results, keyed by the hashed memory-cache key. The in-memory cache
--- is per replica; without this layer every replica paid each panel's cold scan once per
--- TTL (the vitals-detail scan alone costs ~25s), and the first visitor after every expiry
--- always ate one.
-rumPanelCacheGet :: DB es => Text -> Eff es (Maybe RumQueryResult)
+-- | Shared L2 for expensive panel/stats results, keyed by the hashed memory-cache key.
+-- The in-memory caches are per replica; without this layer every replica paid each cold
+-- scan once per TTL (the vitals-detail scan alone costs ~25s), and the first visitor
+-- after every expiry always ate one. Generic over the payload so the API catalog's host
+-- and endpoint stats share the table with the RUM panels.
+rumPanelCacheGet :: (AE.FromJSON a, DB es, Typeable a) => Text -> Eff es (Maybe a)
 rumPanelCacheGet key =
   fmap (\(HI.OneColumn (AesonText value)) -> value)
     . listToMaybe
     <$> Hasql.interp [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|]
 
 
-rumPanelCacheSet :: DB es => Text -> Int64 -> RumQueryResult -> Eff es ()
+-- | Memory-miss path in one step: read the shared table, else compute and publish for
+-- the fleet. @rawKey@ is hashed, so callers pass a readable @show@n key.
+withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es, Typeable a) => Text -> Int64 -> Eff es a -> Eff es a
+withSharedCache rawKey ttl compute = do
+  let key = toXXHash rawKey
+  rumPanelCacheGet key >>= flip maybe pure do
+    fresh <- compute
+    rumPanelCacheSet key ttl fresh
+    pure fresh
+
+
+rumPanelCacheSet :: (AE.ToJSON a, DB es) => Text -> Int64 -> a -> Eff es ()
 rumPanelCacheSet key ttlSeconds value = do
   let payload = AesonText value
   Hasql.interpExecute_

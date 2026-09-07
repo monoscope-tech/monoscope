@@ -168,7 +168,7 @@ data EndpointRequestStats = EndpointRequestStats
   , services :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 -- Per-(endpoint hash, service, bucket) telemetry slice, aggregated in Haskell.
@@ -402,7 +402,7 @@ data HostEvents = HostEvents
   , services :: V.Vector Text -- distinct resource.service.name emitting traffic for this host
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 -- Per-(host, direction, service, bucket) telemetry slice, aggregated in Haskell.

@@ -15,6 +15,7 @@ import Log (logAttention)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
@@ -58,7 +59,10 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
       fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   hostsAndEvents <- case statsMode of
     Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
-    Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ -> fetch Endpoints.WithStats
+    -- Memory first, then the fleet-shared table, so a cold replica doesn't re-pay the
+    -- multi-second span scan another replica already ran this TTL (same layering as RUM).
+    Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ ->
+      RUMData.withSharedCache ("hostStats:" <> show cacheKey) 300 (fetch Endpoints.WithStats)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
@@ -292,7 +296,8 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       fetchStats mode = Endpoints.endpointRequestStatsByProject mode useTf pid endpointQuery
       fetchStatsCached = case statsMode of
         Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
-        Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ -> fetchStats Endpoints.WithStats
+        Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ ->
+          RUMData.withSharedCache ("endpointStats:" <> show cacheKey) 300 (fetchStats Endpoints.WithStats)
   (endpointStats, totalCount) <-
     concurrently
       fetchStatsCached
