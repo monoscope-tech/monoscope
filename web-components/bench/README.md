@@ -74,11 +74,11 @@ Verification completed:
 
 - 154 query, completion, schema, validation, builder, and public-call tests.
 - 35 YAML import/export, live-tail, and inline-handler tests.
-- 21 browser scenarios across Chromium, Firefox, and WebKit: click-to-open and reopen, full-width dropdown presentation, keyboard selection, undo, multiline input, large schemas and queries, isolation, reconnects, schema retry/deduplication, event routing, loading-input adoption, theme changes, and active-option announcements.
+- 21 browser scenarios across Chromium, Firefox, and WebKit: click-to-open and reopen, custom dropdown presentation, keyboard selection, undo, multiline input, large schemas and queries, isolation, reconnects, schema retry/deduplication, event routing, loading-input adoption, theme changes, and active-option announcements.
 - Seven application end-to-end tests against the isolated local database: five query-editor tests, dashboard visualization synchronization, and applying generated KQL in live tail.
 - TypeScript typecheck, production Vite build, full `monoscope-server` development build, Haskell template formatting, and `git diff --check`.
 
-The restored dropdown uses the existing guidance, type badges, field/operator groups, and keyboard footer. CodeMirror renders at most 35 options and owns selection and ARIA; the worker still bounds schema suggestions to 20.
+The restored dropdown keeps the guidance, type badges, field/operator groups, and keyboard footer. It caps width at 640 px and uses 29 px rows. Type labels measured at least 7.09:1 contrast in light mode and 9.92:1 in dark mode; APCA label contrast exceeded Lc 60 in both themes. CodeMirror renders at most 35 options and owns selection and ARIA; the worker still bounds schema suggestions to 20.
 
 The visual builder shows the first 100 matching fields; its search still covers the full schema. Validation uses the existing server endpoint, with the original 400 ms validation and 500 ms query-update delays. Native input remains usable during module loading, and its text, selection, and focus transfer during upgrade. Monaco remains available only for YAML editing.
 

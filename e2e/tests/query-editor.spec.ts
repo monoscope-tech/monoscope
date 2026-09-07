@@ -54,7 +54,7 @@ test("keeps the row aligned while the editor is still loading", async ({ page })
 test.describe("Query editor", () => {
   test.beforeEach(async ({ page }) => waitForEditor(page));
 
-  test("clicking reopens the full-width dropdown with guidance and field types", async ({ page }) => {
+  test("clicking reopens the compact dropdown with guidance and field types", async ({ page }) => {
     const component = page.locator('#filterElement');
     await component.locator('.cm-content').click();
     const popup = component.locator('.query-completion-dropdown');
@@ -63,7 +63,7 @@ test.describe("Query editor", () => {
     await expect(popup.getByRole('option', { name: /status_code.*string/ })).toBeVisible();
     await expect(popup.getByRole('link', { name: 'Syntax guide ↗' })).toBeVisible();
     const width = await component.locator('.cm-editor').evaluate(el => el.getBoundingClientRect().width);
-    expect(await popup.evaluate(el => el.getBoundingClientRect().width)).toBeCloseTo(width, 0);
+    expect(await popup.evaluate(el => el.getBoundingClientRect().width)).toBeCloseTo(Math.min(width, 640), 0);
   });
 
   test("matches the query controls' height and centers its text", async ({ page }) => {

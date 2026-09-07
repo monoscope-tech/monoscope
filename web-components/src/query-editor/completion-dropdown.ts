@@ -73,10 +73,10 @@ export const completionChrome = ViewPlugin.fromClass(class {
   destroy() { this.destroyed = true; }
 });
 
-export const completionTheme = EditorView.theme({
+const popupTheme = EditorView.theme({
   '.query-completion-dropdown.cm-tooltip': {
     position: 'absolute !important', top: '100% !important', left: '0 !important',
-    width: '100%', maxWidth: 'none', marginTop: '4px', boxSizing: 'border-box',
+    width: '100%', maxWidth: 'min(640px, calc(100vw - 24px))', marginTop: '4px', boxSizing: 'border-box',
     display: 'flex', flexDirection: 'column', maxHeight: '80dvh !important',
     borderRadius: '6px', overflow: 'hidden', fontFamily: 'var(--font-sans, system-ui, sans-serif)', fontSize: '12px',
     backgroundColor: 'var(--color-bgRaised, Canvas)', color: 'var(--color-textStrong, CanvasText)',
@@ -89,18 +89,33 @@ export const completionTheme = EditorView.theme({
   '.query-completion-dropdown.cm-tooltip-autocomplete .cm-completionDetail': { marginLeft: '8px', fontStyle: 'normal', opacity: '1', color: 'var(--query-type-color, inherit)' },
   '.query-completion-dropdown.cm-tooltip-autocomplete .cm-completionMatchedText': { textDecoration: 'none', fontWeight: '600' },
   '.query-completion-dropdown.cm-tooltip-autocomplete ul completion-section': { padding: '6px 12px', fontWeight: '600', textTransform: 'uppercase', backgroundColor: 'var(--color-fillWeaker, #f4f5f8)', borderBottom: '1px solid var(--color-strokeWeak, GrayText)' },
-  '.query-completion-icon': { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '20px', height: '20px', flexShrink: '0', borderRadius: '4px', border: '1px solid color-mix(in srgb, var(--color-sky-400, #38bdf8) 30%, transparent)', backgroundColor: 'color-mix(in srgb, var(--color-sky-400, #38bdf8) 15%, transparent)', color: 'var(--color-sky-400, #38bdf8)', fontWeight: '600' },
+  '.query-completion-icon': { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '20px', height: '20px', flexShrink: '0', borderRadius: '4px', border: '1px solid color-mix(in srgb, var(--color-sky-400, #38bdf8) 30%, transparent)', backgroundColor: 'color-mix(in srgb, var(--color-sky-400, #38bdf8) 15%, transparent)', fontWeight: '600' },
   '.query-completion-hint': { display: 'none', order: '-1', padding: '6px 12px', color: 'var(--color-textWeak, inherit)', backgroundColor: 'var(--color-fillWeaker, #f4f5f8)', borderBottom: '1px solid var(--color-strokeWeak, GrayText)' },
   '.query-completion-empty .query-completion-hint': { display: 'block' },
   '.query-completion-help': { order: '1', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '8px', padding: '6px 12px', color: 'var(--color-textWeak, inherit)', borderTop: '1px solid var(--color-strokeWeak, GrayText)' },
   '.query-completion-help kbd, .query-completion-hint code': { padding: '0 3px', borderRadius: '3px', backgroundColor: 'var(--color-fillWeak, #f4f5f8)' },
   '.query-completion-help kbd': { border: '1px solid var(--color-strokeWeak, GrayText)' },
   '.query-completion-help a': { color: 'var(--color-textBrand, LinkText)' },
-  '.query-type-string': { '--query-type-color': '#38bdf8' },
-  '.query-type-number, .query-type-int': { '--query-type-color': '#34d399' },
-  '.query-type-object': { '--query-type-color': '#a78bfa' },
-  '.query-type-array': { '--query-type-color': '#2dd4bf' },
-  '.query-type-duration': { '--query-type-color': '#fbbf24' },
-  '.query-type-boolean': { '--query-type-color': '#fb923c' },
-  '.query-type-bytes': { '--query-type-color': '#fb7185' },
 });
+
+// Use darker steps for small labels on light surfaces; keep bright steps in dark mode.
+export const completionTheme = [popupTheme, EditorView.baseTheme({
+  '&light .query-type-string': { '--query-type-color': 'var(--color-sky-800, #075985)' },
+  '&dark .query-type-string': { '--query-type-color': 'var(--color-sky-300, #7dd3fc)' },
+  '&light .query-type-number': { '--query-type-color': 'var(--color-emerald-800, #065f46)' },
+  '&dark .query-type-number': { '--query-type-color': 'var(--color-emerald-300, #6ee7b7)' },
+  '&light .query-type-int': { '--query-type-color': 'var(--color-emerald-800, #065f46)' },
+  '&dark .query-type-int': { '--query-type-color': 'var(--color-emerald-300, #6ee7b7)' },
+  '&light .query-type-object': { '--query-type-color': 'var(--color-violet-800, #5b21b6)' },
+  '&dark .query-type-object': { '--query-type-color': 'var(--color-violet-300, #c4b5fd)' },
+  '&light .query-type-array': { '--query-type-color': 'var(--color-teal-800, #115e59)' },
+  '&dark .query-type-array': { '--query-type-color': 'var(--color-teal-300, #5eead4)' },
+  '&light .query-type-duration': { '--query-type-color': 'var(--color-amber-800, #92400e)' },
+  '&dark .query-type-duration': { '--query-type-color': 'var(--color-amber-300, #fcd34d)' },
+  '&light .query-type-boolean': { '--query-type-color': 'var(--color-orange-800, #9a3412)' },
+  '&dark .query-type-boolean': { '--query-type-color': 'var(--color-orange-300, #fdba74)' },
+  '&light .query-type-bytes': { '--query-type-color': 'var(--color-rose-800, #9f1239)' },
+  '&dark .query-type-bytes': { '--query-type-color': 'var(--color-rose-300, #fda4af)' },
+  '&light .query-completion-icon': { color: 'var(--color-sky-800, #075985)' },
+  '&dark .query-completion-icon': { color: 'var(--color-sky-300, #7dd3fc)' },
+})];

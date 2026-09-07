@@ -10,7 +10,7 @@ const set = async (page: any, text: string) =>
     (window as any).bench.focus();
   }, text);
 
-test('click opens the full-width custom dropdown and reopens it after Escape', async ({ page }) => {
+test('click opens the compact custom dropdown and reopens it after Escape', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1100 });
   await ready(page);
   await page.locator('query-editor').evaluate(el => { el.style.width = '1400px'; });
@@ -24,7 +24,7 @@ test('click opens the full-width custom dropdown and reopens it after Escape', a
   await expect(popup.locator('.query-completion-help')).toContainText('to navigate');
   const editorBox = await page.locator('.cm-editor').boundingBox();
   const popupBox = await popup.boundingBox();
-  expect(Math.abs(popupBox!.width - editorBox!.width)).toBeLessThanOrEqual(2);
+  expect(Math.abs(popupBox!.width - 640)).toBeLessThanOrEqual(2);
   const optionBox = await popup.getByRole('option').first().boundingBox();
   expect(Math.abs(optionBox!.width - popupBox!.width)).toBeLessThanOrEqual(4);
   expect(popupBox!.y).toBeGreaterThanOrEqual(editorBox!.y + editorBox!.height);
