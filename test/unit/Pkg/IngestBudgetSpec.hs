@@ -1,12 +1,12 @@
 module Pkg.IngestBudgetSpec (spec) where
 
+import Control.Concurrent.Async (cancel, withAsync)
+import Control.Exception qualified as Exception
 import Pkg.IngestBudget
 import Relude
 import System.IO.Error (userError)
 import System.Timeout (timeout)
 import Test.Hspec
-import UnliftIO.Async (cancel, withAsync)
-import UnliftIO.Exception (throwIO, tryAny)
 
 
 spec :: Spec
@@ -35,6 +35,6 @@ spec = describe "shared ingestion byte budget" do
         timeout 1_000_000 (takeMVar waiting) `shouldReturn` Just ()
         cancel waiter
       cancel holder
-    outcome <- tryAny $ withIngestBytes budget full (throwIO (userError "batch failed") :: IO ())
+    outcome <- Exception.try @Exception.IOException $ withIngestBytes budget full (Exception.throwIO (userError "batch failed") :: IO ())
     outcome `shouldSatisfy` isLeft
     timeout 1_000_000 (withIngestBytes budget full pass) `shouldReturn` Just ()
