@@ -311,7 +311,7 @@ eventsSearchParser =
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP" <> help "End time (ISO 8601)"))
     <*> optional (strOption (long "kind" <> metavar "KIND" <> help "log|trace|span"))
     <*> many (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service (repeatable: --service api --service worker → in (api, worker))"))
-    <*> optional (strOption (long "level" <> metavar "LEVEL" <> help "Shorthand for severity.text=='LEVEL'"))
+    <*> optional (strOption (long "level" <> metavar "LEVEL" <> help "Filter by severity (case-insensitive input)"))
     <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Max results"))
     <*> optional (strOption (long "fields" <> metavar "FIELDS" <> help "Comma-separated fields to keep"))
     <*> optional (strOption (long "cursor" <> metavar "CURSOR" <> help "Pagination cursor from a prior response"))
@@ -334,7 +334,7 @@ eventsSearchExamples :: [Text]
 eventsSearchExamples =
   [ "Examples:"
   , "  monoscope logs search POISON_ROW_DROPPED --since 24h   # bare strings = full-text"
-  , "  monoscope events search 'severity.text==\"ERROR\"' --since 1h"
+  , "  monoscope events search 'severity.severity_text==\"error\"' --since 1h"
   , "  monoscope logs search --service checkout-api --level error --limit 50"
   , "  monoscope events search 'attributes.http.response.status_code >= 500' --since 1h"
   , "  monoscope traces search --since 30m --first --id-only   # one trace id"
@@ -474,7 +474,7 @@ facetsExamples =
   [ "Examples:"
   , "  monoscope facets                         # all faceted fields"
   , "  monoscope facets resource.service.name   # values for one field"
-  , "  monoscope facets severity.text --top 5"
+  , "  monoscope facets severity.severity_text --top 5"
   , "  monoscope facets resource.service.name | jq -r '.[\"resource.service.name\"][].value'"
   , "  monoscope facets --since 7d              # widen the lookback"
   , ""
@@ -604,7 +604,7 @@ openExamples =
   , "  monoscope open trace a1b2c3d4                      # the trace waterfall, in the browser"
   , "  monoscope open issue <issue-id>"
   , "  monoscope open dashboard <dashboard-id>"
-  , "  monoscope open logs 'severity.text==\"ERROR\"' --since 6h"
+  , "  monoscope open logs 'severity.severity_text==\"error\"' --since 6h"
   , "  monoscope open project --print                     # just print the link, e.g. to paste in Slack"
   , ""
   , "The host comes from the server (/api/v1/me), so self-hosted installs work."
