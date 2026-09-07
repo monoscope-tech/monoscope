@@ -16,7 +16,7 @@ const withQuery = async (initial: string) => {
   let value = initial;
   // `handleAddQuery(text, replace)` is how the builder writes back — the same entry
   // point the editor exposes to every other caller.
-  (editor as any).editor = { getValue: () => value, setValue: (v: string) => (value = v) };
+  (editor as any).getValue = () => value;
   (editor as any).handleAddQuery = (fragment: string, replace = false) => {
     value = replace ? fragment : `${value} ${fragment}`.trim();
   };
@@ -27,7 +27,7 @@ const withQuery = async (initial: string) => {
   await builder.updateComplete;
   return {
     builder,
-    read: () => (editor as any).editor.getValue(),
+    read: () => (editor as any).getValue(),
     parse: () => builder.extractQueryParts(),
     write: () => builder.updateQuery(),
   };

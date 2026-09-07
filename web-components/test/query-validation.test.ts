@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeAll, afterEach, vi } from 'vitest';
 import { QueryEditorComponent, schemaManager, unclosedQuote, verdictToError, type Verdict } from '../src/query-editor/query-editor';
 
+vi.stubGlobal('Worker', undefined);
+
 // Field-name and grammar rules are the server's (Pkg.Parser.Stats, doctested
 // there) and reach the editor through /log_explorer/validate. What's tested here
 // is the client half: the one local check, the translation of a verdict into a
@@ -103,9 +105,8 @@ describe('the editor asks the server and marks the answer', () => {
   };
 
   const validate = async (el: QueryEditorComponent, query: string) => {
-    const model = (el as any).editor.getModel();
-    model.setValue(query);
-    await (el as any).validateAndMark(query, model);
+    el.setValue(query);
+    await (el as any).validateAndMark(query);
   };
 
   const errorShown = () => {
@@ -184,9 +185,9 @@ describe('the editor asks the server and marks the answer', () => {
     const el = await mount();
     const watch = errorShown();
     try {
-      const model = (el as any).editor.getModel();
-      const stale = (el as any).validateAndMark('attribut contains "x"', model);
-      const fresh = (el as any).validateAndMark('kind == "log"', model);
+
+      const stale = (el as any).validateAndMark('attribut contains "x"');
+      const fresh = (el as any).validateAndMark('kind == "log"');
       await fresh;
       releaseFirst(undefined);
       await stale;
@@ -231,172 +232,8 @@ describe('the editor asks the server and marks the answer', () => {
     stubVerdicts({ valid: true });
     const el = await mount();
     try {
-      const overlay = el.querySelector('.placeholder-overlay')!;
-      expect(overlay.className).toContain('pointer-events-none');
-    } finally {
-      el.remove();
-    }
-  });
-});
-
-// The dropdown used to mirror Monaco's suggest controller through private APIs
-// and ignored a zero-item result, so a stale list stayed on screen. These drive
-// the real component against a real Monaco model.
-describe('the editor is wired to the completion module', () => {
-  const mount = async () => {
-    const el = new QueryEditorComponent();
-    document.body.appendChild(el);
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
-    return el;
-  };
-
-  const suggestFor = async (el: QueryEditorComponent, query: string) => {
-    const editor = (el as any).editor;
-    editor.getModel().setValue(query);
-    editor.setPosition({ lineNumber: 1, column: query.length + 1 });
-    await (el as any).refreshSuggestions();
-    return (el as any).completionItems.map((i: any) => i.label);
-  };
-
-  beforeAll(() => {
-    schemaManager.setSchemaData('spans', {
-      fields: {
-        kind: { type: 'string', examples: ['span'] },
-        status_code: { type: 'string', examples: ['OK', 'ERROR'] },
-        attributes: { type: 'object', examples: [] },
-        'attributes.user_id': { type: 'string', examples: [] },
-      },
-    } as any);
-    schemaManager.setDefaultSchema('spans');
-  });
-
-  test('typing a field name offers fields, not just table names', async () => {
-    const el = await mount();
-    try {
-      expect(await suggestFor(el, 'attribut')).toContain('attributes');
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('a position with nothing to offer clears the previous list', async () => {
-    const el = await mount();
-    try {
-      expect((await suggestFor(el, '')).length).toBeGreaterThan(0);
-      // No such field, so no values exist to suggest — the stale list must go.
-      expect(await suggestFor(el, 'nosuchfield == ')).toEqual([]);
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('the list follows the cursor through a query', async () => {
-    const el = await mount();
-    try {
-      expect(await suggestFor(el, 'status_code ')).toContain('==');
-      expect(await suggestFor(el, 'status_code == ')).toEqual(['OK', 'ERROR']);
-      expect(await suggestFor(el, 'attributes.')).toEqual(['user_id']);
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('a superseded keystroke cannot overwrite a newer list', async () => {
-    const el = await mount();
-    try {
-      const editor = (el as any).editor;
-      editor.getModel().setValue('status_code == ');
-      editor.setPosition({ lineNumber: 1, column: 16 });
-      const stale = (el as any).refreshSuggestions();
-
-      editor.getModel().setValue('kind ');
-      editor.setPosition({ lineNumber: 1, column: 6 });
-      const fresh = (el as any).refreshSuggestions();
-
-      await Promise.all([stale, fresh]);
-      expect((el as any).completionItems.map((i: any) => i.label)).toContain('==');
-    } finally {
-      el.remove();
-    }
-  });
-});
-
-// setSchemaData announces itself so a query typed before the (lazily fetched)
-// schema lands gets re-checked instead of staying unvalidated.
-describe('schema arrival', () => {
-  test('announces the table it loaded', () => {
-    const seen: string[] = [];
-    const on = (e: Event) => seen.push((e as CustomEvent).detail);
-    document.body.addEventListener('schema-loaded', on);
-    try {
-      schemaManager.setSchemaData('spans', { fields: { kind: { type: 'string', examples: [] } } } as any);
-      expect(seen).toEqual(['spans']);
-    } finally {
-      document.body.removeEventListener('schema-loaded', on);
-    }
-  });
-
-  test('does not cache a lookup made before the schema arrived', async () => {
-    schemaManager.setSchemaData('spans', { fields: {} } as any);
-    expect(await schemaManager.resolveNested('spans', '')).toEqual([]);
-    schemaManager.setSchemaData('spans', { fields: { kind: { type: 'string', examples: [] } } } as any);
-    expect((await schemaManager.resolveNested('spans', '')).map((f) => f.name)).toEqual(['kind']);
-  });
-});
-
-
-// Presentation state and screen-reader semantics: the page derives the error look
-// from one attribute, and the input announces itself as a combobox.
-describe('accessibility and state wiring', () => {
-  const mount = async () => {
-    const el = new QueryEditorComponent();
-    document.body.appendChild(el);
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
-    return el;
-  };
-
-  test('the input is a combobox pointing at the suggestion list', async () => {
-    const el = await mount();
-    try {
-      const input = (el as any).editor.getDomNode().querySelector('textarea');
-      expect(input.getAttribute('role')).toBe('combobox');
-      expect(input.getAttribute('aria-controls')).toBe('query-suggestions');
-      expect(input.getAttribute('aria-autocomplete')).toBe('list');
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('aria-expanded follows the dropdown, and the active option is announced', async () => {
-    const el = await mount();
-    try {
-      const input = () => (el as any).editor.getDomNode().querySelector('textarea');
-      expect(input().getAttribute('aria-expanded')).toBe('false');
-      expect(input().hasAttribute('aria-activedescendant')).toBe(false);
-
-      (el as any).showSuggestions = true;
-      (el as any).selectedIndex = 2;
-      await el.updateComplete;
-
-      expect(input().getAttribute('aria-expanded')).toBe('true');
-      expect(input().getAttribute('aria-activedescendant')).toBe('query-suggestion-2');
-
-      (el as any).showSuggestions = false;
-      await el.updateComplete;
-      expect(input().getAttribute('aria-expanded')).toBe('false');
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('the editor no longer paints its own error border — the page owns that state', async () => {
-    const el = await mount();
-    try {
-      const model = (el as any).editor.getModel();
-      (el as any).showError(model, { message: 'boom', startColumn: 1, endColumn: 2, line: 1 });
-      expect(el.querySelector('.\\!border-strokeError-strong')).toBeNull();
+      const overlay = el.querySelector('.cm-placeholder')!;
+      expect(overlay.closest('[contenteditable="true"]')).not.toBeNull();
     } finally {
       el.remove();
     }
@@ -404,52 +241,22 @@ describe('accessibility and state wiring', () => {
 });
 
 
-// Clicking the editor stopped working: the dropdown rendered `absolute` with no
-// offsets (there is no cursor to measure until focus lands), so it sat at its
-// static position — on top of the input row — and swallowed the click. Focus
-// never arrived, the blur handler closed it, focus handler reopened it: a
-// flicker, and nothing typed.
-describe('the dropdown cannot cover the input', () => {
-  const mount = async () => {
-    const el = new QueryEditorComponent();
-    document.body.appendChild(el);
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
-    return el;
-  };
 
-  test('is always positioned when shown, even with no cursor', async () => {
-    const el = await mount();
-    try {
-      // Monaco reports no position until focus has landed; stub that state,
-      // which is precisely when the click arrives.
-      (el as any).editor.getPosition = () => null;
-      (el as any).showSuggestions = true;
-      (el as any).completionItems = [{ kind: 'completion', label: 'kind', insertText: 'kind ', kindCategory: 'field', detail: '' }];
-      await el.updateComplete;
+test('a response arriving during the debounce window cannot mark newer text', async () => {
+  let release!: (response: unknown) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { release = resolve; })));
+  const el = new QueryEditorComponent(); el.setAttribute('project-id', 'test'); document.body.append(el); await el.updateComplete;
+  const messages: string[] = [];
+  const listener = (e: Event) => messages.push((e as CustomEvent).detail);
+  document.body.addEventListener('showParseError', listener);
+  try {
+    el.setValue('old'); const stale = (el as any).validateAndMark('old');
+    el.setValue('new');
+    release({ ok: true, json: async () => ({ valid: false, message: 'old error' }) });
+    await stale; expect(messages).toEqual([]);
+  } finally { el.remove(); document.body.removeEventListener('showParseError', listener); }
+});
 
-      const dropdown = el.querySelector('.suggestions-dropdown') as HTMLElement;
-      expect(dropdown).not.toBeNull();
-      // An empty style attribute is the failure: it means static positioning.
-      expect(dropdown.getAttribute('style') || '').toMatch(/top:\s*\d+px/);
-      expect(dropdown.getAttribute('style') || '').toMatch(/left:\s*10px/);
-    } finally {
-      el.remove();
-    }
-  });
-
-  test('renders nothing at all when there is nothing to suggest', async () => {
-    const el = await mount();
-    try {
-      (el as any).showSuggestions = true;
-      (el as any).completionItems = [];
-      (el as any).recentSearches = [];
-      (el as any).savedViews = [];
-      (el as any).popularSearches = [];
-      await el.updateComplete;
-      expect(el.querySelector('.suggestions-dropdown')).toBeNull();
-    } finally {
-      el.remove();
-    }
-  });
+test.each([['name == "ends in slash\\\\"', null], ['level == "ok"\nname == "oops', 2]])('quote escaping and line positions: %s', (text, expected) => {
+  expect(unclosedQuote(text)?.line ?? null).toBe(expected);
 });

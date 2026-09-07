@@ -1,0 +1,68 @@
+[
+  {
+    "shape": "flat",
+    "fields": 100000,
+    "slowdown": 4,
+    "firstCompletionMs": 190.79999995231628,
+    "domBefore": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "domAfter": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "editorInstances": 1,
+    "state": {
+      "clients": 1,
+      "subscriptions": 1,
+      "pendingRequests": 0
+    }
+  },
+  {
+    "shape": "nested",
+    "fields": 100000,
+    "slowdown": 4,
+    "firstCompletionMs": 259,
+    "domBefore": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "domAfter": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "editorInstances": 1,
+    "state": {
+      "clients": 1,
+      "subscriptions": 1,
+      "pendingRequests": 0
+    }
+  },
+  {
+    "shape": "deep",
+    "fields": 100000,
+    "slowdown": 4,
+    "firstCompletionMs": 245.30000007152557,
+    "domBefore": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "domAfter": {
+      "documents": 2,
+      "nodes": 49,
+      "jsEventListeners": 51
+    },
+    "editorInstances": 1,
+    "state": {
+      "clients": 1,
+      "subscriptions": 1,
+      "pendingRequests": 0
+    }
+  }
+]

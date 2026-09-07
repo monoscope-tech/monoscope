@@ -1,0 +1,165 @@
+{
+  "runtime": "v25.2.1",
+  "platform": "darwin/arm64",
+  "results": [
+    {
+      "shape": "flat",
+      "count": 100,
+      "buildMs": 0.14224999999999,
+      "lookupMs": 0.04137499999995953,
+      "found": 100,
+      "baseline": {
+        "ms": 0.5540000000000305,
+        "count": 100
+      }
+    },
+    {
+      "shape": "flat",
+      "count": 1000,
+      "buildMs": 0.5507089999999835,
+      "lookupMs": 0.05195800000001327,
+      "found": 1000,
+      "baseline": {
+        "ms": 12.970541999999966,
+        "count": 1000
+      }
+    },
+    {
+      "shape": "flat",
+      "count": 5000,
+      "buildMs": 2.7178749999999354,
+      "lookupMs": 0.13141700000005585,
+      "found": 5000,
+      "baseline": {
+        "ms": 2152.0213750000003,
+        "count": 5000
+      }
+    },
+    {
+      "shape": "flat",
+      "count": 10000,
+      "buildMs": 7.569667000000209,
+      "lookupMs": 0.25854100000015023,
+      "found": 10000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    },
+    {
+      "shape": "flat",
+      "count": 100000,
+      "buildMs": 117.27324999999973,
+      "lookupMs": 3.2107089999999516,
+      "found": 100000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    },
+    {
+      "shape": "nested",
+      "count": 100,
+      "buildMs": 0.10770800000000236,
+      "lookupMs": 0.009958000000096945,
+      "found": 100,
+      "baseline": {
+        "ms": 0.8658330000002934,
+        "count": 100
+      }
+    },
+    {
+      "shape": "nested",
+      "count": 1000,
+      "buildMs": 0.5918750000000728,
+      "lookupMs": 0.04362500000024738,
+      "found": 1000,
+      "baseline": {
+        "ms": 21.18883300000016,
+        "count": 1000
+      }
+    },
+    {
+      "shape": "nested",
+      "count": 5000,
+      "buildMs": 3.5335829999999078,
+      "lookupMs": 0.15850000000000364,
+      "found": 5000,
+      "baseline": {
+        "ms": 699.5415419999999,
+        "count": 5000
+      }
+    },
+    {
+      "shape": "nested",
+      "count": 10000,
+      "buildMs": 7.3998750000000655,
+      "lookupMs": 0.22158300000000963,
+      "found": 10000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    },
+    {
+      "shape": "nested",
+      "count": 100000,
+      "buildMs": 169.08458299999984,
+      "lookupMs": 2.846125000000029,
+      "found": 100000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    },
+    {
+      "shape": "deep",
+      "count": 100,
+      "buildMs": 0.11625000000003638,
+      "lookupMs": 0.009000000000014552,
+      "found": 100,
+      "baseline": {
+        "ms": 1.4401670000002014,
+        "count": 100
+      }
+    },
+    {
+      "shape": "deep",
+      "count": 1000,
+      "buildMs": 0.6866660000000593,
+      "lookupMs": 0.03537499999993088,
+      "found": 1000,
+      "baseline": {
+        "ms": 26.34041699999989,
+        "count": 1000
+      }
+    },
+    {
+      "shape": "deep",
+      "count": 5000,
+      "buildMs": 4.627500000000055,
+      "lookupMs": 0.11554200000000492,
+      "found": 5000,
+      "baseline": {
+        "ms": 1395.47075,
+        "count": 5000
+      }
+    },
+    {
+      "shape": "deep",
+      "count": 10000,
+      "buildMs": 21.96991700000035,
+      "lookupMs": 0.2469169999994847,
+      "found": 10000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    },
+    {
+      "shape": "deep",
+      "count": 100000,
+      "buildMs": 344.4547080000002,
+      "lookupMs": 2.678458000000319,
+      "found": 100000,
+      "baseline": {
+        "skipped": "Quadratic baseline capped at 5,000 fields"
+      }
+    }
+  ]
+}

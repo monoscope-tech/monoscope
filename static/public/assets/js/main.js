@@ -55,10 +55,10 @@ function getUTCOffset() {
 window.getUTCOffset = getUTCOffset
 
 // Query editor access function
-window.getQueryFromEditor = () =>
-  [document.activeElement?.closest('form')?.querySelector('query-editor'), document.getElementById('filterElement'), document.querySelector('query-editor')]
-    .find(el => el && el.editor)
-    ?.editor.getValue() || ''
+window.getQueryFromEditor = () => {
+  const el = [document.activeElement?.closest('form')?.querySelector('query-editor'), document.getElementById('filterElement'), document.querySelector('query-editor')].find(Boolean)
+  return el?.getValue?.() ?? el?.querySelector('textarea[data-query-input]')?.value ?? el?.getAttribute('default-value') ?? ''
+}
 
 // Visualization type getter - returns the current viz type from URL or selected tab
 window.getVizType = () => {
@@ -96,8 +96,8 @@ window.params = () => {
 
 window.updateGroupByButtonText = (_e, self) => {
   const el = self,
-    ed = document.querySelector('#filterElement')?.editor,
-    v = ed?.getValue().toLowerCase() || '',
+    ed = document.querySelector('#filterElement'),
+    v = ed?.getValue?.().toLowerCase() || '',
     field = el.dataset.field || el.closest('[data-field-path]')?.dataset.fieldPath,
     // Only the verb span — the field key (.ctx-key) is a sibling and must be preserved.
     span = el.querySelector('.gb-verb') || el.querySelector('span')

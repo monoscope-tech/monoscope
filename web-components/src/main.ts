@@ -631,10 +631,9 @@ function fragmentInQuery(query: string, fragment: string): boolean {
   return false;
 }
 function syncFacetCheckboxes(root: Document | Element = document) {
-  // Monaco loads lazily, so before the editor is upgraded fall back to the query the server
-  // rendered into the element — otherwise a reload with facet filters active shows them all off.
+  // Before upgrade, read the editable server input so early typing is reflected in facets.
   const el = document.getElementById('filterElement') as any;
-  const query = el?.editor?.getValue() ?? el?.getAttribute('default-value') ?? '';
+  const query = el?.getValue?.() ?? el?.querySelector('textarea[data-query-input]')?.value ?? el?.getAttribute('default-value') ?? '';
   root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-field][data-value]').forEach((cb) => {
     cb.checked = fragmentInQuery(query, `${cb.dataset.field} == "${cb.dataset.value}"`);
   });

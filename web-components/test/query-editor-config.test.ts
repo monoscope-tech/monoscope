@@ -4,9 +4,11 @@
 // and these two resolvers are what turn that back into something the editor can walk one
 // level at a time. They had no tests, which is how the suggestion suite came to assert
 // against a Monaco internal for months without anyone noticing it asserted nothing.
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { initializeDefaultSchema } from '../src/query-editor/query-editor-config';
-import { schemaManager } from '../src/query-editor/query-editor';
+import { schemaManager } from '../src/query-editor/schema-manager';
+
+vi.stubGlobal('Worker', undefined);
 
 const SPANS = {
   fields: {
@@ -114,4 +116,14 @@ describe('the defaults the editor starts from', () => {
     expect(schemaManager.getSchemas()).toEqual(['spans', 'metrics']);
     expect(schemaManager.getDefaultSchema()).toBe('spans');
   });
+});
+
+
+test('a replacement invalidates empty and populated indexes without crossing projects', async () => {
+  schemaManager.setSchemaData('spans', { fields: { old: { type: 'string' } } }, 'one');
+  schemaManager.setSchemaData('spans', { fields: { secret: { type: 'string' } } }, 'two');
+  expect(await schemaManager.resolveNested('spans', 'new', 'one')).toEqual([]);
+  schemaManager.setSchemaData('spans', { fields: { 'new.child': { type: 'string' } } }, 'one');
+  expect((await schemaManager.resolveNested('spans', 'new', 'one')).map(f => f.name)).toEqual(['child']);
+  expect((await schemaManager.resolveNested('spans', '', 'two')).map(f => f.name)).toEqual(['secret']);
 });

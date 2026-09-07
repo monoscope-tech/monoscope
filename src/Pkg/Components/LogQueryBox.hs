@@ -353,22 +353,18 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
         span_ $ toHtml v.label
 
 
--- | Static stand-in rendered as a child of @\<query-editor\>@. Monaco is loaded on idle
--- rather than during first paint (see @deferredComponents@ in web-components/src/index.ts),
--- and the element is empty until then — without this the search bar is a blank gap for the
--- first second of every page load. Mirrors the component's own render() shell so the upgrade
--- is not a visible jump; Lit clears these children on first render (the component renders
--- into its light DOM).
+-- | Editable stand-in while the query-editor chunk loads. The component adopts
+-- its text, selection and focus when it upgrades, so early keystrokes are retained.
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
-  div_ [class_ "relative overflow-x-hidden w-full flex-1"] do
-    -- Unpadded: #filterElement's items-center centres it, and padding would push
-    -- this past the 30 the bordered box has room for while Monaco is still loading.
-    div_ [class_ "w-full text-sm leading-5 truncate"]
-      $ case query of
-        Just q | not (T.null q) -> span_ [class_ "font-mono"] $ toHtml q
-        -- Match the upgraded editor's placeholder so loading does not look like a query.
-        _ -> span_ [class_ "text-textWeak opacity-60"] "level == \"ERROR\""
+  textarea_
+    [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none"
+    , term "data-query-input" ""
+    , Aria.label_ "Query"
+    , rows_ "1"
+    , placeholder_ "level == \"ERROR\""
+    ]
+    $ toHtml (fromMaybe "" query)
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
@@ -611,13 +607,8 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
 queryEditorInitializationCode :: Maybe Text -> Projects.ProjectId -> Html ()
-queryEditorInitializationCode vizTypeM pid = do
+queryEditorInitializationCode vizTypeM _pid = do
   let
-    -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
-    -- rather than inlined, so it's out of the page payload and re-encode path.
-    -- Cached in a window promise so it's fetched once per SPA session (reused
-    -- across HTMX morph swaps), not on every render.
-    schemaUrl = "/p/" <> pid.toText <> "/log_explorer/schema"
     popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
     vizType = fromMaybe "logs" vizTypeM
   script_
@@ -700,16 +691,6 @@ queryEditorInitializationCode vizTypeM pid = do
       const editor = document.getElementById('filterElement');
       if (!editor || !window.schemaManager?.setSchemaData) return;
       editor.setQueryLibrary?.(window.queryLibraryData || []);
-      const loadSchema = () => {
-        window.__spanSchemaPromise = window.__spanSchemaPromise || fetch("$schemaUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());
-        window.__spanSchemaPromise.then(s => {
-          window.schemaManager.setSchemaData('spans', s);
-          const qb = document.querySelector('query-builder');
-          if (qb?.refreshFieldSuggestions) qb.refreshFieldSuggestions();
-        }).catch(e => console.warn('[query-editor] schema fetch failed', e));
-      };
-      if (window.__spanSchemaPromise) loadSchema();
-      else editor.addEventListener('focusin', loadSchema, {once: true});
       if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
     });
 

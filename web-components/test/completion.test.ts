@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { computeSuggestions, filterSuggestions, wordAtCursor, type CompletionField, type SchemaAccess, type Suggestion } from '../src/query-editor/completion';
+import { computeSuggestions, filterSuggestions, wordAtCursor, type CompletionField, type SchemaAccess, type Suggestion, topSuggestions, scanContext } from '../src/query-editor/completion';
 
 // A schema shaped like the real /log_explorer/schema response: bare columns, the
 // SELECT aliases the parser accepts, and dotted attribute columns.
@@ -198,5 +198,22 @@ describe('wordAtCursor decides what a completion replaces', () => {
     ['kind == "GE', 'GE'],
   ])('%j → %j', (text, expected) => {
     expect(wordAtCursor(text)).toBe(expected);
+  });
+});
+
+
+describe('bounded completion on pathological input', () => {
+  test.each(['level == "a|b" and ', 'level == "a\\\"|b" and '])('quoted pipes keep their clause: %s', async text => {
+    expect(await labels(text)).toContain('kind');
+    expect(scanContext(text).hasPipe).toBe(false);
+  });
+  test('long words and dotted paths do not use a suffix-search regex', async () => {
+    expect(await labels('x'.repeat(100000))).toContain('kind');
+    expect(await labels('x.'.repeat(50000))).toEqual([]);
+  });
+  test('bounds results and ranks prefixes ahead of substrings', () => {
+    const items = Array.from({ length: 10000 }, (_, i) => ({ label: `field_${i}`, kind: 'field' as const, insertText: '', sortText: `1_field_${i}` }));
+    expect(topSuggestions(items, '')).toHaveLength(20);
+    expect(topSuggestions([{ label: 'xfield', kind: 'field', insertText: '', sortText: '0' }, ...items], 'field')[0].label).toBe('field_0');
   });
 });

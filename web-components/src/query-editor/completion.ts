@@ -17,6 +17,8 @@ export interface Suggestion {
   documentation?: string;
   /** Ordering hint; the caller sorts on it. */
   sortText?: string;
+  fullQuery?: string;
+  section?: string;
 }
 
 export interface CompletionField {
@@ -43,7 +45,28 @@ export const AGGREGATION_COMMANDS = ['summarize', 'timechart', 'stats', 'sort', 
 export const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
 
 // Offered left-to-right in this order; `==` first because it dominates real usage.
-export const SUGGESTION_OPERATORS = ['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches'];
+export const SUGGESTION_OPERATORS = [
+  '==',
+  '!=',
+  '>',
+  '<',
+  '>=',
+  '<=',
+  '=~',
+  'in',
+  '!in',
+  'has',
+  '!has',
+  'has_any',
+  'has_all',
+  'contains',
+  '!contains',
+  'startswith',
+  '!startswith',
+  'endswith',
+  '!endswith',
+  'matches',
+];
 
 export const OPERATOR_DETAILS: Record<string, string> = {
   '==': 'equals',
@@ -75,19 +98,7 @@ const PRIORITY_FIELDS = ['status_code', 'level', 'kind', 'name', 'duration', 'ti
 // after it starts a new field rather than waiting for an operator.
 const NON_FIELD_WORDS = new Set([...AGGREGATION_COMMANDS, ...LOGICAL_OPERATORS, 'by', 'asc', 'desc', 'limit']);
 
-const REGEX = {
-  dotMatchEnd: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.$/,
-  dotMatchPartial: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\.([a-zA-Z0-9_]*)$/,
-  operatorMatch: /([\w.]+)\s*(==|!=|>=|<=|>|<|=~|!in|in|has_any|has_all|!has|has|!contains|contains|!startswith|startswith|!endswith|endswith|matches)\s*$/,
-  afterQuotedValue: /".*"\s*$/,
-  afterNumericValue: /\d+\s*$/,
-  fieldSpace: /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+$/,
-  logicalOperator: /\b(and|or|not)\s+$/i,
-  aggregationSegment: /^(summarize|stats|timechart)\b/i,
-  byKeyword: /\bby\s*$/i,
-  timechartKeyword: /timechart/i,
-  digit: /\d/,
-};
+const REGEX = { aggregationSegment: /^(summarize|stats|timechart)\b/i, byKeyword: /\bby\s*$/i, timechartKeyword: /timechart/i };
 
 const fieldSortText = (name: string) => {
   const i = PRIORITY_FIELDS.indexOf(name);
@@ -100,7 +111,7 @@ const fieldSuggestion = (f: CompletionField): Suggestion => ({
   label: f.name,
   kind: 'field',
   detail: f.type,
-  documentation: f.examples?.join(', '),
+  // Examples are resolved only when completing a value, not for every field.
   // Object-ish fields complete to a trailing dot so the next keystroke opens their children.
   insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
   sortText: fieldSortText(f.name),
@@ -124,22 +135,22 @@ const operatorSuggestions = (): Suggestion[] =>
  * "nothing applies here" and the caller must clear whatever it was showing.
  */
 export async function computeSuggestions(text: string, schema: SchemaAccess): Promise<Suggestion[]> {
-  const segments = text.split(/\|/).map((s) => s.trim());
-  const last = segments[segments.length - 1];
+  const context = scanContext(text);
+  const { tokens, segment, firstToken, inQuote } = context;
+  const last = segment.trim();
+  const segments = context.hasPipe ? ['', last] : [last];
   const tables = schema.tables();
-  const firstToken = text.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-  const table = tables.includes(firstToken) ? firstToken : schema.defaultTable();
-  const lastChar = text.charAt(text.length - 1);
-
-  // `attributes.` / `attributes.htt` — children of the prefix.
-  const dotMatch = text.includes('.') ? text.match(REGEX.dotMatchEnd) || text.match(REGEX.dotMatchPartial) : null;
-  if (dotMatch) {
-    const nested = await schema.fields(table, dotMatch[1]);
-    return nested.map(fieldSuggestion);
+  const table = tables.includes(firstToken.toLowerCase()) ? firstToken.toLowerCase() : schema.defaultTable();
+  const lastChar = /\s/.test(text.at(-1) || '') ? ' ' : text.at(-1);
+  const tail = tokens.at(-1) || '';
+  if (inQuote) return [];
+  // Only examine the current token; never retry a suffix regex at every input offset.
+  const dot = lastChar !== ' ' ? tail.lastIndexOf('.') : -1;
+  if (dot > 0 && /^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(tail)) {
+    return (await schema.fields(table, tail.slice(0, dot))).map(fieldSuggestion);
   }
-
   // `status_code == ` — values for the field on the left.
-  const operatorMatch = lastChar === ' ' ? text.match(REGEX.operatorMatch) : null;
+  const operatorMatch = lastChar === ' ' && SUGGESTION_OPERATORS.includes(tail) && tokens.length > 1 ? ['', tokens.at(-2)!, tail] : null;
   if (operatorMatch) {
     const [, fieldName, operator] = operatorMatch;
     if (operator === 'in' || operator === '!in') {
@@ -164,19 +175,12 @@ export async function computeSuggestions(text: string, schema: SchemaAccess): Pr
     });
   }
 
-  // `level == "ERROR" ` — join this clause to the next one.
-  if (lastChar === ' ') {
-    const trimmed = text.trimEnd();
-    const lastCharTrimmed = trimmed.charAt(trimmed.length - 1);
-    if (lastCharTrimmed === '"' || REGEX.digit.test(lastCharTrimmed)) {
-      if (REGEX.afterQuotedValue.test(text) || REGEX.afterNumericValue.test(text)) {
-        return ['and', 'or', '|'].map((op) => ({ label: op, kind: 'operator' as const, insertText: `${op} ` }));
-      }
-    }
+  if (lastChar === ' ' && (/^["']/.test(tail) || /^\d/.test(tail))) {
+    return ['and', 'or', '|'].map((op) => ({ label: op, kind: 'operator' as const, insertText: `${op} ` }));
   }
 
   // `... and ` — a new field starts here.
-  const logicalOperatorMatch = lastChar === ' ' ? text.match(REGEX.logicalOperator) : null;
+  const logicalOperatorMatch = lastChar === ' ' ? /^(and|or|not)$/i.exec(tail) : null;
   if (logicalOperatorMatch) {
     return (await schema.fields(table, '')).map(fieldSuggestion);
   }
@@ -187,13 +191,17 @@ export async function computeSuggestions(text: string, schema: SchemaAccess): Pr
   // The empty-last-segment half matters after a pipe, where nothing has been named
   // yet and the fallback at the end would otherwise offer comparison operators.
   if ((segments.length === 1 && tables.includes(last.toLowerCase())) || (segments.length > 1 && last === '')) {
-    const commands: Suggestion[] = [...AGGREGATION_COMMANDS, 'limit'].map((k) => ({ label: k, kind: 'keyword' as const, insertText: `${k} ` }));
+    const commands: Suggestion[] = [...AGGREGATION_COMMANDS, 'limit'].map((k) => ({
+      label: k,
+      kind: 'keyword' as const,
+      insertText: `${k} `,
+    }));
     return [...commands, ...(await schema.fields(table, '')).map(fieldSuggestion)];
   }
 
   // `status_code ` — the field is named, an operator comes next. A command word
   // (`where `, `by `) is not a field, so it falls through to the field list.
-  const fieldSpaceMatch = lastChar === ' ' ? text.match(REGEX.fieldSpace) : null;
+  const fieldSpaceMatch = lastChar === ' ' ? /^([a-zA-Z_][a-zA-Z0-9_.]*)$/.exec(tail) : null;
   if (fieldSpaceMatch && !NON_FIELD_WORDS.has(fieldSpaceMatch[1].toLowerCase())) {
     return operatorSuggestions();
   }
@@ -248,10 +256,82 @@ export function filterSuggestions(suggestions: Suggestion[], word: string): Sugg
 
 /** The partial word left of the cursor that a completion replaces. */
 export function wordAtCursor(text: string): string {
-  const m = text.match(/[a-zA-Z_][a-zA-Z0-9_.]*$/);
-  if (!m) return '';
-  // After a dot only the segment being typed is replaced: `attributes.htt` -> `htt`.
-  const word = m[0];
-  const dot = word.lastIndexOf('.');
-  return dot >= 0 ? word.slice(dot + 1) : word;
+  let start = text.length;
+  while (start > 0 && /[a-zA-Z0-9_.]/.test(text[start - 1])) start--;
+  const word = text.slice(start);
+  if (!/^[a-zA-Z_]/.test(word)) return '';
+  return word.slice(word.lastIndexOf('.') + 1);
+}
+
+/** Linear scanner: quoted pipes are data, escaped quotes do not end a string. */
+export function scanContext(text: string) {
+  const tokens: string[] = [];
+  let firstToken = '',
+    segmentStart = 0,
+    start = -1,
+    quote = '',
+    escaped = false,
+    hasPipe = false;
+  const flush = (end: number) => {
+    if (start < 0) return;
+    const token = text.slice(start, end);
+    if (!firstToken) firstToken = token;
+    tokens.push(token);
+    start = -1;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === quote) quote = '';
+    } else if (c === '"' || c === "'") {
+      if (start < 0) start = i;
+      quote = c;
+    } else if (c === '|') {
+      flush(i);
+      tokens.length = 0;
+      segmentStart = i + 1;
+      hasPipe = true;
+    } else if (/\s/.test(c)) flush(i);
+    else if (start < 0) start = i;
+  }
+  flush(text.length);
+  return { tokens, firstToken, segment: text.slice(segmentStart), hasPipe, inQuote: !!quote };
+}
+
+export interface LibraryItem {
+  query: string;
+  label: string;
+  section: string;
+  search: string;
+}
+export function librarySuggestions(items: LibraryItem[], text: string): Suggestion[] {
+  const term = scanContext(text).segment.trim().toLowerCase();
+  const counts = new Map<string, number>();
+  const result: Suggestion[] = [];
+  for (const item of items) {
+    if ((counts.get(item.section) || 0) >= 5 || !item.search.includes(term)) continue;
+    counts.set(item.section, (counts.get(item.section) || 0) + 1);
+    result.push({ label: item.label, insertText: item.query, fullQuery: item.query, section: item.section, kind: 'snippet' });
+    if (result.length === 15) break;
+  }
+  return result;
+}
+
+/** Keep only the best candidates: bounded memory, without sorting a whole schema per key. */
+export function topSuggestions(suggestions: Suggestion[], word: string, limit = 20): Suggestion[] {
+  const top: { item: Suggestion; rank: string }[] = [];
+  const term = word.toLowerCase();
+  for (const item of suggestions) {
+    const label = item.label.toLowerCase();
+    if (term && !label.includes(term)) continue;
+    const rank = `${term && !label.startsWith(term) ? '1' : '0'}${item.sortText || '\uffff'}`;
+    if (top.length === limit && rank >= top[top.length - 1].rank) continue;
+    let i = top.length;
+    while (i > 0 && rank < top[i - 1].rank) i--;
+    top.splice(i, 0, { item, rank });
+    if (top.length > limit) top.pop();
+  }
+  return top.map((entry) => entry.item);
 }

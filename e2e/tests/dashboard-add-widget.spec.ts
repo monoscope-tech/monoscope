@@ -140,7 +140,7 @@ test.describe("adding widgets to a dashboard", () => {
     await page.locator("#ai-search-input").fill("level is error");
     await page.locator("#ai-search-input").press("Enter");
     await expect
-      .poll(() => page.locator("#filterElement").last().evaluate((el: any) => el.editor?.getValue()))
+      .poll(() => page.locator("#filterElement").last().evaluate((el: any) => el.getValue?.()))
       .toBe('level == "ERROR"');
 
     await expect(tabs.locator('input[value="logs"]')).toBeChecked();

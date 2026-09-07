@@ -1,7 +1,7 @@
 {
   "name": "monaco-aql-editor",
   "version": "1.0.0",
-  "description": "Monaco editor with Monoscope Query Language (MQL) support",
+  "description": "Monoscope web components and query editor",
   "scripts": {
     "dev": "vite",
     "watch": "vite build --watch --mode development",
@@ -10,13 +10,25 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bench:query:schema": "node bench/schema.mjs",
+    "bench:query:build": "vite build --config bench/vite.config.ts",
+    "bench:query:serve": "vite preview --config bench/vite.config.ts --port 3099",
+    "bench:query:browser": "node bench/browser.mjs",
+    "test:query:browser": "playwright test --config bench/playwright.config.ts"
   },
   "type": "module",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@lezer/highlight": "^1.2.3",
     "@lit-labs/virtualizer": "^2.1.1",
     "@napi-rs/canvas": "^1.0.0",
     "@rrweb/replay": "^2.0.0",

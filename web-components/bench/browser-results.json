@@ -1,0 +1,109 @@
+{
+  "runtime": "v25.2.1",
+  "results": [
+    {
+      "engine": "textarea",
+      "slowdown": 1,
+      "coldCompletionMs": 0.6999999284744263,
+      "warmBackendP95Ms": 0,
+      "startupMs": 0.40000009536743164,
+      "inputToTwoFramesP95Ms": 7.800000071525574,
+      "longestTaskMs": 0,
+      "layoutCount": 42,
+      "heapBytes": 1987708,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "textarea",
+      "slowdown": 4,
+      "coldCompletionMs": 1.9000000953674316,
+      "warmBackendP95Ms": 0,
+      "startupMs": 0.3999999761581421,
+      "inputToTwoFramesP95Ms": 9.100000023841858,
+      "longestTaskMs": 0,
+      "layoutCount": 42,
+      "heapBytes": 1987672,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "baseline",
+      "slowdown": 1,
+      "coldCompletionMs": 41.90000009536743,
+      "warmBackendP95Ms": 3,
+      "startupMs": 355.10000002384186,
+      "inputToTwoFramesP95Ms": 8.200000047683716,
+      "longestTaskMs": 0,
+      "layoutCount": 108,
+      "heapBytes": 19006664,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "baseline",
+      "slowdown": 4,
+      "coldCompletionMs": 166.69999992847443,
+      "warmBackendP95Ms": 12.300000071525574,
+      "startupMs": 877.1000000238419,
+      "inputToTwoFramesP95Ms": 27.200000047683716,
+      "longestTaskMs": 0,
+      "layoutCount": 108,
+      "heapBytes": 18208528,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "monaco",
+      "slowdown": 1,
+      "coldCompletionMs": 27.800000071525574,
+      "warmBackendP95Ms": 0.30000007152557373,
+      "startupMs": 301.7000000476837,
+      "inputToTwoFramesP95Ms": 10.600000023841858,
+      "longestTaskMs": 0,
+      "layoutCount": 109,
+      "heapBytes": 17669648,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "monaco",
+      "slowdown": 4,
+      "coldCompletionMs": 40.799999952316284,
+      "warmBackendP95Ms": 34.5,
+      "startupMs": 963.7000000476837,
+      "inputToTwoFramesP95Ms": 20.90000009536743,
+      "longestTaskMs": 67,
+      "layoutCount": 110,
+      "heapBytes": 17685140,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "codemirror",
+      "slowdown": 1,
+      "coldCompletionMs": 78.29999995231628,
+      "warmBackendP95Ms": 0.2999999523162842,
+      "startupMs": 43,
+      "inputToTwoFramesP95Ms": 10.799999952316284,
+      "longestTaskMs": 0,
+      "layoutCount": 82,
+      "heapBytes": 5563440,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    },
+    {
+      "engine": "codemirror",
+      "slowdown": 4,
+      "coldCompletionMs": 141.39999997615814,
+      "warmBackendP95Ms": 1,
+      "startupMs": 118.10000002384186,
+      "inputToTwoFramesP95Ms": 15,
+      "longestTaskMs": 0,
+      "layoutCount": 81,
+      "heapBytes": 5552004,
+      "errors": [],
+      "value": "status_code == \"ERROR\" and level == \"WARN\""
+    }
+  ]
+}

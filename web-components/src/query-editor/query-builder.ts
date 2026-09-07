@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { schemaManager } from './query-editor';
+import { schemaManager } from './schema-manager';
 import debounce from 'lodash/debounce';
 
 type FieldOption = { label: string; value: string; type: string };
@@ -62,9 +62,18 @@ export class QueryBuilderComponent extends LitElement {
   };
 
   // Connects to the query editor when first updated
+  private listeners = new AbortController();
+  private timers = new Set<ReturnType<typeof setTimeout>>();
+  private later(fn: () => void, delay = 0) {
+    const timer = setTimeout(() => { this.timers.delete(timer); if (this.isConnected) fn(); }, delay);
+    this.timers.add(timer);
+  }
+  private schemaUnsubscribe?: () => void;
+
   async firstUpdated(): Promise<void> {
     // Manual method binding is not needed with arrow functions in the template
     await this.initializeFields();
+    if (!this.isConnected) return;
     this.extractQueryParts();
 
     // Listen to changes in the query editor
@@ -72,44 +81,34 @@ export class QueryBuilderComponent extends LitElement {
     if (queryEditor) {
       queryEditor.addEventListener('update-query', () => {
         this.extractQueryParts();
-      });
+      }, { signal: this.listeners.signal });
 
-      // Set up a schema change observer
-      if ((window as any).schemaManager) {
-        const originalSetSchemaData = (window as any).schemaManager.setSchemaData;
-        (window as any).schemaManager.setSchemaData = (...args: any[]) => {
-          // Call the original method
-          const result = originalSetSchemaData.apply((window as any).schemaManager, args);
+      this.schemaUnsubscribe?.();
+      this.schemaUnsubscribe = schemaManager.subscribe(() => { void this.refreshFieldSuggestions(); });
 
-          // Then refresh our field suggestions
-          setTimeout(() => this.refreshFieldSuggestions(), 100);
-
-          return result;
-        };
-      }
     }
 
     // Add direct event handlers to add buttons after the component is rendered
-    setTimeout(() => {
+    this.later(() => {
       const addGroupByBtn = this.querySelector('#add-group-by-btn');
       if (addGroupByBtn) {
         addGroupByBtn.addEventListener('pointerdown', () => {
           this.addGroupByField();
-        });
+        }, { signal: this.listeners.signal });
       }
 
       const addAggBtn = this.querySelector('#add-agg-btn');
       if (addAggBtn) {
         addAggBtn.addEventListener('pointerdown', () => {
           this.addAggregation();
-        });
+        }, { signal: this.listeners.signal });
       }
 
       const addSortBtn = this.querySelector('#add-sort-btn');
       if (addSortBtn) {
         addSortBtn.addEventListener('pointerdown', () => {
           this.addSortField();
-        });
+        }, { signal: this.listeners.signal });
       }
     }, 500);
 
@@ -122,10 +121,10 @@ export class QueryBuilderComponent extends LitElement {
           (popover as HTMLElement).hidePopover?.();
         });
       }
-    });
+    }, { signal: this.listeners.signal });
 
     // Set up additional behavior for nested popovers
-    setTimeout(() => {
+    this.later(() => {
       const moreSettingsPopover = document.getElementById('more-settings-popover');
       const sortByButton = document.getElementById('sort-by-button');
       const sortByPopover = document.getElementById('sort-by-popover') as HTMLElement;
@@ -138,7 +137,7 @@ export class QueryBuilderComponent extends LitElement {
               (sortByPopover as any).hidePopover?.();
             }
           }
-        });
+        }, { signal: this.listeners.signal });
 
         // Cache button position to avoid repeated getBoundingClientRect calls
         let cachedButtonRect: DOMRect | null = null;
@@ -165,8 +164,9 @@ export class QueryBuilderComponent extends LitElement {
           cachedButtonRect = null;
         }, 100);
 
-        window.addEventListener('scroll', debouncedUpdate, true);
-        window.addEventListener('resize', debouncedUpdate);
+        this.listeners.signal.addEventListener('abort', () => debouncedUpdate.cancel(), { once: true });
+        window.addEventListener('scroll', debouncedUpdate, { capture: true, signal: this.listeners.signal });
+        window.addEventListener('resize', debouncedUpdate, { signal: this.listeners.signal });
 
         // Click event for the sort by button
         sortByButton.addEventListener('pointerdown', (e) => {
@@ -179,7 +179,7 @@ export class QueryBuilderComponent extends LitElement {
           } else {
             sortByPopover.showPopover?.();
           }
-        });
+        }, { signal: this.listeners.signal });
 
         // Event to make the subpopover keyboard-accessible
         sortByButton.addEventListener('keydown', (e) => {
@@ -188,14 +188,14 @@ export class QueryBuilderComponent extends LitElement {
             positionSortPopover();
             sortByPopover.showPopover?.();
           }
-        });
+        }, { signal: this.listeners.signal });
 
         // Stop propagation for clicks inside the sort popover without closing it
         sortByPopover.addEventListener('pointerdown', (e) => {
           // Don't close popovers when selecting options - we'll close them after selection is complete
           // The actual closing will happen in the @pointerdown handler for each field item
           e.stopPropagation();
-        });
+        }, { signal: this.listeners.signal });
 
         // Add event listener to close the sort popover only when clicking outside of sort-by-popover AND more-settings-popover
         document.addEventListener('pointerdown', (e) => {
@@ -206,7 +206,7 @@ export class QueryBuilderComponent extends LitElement {
               sortByPopover.hidePopover?.();
             }
           }
-        });
+        }, { signal: this.listeners.signal });
       }
     }, 500); // Delay to ensure elements are loaded
   }
@@ -215,22 +215,7 @@ export class QueryBuilderComponent extends LitElement {
    * Load available fields from the schema manager
    */
   private async initializeFields(): Promise<void> {
-    try {
-      // Get raw schema data to include nested fields
-      const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
-      const fields = this.extractAllFields(schemaData);
-
-      // Update fields options array
-      this.fieldsOptions = fields;
-
-      // Ensure UI updates with the new options
-      this.requestUpdate();
-
-      // Schedule another update after render is complete to ensure datalists exist
-      setTimeout(() => this.refreshFieldSuggestions(), 100);
-    } catch (error) {
-      console.error('Failed to load schema fields:', error);
-    }
+    await this.refreshFieldSuggestions();
   }
 
   /**
@@ -297,7 +282,7 @@ export class QueryBuilderComponent extends LitElement {
     try {
 
       // Get raw schema data
-      const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
+      const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema(), document.querySelector(this.queryEditorSelector)?.getAttribute('project-id') || '');
 
       // If we're refreshing root fields, update the fieldsOptions property
       if (!path) {
@@ -335,9 +320,9 @@ export class QueryBuilderComponent extends LitElement {
    */
   private extractQueryParts(): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
-    if (!queryEditor?.editor) return;
+    if (!queryEditor?.getValue) return;
 
-    const query = queryEditor.editor.getValue();
+    const query = queryEditor.getValue();
 
     // Extract GROUP BY fields from summarize statement
     // Look for both KQL style summarize and older group by format
@@ -478,12 +463,12 @@ export class QueryBuilderComponent extends LitElement {
    */
   private updateQuery(): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
-    if (!queryEditor?.editor) {
+    if (!queryEditor?.getValue) {
       console.error('Query editor not found or missing editor instance');
       return;
     }
 
-    let query = queryEditor.editor.getValue();
+    let query = queryEditor.getValue();
 
     // Make summarize clause with GROUP BY
     if (this.aggregations.length > 0) {
@@ -624,7 +609,7 @@ export class QueryBuilderComponent extends LitElement {
         this.enableBinning = false;
         this.enableAutoBin = false;
         // Make sure the radio button for "no bin" is selected after adding
-        setTimeout(() => {
+        this.later(() => {
           const noBinRadio = document.querySelector('input[name="bin-type"]:first-of-type') as HTMLInputElement;
           if (noBinRadio) {
             noBinRadio.checked = true;
@@ -663,9 +648,9 @@ export class QueryBuilderComponent extends LitElement {
    */
   public updateBinInQuery(fieldName: string, binValue: string): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
-    if (!queryEditor?.editor) return;
+    if (!queryEditor?.getValue) return;
 
-    let query = queryEditor.editor.getValue();
+    let query = queryEditor.getValue();
     const binPattern = new RegExp(`bin(_auto)?\\(\\s*${fieldName}\\s*(?:,\\s*[^)]+)?\\)`, 'gi');
 
     query = query.replace(binPattern, `bin(${fieldName}, ${binValue})`);
@@ -673,7 +658,7 @@ export class QueryBuilderComponent extends LitElement {
     queryEditor.dispatchEvent(new CustomEvent('update-query'));
 
     // Extract query parts to update UI
-    setTimeout(() => this.extractQueryParts(), 0);
+    this.later(() => this.extractQueryParts(), 0);
   }
 
   /**
@@ -683,7 +668,7 @@ export class QueryBuilderComponent extends LitElement {
    */
   public toggleGroupByField(field: string): void {
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
-    if (!queryEditor?.editor) return;
+    if (!queryEditor?.getValue) return;
 
     // First ensure we're using a timeseries visualization type
     const vizType = queryEditor.closest('form')?.querySelector('#visualizationTabs input:checked')?.value
@@ -706,11 +691,11 @@ export class QueryBuilderComponent extends LitElement {
 
       // Remove entire summarize if no fields and no aggregations left
       if (this.groupByFields.length === 0 && this.aggregations.length === 0) {
-        const query = queryEditor.editor.getValue().replace(this.QUERY_PATTERNS.summarizeClauseWithCapture, '');
+        const query = queryEditor.getValue().replace(this.QUERY_PATTERNS.summarizeClauseWithCapture, '');
         queryEditor.handleAddQuery(query, true);
 
         // Make sure to extract query parts after updating
-        setTimeout(() => this.extractQueryParts(), 0);
+        this.later(() => this.extractQueryParts(), 0);
         return;
       }
     } else {
@@ -735,7 +720,7 @@ export class QueryBuilderComponent extends LitElement {
     this.updateQuery();
 
     // Extract query parts after updating the query to refresh the UI state
-    setTimeout(() => this.extractQueryParts(), 0);
+    this.later(() => this.extractQueryParts(), 0);
   }
 
   /**
@@ -982,10 +967,15 @@ export class QueryBuilderComponent extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    if (this.listeners.signal.aborted) { this.listeners = new AbortController(); void this.updateComplete.then(() => this.firstUpdated()); }
     this.addEventListener('pointerdown', this.handleComponentClick);
   }
 
   disconnectedCallback(): void {
+    this.schemaUnsubscribe?.();
+    this.listeners.abort();
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
     this.removeEventListener('pointerdown', this.handleComponentClick);
     super.disconnectedCallback();
   }
@@ -1086,7 +1076,7 @@ export class QueryBuilderComponent extends LitElement {
                   <div class="max-h-60 overflow-y-auto">
                     ${
                       this.showFieldsColumn && this.fieldsOptions.length > 0
-                        ? (this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map(
+                        ? (this.aggSearchTerm ? this.filteredFields : this.fieldsOptions).slice(0, 100).map(
                             (field) => html`
                               <div
                                 class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newAggField === field.value
@@ -1224,22 +1214,22 @@ export class QueryBuilderComponent extends LitElement {
                         <input
                           type="text"
                           class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
-                          placeholder="Search fields..."
+                          placeholder="Search all fields (first 100 shown)…"
                           .value="${this.groupBySearchTerm}"
                           @input="${(e: Event) => this.filterGroupByOptions(e)}"
                           autofocus
                         />
                       </div>
 
-                      <!-- Fields List -->
+                      <!-- Fields List (bounded; search matches the full schema) -->
                       <div class="border rounded">
                         <div class="p-1 bg-fillWeaker font-medium border-b monospace">Fields</div>
                         <div class="max-h-60 overflow-y-auto">
                           ${this.fieldsOptions.length > 0
-                            ? (this.groupBySearchTerm && this.filteredGroupByFields.length > 0
+                            ? (this.groupBySearchTerm
                                 ? this.filteredGroupByFields
                                 : this.fieldsOptions
-                              ).map(
+                              ).slice(0, 100).map(
                                 (field) => html`
                                   <div
                                     class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newGroupByField === field.value
@@ -1428,20 +1418,20 @@ export class QueryBuilderComponent extends LitElement {
               <input
                 type="text"
                 class="input input-bordered input-md w-full px-3 py-2 focus:outline-none"
-                placeholder="Search fields..."
+                placeholder="Search all fields (first 100 shown)…"
                 .value="${this.aggSearchTerm}"
                 @input="${(e: Event) => this.filterAggregationOptions(e)}"
                 autofocus
               />
             </div>
 
-            <!-- Fields List -->
+            <!-- Fields List (bounded; search matches the full schema) -->
             <div class="border rounded">
               <div class="p-1 bg-fillWeaker font-medium border-b monospace">Fields</div>
               <div class="max-h-60 overflow-y-auto">
                 ${
                   this.fieldsOptions.length > 0
-                    ? (this.aggSearchTerm && this.filteredFields.length > 0 ? this.filteredFields : this.fieldsOptions).map(
+                    ? (this.aggSearchTerm ? this.filteredFields : this.fieldsOptions).slice(0, 100).map(
                         (field) => html`
                           <div
                             class="p-2 hover:bg-fillHover cursor-pointer monospace ${this.newSortField === field.value
@@ -1455,10 +1445,10 @@ export class QueryBuilderComponent extends LitElement {
                               this.newSortDirection = 'asc';
 
                               // Set field value first, then add sort field, and only close popovers after the operation is complete
-                              setTimeout(() => {
+                              this.later(() => {
                                 this.addSortField();
                                 // Only close popovers after the sort field has been added
-                                setTimeout(() => {
+                                this.later(() => {
                                   const popover = document.getElementById('sort-by-popover');
                                   if (popover) {
                                     (popover as any).hidePopover?.();
