@@ -1,6 +1,7 @@
 module Pkg.EmbeddingFairnessSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Exception (SomeAsyncException)
 import Data.Effectful.LLM qualified as LLM
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -12,7 +13,7 @@ import Pkg.TestUtils
 import Relude
 import System.Timeout (timeout)
 import Test.Hspec
-import UnliftIO.Async (withAsync)
+import UnliftIO.Async (cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
 
@@ -54,8 +55,12 @@ spec = aroundAll withTestResources do
               SELECT embedding IS NOT NULL FROM apis.log_patterns WHERE pattern_hash = 'embedding-stage-ready'|]
             pure ready
           waitSaved = saved >>= \ready -> unless ready (threadDelay 10000 >> waitSaved)
-      withAsync (runTestBg frozenTime tr $ provider $ BackgroundJobs.patternEmbeddingAndMerge testPid) \_ ->
+      withAsync (runTestBg frozenTime tr $ provider $ BackgroundJobs.patternEmbeddingAndMerge testPid) \worker -> do
         timeout 3000000 waitSaved `shouldReturn` Just ()
+        cancel worker
+        waitCatch worker >>= \case
+          Left err -> isJust (fromException err :: Maybe SomeAsyncException) `shouldBe` True
+          Right _ -> expectationFailure "A cancelled embedding job must not report success"
       saved `shouldReturn` True
       withResource tr.trPool \conn -> do
         [PG.Only untouched] <-
