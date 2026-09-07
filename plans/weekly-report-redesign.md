@@ -244,7 +244,8 @@ back to the platform.
 - Static ECharts rendering preserves pixel and percentage units: the previous
   renderer incorrectly converted the 36px legend reserve into 37% of the image.
   Dark rendering explicitly supplies background, axis, legend, and grid colors.
-- Keep digest sections at 4–5 entries, with a maximum of 10 per list.
+- New system digests show 4–5 detailed entries per section; every email list
+  has a maximum of 10.
   Close historical slow-query/workload gaps and add platform links to historical
   issues/endpoints/queries and patterns. Web reports retain full stored detail.
 - Regression coverage checks real ECharts plot geometry, both palettes, default
@@ -255,3 +256,7 @@ services, issues, and endpoints were tightened to five rather than weakening the
 80 KB limit. Vitest discovery now leaves `bench/**` to its dedicated Playwright
 runner; the full UI run previously reached all 914 passing tests but failed when
 it tried to import that separate browser test. Final checks and deployment pending.
+
+The report detail links and empty-history live action explicitly disable inherited
+hover preloading. Hover must not start live snapshot collection; the production
+browser check exercises hover before click.

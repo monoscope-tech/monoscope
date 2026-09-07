@@ -86,6 +86,8 @@ spec = around withTestResources do
           let pageHtml = toText $ renderText $ toHtml reportsPage
               latestUrl = "/p/" <> testPid.toText <> "/reports/" <> maybe "" ((.toText) . (.id)) (reports V.!? 0)
           pageHtml `shouldContainAll` ["Generate live report", "hx-get=\"" <> latestUrl <> "\""]
+          find (\tag -> T.isPrefixOf "a " tag && T.isInfixOf "/reports/live" tag) (T.splitOn "<" pageHtml)
+            `shouldSatisfy` maybe False (T.isInfixOf "hx-preload=\"false\"")
           snd (T.breakOn "id=\"detailSidebar\"" pageHtml) `shouldSatisfy` (not . T.isInfixOf "/reports/live")
           V.any ((== Projects.RTWeekly) . (.reportType)) reports `shouldBe` True
           maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== Projects.RTDaily) . (.reportType)) reports

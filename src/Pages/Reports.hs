@@ -504,7 +504,7 @@ singleReportPage (reportType, dateLabel, emailHtml) =
 
 -- | HTMX attrs loading @url@ into the report detail pane.
 detailPaneAttrs :: Text -> [Attribute]
-detailPaneAttrs url = [hxGet_ url, hxTarget_ "#detailSidebar", hxSwap_ "innerHTML"]
+detailPaneAttrs url = [hxGet_ url, hxTarget_ "#detailSidebar", hxSwap_ "innerHTML", term "hx-preload" "false"]
 
 
 -- | Clickable report card: @borderCls@ distinguishes the live entry from history.
@@ -537,7 +537,7 @@ reportsPage pid reports nextUrl =
       then div_ [class_ "flex h-full w-full justify-center items-center"]
         $ div_ [class_ "flex flex-col items-center gap-4"] do
           emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
-          a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary"] "Generate live report"
+          a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary", term "hx-preload" "false"] "Generate live report"
       else do
         div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
           $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
