@@ -227,3 +227,31 @@ CI `34104221806` passed application compilation, unused-code checking, HLint, an
 | Verify the requested final state | Public API and actual HTMX browser checks, populated charts, historical reports, scoped links, and desktop/mobile visual checks passed after the final deployment. |
 
 Validation does not claim exhaustive testing in every inbox client or actual customer email delivery. Essential email styles are inline, critical information remains text, and the stress email fixture stays below 80 KB; the larger full web report intentionally expands the stored evidence.
+
+### Follow-up: saved default, themed images, bounded email sections (2026-09-07)
+
+User feedback: Reports should open the latest saved report immediately, retain
+explicit live generation, use a light wordmark and matching charts in dark mode,
+remove the large gap beneath chart plots, and bound all email lists with links
+back to the platform.
+
+- Default detail request uses the first report from descending saved history.
+  Live generation remains an explicit action, including when history is empty.
+- Shared email wrappers switch transparent PNG wordmarks and chart images through
+  the existing dark-mode media query. Light images remain the inline fallback.
+  The PNG endpoint accepts a presentation-only `appearance` parameter, like its
+  existing width/height controls; widget data and queries remain HMAC-verified.
+- Static ECharts rendering preserves pixel and percentage units: the previous
+  renderer incorrectly converted the 36px legend reserve into 37% of the image.
+  Dark rendering explicitly supplies background, axis, legend, and grid colors.
+- Keep digest sections at 4–5 entries, with a maximum of 10 per list.
+  Close historical slow-query/workload gaps and add platform links to historical
+  issues/endpoints/queries and patterns. Web reports retain full stored detail.
+- Regression coverage checks real ECharts plot geometry, both palettes, default
+  saved-report selection, and historical email cap versus full web output.
+
+Validation: the original dark-image stress fixture reached 81,227 bytes, so
+services, issues, and endpoints were tightened to five rather than weakening the
+80 KB limit. Vitest discovery now leaves `bench/**` to its dedicated Playwright
+runner; the full UI run previously reached all 914 passing tests but failed when
+it tried to import that separate browser test. Final checks and deployment pending.

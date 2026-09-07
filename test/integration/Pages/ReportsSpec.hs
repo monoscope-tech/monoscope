@@ -83,6 +83,10 @@ spec = around withTestResources do
       reportId <- case reportsPage of
         Reports.ReportsGetMain (PageCtx _ (_, reports, _)) -> do
           V.length reports `shouldBe` 3
+          let pageHtml = toText $ renderText $ toHtml reportsPage
+              latestUrl = "/p/" <> testPid.toText <> "/reports/" <> maybe "" ((.toText) . (.id)) (reports V.!? 0)
+          pageHtml `shouldContainAll` ["Generate live report", "hx-get=\"" <> latestUrl <> "\""]
+          snd (T.breakOn "id=\"detailSidebar\"" pageHtml) `shouldSatisfy` (not . T.isInfixOf "/reports/live")
           V.any ((== Projects.RTWeekly) . (.reportType)) reports `shouldBe` True
           maybe (fail "the daily report was not listed") (pure . (.id)) $ V.find ((== Projects.RTDaily) . (.reportType)) reports
         _ -> fail "the reports page did not load after generation"
@@ -279,15 +283,15 @@ spec = around withTestResources do
       charts <- forM (drop 1 $ T.splitOn "widgetZ=" email) $ \suffix -> do
         compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
         either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
-      map (.query) charts `shouldBe` [Nothing, Nothing]
+      map (.query) charts `shouldBe` replicate 4 Nothing
       map (fmap (.source) . (.dataset)) charts
-        `shouldBe` [Just [aesonQQ|[["Time","Events"],[1735689600000,100]]|], Just [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]
-      email `shouldContainAll` ["View 22 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 24 more endpoints"]
+        `shouldBe` concatMap (replicate 2 . Just) [[aesonQQ|[["Time","Events"],[1735689600000,100]]|], [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]
+      email `shouldContainAll` ["appearance=light", "appearance=dark", "logo-white-ink.png", "email-image-dark", "View 25 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 25 more endpoints"]
       email `shouldSatisfy` (not . T.isInfixOf "<script>")
       BS.length (encodeUtf8 email) `shouldSatisfy` (< 80000)
-      full `shouldSatisfy` (not . T.isInfixOf "View 22 more service comparisons")
+      full `shouldSatisfy` (not . T.isInfixOf "View 25 more service comparisons")
       T.count "Avg request" full `shouldBe` 30
-      T.count "Avg request" email `shouldBe` 8
+      T.count "Avg request" email `shouldBe` 5
       (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable, Report.trends = Just Report.Unavailable}
       partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Activity trends unavailable", "Services"]
       let quiet =
@@ -303,6 +307,12 @@ spec = around withTestResources do
               , Report.ingestionCapped = Just False
               }
       (_, _, quietEmail) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False quiet
+      let historical = Email.HistoricalEvidence Email.HistoricalReportEvidence{totalEvents = 0, totalErrors = 0, anomalies = V.empty, performance = V.empty, slowQueries = V.replicate 15 ("SELECT historical_slow_query", 900000000, 10)}
+      (_, _, historicalEmail) <- runTestBg frozenTime tr $ Reports.renderWeeklyEmail Projects.RTWeekly "/reports/test" project "Ada" frozenTime frozenTime False historical
+      (_, _, historicalFull) <- runTestBg frozenTime tr $ Reports.renderWeeklyEmail Projects.RTWeekly "/reports/test" project "Ada" frozenTime frozenTime True historical
+      T.count "SELECT historical_slow_query" historicalEmail `shouldBe` 4
+      T.count "SELECT historical_slow_query" historicalFull `shouldBe` 15
+      historicalEmail `shouldContainAll` ["View all slow queries", "View all endpoints"]
       quietEmail `shouldContainAll` ["No telemetry events", "No HTTP server spans", "No infrastructure metrics observed", "No monitors configured"]
 
     it "counts issue lifecycle states before selecting the highest-priority evidence" \tr -> do

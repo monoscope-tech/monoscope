@@ -1224,6 +1224,8 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
             , "width" AE..= width
             , "height" AE..= height
             , "theme" AE..= fromMaybe "default" processedWidget.theme
+            , -- Presentation only, like width/height; the signed widget data is unchanged.
+              "darkMode" AE..= (case L.lookup "appearance" allParams of Just (Just "dark") -> True; Just (Just "light") -> False; _ -> processedWidget.theme == Just "dark")
             ]
 
   pngBytes <-
