@@ -825,6 +825,8 @@ buildSearchParams opts =
 -- True
 -- >>> withError "body has \"a|b\" | summarize count()" == parseQueryToAST "severity.severity_text==\"error\" | body has \"a|b\" | summarize count()"
 -- True
+-- >>> and [withError ("| " <> stage) == parseQueryToAST ("severity.severity_text==\"error\" | " <> stage) | stage <- ["take 10", "sort by timestamp"]]
+-- True
 foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Text
 foldFiltersIntoQuery query services mLevel
   | T.null prefix = rewritten
@@ -847,8 +849,8 @@ foldFiltersIntoQuery query services mLevel
 -- previous behaviour parsed the bareword as a column reference, producing a
 -- useless @column "X" does not exist@ error.
 --
--- A query containing any of @== != >= <= > < has and or " (@ is passed
--- through unchanged.
+-- A query starting with @|@ or containing any of @== != >= <= > < has and or " (@
+-- is passed through unchanged.
 --
 -- >>> rewriteBareQuery ""
 -- ""
@@ -879,7 +881,8 @@ rewriteBareQuery t
     -- Operators / grouping disable the rewrite; multi-word phrases ("foo
     -- bar") are still rewritten so a phrase search Just Works.
     hasOperator x =
-      any (`T.isInfixOf` x) ["==", "!=", ">=", "<=", " has ", " and ", " or "]
+      T.isPrefixOf "|" x
+        || any (`T.isInfixOf` x) ["==", "!=", ">=", "<=", " has ", " and ", " or "]
         || T.any (`elem` ("><\"(" :: [Char])) x
 
 
