@@ -1017,13 +1017,13 @@ rumEmptyState_ pid = div_ [class_ "mx-auto flex min-h-[60vh] max-w-2xl flex-col 
 
 
 overview_ :: RumData -> Html ()
-overview_ page = div_ [class_ "space-y-5 p-4 max-md:p-3"] do
+overview_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
   slot_ page PanelPulse pulseSkeleton_ $ pulseOrEmpty_ page
   div_ [class_ "grid grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)] gap-4 max-xl:grid-cols-1"] do
-    div_ [class_ "min-w-0 space-y-4"] do
+    div_ [class_ "min-w-0 space-y-2"] do
       slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
       slot_ page PanelAudience (panelSkeleton_ $ Components.tableSkeleton_ 3) $ audiencePanel_ page.breakdown
-    aside_ [class_ "min-w-0 space-y-4"] do
+    aside_ [class_ "min-w-0 space-y-2"] do
       slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 4) $ vitalsPanel_ page.vitals
       slot_ page PanelErrors (panelSkeleton_ $ Components.tableSkeleton_ 4) $ recentErrors_ page.links page.errors
   slot_ page PanelSessions (panelSkeleton_ $ Components.tableSkeleton_ 6) $ recentSessions_ page
@@ -1480,7 +1480,7 @@ replayPrompt_ title description action =
 
 
 performance_ :: RumData -> Html ()
-performance_ page = div_ [class_ "space-y-4 p-4 max-md:p-3"] do
+performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
   slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
     vitalTrendPanel_ page.vitalTrend
