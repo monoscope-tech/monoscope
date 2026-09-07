@@ -12,6 +12,8 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
 import Relude
+import System.Config qualified as Config
+import System.Timeout qualified as Timeout
 import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
@@ -59,3 +61,11 @@ spec = around withTestResources do
       queueAt tr "DailyJob" "9 hours"
       BackgroundJobs.ensureDailyJobScheduled tr.trATCtx
       countTag tr "DailyJob" >>= (`shouldBe` 1)
+
+  describe "disabled background worker" do
+    it "leaves queued jobs untouched and does not start a runner" \tr -> do
+      queueAt tr "DailyJob" "-1 hour"
+      let ctx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.enableBackgroundJobs = False, Config.enableDailyJobScheduling = False}}
+      result <- Timeout.timeout 1_000_000 $ BackgroundJobs.jobsWorkerInit tr.trLogger ctx tr.trTracerProvider
+      remaining <- countTag tr "DailyJob"
+      (result, remaining) `shouldBe` (Just (), 1)

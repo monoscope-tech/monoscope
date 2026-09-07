@@ -462,7 +462,7 @@ runServer appLogger env tp = do
           -- replicas dropped their listener every ~10-50min with nothing in the logs).
           guard (not consumerOnly) $> async ((runSettings warpSettings wrappedServer >> logExc "warp" "runSettings returned cleanly") `Safe.withException` \(e :: SomeException) -> logExc "warp" ("runSettings threw: " <> show e))
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
-        , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
+        , guard (not consumerOnly && env.config.enableBackgroundJobs) $> async (supervise logExc "background-jobs" bgJobWorker)
         , guard (not consumerOnly && env.config.enableOtlpGrpcService) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
         , -- TWO identical ingest consumers per node, on purpose (commit 4ee5350a, "Extra
           -- kafka processor fiber per node"): they join the same consumer group, so the
