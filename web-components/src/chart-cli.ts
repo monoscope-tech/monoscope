@@ -5,12 +5,14 @@
 
 import { createCanvas } from "@napi-rs/canvas";
 import * as echarts from "echarts";
+import { preparePngOptions } from "./chart-png-options";
 
 interface RenderInput {
   echarts: any;
   width?: number;
   height?: number;
   theme?: string;
+  darkMode?: boolean;
 }
 
 // Global formatters for ECharts callbacks (referenced in Haskell-generated formatter strings)
@@ -64,24 +66,16 @@ async function main() {
   const chunks: Buffer[] = [];
   for await (const chunk of Bun.stdin.stream()) chunks.push(Buffer.from(chunk));
   const input: RenderInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-  const { echarts: options, width = 900, height = 300, theme = "default" } = input;
+  const { echarts: options, width = 900, height = 300, theme = "default", darkMode = false } = input;
 
   if (process.env.DEBUG_CHART) console.error("INPUT:", JSON.stringify(input, null, 2));
 
   const canvas = createCanvas(Math.min(Math.max(width, 100), 2000), Math.min(Math.max(height, 100), 2000));
-  const chart = echarts.init(canvas as any, theme);
+  const chart = echarts.init(canvas as any, darkMode ? "dark" : theme);
 
   const finalOptions = convertFunctionStrings(options);
   finalOptions.animation = false;
-  finalOptions.backgroundColor = finalOptions.backgroundColor || "#ffffff";
-
-  // Add 1% padding for PNG rendering (doesn't affect dashboard widgets)
-  finalOptions.grid = finalOptions.grid || {};
-  delete finalOptions.grid.width; // Remove width so left/right padding works
-  finalOptions.grid.left = (parseFloat(finalOptions.grid.left) || 0) + 1 + "%";
-  finalOptions.grid.right = (parseFloat(finalOptions.grid.right) || 0) + 1 + "%";
-  finalOptions.grid.top = (parseFloat(finalOptions.grid.top) || 5) + 1 + "%";
-  finalOptions.grid.bottom = (parseFloat(finalOptions.grid.bottom) || 2) + 1 + "%";
+  preparePngOptions(finalOptions, canvas.width, canvas.height, darkMode);
 
   if (process.env.DEBUG_CHART) console.error("FINAL OPTIONS:", JSON.stringify(finalOptions, null, 2));
 

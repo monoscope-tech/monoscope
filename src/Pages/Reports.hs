@@ -511,7 +511,7 @@ detailPaneAttrs url = [hxGet_ url, hxTarget_ "#detailSidebar", hxSwap_ "innerHTM
 reportCard_ :: Text -> Text -> Html () -> Html ()
 reportCard_ borderCls url body =
   div_ [class_ $ "shrink-0 w-64 md:w-full flex flex-col border rounded-lg hover:bg-fillWeaker " <> borderCls]
-    $ a_ (class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer" : detailPaneAttrs url)
+    $ a_ (href_ url : class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer" : detailPaneAttrs url)
     $ div_ [class_ "flex flex-col grow gap-4"] body
 
 
@@ -534,20 +534,22 @@ reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Tex
 reportsPage pid reports nextUrl =
   div_ [class_ "flex flex-col md:flex-row h-full w-full border-t"] do
     if V.null reports
-      then
-        div_ [class_ "flex h-full w-full justify-center items-center"]
-          $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
+      then div_ [class_ "flex h-full w-full justify-center items-center"]
+        $ div_ [class_ "flex flex-col items-center gap-4"] do
+          emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
+          a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary"] "Generate live report"
       else do
         div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
           $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
             reportCard_ "border-strokeBrand-weak bg-fillBrand-weak/10" ("/p/" <> pid.toText <> "/reports/live") do
               reportCardHead_ "bg-fillBrand-weak" "Weekly report"
                 $ span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
-              reportCardTitle_ "Last 7 days"
+              reportCardTitle_ "Generate live report"
+              p_ [class_ "text-xs text-textWeak"] "Last 7 days · may take a few minutes"
             reportListItems pid reports nextUrl
         div_ [class_ "w-full md:w-2/3 overflow-y-auto"]
           $ div_ [class_ "flex h-full", id_ "detailSidebar"]
-          $ a_ (class_ "w-full text-center cursor-pointer" : hxTrigger_ "intersect once" : detailPaneAttrs ("/p/" <> pid.toText <> "/reports/live"))
+          $ a_ (class_ "w-full text-center cursor-pointer" : hxTrigger_ "intersect once" : detailPaneAttrs ("/p/" <> pid.toText <> "/reports/" <> maybe "live" ((.toText) . (.id)) (reports V.!? 0)))
           $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"]
           $ loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
