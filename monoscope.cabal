@@ -788,6 +788,7 @@ test-suite integration-tests
     , wai
     , wai-extra
     , wreq
+    , zlib
   default-language: GHC2024
 
 test-suite test-dev
