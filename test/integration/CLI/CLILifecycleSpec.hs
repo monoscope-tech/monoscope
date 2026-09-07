@@ -147,13 +147,29 @@ spec = around withTestResources do
       (ecG, getOut) <- runCLILifecycle tr ["--json", "events", "get", toString eid]
       ecG `shouldBe` ExitSuccess
       gv <- jsonOut getOut
-      ts <- case gv of
+      (ts, traceIDText) <- case gv of
         AE.Object o
           | Just (AE.Array evs) <- KM.lookup "events" o
           , Just (AE.Object e0) <- evs V.!? 0
-          , Just (AE.String t) <- KM.lookup "timestamp" e0 ->
-              pure t
+          , Just (AE.String t) <- KM.lookup "timestamp" e0
+          , Just (AE.String tid) <- KM.lookup "trace_id" e0 ->
+              pure (t, tid)
         _ -> expectationFailure ("no events[0].timestamp in events get output: " <> take 300 (toString getOut)) >> error "unreachable"
+
+      -- A trace ID is not an event UUID: --at must still find the same span.
+      forM_ [(ts, [Just (AE.String eid)]), (toText $ iso8601Show $ addUTCTime 3600 frozenTime, [])] \(lookupAt, expectedIds) -> do
+        (ecAt, atOut) <- runCLILifecycle tr ["--json", "traces", "get", toString traceIDText, "--at", toString lookupAt, "--since", "90d"]
+        ecAt `shouldBe` ExitSuccess
+        atValue <- jsonOut atOut
+        case atValue of
+          AE.Object o
+            | Just (AE.Array evs) <- KM.lookup "events" o ->
+                [KM.lookup "id" e | AE.Object e <- V.toList evs] `shouldBe` expectedIds
+          _ -> expectationFailure ("no events in timestamped trace lookup: " <> take 300 (toString atOut))
+
+      (ecUuid, uuidOut) <- runCLILifecycle tr ["--json", "events", "get", toString eid, "--at", toString ts, "--field", "id"]
+      ecUuid `shouldBe` ExitSuccess
+      jsonOut uuidOut `shouldReturn` AE.object ["id" AE..= eid]
 
       -- temporal context with per-trace summary (skill step 4)
       (ecCx, cxOut) <- runCLILifecycle tr ["--json", "events", "context", "--at", toString ts, "--window", "5m", "--summary"]
