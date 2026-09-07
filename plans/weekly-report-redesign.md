@@ -255,7 +255,7 @@ Validation: the original dark-image stress fixture reached 81,227 bytes, so
 services, issues, and endpoints were tightened to five rather than weakening the
 80 KB limit. Vitest discovery now leaves `bench/**` to its dedicated Playwright
 runner; the full UI run previously reached all 914 passing tests but failed when
-it tried to import that separate browser test. Final checks and deployment pending.
+it tried to import that separate browser test. Final checks and production deployment passed; evidence is recorded below.
 
 The report detail links and empty-history live action explicitly disable inherited
 hover preloading. Hover must not start live snapshot collection; the production
@@ -268,10 +268,35 @@ local `bun build --compile` renderer produced both PNG palettes successfully.
 The first production browser check opened saved report
 `447647ba-f56e-47dd-9de1-0773c908fe86` in 0.607 seconds, verified both logo themes,
 and confirmed the explicit live action displays its waiting state. Final PNG and
-hover verification follows the packaging/preload rollout.
+hover verification passed after the packaging/preload rollout.
 
 The CDN confirmed a HIT on old PNGs with a one-year immutable lifetime. Chart
 URLs now carry `render=2`. Publish this URL revision after every replica has the
 newly compiled renderer, so mixed-version rollout cannot cache an old image
 under the new URL. All seven report tests pass with this revision and the hover
 preloading regression.
+
+
+#### Follow-up completion
+
+- Main PR #530 and cache revision PR #533 are merged. Production deployment
+  34126733436 passed all combined-master checks. The packaging and hover fixes
+  shipped before the cache revision; all three replicas were then verified on
+  descendant `4b5e072a8`, which also includes unrelated investigation notes.
+- Final browser verification opened the latest saved report in **1.045 seconds**,
+  checked both logo/chart appearances and the `render=2` URLs, and confirmed
+  hovering over the live action starts no generation. Clicking it showed the
+  waiting state and completed a populated live report in **176.129 seconds**.
+- Four production snapshot PNG variants returned HTTP 200 at 900×300 with the
+  expected white or dark background. The four historical chart variants also
+  rendered successfully, each in under 0.8 seconds. Visual review confirmed the
+  plot now uses the available height and the legend no longer leaves the large
+  blank region shown in the original screenshot.
+- All seven report integration tests, all 914 UI tests, TypeScript checks,
+  formatting, HLint, and Haskell constraint review passed. Full CI runs
+  34118233198 and 34124475626 passed, followed by the combined-master deployment
+  checks. The email stress fixture remains below 80 KB.
+- Evidence: `/tmp/monoscope-report-research/presentation-verification.json`,
+  `presentation-chart-verification.json`, `historical-chart-verification.json`,
+  and `presentation-live-ready.png`. No customer emails were sent. Inbox-client
+  theme support still varies; the inline light image remains the fallback.
