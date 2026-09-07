@@ -278,9 +278,10 @@ bodyWrapper bcfg child = do
         , assetUrl "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"
         ]
 
-      -- defer: a third-party CDN script must never block HTML parsing — a slow unpkg
-      -- response would otherwise stall first paint for every visitor.
-      when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js", defer_ ""] ("" :: Text)
+      -- Vendored (not unpkg): a third-party CDN must never sit on our critical path — a
+      -- slow or unreachable CDN stalled first paint for every visitor. defer keeps even
+      -- the local copy off the parser.
+      when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
 
       -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is

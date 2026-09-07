@@ -183,7 +183,7 @@ data RumCacheKey = RumCacheKey
 -- scan once per TTL (the vitals-detail scan alone costs ~25s), and the first visitor
 -- after every expiry always ate one. Generic over the payload so the API catalog's host
 -- and endpoint stats share the table with the RUM panels.
-rumPanelCacheGet :: (AE.FromJSON a, DB es, Typeable a) => Text -> Eff es (Maybe a)
+rumPanelCacheGet :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe a)
 rumPanelCacheGet key =
   fmap (\(HI.OneColumn (AesonText value)) -> value)
     . listToMaybe
@@ -192,7 +192,7 @@ rumPanelCacheGet key =
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for
 -- the fleet. @rawKey@ is hashed, so callers pass a readable @show@n key.
-withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es, Typeable a) => Text -> Int64 -> Eff es a -> Eff es a
+withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff es a -> Eff es a
 withSharedCache rawKey ttl compute = do
   let key = toXXHash rawKey
   rumPanelCacheGet key >>= flip maybe pure do
