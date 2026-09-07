@@ -53,7 +53,7 @@ telemetrySchema =
           , ("kind", FieldInfo "string" "Type of telemetry data (logs, span, request)" (Just ["logs", "span", "request"]))
           , ("status_code", FieldInfo "string" "Status code of the span" (Just ["OK", "ERROR", "UNSET"]))
           , ("status_message", FieldInfo "string" "Status message" Nothing)
-          , ("level", FieldInfo "string" "Log level (same as severity text)" (Just ["trace", "debug", "info", "warn", "error", "fatal"]))
+          , ("level", FieldInfo "string" "Log level (uppercase)" (Just ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]))
           , ("body", FieldInfo "object" "Body content of the log/span" Nothing)
           , ("duration", FieldInfo "duration" "Duration of the span in nanoseconds" Nothing)
           , ("start_time", FieldInfo "string" "Start time of the span" Nothing)
@@ -297,7 +297,9 @@ popularOtelQueriesJson = AE.toJSON popularOtelQueries
 -- >>> map advertises ["summary", "errors", "message_size_bytes", "service", "span_name", "url_path"]
 -- [True,True,True,True,True,True]
 --
--- Severity metadata describes the actual storage fields and lowercase values:
+-- Severity metadata distinguishes the uppercase level from the lowercase enum:
+-- >>> Map.lookup "level" telemetrySchema.fields >>= (.examples)
+-- Just ["TRACE","DEBUG","INFO","WARN","ERROR","FATAL"]
 -- >>> Map.lookup "severity.severity_text" telemetrySchema.fields >>= (.examples)
 -- Just ["trace","debug","info","warn","error","fatal"]
 -- >>> (.fieldType) <$> Map.lookup "severity.severity_number" telemetrySchema.fields
