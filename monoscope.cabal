@@ -749,6 +749,7 @@ test-suite integration-tests
     , kafka-effectful
     , ki
     , ki-effectful
+    , langchain-hs
     , lens
     , lens-aeson
     , lucid
