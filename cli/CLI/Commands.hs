@@ -799,8 +799,8 @@ buildSearchParams opts =
 -- @body has "POISON_ROW_DROPPED" or summary has "POISON_ROW_DROPPED"@,
 -- matching what a developer naturally types.
 --
--- --level normalizes to upper-case (B2) so @--level error@ and @--level
--- ERROR@ both match the canonical OTel severity strings.
+-- --level uses the stored severity field and normalizes its enum value to
+-- lower-case, so @--level error@ and @--level ERROR@ select the same rows.
 --
 -- >>> foldFiltersIntoQuery "" [] Nothing
 -- ""
@@ -810,10 +810,10 @@ buildSearchParams opts =
 -- "resource.service.name==\"web\""
 -- >>> foldFiltersIntoQuery "" ["web", "worker"] Nothing
 -- "resource.service.name in (\"web\", \"worker\")"
--- >>> foldFiltersIntoQuery "" [] (Just "warn")
--- "severity.text==\"WARN\""
+-- >>> map (foldFiltersIntoQuery "" []) [Just "warn", Just "WARN"]
+-- ["severity.severity_text==\"warn\"","severity.severity_text==\"warn\""]
 -- >>> foldFiltersIntoQuery "errors > 0" ["web"] (Just "error")
--- "resource.service.name==\"web\" and severity.text==\"ERROR\" and (errors > 0)"
+-- "resource.service.name==\"web\" and severity.severity_text==\"error\" and (errors > 0)"
 -- >>> foldFiltersIntoQuery "POISON_ROW_DROPPED" [] Nothing
 -- "body has \"POISON_ROW_DROPPED\" or summary has \"POISON_ROW_DROPPED\""
 foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Text
@@ -828,7 +828,7 @@ foldFiltersIntoQuery query services mLevel
       [] -> Nothing
       [s] -> Just (eq "resource.service.name" s)
       ss -> Just ("resource.service.name in (" <> T.intercalate ", " (map q ss) <> ")")
-    filters = catMaybes [serviceFilter, eq "severity.text" . T.toUpper <$> mLevel]
+    filters = catMaybes [serviceFilter, eq "severity.severity_text" . T.toLower <$> mLevel]
     prefix = T.intercalate " and " filters
     rewritten = rewriteBareQuery (T.strip query)
 
