@@ -3112,7 +3112,7 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
-jobsWorkerInit logger appCtx tp = do
+jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
   when appCtx.config.enableDailyJobScheduling do
     ensureDailyJobScheduled appCtx
     void $ async $ forever do
