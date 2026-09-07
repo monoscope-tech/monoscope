@@ -318,16 +318,20 @@ chunksByBytes target size = go [] 0
       | otherwise = go (x : acc) (n + size x) xs
 
 
--- | Per-sub-chunk payload-byte target. One sub-chunk becomes one bulk INSERT /
--- Delta write; sizing by bytes (not record count) bounds write granularity and
--- keeps Delta file sizes off the small-files OOM path.
-kafkaChunkTargetBytes :: Int
-kafkaChunkTargetBytes = IngestBudget.ingestByteLimit
+-- | Divide the shared processing budget among the configured workers. Under
+-- backlog, full chunks can run concurrently without multiplying decoded input
+-- by the number of consumers. A larger indivisible record still runs alone.
+--
+-- >>> kafkaChunkTargetBytes 4
+-- 16777216
+-- >>> kafkaChunkTargetBytes 0
+-- 67108864
+kafkaChunkTargetBytes :: Int -> Int
+kafkaChunkTargetBytes concurrency = max 1 (IngestBudget.ingestByteLimit `div` max 1 concurrency)
 
 
--- | Bounded hand-off between poller and workers. At ~kafkaChunkTargetBytes per
--- item this caps in-flight work at ~4 GiB; the poller blocks on a full queue,
--- which (with the high-water pause) is the backpressure ceiling.
+-- | Secondary count bound for tiny per-partition chunks. Byte admission is
+-- controlled independently by the poller's high-water pause.
 workQueueBound :: Natural
 workQueueBound = 64
 
@@ -519,7 +523,7 @@ pollKafkaBatch :: Int -> ConsumerEff [Either K.KafkaError (K.ConsumerRecord (May
 pollKafkaBatch batchSize = go (max 1 batchSize) 0 [] (K.Timeout 100)
   where
     go !remaining !bytes acc pollTimeout
-      | remaining == 0 || bytes >= kafkaChunkTargetBytes = pure (reverse acc)
+      | remaining == 0 || bytes >= IngestBudget.ingestByteLimit = pure (reverse acc)
       | otherwise = do
           result <- tryError @K.KafkaError $ KE.pollMessage pollTimeout
           case result of
@@ -557,8 +561,8 @@ decoupledLoop
   -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg])))
   -> ConsumerEff ()
 decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
-  let highWaterBytes = 4 * kafkaChunkTargetBytes
-      lowWaterBytes = kafkaChunkTargetBytes
+  let highWaterBytes = 4 * IngestBudget.ingestByteLimit
+      lowWaterBytes = IngestBudget.ingestByteLimit
   workQ <- liftIO (newTBQueueIO workQueueBound :: IO (TBQueue WorkItem))
   trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
@@ -667,7 +671,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
             -- 'writeTargetFor' with the writer keeps the leg semantics in one
             -- place and batches both-failed/normal together (both → WriteBoth).
             dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
-            subChunks = subChunksFor role dlqGroupKey nowEpoch byTP
+            subChunks = subChunksFor (kafkaChunkTargetBytes appCtx.config.kafkaGroupConcurrency) role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do
             -- (const id) keeps the existing watermark if the partition is already
@@ -774,23 +778,24 @@ topicToCeType = \case
 --
 -- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show (due::Int)))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
--- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay (const "x") 10 m]
+-- >>> [w.offsets | w <- subChunksFor (kafkaChunkTargetBytes 4) KafkaDlqReplay (const "x") 10 m]
 -- [[0,1]]
 subChunksFor
   :: Ord k
-  => KafkaRole
+  => Int
+  -> KafkaRole
   -> (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> k)
   -> Int
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
   -> [WorkItem]
-subChunksFor role dlqGroupKey nowEpoch byTP =
+subChunksFor chunkTarget role dlqGroupKey nowEpoch byTP =
   [ WorkItem tpKey hdr (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (consumerRecordBytes <$> chunk))
   | (tpKey, recs) <- Map.toList byTP
   , let sorted = sortOn (.crOffset) (toList recs)
   , grp <- case role of
       KafkaPrimary -> [sorted]
       KafkaDlqReplay -> sortOn (.crOffset) <$> Map.elems (Map.fromListWith (<>) [(dlqGroupKey r, [r]) | r <- takeWhile (isDue nowEpoch) sorted])
-  , chunk <- chunksByBytes kafkaChunkTargetBytes consumerRecordBytes grp
+  , chunk <- chunksByBytes chunkTarget consumerRecordBytes grp
   , -- headers come from the partition head (primary: one topic) or the chunk head
   -- (DLQ: chunks are per-ce-type slices of interleaved source topics)
   let hdr = case chunk of

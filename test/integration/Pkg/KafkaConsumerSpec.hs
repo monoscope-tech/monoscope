@@ -15,6 +15,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Queue qualified as Queue
 import Pkg.TestUtils
 import Relude
+import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, runBackground)
 import Test.Hspec
@@ -169,6 +170,21 @@ spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broke
       fmap length batch `shouldBe` Right expected
       b <- readTVarIO bVar
       Map.lookup ("otlp_logs", 0) b.cursor `shouldBe` Just expected
+
+  it "keeps four normal chunks concurrent within the shared byte budget" \tr -> do
+    let raw = BS.replicate (8 * 1024 * 1024) 0
+        tr4 = tr{trATCtx = tr.trATCtx{Config.config = tr.trATCtx.config{Config.kafkaGroupConcurrency = 4}}}
+    bVar <- newTVarIO $ foldl' (\b _ -> appendRecord "otlp_logs" (Just raw) (K.headersFromList []) b) emptyBroker [1 .. 8 :: Int]
+    entered <- newTVarIO (0 :: Int)
+    let fn tuples _ = do
+          atomically $ modifyTVar' entered (+ 1)
+          atomically $ readTVar entered >>= check . (== 4)
+          pure (Right (map fst tuples, []))
+    b <- drive tr4 bVar ["otlp_logs"] Queue.KafkaPrimary fn $ do
+      brokerState <- readTVar bVar
+      check (Map.lookup ("otlp_logs", 0) brokerState.committed == Just 8)
+    readTVarIO entered `shouldReturn` 4
+    Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 8
 
   it "shares processing capacity across consumers and resumes both without losing offsets" \tr -> do
     large <- newTVarIO $ appendRecord "otlp_logs" (Just $ BS.replicate (64 * 1024 * 1024) 0) (K.headersFromList []) emptyBroker
