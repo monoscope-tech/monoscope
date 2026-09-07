@@ -671,7 +671,7 @@ deferredShell_ containerId url extra =
 -- Deliberately not an empty table — a zero state that turns into rows a second later reads
 -- as "nothing here" during the moment a user is deciding whether the page is broken.
 tableSkeleton_ :: Int -> Html ()
-tableSkeleton_ rows = div_ [class_ "flex w-full flex-col gap-3 px-4 pt-4", role_ "status", Aria.label_ "Loading"] do
+tableSkeleton_ rows = div_ [class_ "flex w-full flex-col gap-3 px-4 pt-2", role_ "status", Aria.label_ "Loading"] do
   div_ [class_ "flex items-center gap-3"] do
     div_ [class_ "h-8 w-64 rounded-lg skeleton-shimmer"] ""
     div_ [class_ "ml-auto h-8 w-28 rounded-lg skeleton-shimmer"] ""
