@@ -296,10 +296,20 @@ contentTokens :: Text -> S.Set Text
 contentTokens = S.fromList . filter (not . isPlaceholderToken) . words
 
 
--- | Jaccard similarity on pre-computed token sets.
+-- | Jaccard similarity on pre-computed token sets. Count common tokens without
+-- allocating an intersection tree for every candidate pair.
+--
+-- Exhaustive small-set comparison with the set-algebra definition:
+--
+-- >>> import Data.List (subsequences)
+-- >>> let sets = map S.fromList (subsequences (["a", "b", "c", "d"] :: [Text]))
+-- >>> let reference a b = if S.null (S.union a b) then 1 else fromIntegral (S.size (S.intersection a b)) / fromIntegral (S.size (S.union a b))
+-- >>> and [jaccardOnSets a b == reference a b | a <- sets, b <- sets]
+-- True
 jaccardOnSets :: S.Set Text -> S.Set Text -> Double
 jaccardOnSets tokA tokB =
-  let inter = S.size $ S.intersection tokA tokB
+  let (smaller, larger) = if S.size tokA <= S.size tokB then (tokA, tokB) else (tokB, tokA)
+      inter = S.foldl' (\count token -> if S.member token larger then count + 1 else count) 0 smaller
       -- Cardinality needs no union tree: |A union B| = |A| + |B| - |A intersect B|.
       union_ = S.size tokA + S.size tokB - inter
    in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
