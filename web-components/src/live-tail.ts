@@ -703,7 +703,7 @@ export class LiveTail extends LitElement {
               this.restart();
             }}
           >
-            <textarea data-query-input aria-label="Query" rows="1" class="w-full bg-transparent resize-none font-mono text-sm leading-5 py-1" .value=${this.query} placeholder="Filter the live stream with KQL"></textarea>
+            <textarea data-query-input aria-label="Query" rows="1" class="w-full bg-transparent resize-none font-mono text-sm leading-5 py-1 no-focus-ring placeholder:opacity-60" .value=${this.query} placeholder="Filter the live stream with KQL"></textarea>
           </query-editor>
           ${this.aiSearchOpen
             ? html`<div
