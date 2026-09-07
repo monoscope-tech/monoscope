@@ -3807,16 +3807,17 @@ data MergeConfig k a = MergeConfig
 
 embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> MergeConfig k a -> ATBackgroundCtx ()
 embedAndMerge pid ctx cfg = unless (null cfg.items) do
-  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ cfg.normalizeEmb $ cfg.itemText item) mempty) cfg.items
-  embedResult <- ELLM.embedDocuments (embeddingConfig ctx) docs
+  let docs = map (\item -> (cfg.toId item, Langchain.DocumentLoader.Core.Document (toLazy $ cfg.normalizeEmb $ cfg.itemText item) mempty)) cfg.items
+      save batch = do
+        count <- cfg.updateEmbs batch
+        Log.logInfo "Saved pattern embeddings" $ AE.object ["project_id" AE..= pid, "pattern_type" AE..= cfg.label, "saved" AE..= count]
+  embedResult <- ELLM.embedDocumentsWithProgress (ELLM.embedDocuments $ embeddingConfig ctx) save docs
   case embedResult of
     Left err -> Log.logAttention ("Failed to embed " <> cfg.label <> " patterns") (pid, err)
-    Right embeddingsList -> do
-      void $ cfg.updateEmbs $ zipWith (\item emb -> (cfg.toId item, emb)) cfg.items embeddingsList
+    Right newWithEmbs -> do
       allCentroids <- cfg.getCentroids
       let newIds = S.fromList $ map cfg.toId cfg.items
           centroids = filter (\(cid, _) -> not $ S.member cid newIds) allCentroids
-          newWithEmbs = zip (map cfg.toId cfg.items) embeddingsList
           !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
       let newTextMap = Map.fromList $ map (\item -> (cfg.toId item, cfg.itemText item)) cfg.items
           neededIds = ordNub $ map snd autoMerges <> map snd ambiguous
