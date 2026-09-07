@@ -244,10 +244,14 @@ back to the platform.
 - Static ECharts rendering preserves pixel and percentage units: the previous
   renderer incorrectly converted the 36px legend reserve into 37% of the image.
   Dark rendering explicitly supplies background, axis, legend, and grid colors.
-- Retain existing tighter digest limits (4–8), with a maximum of 10 per list.
+- Keep digest sections at 4–5 entries, with a maximum of 10 per list.
   Close historical slow-query/workload gaps and add platform links to historical
   issues/endpoints/queries and patterns. Web reports retain full stored detail.
 - Regression coverage checks real ECharts plot geometry, both palettes, default
   saved-report selection, and historical email cap versus full web output.
 
-Validation and production verification: pending this follow-up's checks.
+Validation: the original dark-image stress fixture reached 81,227 bytes, so
+services, issues, and endpoints were tightened to five rather than weakening the
+80 KB limit. Vitest discovery now leaves `bench/**` to its dedicated Playwright
+runner; the full UI run previously reached all 914 passing tests but failed when
+it tried to import that separate browser test. Final checks and deployment pending.

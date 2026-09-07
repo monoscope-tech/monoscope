@@ -753,7 +753,7 @@ weeklyReportEmail d =
           Just snapshot -> do
             reportSection "Services" "Ordered by error events, then activity. Compare with the preceding equal-length period." do
               when (null snapshot.services) $ reportNote "No services observed in either period."
-              forM_ (reportRows 8 snapshot.services) $ \s -> do
+              forM_ (reportRows 5 snapshot.services) $ \s -> do
                 let current = s.current
                     previous = s.previous
                     label = fromMaybe "Unnamed service" s.service
@@ -767,7 +767,7 @@ weeklyReportEmail d =
                   , ("Requests", maybe "0" (reportCount . (.serverRequests)) current, "Server spans")
                   , ("Avg request", maybe "Not measured" reportMs (current >>= (.serverLatencyMs)), reportChange (current >>= (.serverLatencyMs)) (previous >>= (.serverLatencyMs)))
                   ]
-              when (not d.fullReport && length snapshot.services > 8) $ reportMore d.reportUrl (length snapshot.services - 8) "service comparisons"
+              when (not d.fullReport && length snapshot.services > 5) $ reportMore d.reportUrl (length snapshot.services - 5) "service comparisons"
             reportSection "Infrastructure" "Latest resource usage and readiness at the period end." $ case snapshot.infrastructure of
               Report.Unavailable -> reportNote "Infrastructure metrics could not be loaded. Open infrastructure to check the latest observations."
               Report.Available infra -> do
@@ -787,13 +787,13 @@ weeklyReportEmail d =
               Report.Available issues -> do
                 reportMetrics [("New in period", reportCount issues.newIssues, "Issue groups"), ("Unacknowledged", reportCount issues.openIssues, reportCount issues.criticalOpen <> " critical"), ("Acknowledged", reportCount issues.acknowledged, "Not archived"), ("Archived", reportCount issues.archivedInPeriod, "During this period")]
                 when (null issues.priorities) $ reportNote "No unacknowledged issues at generation time."
-                forM_ (reportRows 6 issues.priorities) $ \i ->
+                forM_ (reportRows 5 issues.priorities) $ \i ->
                   reportItem
                     (d.projectUrl <> "/issues/" <> i.id)
                     (reportClip 180 $ stripSummaryBadges i.title)
                     (T.intercalate " · " $ i.severity : maybeToList i.service)
                     [("Category", T.replace "_" " " i.issueType, ""), ("Affected requests", reportCount i.affectedRequests, "Recorded issue total")]
-                when (issues.openIssues > fromIntegral (length $ reportRows 6 issues.priorities)) $ reportMore (d.projectUrl <> "/issues") (fromIntegral issues.openIssues - length (reportRows 6 issues.priorities)) "unacknowledged issues"
+                when (issues.openIssues > fromIntegral (length $ reportRows 5 issues.priorities)) $ reportMore (d.projectUrl <> "/issues") (fromIntegral issues.openIssues - length (reportRows 5 issues.priorities)) "unacknowledged issues"
             reportSection "Monitors" ("Status at " <> reportTime snapshot.generatedAt <> " UTC.") $ case snapshot.monitors of
               Report.Unavailable -> reportNote "Monitor status could not be loaded."
               Report.Available monitors -> do
@@ -818,14 +818,14 @@ weeklyReportEmail d =
               $ reportObserved snapshot.performance
               $ \rows -> do
                 when (null rows) $ reportNote "No HTTP server spans recorded in this period."
-                forM_ (reportRows 6 rows) $ \comparison -> do
+                forM_ (reportRows 5 rows) $ \comparison -> do
                   let e = comparison.current
                   reportItem
                     (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> kqlQuoted e.method <> " and attributes.url.path == " <> kqlQuoted e.path)
                     (e.method <> " " <> reportClip 140 e.path)
                     (T.intercalate " · " $ catMaybes [e.service, e.environment, Just e.host])
                     [("Requests", reportCount e.requests, "Server spans"), ("Avg duration", maybe "Not measured" reportMs e.averageMs, reportChange e.averageMs (comparison.previous >>= (.averageMs)))]
-                when (not d.fullReport && length rows > 6) $ reportMore d.reportUrl (length rows - 6) "endpoints"
+                when (not d.fullReport && length rows > 5) $ reportMore d.reportUrl (length rows - 5) "endpoints"
             reportSection "Slow database operations" "Queries averaging more than 500 ms, ordered by average duration."
               $ reportObserved snapshot.databases
               $ \rows -> do

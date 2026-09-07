@@ -286,12 +286,12 @@ spec = around withTestResources do
       map (.query) charts `shouldBe` replicate 4 Nothing
       map (fmap (.source) . (.dataset)) charts
         `shouldBe` concatMap (replicate 2 . Just) [[aesonQQ|[["Time","Events"],[1735689600000,100]]|], [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]
-      email `shouldContainAll` ["appearance=light", "appearance=dark", "logo-white-ink.png", "email-image-dark", "View 22 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 24 more endpoints"]
+      email `shouldContainAll` ["appearance=light", "appearance=dark", "logo-white-ink.png", "email-image-dark", "View 25 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 25 more endpoints"]
       email `shouldSatisfy` (not . T.isInfixOf "<script>")
       BS.length (encodeUtf8 email) `shouldSatisfy` (< 80000)
-      full `shouldSatisfy` (not . T.isInfixOf "View 22 more service comparisons")
+      full `shouldSatisfy` (not . T.isInfixOf "View 25 more service comparisons")
       T.count "Avg request" full `shouldBe` 30
-      T.count "Avg request" email `shouldBe` 8
+      T.count "Avg request" email `shouldBe` 5
       (_, _, partial) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" False snapshot{Report.infrastructure = Report.Unavailable, Report.trends = Just Report.Unavailable}
       partial `shouldContainAll` ["Infrastructure metrics could not be loaded", "Activity trends unavailable", "Services"]
       let quiet =
