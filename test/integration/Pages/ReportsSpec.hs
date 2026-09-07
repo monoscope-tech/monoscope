@@ -288,7 +288,7 @@ spec = around withTestResources do
       map (.query) charts `shouldBe` replicate 4 Nothing
       map (fmap (.source) . (.dataset)) charts
         `shouldBe` concatMap (replicate 2 . Just) [[aesonQQ|[["Time","Events"],[1735689600000,100]]|], [aesonQQ|[["Time","Errors"],[1735689600000,7]]|]]
-      email `shouldContainAll` ["appearance=light", "appearance=dark", "logo-white-ink.png", "email-image-dark", "View 25 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 25 more endpoints"]
+      email `shouldContainAll` ["appearance=light", "appearance=dark", "render=2", "logo-white-ink.png", "email-image-dark", "View 25 more service comparisons", "&lt;script&gt;", "View 8 more monitors", "View 25 more endpoints"]
       email `shouldSatisfy` (not . T.isInfixOf "<script>")
       BS.length (encodeUtf8 email) `shouldSatisfy` (< 80000)
       full `shouldSatisfy` (not . T.isInfixOf "View 25 more service comparisons")
