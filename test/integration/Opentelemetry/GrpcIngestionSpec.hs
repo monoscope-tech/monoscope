@@ -106,6 +106,8 @@ spec = sequential $ aroundAll withTestResources do
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 3)
+      statuses :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND kind = 'log' AND level IS NOT NULL AND status_code IS DISTINCT FROM level |] (Only $ unUUIDId pid)
+      statuses `shouldBe` V.singleton (Only 0)
 
     it "Test 2.1b: surfaces backend query failures as LogResult.error, not a silent empty list" $ \tr -> do
       -- Regression: the log-explorer data endpoint used to swallow every query

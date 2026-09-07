@@ -369,6 +369,13 @@ spec = sequential $ aroundAll withTestResources do
       T.toUpper sql `shouldSatisfy` T.isInfixOf "SELECT"
       sql `shouldNotBe` "status_code == \"ERROR\""
 
+    it "copies the chart query with its category grouping" \tr -> do
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing
+      sql `shouldNotSatisfy` T.isInfixOf "jsonb_build_array"
+      let groupBy = snd $ T.breakOn "GROUP BY" sql
+      groupBy `shouldSatisfy` T.isInfixOf "status_code"
+      groupBy `shouldSatisfy` T.isInfixOf "level"
+
     it "reports a clear message instead of blank/failing when no query is given" \tr -> do
       (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing
       sql `shouldBe` "No query provided"

@@ -1063,7 +1063,7 @@ logChartWidget pid =
   (def :: Widget.Widget)
     { Widget.id = Just "log-explorer-all-traces"
     , Widget.wType = WTTimeseries
-    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"
+    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
     , Widget.legendPosition = Just "top-right"

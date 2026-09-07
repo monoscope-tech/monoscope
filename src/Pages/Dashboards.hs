@@ -2203,7 +2203,7 @@ widgetSqlTextGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Tex
 widgetSqlTextGetH pid queryM sinceStr fromDStr toDStr = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let generatedSql query = (.finalSqlQuery) . snd <$> parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query
+  let generatedSql query = (\(_, qc) -> fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery) <$> parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query
   addRespHeaders $ either id id $ generatedSql =<< maybeToRight "No query provided" queryM
 
 
@@ -2219,8 +2219,8 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err
       Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg text-xs sql-preview-container"] do
-        sqlBlock_ "Main Query" qc.finalSqlQuery
-        whenJust qc.finalSummarizeQuery $ sqlBlock_ "Summarize Query"
+        sqlBlock_ "Widget Query" $ fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery
+        sqlBlock_ "Table Query" qc.finalSqlQuery
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
         let cssUrl = assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css" :: Text
             hljsUrl = assetUrl "/public/assets/deps/highlightjs/highlight.min.js" :: Text

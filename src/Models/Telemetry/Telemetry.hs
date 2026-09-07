@@ -1911,7 +1911,7 @@ otelColumns =
       , splitColumn "hashes" (\r -> fromMaybe V.empty r.row.hashes)
       , textField "name" (fmap (T.take 500) . (.name))
       , textField "kind" (.kind)
-      , textField "status_code" (.status_code)
+      , textField "status_code" (\r -> r.status_code <|> r.level)
       , textField "status_message" (.status_message)
       , textField "level" (.level)
       , jsonField "severity" (fmap AE.toJSON . (.severity))
