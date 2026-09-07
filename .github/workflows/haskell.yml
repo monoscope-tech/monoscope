@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
+    # Investigation notes do not change the application; avoid restarting
+    # consumers just to publish a checkpoint. Mixed code/plan pushes still run.
+    paths-ignore:
+      - 'plans/**'
 
 env:
   LANG: C.UTF-8
