@@ -1166,9 +1166,9 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- as @Text@. Lives here rather than in "Pkg.Parser" so the CLI can validate
 -- queries client-side without pulling in the DB-bound half of the parser.
 --
--- >>> isRight (parseQueryToAST "severity.text==\"ERROR\"")
+-- >>> isRight (parseQueryToAST "severity.severity_text==\"error\"")
 -- True
--- >>> isLeft (parseQueryToAST "severity.text ==")
+-- >>> isLeft (parseQueryToAST "severity.severity_text ==")
 -- True
 -- >>> parseQueryToAST "attribute contains \"x\""
 -- Left "Unknown field \"attribute\". Did you mean \"attributes\"?"

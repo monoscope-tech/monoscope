@@ -108,7 +108,7 @@ SVC=$(monoscope facets resource.service.name --top 1 \
         | jq -r '.["resource.service.name"][0].value')
 
 # 2. Grab one error event from that service — id only, ready to chain.
-ID=$(monoscope logs search 'severity.text=="error"' \
+ID=$(monoscope logs search 'severity.severity_text=="error"' \
         --service "$SVC" --first --id-only)
 
 # 3. Pull the surrounding 5 minutes of traffic, with a per-trace summary
