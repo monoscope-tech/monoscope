@@ -39,7 +39,6 @@ import Effectful.Concurrent.Async (Concurrent, concurrently)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
-import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Issues qualified as Issues
