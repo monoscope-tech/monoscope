@@ -1,6 +1,6 @@
 # Weekly system report: research, design, and delivery
 
-Status: implementation and PR validation complete; merged into production master. Deployment succeeded; live verification found a telemetry backend failure that remains unresolved. Earlier entries below are a chronological iteration record.
+Status: implementation and PR validation complete; merged into production master. Deployment succeeded. Storage metadata has recovered, but the public live-report route still exceeds the gateway timeout; production iteration continues. Earlier entries below are a chronological iteration record.
 
 ## Objective and audience
 
@@ -167,3 +167,29 @@ The first full CI run passed build, doctests, unit tests, CLI tests, formatting,
 - Production event `9c90df9a-1589-5cc2-894e-217da1994815` at `2026-09-06T23:39:57.343198Z` records database-performance collection failing because a referenced Parquet object in the demo project’s 2026-09-06 partition returns S3 `NoSuchKey` / HTTP 404. Event `64cdae94-dc7e-51ea-be64-b35464d15f85` confirms the same missing object on the previous request. Workload cancellation cleanup also reports the pre-existing pgwire `Prepared statement all does not exist` error. Backend recovery and live latency verification remain required.
 
 Read-only storage verification confirms this is current metadata damage: Delta version `528425` still includes the missing path among 24 active demo-project files for 2026-09-06, and a direct S3 HEAD returns 404. Bucket versioning is not enabled and listing versions for the exact key finds no recoverable version. Evidence: `/tmp/weekly-report-storage-check.json`. No metadata or telemetry objects were changed.
+
+### Resumed production review (7 September morning)
+
+- Latest Delta snapshot `534284` no longer references the previously missing object; the earlier recovery blocker has changed. No storage mutation was performed in this task.
+- A direct production-origin request returned HTTP 200 in **43.982 seconds**, with 547,174 bytes of outer HTML, the new system report, and no unavailable section text. Artifact: `/tmp/weekly-report-direct-origin.html`.
+- Public Playwright requests still returned 504. A separate public curl request confirmed HTTP 504 after **60.261 seconds**. The app gateway config has no report-specific timeout override. The current report service queries scan substantial weekly data (observed 6,720 MB and 4,274 MB file selections); this is a fresh-generation latency issue requiring further work, not a reason to restore the old narrow report.
+- Origin visual/chart verification is running separately from the public-route check. Do not use origin success as proof that the normal user-facing route is reliable.
+
+### Live-preview timeout correction
+
+The synchronous live endpoint exceeded the public gateway’s 60-second timeout after storage recovered. The follow-up uses an app-lifetime background task and a shared PostgreSQL preview record keyed by project. Requests authorize as before, atomically claim an expired lease, and immediately return a loading view. HTMX polls only the preview section. Generation retains the complete seven-day snapshot and all full-report sections; successful results are reused for five minutes across replicas. Failures display an explicit retry state, and a six-minute lease permits recovery after worker restart. A generation timestamp prevents an older worker from replacing a newer result. No notifications or saved report history are created by preview generation.
+
+Added regression coverage for simultaneous claim deduplication, immediate polling responses, cached full rendering, project isolation, expired leases, stale-worker completion, and failure state. Compile/test/CI and post-deploy public-route verification remain pending for this follow-up.
+
+### Persisted activity charts
+
+- Preview-only CI run `34101390876` passed the complete build and test workflow at `cbcf0d3e9`.
+- Rechecked production chart URLs: telemetry returned a populated PNG in 0.66 seconds, but the error chart returned nginx 504 at 60 seconds through both public and direct-origin paths.
+- TimeFusion logs show the error KQL expands embedded span exceptions through JSONPath and selects about 6.7 GB of raw telemetry. A scalar-only SQL variant rendered in 8.16 seconds, but omits embedded exceptions; it was not adopted. A JSONB-cast experiment returned an empty PNG due to an unsupported backend type; it was also rejected.
+- The complete exception-aware aggregate succeeds for a one-day production slice in 21.27 seconds (5,564,457 events, 6,649 errors). New snapshots now collect hourly trends in disjoint day slices and combine shared boundary buckets. The entire requested period and embedded exception coverage are retained.
+- New chart URLs carry signed, compressed snapshot data. The PNG handler verifies the existing signature, then renders the supplied dataset without a telemetry query. Old snapshots without trends retain their existing chart path; failed trend collection is explicitly labeled unavailable.
+- Added regressions for embedded exceptions, slice boundaries, old snapshots without trends, saved chart payloads, and unavailable trends. The application compiles locally; refreshed integration tests, full CI, deployment, and production verification remain required.
+
+Follow-up validation: all seven report integration examples passed from the freshly linked development test executable (481.17 seconds on the shared development machine). A production probe of the complete seven-day trend period finished in 89.89 seconds using sequential day slices: 32,878,748 events and 51,756 error/exception events. This validates retaining sequential slices to limit query load within the five-minute preview budget.
+
+CI `34104221806` passed application compilation, unused-code checking, HLint, and frontend checks. Its doctest step also builds the standard integration-test target and found that the new chart-payload regression needed an explicit `zlib` test dependency. The development test target already inherited that dependency from the library. Added it to `package.yaml` and regenerated `monoscope.cabal`; full CI must pass before deployment.

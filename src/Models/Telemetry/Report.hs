@@ -2,6 +2,12 @@
 -- presentation limits; optional sources retain failure separately from an empty result.
 module Models.Telemetry.Report (
   ReportSnapshot (..),
+  PreviewStatus (..),
+  claimPreview,
+  getPreview,
+  finishPreview,
+  TrendPoint (..),
+  trendStats,
   EndpointStats (..),
   EndpointComparison (..),
   DatabaseStats (..),
@@ -38,7 +44,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
-import Pkg.DeriveUtils (DB)
+import Pkg.DeriveUtils (AesonText (..), DB)
 import Relude
 
 
@@ -58,11 +64,49 @@ data ReportSnapshot = ReportSnapshot
   , databases :: ReportSection [DatabaseStats]
   , workloads :: ReportSection [WorkloadStats]
   , ingestionCapped :: Maybe Bool
+  , trends :: Maybe (ReportSection [TrendPoint])
   , startTime :: UTCTime
   , endTime :: UTCTime
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Hourly counts saved with the report, so opening an email does not scan
+-- telemetry again. Missing trends identify snapshots written before this field.
+data TrendPoint = TrendPoint
+  { epochSeconds :: Int64
+  , events :: Int64
+  , errors :: Int64
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
+-- | Bound each scan to one day while retaining the complete requested period.
+-- Adjacent slices can share an hourly bucket; add their disjoint counts.
+trendStats :: forall es. (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [TrendPoint]
+trendStats useTf pid start end = do
+  points <- concat <$> traverse fetch (takeWhile (< end) $ iterate (addUTCTime 86400) start)
+  pure [TrendPoint epoch events errors | (epoch, (events, errors)) <- M.toAscList $ M.fromListWith (\(a, b) (c, d) -> (a + c, b + d)) [(p.epochSeconds, (p.events, p.errors)) | p <- points]]
+  where
+    fetch :: UTCTime -> Eff es [TrendPoint]
+    fetch sliceStart =
+      let sliceEnd = min end (addUTCTime 86400 sliceStart)
+       in Hasql.withHasqlTimefusion useTf
+            $ Hasql.interp
+              [HI.sql|
+          SELECT extract(epoch from time_bucket('1 hour', timestamp))::bigint,
+            COUNT(*)::bigint,
+            COUNT(*) FILTER (WHERE status_code = 'ERROR'
+              OR coalesce(attributes___exception___type,
+                jsonb_path_query_first(events, '$[*] ? (@.event_name == "exception").event_attributes.exception.type') #>> '{}') IS NOT NULL
+              OR severity___severity_number >= 17 OR lower(level) IN ('error', 'fatal'))::bigint
+          FROM otel_logs_and_spans
+          WHERE project_id = #{pid.toText} AND timestamp >= #{sliceStart} AND timestamp < #{sliceEnd}
+          GROUP BY time_bucket('1 hour', timestamp)
+          ORDER BY time_bucket('1 hour', timestamp)
+        |]
 
 
 -- | All events and server spans have deliberately separate denominators. Latency
@@ -375,3 +419,47 @@ issueStats pid start end = do
     |]
   let (newIssues, openIssues, criticalOpen, acknowledged, archivedInPeriod) = fromMaybe (0, 0, 0, 0, 0) totals
   pure IssueStats{newIssues, openIssues, criticalOpen, acknowledged, archivedInPeriod, priorities}
+
+
+-- | A shared preview survives polling across replicas. Only the lease owner may
+-- publish a result; a restart leaves an expiring lease that a later request renews.
+data PreviewStatus = PreviewBuilding | PreviewReady ReportSnapshot | PreviewFailed
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+claimPreview :: DB es => Projects.ProjectId -> Eff es (Maybe UTCTime)
+claimPreview pid = do
+  let payload = AesonText PreviewBuilding
+  fmap (\(HI.OneColumn token) -> token)
+    . listToMaybe
+    <$> Hasql.interp
+      [HI.sql|
+        INSERT INTO apis.report_previews (project_id, requested_at, expires_at, payload)
+        VALUES (#{pid}, clock_timestamp(), now() + interval '6 minutes', #{payload})
+        ON CONFLICT (project_id) DO UPDATE
+          SET requested_at = EXCLUDED.requested_at, expires_at = EXCLUDED.expires_at, payload = EXCLUDED.payload
+          WHERE report_previews.expires_at <= now()
+        RETURNING requested_at
+      |]
+
+
+getPreview :: DB es => Projects.ProjectId -> Eff es (Maybe PreviewStatus)
+getPreview pid =
+  fmap (\(HI.OneColumn (AesonText payload)) -> payload)
+    . listToMaybe
+    <$> Hasql.interp [HI.sql|SELECT payload FROM apis.report_previews WHERE project_id = #{pid}|]
+
+
+finishPreview :: DB es => Projects.ProjectId -> UTCTime -> PreviewStatus -> Eff es ()
+finishPreview pid token status = do
+  let payload = AesonText status
+      ttlSeconds = case status of
+        PreviewReady{} -> 300 :: Int64
+        PreviewFailed -> 60
+        PreviewBuilding -> 360
+  Hasql.interpExecute_
+    [HI.sql|
+      UPDATE apis.report_previews SET payload = #{payload}, expires_at = now() + make_interval(secs => #{ttlSeconds}::double precision)
+      WHERE project_id = #{pid} AND requested_at = #{token}
+    |]
