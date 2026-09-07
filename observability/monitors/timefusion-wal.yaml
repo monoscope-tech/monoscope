@@ -2,9 +2,8 @@ active: true
 alert_recovery_threshold: null
 alert_threshold: 6.442450944e10
 check_interval_mins: 15
-email_all: false
-emails:
-- anthony@talstack.com
+email_all: true
+emails: []
 message: WAL dir above 60GB — steady state should be ~retention+20min of ingest (~30GB
   at 6MB/s). Either the mtime reaper stopped, walrus leaked across rapid restarts,
   or ingest spiked. Check timefusion.wal.gc_deleted_files and the WAL GC log lines.

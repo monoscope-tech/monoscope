@@ -2,9 +2,8 @@ active: true
 alert_recovery_threshold: null
 alert_threshold: 1200.0
 check_interval_mins: 5
-email_all: false
-emails:
-- anthony@talstack.com
+email_all: true
+emails: []
 message: Oldest bucket older than 2x flush interval (1200s) for 5+ min. Data is not
   reaching Delta; ingest will eventually reject. Check flush task / S3 connectivity
   / lock convoy.

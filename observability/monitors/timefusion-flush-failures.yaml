@@ -2,9 +2,8 @@ active: true
 alert_recovery_threshold: null
 alert_threshold: 1.0
 check_interval_mins: 5
-email_all: false
-emails:
-- anthony@talstack.com
+email_all: true
+emails: []
 message: Flush failures detected — Delta commits erroring. Check S3/R2 connectivity
   and commit coordination. Leading indicator of the bucket-age page.
 notify_after_mins: null

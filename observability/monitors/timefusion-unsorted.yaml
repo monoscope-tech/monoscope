@@ -2,9 +2,8 @@ active: true
 alert_recovery_threshold: null
 alert_threshold: 1.0
 check_interval_mins: 5
-email_all: false
-emails:
-- anthony@talstack.com
+email_all: true
+emails: []
 message: A flush sort failed and wrote its group with no sorting_columns footer. The
   reader's derive_common_ordering is all-or-nothing, so ONE such file voids the declared
   ordering for every scan touching that partition — DedupExec drops to its unbounded
