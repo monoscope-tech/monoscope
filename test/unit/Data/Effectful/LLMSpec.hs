@@ -1,7 +1,7 @@
 module Data.Effectful.LLMSpec (spec) where
 
 import Data.ByteString qualified as BS
-import Data.Effectful.LLM (embedDocumentsBounded, openAIEmbeddings)
+import Data.Effectful.LLM (embedDocumentsBounded, embedDocumentsWithProgress, openAIEmbeddings)
 import Data.Text qualified as T
 import Langchain.DocumentLoader.Core qualified as Doc
 import Langchain.Embeddings.OpenAI qualified as EmbOAI
@@ -11,6 +11,31 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "durable embedding progress" do
+    let cases :: [(String, [Int], [(Int, [Float])])]
+        cases = [("completed documents survive a later failure", [36, 36], [(1, [1, 0])]), ("an unfinished document is never saved", [72], [])]
+    forM_ cases \(label, sizes, expected) ->
+      it label do
+        saved <- newIORef []
+        calls <- newIORef (0 :: Int)
+        let docs = zip [1 :: Int ..] $ map (\n -> Doc.Document (toLazy $ T.replicate (8188 * n) "a") mempty) sizes
+            request batch = do
+              modifyIORef' calls (+ 1)
+              call <- readIORef calls
+              pure $ if call == 2 then Left "provider unavailable" else Right (replicate (length batch) [1, 0])
+        embedDocumentsWithProgress (embedDocumentsBounded request) (modifyIORef' saved . flip (<>)) docs
+          `shouldReturn` Left "provider unavailable"
+        readIORef saved `shouldReturn` expected
+        readIORef calls `shouldReturn` 2
+
+    it "returns and saves all document identities in input order" do
+      saved <- newIORef []
+      let docs = [(i, Doc.Document (toLazy $ T.replicate 8191 "a") mempty) | i <- [1 :: Int .. 80]]
+          request batch = pure $ Right $ replicate (length batch) [1, 0]
+          expected = [(i, [1, 0]) | i <- [1 :: Int .. 80]]
+      embedDocumentsWithProgress (embedDocumentsBounded request) (modifyIORef' saved . flip (<>)) docs `shouldReturn` Right expected
+      readIORef saved `shouldReturn` expected
+
   describe "embedding endpoint configuration" do
     let cases :: [(Text, String)]
         cases =

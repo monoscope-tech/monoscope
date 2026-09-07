@@ -5,6 +5,7 @@ module Data.Effectful.LLM (
   embedDocuments,
   openAIEmbeddings,
   embedDocumentsBounded,
+  embedDocumentsWithProgress,
   callOpenAIAPI,
   modelAndEffort,
   runLLMReal,
@@ -94,8 +95,6 @@ embedDocumentsBounded request docs
       means <- go mempty chunks
       traverse (finish means) [0 .. length docs - 1]
   where
-    maxInputBytes = 8191 :: Int
-    maxBatchChunks = 300000 `div` maxInputBytes
     -- takeWord8/dropWord8 advance together by up to three bytes to finish a
     -- code point. Reserve those bytes so even that final character fits.
     chunkBytes = fromIntegral (maxInputBytes - 3)
@@ -137,6 +136,43 @@ embedDocumentsBounded request docs
              in if norm == 0
                   then throwError "Chunk embeddings have a zero-length mean"
                   else pure $ map (realToFrac . (/ norm)) $ VU.toList mean
+
+
+maxInputBytes, maxBatchChunks :: Int
+maxInputBytes = 8191
+maxBatchChunks = 300000 `div` maxInputBytes
+
+
+-- | Save completed documents between bounded groups of provider requests.
+-- A document spanning more than one request stays whole: partial chunk means
+-- must never be persisted as that document's embedding.
+embedDocumentsWithProgress
+  :: Monad m
+  => ([DocLoader.Document] -> m (Either Text [[Float]]))
+  -> ([(a, [Float])] -> m ())
+  -> [(a, DocLoader.Document)]
+  -> m (Either Text [(a, [Float])])
+embedDocumentsWithProgress request save docs = runExceptT $ concat . reverse <$> foldM store [] (groups docs)
+  where
+    chunks (_, doc) =
+      let bytes = BS.length $ encodeUtf8 $ toStrict $ DocLoader.pageContent doc
+       in if bytes <= maxInputBytes then 1 else 1 + (bytes - 1) `div` (maxInputBytes - 3)
+    groups [] = []
+    groups (doc : rest) =
+      let (following, remaining) = fill (maxBatchChunks - chunks doc) rest
+       in (doc : following) : groups remaining
+    fill _ [] = ([], [])
+    fill budget pending@(doc : rest)
+      | chunks doc > budget = ([], pending)
+      | otherwise =
+          let (following, remaining) = fill (budget - chunks doc) rest
+           in (doc : following, remaining)
+    store completed batch = do
+      vectors <- ExceptT $ request $ map snd batch
+      when (length vectors /= length batch) $ throwError "Embedding response count does not match request"
+      let pairs = zip (map fst batch) vectors
+      lift $ save pairs
+      pure (pairs : completed)
 
 
 -- Strict fields keep chunk accumulation from retaining previous batch vectors.
