@@ -1248,6 +1248,14 @@ getAlertStatusColor = \case
 --
 -- >>> map replaceAllFormats ["code 1A2B3C", "code 4D5E6F"]
 -- ["code {integer}A{integer}B{integer}C","code {integer}D{integer}E{integer}F"]
+--
+-- Failed JWT candidates remain text, including nested prefixes; later valid tokens still match.
+-- >>> replaceAllFormats "eyJeyJeyJ! eyJabc..bad eyJgood.payload.signature user@example.com next@other.org"
+-- "eyJeyJeyJ! eyJabc..bad {jwt} {email} {email}"
+-- >>> map replaceAllFormats ["λcode1", "λcode2"] == ["λcode{integer}", "λcode{integer}"]
+-- True
+-- >>> replaceAllFormats (T.replicate 1000 "9") == replaceAllFormats (T.replicate 1001 "9")
+-- True
 replaceAllFormats :: Text -> Text
 replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
@@ -1292,8 +1300,9 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       -- Detect "D-" or "DD-" that might precede a month: defer it
       | isNothing deferred
       , isDigit (T.head t)
-      , let (ds, r) = T.span isDigit t
+      , let ds = T.takeWhile isDigit $ T.take 3 t
       , T.length ds <= 2
+      , let r = T.drop (T.length ds) t
       , not (T.null r)
       , T.head r == '-'
       , let afterDash = T.drop 1 r
@@ -1332,14 +1341,16 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       pure r5
 
     replaceEmails :: Text -> Text
-    replaceEmails !txt =
-      let (before, after) = T.breakOn "@" txt
-          afterAt = T.drop 1 after
-          (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
-          keepAt = before <> "@" <> replaceEmails afterAt
-       in if T.null after
-            then txt
-            else maybe keepAt (\rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest) (guard (not $ T.null localRev) >> tryEmailDomain afterAt)
+    replaceEmails = toText . TLB.toLazyText . emails
+      where
+        emails !txt =
+          let (before, after) = T.breakOn "@" txt
+              afterAt = T.drop 1 after
+              (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
+              keepAt = TLB.fromText before <> "@" <> emails afterAt
+           in if T.null after
+                then TLB.fromText txt
+                else maybe keepAt (\rest -> TLB.fromText (T.reverse prefixRev) <> "{email}" <> emails rest) (guard (not $ T.null localRev) >> tryEmailDomain afterAt)
 
     isLocalChar :: Char -> Bool
     isLocalChar c = isAlphaNum c || c `elem` ("._%+-" :: [Char])
@@ -1354,12 +1365,19 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       pure rest
 
     replaceJWTs :: Text -> Text
-    replaceJWTs !txt =
-      let (before, after) = T.breakOn "eyJ" txt
-          rest3 = T.drop 3 after
-       in if T.null after
-            then txt
-            else maybe (before <> "eyJ" <> replaceJWTs rest3) (\r3 -> before <> "{jwt}" <> replaceJWTs r3) (jwtTail rest3)
+    replaceJWTs = toText . TLB.toLazyText . jwts
+      where
+        jwts !txt =
+          let (before, after) = T.breakOn "eyJ" txt
+              rest3 = T.drop 3 after
+              -- A failed candidate cannot hide a valid JWT inside this same
+              -- header run: every suffix would encounter the same separators.
+              -- Advance past it once instead of rescanning each nested "eyJ".
+              (header, rest) = T.span isBase64Url rest3
+              keepHeader = "eyJ" <> TLB.fromText header <> jwts rest
+           in if T.null after
+                then TLB.fromText txt
+                else TLB.fromText before <> maybe keepHeader (\r3 -> "{jwt}" <> jwts r3) (jwtTail rest3)
 
     -- Two more non-empty base64url segments, each dot-separated, after the "eyJ" header.
     jwtTail :: Text -> Maybe Text
@@ -1388,7 +1406,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
                   else -- Digit trigger: check for hex-alpha suffix to peel
                     case peelHexSuffix safe of
                       (safePre, hexPart)
-                        | not (T.null hexPart) -> TLB.fromText safePre <> scanHexDigit (hexPart <> rest)
+                        | not (T.null hexPart) -> TLB.fromText safePre <> scanHexDigit (T.drop (T.length safePre) txt)
                       _ -> TLB.fromText safe <> scanDigit rest
 
     trigger :: Char -> Bool
