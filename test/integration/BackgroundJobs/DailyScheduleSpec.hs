@@ -7,9 +7,12 @@
 module BackgroundJobs.DailyScheduleSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Exception (bracket_)
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.Notification qualified as PGN
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import OddJobs.Types (pgEventName)
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
@@ -61,6 +64,17 @@ spec = around withTestResources do
       queueAt tr "DailyJob" "9 hours"
       BackgroundJobs.ensureDailyJobScheduled tr.trATCtx
       countTag tr "DailyJob" >>= (`shouldBe` 1)
+
+  describe "background job wakeups" do
+    it "notifies the channel used by the installed job listener" \tr ->
+      withResource tr.trPool \listener ->
+        bracket_
+          (PGS.execute listener "LISTEN ?" (PGS.Only $ pgEventName "background_jobs"))
+          (PGS.execute listener "UNLISTEN ?" (PGS.Only $ pgEventName "background_jobs"))
+          do
+            queueAt tr "DailyJob" "-1 hour"
+            event <- Timeout.timeout 5_000_000 $ PGN.getNotification listener
+            fmap PGN.notificationChannel event `shouldBe` Just "jobs_created_background_jobs"
 
   describe "disabled background worker" do
     it "leaves queued jobs untouched and does not start a runner" \tr -> do
