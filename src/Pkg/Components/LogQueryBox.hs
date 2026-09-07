@@ -358,7 +358,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 queryEditorSkeleton_ :: Maybe Text -> Html ()
 queryEditorSkeleton_ query =
   textarea_
-    [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none"
+    [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60"
     , term "data-query-input" ""
     , Aria.label_ "Query"
     , rows_ "1"
