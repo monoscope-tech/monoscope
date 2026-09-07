@@ -11,17 +11,22 @@ const set = async (page: any, text: string) =>
   }, text);
 
 test('click opens the full-width custom dropdown and reopens it after Escape', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
   await ready(page);
+  await page.locator('query-editor').evaluate(el => { el.style.width = '1400px'; });
   await input(page).click();
   const popup = page.locator('.query-completion-dropdown');
   await expect(popup).toBeVisible();
   await expect(popup.getByText('Type a field name, then an operator and value', { exact: false })).toBeVisible();
   await expect(popup.getByText('More Fields', { exact: true })).toBeVisible();
+  expect(await popup.locator('completion-section').first().evaluate(el => getComputedStyle(el).paddingTop)).toBe('8px');
   await expect(popup.getByRole('link', { name: 'Syntax guide ↗' })).toBeVisible();
   await expect(popup.locator('.query-completion-help')).toContainText('to navigate');
   const editorBox = await page.locator('.cm-editor').boundingBox();
   const popupBox = await popup.boundingBox();
   expect(Math.abs(popupBox!.width - editorBox!.width)).toBeLessThanOrEqual(2);
+  const optionBox = await popup.getByRole('option').first().boundingBox();
+  expect(Math.abs(optionBox!.width - popupBox!.width)).toBeLessThanOrEqual(4);
   expect(popupBox!.y).toBeGreaterThanOrEqual(editorBox!.y + editorBox!.height);
   await page.keyboard.press('Escape');
   await expect(popup).toHaveCount(0);
