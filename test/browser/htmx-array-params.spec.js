@@ -11,7 +11,7 @@ for (const mode of ['post', 'get', 'preload']) {
       await route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body></body></html>' });
     });
     await page.goto('http://notification.test/');
-    for (const file of ['htmx-4.0.0-beta6.min.js', 'htmx-2-compat.js', 'hx-preload-4.js']) {
+    for (const file of ['htmx-4.0.0.min.js', 'htmx-2-compat.js', 'hx-preload-4.js']) {
       await page.addScriptTag({ path: path.join(deps, file) });
     }
     await page.setContent(`<body hx-preload:inherited="mouseover">
