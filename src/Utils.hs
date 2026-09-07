@@ -1272,7 +1272,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     scanMons !prev !deferred !t
       -- End of input: flush deferred and remaining text
       | T.null t = flushDef deferred
-      | T.length t < 3 = flushDef deferred <> TLB.fromText t
+      | T.compareLength t 3 == LT = flushDef deferred <> TLB.fromText t
       -- Check for month abbreviation
       | let mon = T.take 3 t
       , HS.member mon monthSet
@@ -1297,7 +1297,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       , not (T.null r)
       , T.head r == '-'
       , let afterDash = T.drop 1 r
-      , T.length afterDash >= 3
+      , T.compareLength afterDash 3 /= LT
       , HS.member (T.take 3 afterDash) monthSet
       , maybe True (not . isAlphaNum) prev =
           scanMons (Just '-') (Just (mempty, ds <> "-")) afterDash
@@ -1451,7 +1451,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     scanDigit :: Text -> TLB.Builder
     scanDigit !txt
       -- 0x hex literal
-      | T.length txt >= 2 && T.head txt == '0' && T.index txt 1 == 'x' =
+      | T.compareLength txt 2 /= LT && T.head txt == '0' && T.index txt 1 == 'x' =
           let (hexRun, rest) = T.span isHexDigit' (T.drop 2 txt)
            in if T.null hexRun then "{integer}" <> go (Just '}') (T.drop 1 txt) else "{hex}" <> go (Just '}') rest
       | otherwise =
