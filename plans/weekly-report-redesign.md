@@ -1,6 +1,6 @@
 # Weekly system report: research, design, and delivery
 
-Status: implementation and PR validation complete; merged into production master. Deployment succeeded. Storage metadata has recovered, but the public live-report route still exceeds the gateway timeout; production iteration continues. Earlier entries below are a chronological iteration record.
+Status: complete. The expanded emails, asynchronous live preview, and saved activity charts are deployed to production master. Full CI and production browser, chart, saved-report, and desktop/mobile verification passed.
 
 ## Objective and audience
 
@@ -99,7 +99,7 @@ Density target: approximately 680–720px maximum report width, 14px body text, 
 - [x] Check semantic reading order, all mobile metrics, contrast, links, no horizontal clipping, no scripts, and HTML byte size.
 - [x] Run repository-required compile/test/CI gates; record exact evidence.
 - [x] Deploy to production master while preserving concurrent work.
-- [ ] Verify deployed report preview and saved report behavior; record post-deployment findings and resolve material defects.
+- [x] Verify deployed report preview and saved report behavior; record post-deployment findings and resolve material defects.
 
 ## Implementation / review log
 
@@ -193,3 +193,37 @@ Added regression coverage for simultaneous claim deduplication, immediate pollin
 Follow-up validation: all seven report integration examples passed from the freshly linked development test executable (481.17 seconds on the shared development machine). A production probe of the complete seven-day trend period finished in 89.89 seconds using sequential day slices: 32,878,748 events and 51,756 error/exception events. This validates retaining sequential slices to limit query load within the five-minute preview budget.
 
 CI `34104221806` passed application compilation, unused-code checking, HLint, and frontend checks. Its doctest step also builds the standard integration-test target and found that the new chart-payload regression needed an explicit `zlib` test dependency. The development test target already inherited that dependency from the library. Added it to `package.yaml` and regenerated `monoscope.cabal`; full CI must pass before deployment.
+
+
+### Follow-up release gates
+
+- PR [#525](https://github.com/monoscope-tech/monoscope/pull/525) merged into master as `ebb0e4fd04b04f8c21204e191d72d9d918ffa4be`.
+- CI [34106108223](https://github.com/monoscope-tech/monoscope/actions/runs/34106108223) passed compilation, unused-code checking, doctests, unit tests, integration tests, end-to-end checks, HLint, and frontend checks. Unchanged CLI/UI checks reused the fingerprint gate.
+- All seven report integration examples passed locally, including the new chart payload and preview lease regressions. The local macOS doctest runner could not locate the main package registration; this was not a failing doctest example, and the required CI doctests passed. Temporary local configuration experiments were removed.
+- Production workflow [34108605532](https://github.com/monoscope-tech/monoscope/actions/runs/34108605532) reused the proven test fingerprints and is building the application image. CapRover deployment and post-deployment verification are not yet claimed complete.
+
+
+### Final production verification (7 September)
+
+- Deployment [34108605532](https://github.com/monoscope-tech/monoscope/actions/runs/34108605532) completed successfully, including CapRover. All three application replicas were observed running image `ebb0e4fd04b04f8c21204e191d72d9d918ffa4be`.
+- The first browser request immediately after rollout returned 502. After the replicas settled, the normal public preview returned HTTP 200 in 0.229 seconds. Subsequent browser and API checks completed successfully; no application restart or production data edit was performed for verification.
+- The full API check received the loading page in **0.428 seconds** and the finished seven-day report in **157.959 seconds**. It contained all eleven sections, **475 labeled metric cells**, and **zero unavailable sections**.
+- A real browser received its initial page in **0.615 seconds**, made **53 HTMX polling requests**, and displayed the completed report automatically. Clicking a service link navigated the main page to the correctly scoped Log Explorer URL with the report's exact UTC bounds and service/environment filter.
+- Both chart URLs contained finite, nonempty saved datasets and no live query. Both returned HTTP 200 with valid, populated PNG images (25,980 and 19,695 bytes). The images were visually inspected; this is stronger evidence than accepting an empty PNG with a successful HTTP status.
+- The historical saved report returned HTTP 200 in **0.186 seconds**, retained its historical decoder, and displayed the new layout without a parse error.
+- Desktop and 375px mobile checks found no horizontal overflow, no hidden metric cells, no scripts inside the report, and correct top-level navigation targets. Reviewed the actual application view, mobile briefing, infrastructure views, and both trend images. Image-blocked captures preserve the useful report text and metrics.
+- Local evidence: `/tmp/monoscope-report-research/production-verification.json`, `browser-verification.json`, `deployed-live-app.png`, `deployed-chart-1.png`, `deployed-chart-2.png`, `final-live-top-375.png`, and `final-live-infrastructure-{375,1000}.png`.
+
+### Completion audit
+
+| Requirement | Evidence |
+| --- | --- |
+| Research competitors and prior art before implementation | Primary-source comparison and inspected Scout/Sentry samples recorded at the start of this document. |
+| Brainstorm and iterate in Markdown | Alternatives, selected information hierarchy, data contract, baseline defects, and implementation/release iterations above. |
+| Rich system status in the weekly email | Shared typed snapshot and renderer cover services, infrastructure, issues, monitors, HTTP/database performance, workloads, patterns, trends, and coverage. Captured-email and persisted-snapshot regressions pass. |
+| Better layout and reusable email components | Dense 720px layout, labeled metrics, bounded email lists with full-report links, shared shell fixes, image-blocked/mobile/dark/inline-style artifact checks, and representative invite/error email previews. |
+| Accurate data and preserved preferences | Seven-day boundary, duration-unit, missing-baseline, issue-lifecycle, infrastructure/monitor, recipient preference, and project-isolation tests; full CI passed. No customer test emails were sent. |
+| Implement, deploy, and iterate in production | Original PR #509 and follow-up PR #525 merged; both production deployments succeeded. The observed gateway/chart failures led to the verified asynchronous preview and persisted-trend changes. |
+| Verify the requested final state | Public API and actual HTMX browser checks, populated charts, historical reports, scoped links, and desktop/mobile visual checks passed after the final deployment. |
+
+Validation does not claim exhaustive testing in every inbox client or actual customer email delivery. Essential email styles are inline, critical information remains text, and the stress email fixture stays below 80 KB; the larger full web report intentionally expands the stored evidence.
