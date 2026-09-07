@@ -183,7 +183,7 @@ data RumCacheKey = RumCacheKey
 -- scan once per TTL (the vitals-detail scan alone costs ~25s), and the first visitor
 -- after every expiry always ate one. Generic over the payload so the API catalog's host
 -- and endpoint stats share the table with the RUM panels.
-rumPanelCacheGet :: (AE.FromJSON a, DB es, Typeable a) => Text -> Eff es (Maybe a)
+rumPanelCacheGet :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe a)
 rumPanelCacheGet key =
   fmap (\(HI.OneColumn (AesonText value)) -> value)
     . listToMaybe
