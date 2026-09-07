@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import '../src/widgets';
+import { graphic, color } from 'echarts';
 
 const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 const chartData = { from: 0, to: 1, headers: ['timestamp'], dataset: [[0]], rows_per_min: 0, stats: { count: 1, max: 1, max_group_sum: 1 } };
@@ -112,6 +113,56 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('true');
     send('complete');
     await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('false'));
+    expect(document.getElementById('volume')!.hasAttribute('data-chart-partial')).toBe(false);
+  });
+
+  test.each(['bar', 'line'])('uses current %s bounds for partials and clears stale status through failure and retry', async (chartType) => {
+    const instance = chart();
+    // Capture options at each render: the widget mutates its option object later.
+    const rendered: any[] = [];
+    instance.setOption.mockImplementation(option => rendered.push({
+      max: option.yAxis?.max, source: JSON.parse(JSON.stringify(option.dataset.source ?? [])),
+      xAxis: { ...option.xAxis }, series: option.series.map((s: any) => ({ name: s.name, encode: s.encode })),
+    }));
+    (window as any).echarts = { graphic, color, getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volumeValue"></div><div id="volumeSubtitle"></div>' +
+      '<div id="volume_error" class="hidden"><span id="volume_errorMsg"></span><button id="volume_retry">Retry</button></div>';
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
+    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(c) { bodies.push(c); } }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
+    (window as any).chartWidget({ ...widget('volume'), chartType });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(bodies).toHaveLength(1));
+    const send = (type: string, data: any) => bodies.at(-1)!.enqueue(new TextEncoder().encode(JSON.stringify({ type, data }) + '\n'));
+    send('complete', { ...chartData, stats: { ...chartData.stats, max: 10600, max_group_sum: 10600 } });
+    await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('false'));
+    window.dispatchEvent(new CustomEvent('update-query'));
+    await vi.waitFor(() => expect(bodies).toHaveLength(2));
+    const data = { ...chartData, from: 0, to: 2592000000, rows_per_min: 2400,
+      headers: ['timestamp', 'ERROR', 'UNSET'], dataset: [[0, 200000, 1000000]],
+      stats: { count: 2, sum: 1200000, max: 1000000, max_group_sum: 1200000 } };
+    send('partial', data);
+    await vi.waitFor(() => expect(rendered.at(-1).max).toBe(chartType === 'bar' ? 1200000 : 1000000));
+    expect(document.getElementById('volumeSubtitle')!.textContent).toBe('Loading partial results…');
+    expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('true');
+    // EOF must leave visible evidence explicitly incomplete, never success.
+    bodies.at(-1)!.close();
+    await vi.waitFor(() => expect(document.getElementById('volume_errorMsg')!.textContent).toContain('Incomplete results'));
+    expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('false');
+    expect(document.getElementById('volumeSubtitle')!.textContent).toBe('Incomplete results');
+    document.getElementById('volume_retry')!.click();
+    await vi.waitFor(() => expect(bodies).toHaveLength(3));
+    expect(document.getElementById('volume_error')!.classList.contains('hidden')).toBe(true);
+    send('partial', { ...data, stats: undefined });
+    await vi.waitFor(() => expect(rendered.at(-1).max).toBeUndefined());
+    send('partial', data);
+    await vi.waitFor(() => expect(rendered.at(-1).max).toBe(chartType === 'bar' ? 1200000 : 1000000));
+    const partial = rendered.at(-1);
+    send('complete', data);
+    await vi.waitFor(() => expect(document.getElementById('volume')!.getAttribute('aria-busy')).toBe('false'));
+    expect(rendered.at(-1)).toEqual(partial);
+    expect(document.getElementById('volumeSubtitle')!.textContent).toContain('/min');
     expect(document.getElementById('volume')!.hasAttribute('data-chart-partial')).toBe(false);
   });
 

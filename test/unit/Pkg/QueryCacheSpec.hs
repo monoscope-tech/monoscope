@@ -3,7 +3,7 @@ module Pkg.QueryCacheSpec (spec) where
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
-import Pages.Charts.Charts (MetricsData (..))
+import Pages.Charts.Charts (MetricsData (..), convertTimestampsToMs)
 import Pkg.Parser (RangeEnd (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
@@ -43,6 +43,20 @@ timestampSubject = Subject "timestamp" "timestamp" []
 
 spec :: Spec
 spec = do
+  describe "chart response event rate" do
+    it "uses event totals and the selected interval for fresh, merged and trimmed data" do
+      let fresh = (mkMetrics [(86400, 103680000)]){from = Just 0, to = Just 2592000, rowsCount = 103680000, rowsPerMin = Just 0.01}
+          merged = mergeTimeseriesData (mkMetrics [(86400, 51840000)]) (mkMetrics [(172800, 51840000)])
+          trimmed = trimToRange merged (mkTime 0) (mkTime 2592000)
+      forM_ [fresh, trimmed] \metrics -> do
+        let response = convertTimestampsToMs metrics
+        response.rowsPerMin `shouldBe` Just 2400
+        response.to `shouldBe` Just 2592000000
+      forM_ [0, -1] \end ->
+        (convertTimestampsToMs fresh{to = Just end}).rowsPerMin `shouldBe` Just 0
+      (convertTimestampsToMs fresh{rowsCount = 0, dataset = V.empty}).rowsPerMin `shouldBe` Just 0
+      (convertTimestampsToMs fresh{rowsPerMin = Nothing}).rowsPerMin `shouldBe` Nothing
+
   describe "chart chunk boundaries" do
     it "covers a range once, newest first, including the inclusive final endpoint" do
       chartChunks "1 hour" (mkTime 17, mkTime 20000)

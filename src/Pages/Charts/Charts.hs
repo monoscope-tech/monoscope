@@ -515,8 +515,12 @@ instance FromField AnyText where
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
 convertTimestampsToMs :: MetricsData -> MetricsData
-convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1000) <$> md.from, to = (* 1000) <$> md.to}
+convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1000) <$> md.from, to = (* 1000) <$> md.to, rowsPerMin = rate}
   where
+    -- Normalize at the shared wire boundary: cache/chunk helpers may count
+    -- aggregate cells, but the displayed rate represents their total value over
+    -- the requested interval, including empty time before/after occupied bins.
+    rate = md.rowsPerMin *> liftA2 (\start end -> if end > start then md.rowsCount * 60 / fromIntegral (end - start) else 0) md.from md.to
     convertRow row = case V.uncons row of
       Just (Just ts, rest) -> V.cons (Just $ ts * 1000) rest
       _ -> row

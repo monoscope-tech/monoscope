@@ -557,6 +557,17 @@ const chartRefreshState = new WeakMap<object, { url: string; hasData: boolean; f
 const BACKGROUND_FAILURE_THRESHOLD = 3;
 const chartRequests = new WeakMap<object, AbortController>();
 
+// Every response snapshot uses the same scale, dimensions and series mapping.
+const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: ChartDataResponse) => {
+  const headers = data.headers?.map(h => h === 'timestamp' || h === 'created_at'
+    ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
+  opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
+  opt.dataset.source = [headers || [], ...(data.dataset || [])];
+  const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
+  opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
+  chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+};
+
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
   if (!shouldFetch || lifetimeSignal.aborted) return;
   // A timer must not replace an unfinished stream with a blocking refresh.
@@ -576,6 +587,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     chartRefreshState.set(chart, state);
   }
   const isStale = beginChartFetch(chartId);
+  let receivedPartial = false;
+  const subtitle = $(`${chartId}Subtitle`);
   const retry = () => updateChartData(chart, opt, true, widgetData, lifetimeSignal);
   const reportFailure = (message: string) => {
     state.failures = showLoader ? 0 : state.failures + 1;
@@ -586,17 +599,28 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       }
       return;
     }
+    if (receivedPartial) {
+      message = `Incomplete results. ${message}`;
+      if (subtitle) subtitle.textContent = 'Incomplete results';
+    } else if (showLoader && subtitle) subtitle.textContent = '';
     showChartError(chartId, message, retry);
     if (!state.hasData) setStatValue(widgetData, null);
   };
   // Batch DOM updates before fetch
-  if (showLoader) setChartLoading(chartId, true);
+  if (showLoader) {
+    hideChartError(chartId);
+    setStatValue(widgetData, null);
+    if (subtitle) subtitle.textContent = 'Loading…';
+    $(chartId)?.removeAttribute('data-chart-partial');
+    $(chartId)?.setAttribute('aria-busy', 'true');
+    setChartLoading(chartId, true);
+  }
 
   try {
     const partial = (data: ChartDataResponse) => {
       if (signal.aborted || isStale() || !showLoader) return;
-      opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
-      opt.dataset.source = [data.headers || [], ...(data.dataset || [])];
+      receivedPartial = !!data.dataset?.length;
+      if (subtitle) subtitle.textContent = receivedPartial ? 'Loading partial results…' : 'Loading…';
       if (data.dataset?.length) chart.hideLoading();
       else {
         const styles = getChartStyles();
@@ -604,16 +628,17 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
           textColor: styles.tooltipTextColor, maskColor: styles.chartMask, zlevel: 0 });
       }
       hideNoDataOverlay(chartId);
-      chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+      applyChartResponse(chart, opt, widgetData, data);
       // Keep incomplete totals out of stat tiles. The loading state distinguishes
       // a partial chart from an empty or complete result.
       const element = $(chartId);
       element?.setAttribute('aria-busy', 'true');
       element?.setAttribute('data-chart-partial', 'true');
     };
-    const { from, to, headers, dataset, rows_per_min, stats, error }: ChartDataResponse =
+    const data: ChartDataResponse =
       (await takePrefetched(chartId, url, partial, signal)) ??
       (await limitedFetch(showLoader ? streamUrl(url) : url, res => readChartResponse<ChartDataResponse>(checkChartResponse(res), partial), signal));
+    const { from, to, dataset, rows_per_min, stats, error } = data;
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,
@@ -621,25 +646,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       reportFailure(error);
       return;
     }
-    const trmHeaders = headers?.map((h) => {
-      if (h === 'timestamp' || h === 'created_at') {
-        return h;
-      }
-      return h.substring(0, 75) + (h.length > 75 ? '...' : '');
-    });
-    opt.xAxis = opt.xAxis || {};
-    opt.xAxis.min = from;  // Already in ms from server
-    opt.xAxis.max = to;
-    opt.dataset.source = [trmHeaders || [], ...(dataset ?? [])];
-    if (stats) {
-      opt.yAxis.max = stats.max;
-      if (widgetData.chartType != 'line') {
-        opt.yAxis.max = stats.max_group_sum;
-      }
-    }
-
-    const subtitle = $(`${chartId}Subtitle`);
-    subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)}/min`);
+    if (subtitle) subtitle.textContent = rows_per_min == null ? '' : `${window.formatNumber(rows_per_min)}/min`;
 
     // Representative scalar for the unit (rate/mean/…), not a blind sum of
     // per-bin values — see statScalar. from/to are ms, needed for rate. count<1
@@ -653,7 +660,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     } else {
       hideNoDataOverlay(chartId);
     }
-    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+    applyChartResponse(chart, opt, widgetData, data);
     $(chartId)?.removeAttribute('data-chart-partial');
     $(chartId)?.setAttribute('aria-busy', 'false');
     state.hasData = !!dataset?.length;
