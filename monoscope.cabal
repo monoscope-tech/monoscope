@@ -178,6 +178,8 @@ extra-source-files:
     static/migrations/0147_error_patterns_first_trace_at.sql
     static/migrations/0148_hosts_last_seen.sql
     static/migrations/0149_report_previews.sql
+    static/migrations/0150_background_job_notification_channel.sql
+    static/migrations/0151_background_job_updated_at.sql
 
 source-repository head
   type: git
@@ -285,6 +287,7 @@ library
       Pkg.TestClock
       Pkg.TestUtils
       Pkg.TraceSessionCache
+      Pkg.UUID
       ProcessMessage
       Start
       System.Config
@@ -892,6 +895,7 @@ test-suite test-dev
       Pkg.TestClock
       Pkg.TestUtils
       Pkg.TraceSessionCache
+      Pkg.UUID
       ProcessMessage
       Start
       System.Config

@@ -142,6 +142,7 @@ import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), Wrapp
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
+import Pkg.UUID qualified as UUIDBytes
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
@@ -2757,7 +2758,7 @@ metricIdNamespace = [uuid|5a5e99db-2f4d-58c6-9f8a-b9db1f6139aa|]
 
 -- | v5 id over 0x1F-joined key parts, in 'metricIdNamespace'.
 metricUuid :: [Text] -> UUID.UUID
-metricUuid = UUIDv5.generateNamed metricIdNamespace . BS.unpack . encodeUtf8 . T.intercalate "\x1f"
+metricUuid = UUIDBytes.generateNamedV5 metricIdNamespace . encodeUtf8 . T.intercalate "\x1f"
 
 
 metricSeriesId :: MetricRecord -> Text
