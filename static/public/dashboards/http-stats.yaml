@@ -16,7 +16,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Requests'
         icon: list-tree
-        query: summarize count(*) by bin_auto(timestamp)
+        query: kind == "server" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -27,7 +27,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'All requests'
-    query: summarize count(*) by bin_auto(timestamp), status_code
+    query: kind == "server" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
     unit: reqs
     layout: { w: 6, h: 4 }
 
@@ -38,32 +38,30 @@ widgets:
     # query: timechart p50(duration_ns) as p50, p75(duration_ns) as p75, p90(duration_ns) as p90, p95(duration_ns) as p95 by duration_ns
     summarize_by: max
     sql: |
-      SELECT timeB, value, quantile
-      FROM (
+      WITH bucket_digests AS (
         SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
-               ARRAY[
-                 (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
-                 (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
-               ] AS values,
-               ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
+               percentile_agg(duration) AS digest
         FROM otel_logs_and_spans
         WHERE project_id='{{project_id}}'
-          AND name = 'monoscope.http' AND kind = 'SERVER'
+          AND attributes___http___response___status_code IS NOT NULL AND kind = 'server'
           {{time_filter_sql}}
         GROUP BY timeB
-      ) s,
-      LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);
+      )
+      SELECT b.timeB,
+             (approx_percentile(q.percentile, b.digest) / 1000000.0)::float AS value,
+             q.quantile
+      FROM bucket_digests b
+      CROSS JOIN (VALUES ('p50', 0.50), ('p75', 0.75), ('p90', 0.90), ('p95', 0.95))
+        AS q(quantile, percentile);
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Errors'
     theme: 'roma'
-    query: status_code >= 300.0 | summarize count(*) by bin_auto(timestamp), status_code
+    query: kind == "server" AND attributes.http.response.status_code >= 400 | summarize count(*) by bin_auto(timestamp), attributes.http.response.status_code
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Requests by Endpoint'
-    query: summarize count(*) by bin_auto(timestamp), method, url_path
+    query: kind == "server" AND attributes.http.response.status_code != null | summarize count(*) by bin_auto(timestamp), method, url_path
     layout: { w: 6, h: 4 }
