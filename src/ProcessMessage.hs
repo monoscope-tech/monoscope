@@ -23,6 +23,7 @@ module ProcessMessage (
   classifyUrlPathWith,
   PathClassifier (..),
   mkPathClassifier,
+  mkBatchPathClassifiers,
   emptyPathClassifier,
   dedupFields,
   isUrlIdLike,
@@ -313,14 +314,15 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
 -- Rows whose project cache is absent pass through unstamped; the worker's UPDATE
 -- path still covers them.
 stampHashesAtIngest :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> V.Vector Telemetry.OtelLogsAndSpans
-stampHashesAtIngest caches = V.map \r -> fromMaybe r do
-  pid <- Projects.projectIdFromText r.project_id
-  pjc <- HM.lookup pid caches
-  let (_, spanHashes, _, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
-      errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
-  pure r{hashes = Just $ spanHashes <> errHashes}
+stampHashesAtIngest caches spans = V.map stamp spans
   where
-    templatesByPid = HM.map mkPathClassifier caches
+    stamp r = fromMaybe r do
+      pid <- Projects.projectIdFromText r.project_id
+      pjc <- HM.lookup pid caches
+      let (_, spanHashes, _, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
+          errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
+      pure r{hashes = Just $ spanHashes <> errHashes}
+    templatesByPid = mkBatchPathClassifiers caches spans
 
 
 -- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.
@@ -1323,6 +1325,25 @@ mkPathClassifier pjc =
     }
 
 
+-- | Share router declarations before classifying any span in a batch. A span
+-- without http.route must get the same identity as its routed sibling, even
+-- when this is the first batch for that endpoint. Derive declarations against
+-- the original cache so input order cannot change the canonical choice.
+mkBatchPathClassifiers :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> HM.HashMap Projects.ProjectId PathClassifier
+mkBatchPathClassifiers caches spans = HM.map sortTemplates $ V.foldl' addDeclared bases spans
+  where
+    bases = HM.map mkPathClassifier caches
+    sortTemplates classifier = classifier{templates = sortCanonicalPaths classifier.templates}
+    addDeclared classifiers sp = fromMaybe classifiers do
+      pid <- Projects.projectIdFromText sp.project_id
+      original <- HM.lookup pid bases
+      let HttpKey{method, host, urlPath, isHttpSpan, pathSource} = httpKeyOf original sp
+      guard $ isHttpSpan && pathSource == DeclaredByRouter
+      let segs = T.splitOn "/" urlPath
+          add classifier = classifier{templates = HM.insertWith (<>) (method, host, length segs) [(segs, urlPath)] classifier.templates}
+      pure $ HM.adjust add pid classifiers
+
+
 -- | Number of literal (non-wildcard) segments — a template's specificity.
 templateLiterals :: [Text] -> Int
 templateLiterals = length . filter (not . isBracedPlaceholder)
@@ -1367,11 +1388,15 @@ matchCanonicalPath idx reqMethod reqHost reqPath =
 -- Within a bucket, most-literal-first, then lexically — so the winner does not
 -- depend on the order Postgres aggregated the rows in.
 parseCanonicalPaths :: V.Vector Text -> CanonicalPathIndex
-parseCanonicalPaths = HM.map (sortOn (\(segs, p) -> (negate $ templateLiterals segs, p))) . V.foldl' step HM.empty
+parseCanonicalPaths = sortCanonicalPaths . V.foldl' step HM.empty
   where
     step m t = case T.splitOn "|" t of
       [method, host, p] -> let segs = T.splitOn "/" p in HM.insertWith (<>) (method, host, length segs) [(segs, p)] m
       _ -> m
+
+
+sortCanonicalPaths :: CanonicalPathIndex -> CanonicalPathIndex
+sortCanonicalPaths = HM.map (sortOn (\(segs, p) -> (negate $ templateLiterals segs, p)) . ordNub)
 
 
 -- | Re-derive a stored path's template with the current classifier.

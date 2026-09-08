@@ -1,7 +1,7 @@
 module ProcessMessageSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.HashMap.Strict qualified as HashMap
+import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -14,9 +14,10 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.TestUtils
-import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages, processSpanToEntities)
+import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages, processSpanToEntities, stampHashesAtIngest)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Config (AuthContext (..))
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
 import Utils (toXXHash)
 
@@ -89,6 +90,32 @@ spec = around withTestResources do
         pathOf classifier cache sp = (\(_, _, np, _) -> np) $ processSpanToEntities classifier cache pid sp
         fwHashOf classifier cache sp = (\(_, _, _, fw) -> fw) $ processSpanToEntities classifier cache pid sp
 
+    it "httpRoute_batchSharesDeclaredRouteWithUnroutedSpans" \tr -> do
+      let path = "/api/stores/6a42926ba6838426a09a58c0/business-hours"
+          declared = route "/api/stores/:id/business-hours" path frozenTime
+          unrouted = route "" path frozenTime
+          caches = one (pid, Projects.defaultProjectCache)
+          expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{id}/business-hours"
+      for_ [V.fromList [declared, unrouted], V.fromList [unrouted, declared]] \spans ->
+        V.map (.hashes) (stampHashesAtIngest caches spans) `shouldBe` V.replicate 2 expected
+      Telemetry.handOffBatches tr.trATCtx.extractionWorker caches $ stampHashesAtIngest caches $ V.fromList [unrouted, declared]
+      drainExtractionWorker tr
+      endpoints <-
+        withPool tr.trPool
+          $ DBT.query [sql| SELECT url_path, hash FROM apis.endpoints WHERE project_id = ? |] (Only pid)
+          :: IO (V.Vector (Text, Text))
+      endpoints `shouldBe` V.singleton ("/api/stores/{id}/business-hours", toXXHash $ pid.toText <> "GET" <> "/api/stores/{id}/business-hours")
+
+    it "httpRoute_batchDeclarationsStayWithinTheirProject" \_ -> do
+      let path = "/api/stores/6a42926ba6838426a09a58c0/business-hours"
+          otherPid = UUIDId $ UUID.fromWords 1 2 3 4
+          declared = (route "/api/stores/:id/business-hours" path frozenTime){Telemetry.project_id = otherPid.toText}
+          unrouted = route "" path frozenTime
+          caches = HM.fromList [(pid, Projects.defaultProjectCache), (otherPid, Projects.defaultProjectCache)]
+          stamped = stampHashesAtIngest caches $ V.fromList [declared, unrouted]
+          expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{uuid}/business-hours"
+      (.hashes) <$> (stamped V.!? 1) `shouldBe` Just expected
+
     -- Django writes a Python named-group regex. normalizeUrlPath then truncated
     -- it at the '?' of "(?P<", which is how "api/v1/wallets/(" became 162 real
     -- endpoints across four projects.
@@ -134,7 +161,7 @@ spec = around withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let jsonMsg = "{\"duration\":737639,\"host\":\"3.228.92.161\",\"method\":\"POST\",\"path_params\":{\"0\":\"/service/extension/backup/mboximport\"},\"project_id\":\"00000000-0000-0000-0000-000000000000\",\"proto_minor\":1,\"proto_major\":1,\"query_params\":{\"account-name\":[\"admin\"],\"account-status\":[\"1\"],\"ow\":[\"cmd\"]},\"raw_url\":\"/service/extension/backup/mboximport?account-name=admin&account-status=1&ow=cmd\",\"referer\":\"\",\"request_body\":\"e30=\",\"request_headers\":{\"connection\":[\"upgrade\"],\"host\":[\"3.228.92.161\"],\"x-real-ip\":[\"172.31.5.55\"],\"x-forwarded-for\":[\"138.199.34.206, 172.31.5.55\"],\"content-length\":[\"716\"],\"x-forwarded-proto\":[\"http\"],\"x-forwarded-port\":[\"80\"],\"x-amzn-trace-id\":[\"Root=1-65e01ff0-22108e1659ac458930d6e9b0\"],\"user-agent\":[\"Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:92.0) Gecko/20100101 Firefox/92.0\"],\"accept-encoding\":[\"gzip, deflate\"],\"content-type\":[\"application/x-www-form-urlencoded\"]},\"response_body\":\"Tm90IEZvdW5k\",\"response_headers\":{\"x-powered-by\":[\"Express\"],\"vary\":[\"Origin\"],\"access-control-allow-credentials\":[\"true\"],\"content-type\":[\"text/html; charset=utf-8\"],\"content-length\":[\"9\"],\"etag\":[\"W/\\\"9-0gXL1ngzMqISxa6S1zx3F4wtLyg\\\"\"]},\"sdk_type\":\"JsExpress\",\"status_code\":404,\"timestamp\":\"" <> toString nowTxt <> "\",\"url_path\":\"/service/extension/backup/mboximport\",\"errors\":[],\"tags\":[],\"msg_id\":\"fdadc75d-5710-49cd-adfd-2d7547c9ab17\"}"
       let msgs = [("m1", encodeUtf8 jsonMsg)]
-      resp <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
+      resp <- runTestBg frozenTime tr $ processMessages msgs HM.empty
       case resp of
         Right (ids, _poison) -> ids `shouldBe` ["m1"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
@@ -148,7 +175,7 @@ spec = around withTestResources do
             [ ("m1", toStrict $ AE.encode reqMsg1)
             , ("m2", toStrict $ AE.encode reqMsg2)
             ]
-      resp <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
+      resp <- runTestBg frozenTime tr $ processMessages msgs HM.empty
       case resp of
         Right (ids, _poison) -> ids `shouldBe` ["m1", "m2"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
@@ -162,7 +189,7 @@ spec = around withTestResources do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
           reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HashMap.empty
+      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HM.empty
       whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
       -- No drainExtractionWorker / runAllBackgroundJobs: the hash must be there already.
       hashes <- withPool tr.trPool $ DBT.query [sql| SELECT unnest(hashes) FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid) :: IO (V.Vector (Only Text))
@@ -177,7 +204,7 @@ spec = around withTestResources do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
           reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HashMap.empty
+      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HM.empty
       whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
       routes <-
         withPool tr.trPool
@@ -194,7 +221,7 @@ spec = around withTestResources do
             [ ("m1", toStrict $ AE.encode reqMsg1)
             , ("m2", toStrict $ AE.encode reqMsg2)
             ]
-      f <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
+      f <- runTestBg frozenTime tr $ processMessages msgs HM.empty
       drainExtractionWorker tr
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs

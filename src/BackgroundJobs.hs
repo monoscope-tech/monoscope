@@ -109,7 +109,7 @@ import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, mkPathClassifier, processSpanToEntities)
+import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -2414,7 +2414,7 @@ processEagerBatch batch shard
 
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
-        let !canonicalTemplates = mkPathClassifier projectCache
+        let !canonicalTemplates = HM.lookupDefault (mkPathClassifier projectCache) pid $ mkBatchPathClassifiers (one (pid, projectCache)) spans
             !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
