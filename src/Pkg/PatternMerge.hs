@@ -26,7 +26,6 @@ import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.Aeson.Types (parseMaybe)
-import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Set qualified as S
@@ -67,7 +66,12 @@ cosineSimWithNorms (xs, normA) (ys, normB)
   | normA == 0 || normB == 0 = 0.0
   | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
   where
-    dotP = VU.sum $ VU.zipWith (*) xs ys
+    -- Keep accumulation strict without allocating intermediate stream steps.
+    -- Length equality is checked above; both indexed reads stay in bounds.
+    dotP = go 0 0
+    go !i !acc
+      | i == VU.length xs = acc
+      | otherwise = go (i + 1) (acc + (xs VU.! i) * (ys VU.! i))
 
 
 vecNorm :: VU.Vector Float -> Float
@@ -92,6 +96,16 @@ ambiguousThreshold = 0.75
 --
 -- >>> assignToCentroids [("c1", [1,0,0])] [("n1", [0,1,0])]
 -- ([],[])
+--
+-- Equal scores keep the last centroid, including scores tied by rounding.
+-- >>> assignToCentroids [("first", [1,0]), ("last", [1,0])] [("new", [1,0])]
+-- ([("new","last")],[])
+--
+-- >>> assignToCentroids [("zero", [0,0]), ("short", [1])] [("new", [1,0])]
+-- ([],[])
+--
+-- >>> assignToCentroids [("c", [1,0])] [("new", [0.8,0.6])]
+-- ([],[("new","c")])
 assignToCentroids :: [(a, [Float])] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
 assignToCentroids centroids = foldl' classify ([], [])
   where
@@ -104,9 +118,15 @@ assignToCentroids centroids = foldl' classify ([], [])
               | sim >= autoMergeThreshold -> ((newId, centId) : merges, ambiguous)
               | sim >= ambiguousThreshold -> (merges, (newId, centId) : ambiguous)
             _ -> (merges, ambiguous)
-    bestMatch newNormed cs = case mapMaybe (\(cid, cemb, cnorm) -> let s = cosineSimWithNorms newNormed (cemb, cnorm) in bool Nothing (Just (cid, s)) (s >= ambiguousThreshold)) cs of
-      [] -> Nothing
-      matches -> Just $ maximumBy (comparing snd) matches
+    bestMatch newNormed = foldl' choose Nothing
+      where
+        choose best (cid, cemb, cnorm)
+          | sim >= ambiguousThreshold = case best of
+              Just (_, bestSim) | sim < bestSim -> best
+              _ -> Just (cid, sim)
+          | otherwise = best
+          where
+            sim = cosineSimWithNorms newNormed (cemb, cnorm)
 
 
 -- | Indices of the input pairs the judge answered @MERGE@ for. Pairs it declined,
