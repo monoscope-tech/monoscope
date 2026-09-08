@@ -31,6 +31,9 @@ test("deep paging and live delivery preserve the row under the reader", async ({
       document.body.append(list);
       await list.updateComplete;
     }
+    // A visible server-rendered tag can still be waiting for its lazy module.
+    await customElements.whenDefined("log-list");
+    await list.updateComplete;
     const COUNT = 2_500;
     const PAGE = 400;
     const columns = ["id", "timestamp", "service", "summary", "latency_breakdown", "trace_id", "parent_id", "kind", "start_time_ns", "duration"];

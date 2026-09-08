@@ -185,7 +185,10 @@ mergeGroup policy pid keyHash grp st = fromMaybe st do
       sampleNow = case curEntry of
         Just e -> e.sampleCount `mod` policy.learnSampleEveryN == 0
         Nothing -> True
-      base = fromMaybe (newEntry rep.keyKind rep.scope now) curEntry
+      baseEntry = fromMaybe (newEntry rep.keyKind rep.scope now) curEntry
+      -- Scope is observation evidence, not sampled field data. In particular,
+      -- retain a non-404 response anywhere in the batch after learning slows.
+      base = baseEntry{Catalog.scope = V.foldl' (\acc input -> Catalog.mergeScope acc input.scope) baseEntry.scope grp}
       n = fromIntegral (V.length grp) :: Word64
       walked =
         if learnPhase || sampleNow

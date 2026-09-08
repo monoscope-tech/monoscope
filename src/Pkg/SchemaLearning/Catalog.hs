@@ -26,6 +26,7 @@ module Pkg.SchemaLearning.Catalog (
   emptyScope,
   newEntry,
   mergeFullWalk,
+  mergeScope,
   classifyFormat,
   -- Anomaly diffing.
   AnomalyKind (..),
@@ -457,12 +458,18 @@ diffAnomalies :: Text -> Maybe CatalogEntry -> CatalogEntry -> [ProducedAnomaly]
 diffAnomalies kh priorM cur =
   let priorFields = maybe HM.empty (.template.fields) priorM
       curFields = cur.template.fields
-      isNew = isNothing priorM
-      isHttp = cur.template.keyKind == HttpEndpoint
+      -- 404 observations remain useful catalog data, but do not establish an
+      -- endpoint (processSpanToEntities excludes them too). Announce the first
+      -- non-404 response even if an earlier flush persisted only 404s.
+      -- Older catalog entries can lack status evidence; retain their eligibility.
+      endpointObserved entry =
+        entry.template.keyKind
+          == HttpEndpoint
+          && (V.null entry.scope.statusCodes || V.any (/= 404) entry.scope.statusCodes)
       headline =
         [ ProducedAnomaly AKEndpoint kh kh Nothing
-        | isNew
-        , isHttp
+        | endpointObserved cur
+        , not $ maybe False endpointObserved priorM
         ]
       shapeChanged = case priorM of
         Nothing -> True

@@ -27,7 +27,7 @@ import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
 import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, withTestResources)
 import Relude
-import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 import Utils (toXXHash)
 
 
@@ -39,7 +39,7 @@ pid = UUIDId UUID.nil
 -- Order matters: catalog → summary → template (FK), then anomalies + queued jobs.
 clearAll :: TestResources -> IO ()
 clearAll tr = do
-  let exec :: forall ps. (Database.PostgreSQL.Simple.ToRow.ToRow ps) => Database.PostgreSQL.Simple.Types.Query -> ps -> IO ()
+  let exec :: forall ps. Database.PostgreSQL.Simple.ToRow.ToRow ps => Database.PostgreSQL.Simple.Types.Query -> ps -> IO ()
       exec q ps = void $ withPool tr.trPool $ DBT.execute q ps
   exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ? |] (Only pid)
   exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ? |] (Only pid)
@@ -102,19 +102,21 @@ observeAndFlush tr ref obs = do
 countAnomalies :: TestResources -> Text -> IO Int
 countAnomalies tr atype = do
   rows :: V.Vector (Only Int) <-
-    withPool tr.trPool $ DBT.query
-      [sql| SELECT COUNT(*)::int FROM apis.anomalies
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT COUNT(*)::int FROM apis.anomalies
             WHERE project_id = ? AND anomaly_type = ?::apis.anomaly_type |]
-      (pid, atype)
+        (pid, atype)
   pure $ maybe 0 (\(Only n) -> n) (rows V.!? 0)
 
 
 countAllAnomalies :: TestResources -> IO Int
 countAllAnomalies tr = do
   rows :: V.Vector (Only Int) <-
-    withPool tr.trPool $ DBT.query
-      [sql| SELECT COUNT(*)::int FROM apis.anomalies WHERE project_id = ? |]
-      (Only pid)
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT COUNT(*)::int FROM apis.anomalies WHERE project_id = ? |]
+        (Only pid)
   pure $ maybe 0 (\(Only n) -> n) (rows V.!? 0)
 
 
@@ -122,26 +124,56 @@ countAllAnomalies tr = do
 countAnomalyJobs :: TestResources -> IO Int
 countAnomalyJobs tr = do
   rows :: V.Vector (Only Int) <-
-    withPool tr.trPool $ DBT.query
-      [sql| SELECT COUNT(*)::int FROM background_jobs
+    withPool tr.trPool
+      $ DBT.query
+        [sql| SELECT COUNT(*)::int FROM background_jobs
             WHERE payload->>'tag' = 'NewAnomaly'
               AND payload->>'projectId' = ?::text |]
-      (Only pid)
+        (Only pid)
   pure $ maybe 0 (\(Only n) -> n) (rows V.!? 0)
 
 
 spec :: Spec
 -- aroundAll (shared DB + clearAll between examples) — must run sequentially, else the
 -- parallel hook races concurrent flushes on the shared schema_catalog/template.
-spec = sequential $ aroundAll withTestResources $
-  describe "Schema Learning – flush + anomaly producer" $ do
+spec = sequential
+  $ aroundAll withTestResources
+  $ describe "Schema Learning – flush + anomaly producer"
+  $ do
+    it "404 observations retain their catalog but only a later matched response announces an endpoint" $ \tr -> do
+      clearAll tr
+      ref <- newIORef Hot.emptySchemaShardState
+      let matched =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/users"
+              [("response.body.message", AE.String "missing", Catalog.FCResponseBody)]
+          missing = matched{Hot.scope = matched.scope{Catalog.statusCodes = V.singleton 404}}
+      -- Pass the full-learning threshold: endpoint evidence must not depend on
+      -- whether the field walk happens to be sampled on the next observation.
+      initialFlush <- observeAndFlush tr ref (replicate 201 missing)
+      initialFlush.catalogRowsWritten `shouldBe` 1
+      countAnomalies tr "endpoint" `shouldReturn` 0
+      countAnomalies tr "field" `shouldReturn` 1
+      _ <- observeAndFlush tr ref [matched]
+      countAnomalies tr "endpoint" `shouldReturn` 1
+      _ <- observeAndFlush tr ref [missing, matched]
+      countAnomalies tr "endpoint" `shouldReturn` 1
+
     it "first flush emits endpoint+shape+field+format anomalies and enqueues one job per type" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
-      let obs = mkObs frozenTime "api.example.com" "GET" "/users"
-            [ ("request.body.user.id", AE.String "abc", Catalog.FCRequestBody)
-            , ("request.body.user.email", AE.String "x@y", Catalog.FCRequestBody)
-            ]
+      let obs =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/users"
+              [ ("request.body.user.id", AE.String "abc", Catalog.FCRequestBody)
+              , ("request.body.user.email", AE.String "x@y", Catalog.FCRequestBody)
+              ]
       r <- observeAndFlush tr ref [obs]
       r.dirtyKeys `shouldBe` 1
       r.catalogRowsWritten `shouldBe` 1
@@ -160,23 +192,34 @@ spec = sequential $ aroundAll withTestResources $
     it "flush survives NUL bytes in field paths" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
-      let obs = mkObs frozenTime "api.example.com" "GET" "/nul"
-            [("request.body.bad\NULkey", AE.String "v\NULv", Catalog.FCRequestBody)]
+      let obs =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/nul"
+              [("request.body.bad\NULkey", AE.String "v\NULv", Catalog.FCRequestBody)]
       r <- observeAndFlush tr ref [obs]
       r.catalogRowsWritten `shouldBe` 1
       trows :: V.Vector (Only Int) <-
-        withPool tr.trPool $ DBT.query
-          [sql| SELECT COUNT(*)::int FROM apis.schema_template t
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT COUNT(*)::int FROM apis.schema_template t
                 JOIN apis.schema_catalog c ON c.template_hash = t.template_hash
                 WHERE c.project_id = ? |]
-          (Only pid)
+            (Only pid)
       (maybe 0 (\(Only n) -> n) (trows V.!? 0) :: Int) `shouldBe` 1
 
     it "second flush of identical observations dedupes — no new anomalies, no extra jobs" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
-      let obs = mkObs frozenTime "api.example.com" "GET" "/users"
-            [("request.body.id", AE.String "abc", Catalog.FCRequestBody)]
+      let obs =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/users"
+              [("request.body.id", AE.String "abc", Catalog.FCRequestBody)]
       _ <- observeAndFlush tr ref [obs]
       before <- countAllAnomalies tr
       jobsBefore <- countAnomalyJobs tr
@@ -185,20 +228,35 @@ spec = sequential $ aroundAll withTestResources $
       jobsAfter <- countAnomalyJobs tr
       after `shouldBe` before -- ON CONFLICT DO NOTHING on (project_id, target_hash)
       jobsAfter `shouldBe` jobsBefore -- queued job coalesces in place
-
     it "adding a new field path emits one shape + one field + one format anomaly (no new endpoint)" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
       let host = "api.example.com"; method = "POST"; path = "/orders"
-      _ <- observeAndFlush tr ref
-        [mkObs frozenTime host method path
-          [("request.body.id", AE.String "x", Catalog.FCRequestBody)]]
+      _ <-
+        observeAndFlush
+          tr
+          ref
+          [ mkObs
+              frozenTime
+              host
+              method
+              path
+              [("request.body.id", AE.String "x", Catalog.FCRequestBody)]
+          ]
       before <- countAllAnomalies tr
-      _ <- observeAndFlush tr ref
-        [mkObs frozenTime host method path
-          [ ("request.body.id", AE.String "x", Catalog.FCRequestBody)
-          , ("request.body.email", AE.String "a@b", Catalog.FCRequestBody)
-          ]]
+      _ <-
+        observeAndFlush
+          tr
+          ref
+          [ mkObs
+              frozenTime
+              host
+              method
+              path
+              [ ("request.body.id", AE.String "x", Catalog.FCRequestBody)
+              , ("request.body.email", AE.String "a@b", Catalog.FCRequestBody)
+              ]
+          ]
       countAnomalies tr "endpoint" `shouldReturn` 1 -- unchanged
       shapeN <- countAnomalies tr "shape"
       fieldN <- countAnomalies tr "field"
@@ -214,22 +272,37 @@ spec = sequential $ aroundAll withTestResources $
       ref <- newIORef Hot.emptySchemaShardState
       let host = "api.example.com"; method = "GET"; path = "/widen"
       -- First: id is string-only.
-      _ <- observeAndFlush tr ref
-        [mkObs frozenTime host method path
-          [("response.body.id", AE.String "abc", Catalog.FCResponseBody)]]
+      _ <-
+        observeAndFlush
+          tr
+          ref
+          [ mkObs
+              frozenTime
+              host
+              method
+              path
+              [("response.body.id", AE.String "abc", Catalog.FCResponseBody)]
+          ]
       before <- countAllAnomalies tr
       -- Now widen with a number occurrence — flushDirty re-walks past learnFullThreshold
       -- but for the very first batch the walk runs unconditionally, so a single
       -- widened observation suffices.
-      _ <- observeAndFlush tr ref
-        [mkObs frozenTime host method path
-          [("response.body.id", AE.Number 42, Catalog.FCResponseBody)]]
+      _ <-
+        observeAndFlush
+          tr
+          ref
+          [ mkObs
+              frozenTime
+              host
+              method
+              path
+              [("response.body.id", AE.Number 42, Catalog.FCResponseBody)]
+          ]
       after <- countAllAnomalies tr
       -- Endpoint already exists, no new field path → only shape + format add up.
       (after - before) `shouldSatisfy` (`elem` [1, 2 :: Int])
       countAnomalies tr "endpoint" `shouldReturn` 1
       countAnomalies tr "field" `shouldReturn` 1 -- only the original
-
     it "buildAnomalyRows produces no rows when prior == current" $ \_tr -> do
       let kh = "khTest"
           fs = Catalog.FieldStruct (HS.fromList [Catalog.FTString]) (HS.fromList ["text"]) Catalog.FCRequestBody False
@@ -251,10 +324,15 @@ spec = sequential $ aroundAll withTestResources $
     it "regression: NUL byte in observed value must not crash schema_summary upsert" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState
-      let obs = mkObs frozenTime "api.example.com" "GET" "/k8s"
-            [ ("resource.container.image.name", AE.String "ghcr.io/foo/bar\NULextra", Catalog.FCResource)
-            , ("resource.container.restart_count", AE.String "0\NUL", Catalog.FCResource)
-            ]
+      let obs =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/k8s"
+              [ ("resource.container.image.name", AE.String "ghcr.io/foo/bar\NULextra", Catalog.FCResource)
+              , ("resource.container.restart_count", AE.String "0\NUL", Catalog.FCResource)
+              ]
       -- Pre-fix, the upsert throws 22P05 inside flushDirty.
       -- Post-fix, flushDirty returns cleanly with one summary written.
       r <- observeAndFlush tr ref [obs]
@@ -263,22 +341,40 @@ spec = sequential $ aroundAll withTestResources $
     it "regression: one project's NUL-tainted doc must not block other projects' summary writes" $ \tr -> do
       clearAll tr
       let pidGood = UUIDId (fromMaybe UUID.nil (UUID.fromString "11111111-1111-1111-1111-111111111111"))
-      void $ withPool tr.trPool $ DBT.execute
-        [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
               VALUES (?, 'NUL Resilience Project', 'Startup', true, NULL, false, false)
               ON CONFLICT (id) DO UPDATE SET active = true, deleted_at = NULL |]
           (Only pidGood)
-      void $ withPool tr.trPool $ DBT.execute
-        [sql| DELETE FROM apis.schema_summary WHERE project_id = ? |] (Only pidGood)
-      void $ withPool tr.trPool $ DBT.execute
-        [sql| DELETE FROM apis.anomalies WHERE project_id = ? |] (Only pidGood)
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql| DELETE FROM apis.schema_summary WHERE project_id = ? |]
+          (Only pidGood)
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql| DELETE FROM apis.anomalies WHERE project_id = ? |]
+          (Only pidGood)
       ref <- newIORef Hot.emptySchemaShardState
       -- Tainted observation on the default pid.
-      let tainted = mkObs frozenTime "api.example.com" "GET" "/bad"
-            [("k", AE.String "x\NULy", Catalog.FCRequestBody)]
+      let tainted =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/bad"
+              [("k", AE.String "x\NULy", Catalog.FCRequestBody)]
       -- Clean observation on a different project — both flushed in the same pass.
-      let clean = mkObs frozenTime "api.example.com" "GET" "/ok"
-            [("k", AE.String "hello", Catalog.FCRequestBody)]
+      let clean =
+            mkObs
+              frozenTime
+              "api.example.com"
+              "GET"
+              "/ok"
+              [("k", AE.String "hello", Catalog.FCRequestBody)]
       Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton tainted)
       Hot.observeSpans ref Hot.defaultPolicy pidGood (V.singleton clean)
       r <- runHasqlEffect tr (Worker.flushDirty ref)
