@@ -313,6 +313,11 @@ spec = around withTestResources do
           events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
       roundTrip events `shouldBe` Right events
 
+    it "round-trips long strings around escapes and UTF-8 characters" $ \_ -> do
+      let content = T.replicate 1000000 "x"
+          events = AE.toJSON ([content <> "\"\\é🙂" <> content, ""] :: [Text])
+      roundTrip events `shouldBe` Right events
+
   describe "processReplayEvents (e2e)" do
     -- End-to-end through the kafka batch entry point. Uses a nonexistent
     -- project_id so `saveReplayMinio` short-circuits in the project-lookup
