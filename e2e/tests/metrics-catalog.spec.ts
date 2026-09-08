@@ -164,6 +164,9 @@ test.describe('metrics catalog', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const colorScheme of ['light', 'dark'] as const) {
       await page.emulateMedia({ colorScheme });
+      await page.context().addCookies([{
+        name: 'theme', value: colorScheme, url: test.info().project.use.baseURL as string,
+      }]);
       await page.goto(url + '?q=uxcatalog');
       await expect(page.locator('body')).toHaveAttribute('data-theme', colorScheme);
       expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(390);
