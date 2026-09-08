@@ -313,6 +313,18 @@ spec = around withTestResources do
           events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
       roundTrip events `shouldBe` Right events
 
+    it "scans long event strings without allocating for each byte" $ \_ -> do
+      let events = AE.toJSON [T.replicate 1000000 "x"]
+          body = mkPayload events
+      bodySize <- evaluateWHNF (BS.length body)
+      allocated <- allocatedBy do
+        payload <- either fail pure (splitReplayPayload body)
+        evaluateWHNF (BS.length payload.eventsBytes)
+      -- Allow copies of the input and metadata overhead, but not the old
+      -- per-character parser chain (roughly 72 bytes per ordinary byte).
+      allocated `shouldSatisfy` (< fromIntegral bodySize * 8)
+      roundTrip events `shouldBe` Right events
+
   describe "processReplayEvents (e2e)" do
     -- End-to-end through the kafka batch entry point. Uses a nonexistent
     -- project_id so `saveReplayMinio` short-circuits in the project-lookup

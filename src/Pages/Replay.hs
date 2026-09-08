@@ -298,7 +298,8 @@ skipBracketed open close = AC.anyChar *> loop (1 :: Int)
 -- >>> AB.parseOnly (skipStringBody *> AC.takeByteString) "a\\\"b\",rest"
 -- Right ",rest"
 skipStringBody :: AC.Parser ()
-skipStringBody =
+skipStringBody = do
+  AB.skipWhile (\b -> b /= 0x22 && b /= 0x5c)
   AC.anyChar >>= \case
     '"' -> pass
     '\\' -> AC.anyChar *> skipStringBody
