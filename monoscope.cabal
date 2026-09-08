@@ -275,6 +275,7 @@ library
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
+      Pkg.Minio
       Pkg.Parser
       Pkg.PatternMerge
       Pkg.Prometheus
@@ -641,6 +642,7 @@ test-suite integration-tests
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
+      MinioManagerSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.StandardOtelSpansSpec
@@ -883,6 +885,7 @@ test-suite test-dev
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
+      Pkg.Minio
       Pkg.Parser
       Pkg.PatternMerge
       Pkg.Prometheus
@@ -930,6 +933,7 @@ test-suite test-dev
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
+      MinioManagerSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.StandardOtelSpansSpec

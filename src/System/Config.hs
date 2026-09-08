@@ -26,6 +26,8 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes qualified as Containers
 import Models.Telemetry.RUM qualified as RUM
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Client qualified as HC
+import Network.HTTP.Client.TLS qualified as HCTLS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
@@ -395,6 +397,7 @@ type CodeBlobKey = (Text, Text, Text, Text)
 
 data AuthContext = AuthContext
   { env :: EnvConfig
+  , s3HttpManager :: HC.Manager
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
@@ -465,6 +468,7 @@ instance Default DeploymentEnv where
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
+  s3HttpManager <- liftIO $ HC.newManager HCTLS.tlsManagerSettings
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
       tfParams =
@@ -562,6 +566,7 @@ configToEnv config = do
       , hasqlTimefusionPool
       , hasqlTimefusionUsesPgTypes = False -- prod TF is a real TimeFusion: bare text→Variant
       , env = config
+      , s3HttpManager
       , projectCache
       , projectKeyCache
       , logsPatternCache

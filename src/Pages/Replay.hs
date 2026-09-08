@@ -35,10 +35,12 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Client (Manager)
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
 import Pkg.ErrorMetrics qualified as Metrics
+import Pkg.Minio qualified as Storage
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
 import Relude.Extra.Tuple (traverseToFst)
@@ -324,18 +326,18 @@ processReplayEvents msgs _attrs = do
       (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
       oversizePoison = [(ackId, body, "replay:oversize_message") | (ackId, body) <- oversized]
   replicateM_ (length oversized) $ Metrics.bumpErrorCounter "replay:oversize_message"
-  (acks, decodePoison) <- foldMapM (handleChunk envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
+  (acks, decodePoison) <- foldMapM (handleChunk ctx.s3HttpManager envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
   pure $ Right (acks, oversizePoison <> decodePoison)
   where
     -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
     -- ack only the successfully-saved + DLQ'd ackIds.
-    handleChunk envCfg jobsPool = foldMapM \(!ackId, !body) ->
+    handleChunk manager envCfg jobsPool = foldMapM \(!ackId, !body) ->
       case splitReplayPayload (stripJsonNullEscapes body) of
         Left err -> do
           Metrics.bumpErrorCounter "replay:decode_error"
           pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
         Right payload ->
-          saveReplayMinio envCfg jobsPool ackId payload <&> (,[]) . maybeToList
+          saveReplayMinio manager envCfg jobsPool ackId payload <&> (,[]) . maybeToList
 
 
 -- | True if the Minio error represents a missing object (safe to treat as empty).
@@ -566,13 +568,14 @@ classifyFetches rs =
 -- that is `True` if any key was lost to a non-NoSuchKey error.
 fetchIndividualsRaw
   :: (IOE :> es, Log :> es)
-  => Minio.ConnectInfo
+  => Manager
+  -> Minio.ConnectInfo
   -> Minio.Bucket
   -> [Text]
   -> HashMap Text Text
   -> Eff es ([(Double, BL.ByteString)], Bool, Int)
-fetchIndividualsRaw conn bucket fileKeys logCtx = do
-  split <- classifyFetches <$> liftIO (forM fileKeys \k -> (k,) <$> Minio.runMinio conn (fetchRawForMerge bucket k False))
+fetchIndividualsRaw manager conn bucket fileKeys logCtx = do
+  split <- classifyFetches <$> liftIO (forM fileKeys \k -> (k,) <$> Storage.runMinio manager conn (fetchRawForMerge bucket k False))
   unless (null split.decodeErrs)
     $ Log.logAttention "Decode errors while reading replay event files" (HM.insert "errors" (toText $ show split.decodeErrs) logCtx)
   unless (null split.transportErrs)
@@ -588,8 +591,8 @@ fetchIndividualsRaw conn bucket fileKeys logCtx = do
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
 -- unrecoverable failure, `Right` on success (including empty or partial results).
-getSessionEvents :: (DB es, Log :> es) => Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (BL.ByteString, Bool))
-getSessionEvents conn pid bucket sessionId = do
+getSessionEvents :: (DB es, Log :> es) => Manager -> Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (BL.ByteString, Bool))
+getSessionEvents manager conn pid bucket sessionId = do
   let sessionStr = UUID.toText sessionId
       logCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
       transientMsg = "Storage is temporarily unreachable. Retry in a moment — your recording is safe." :: Text
@@ -602,7 +605,7 @@ getSessionEvents conn pid bucket sessionId = do
       -- Ancient single-object sessions (pre file_keys migration): fetch raw.
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
-        liftIO (Minio.runMinio conn $ fetchRawForMerge bucket (sessionStr <> ".json") False) >>= \case
+        liftIO (Storage.runMinio manager conn $ fetchRawForMerge bucket (sessionStr <> ".json") False) >>= \case
           Left err
             | isNoSuchKey err -> noEvents "legacy_blob_missing"
             | otherwise -> legacyFailed (toText $ displayException err)
@@ -614,14 +617,14 @@ getSessionEvents conn pid bucket sessionId = do
   -- individual tail both come from the DB — never from listing S3 (minio-hs can't
   -- list R2). Fetch each key by getObject, gzip-decoding by suffix.
   (shardKeys, fileKeys) <- sessionKeys pid sessionId
-  shards <- classifyFetches <$> liftIO (forM shardKeys \sk -> (sk,) <$> Minio.runMinio conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk)))
+  shards <- classifyFetches <$> liftIO (forM shardKeys \sk -> (sk,) <$> Storage.runMinio manager conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk)))
   -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
   -- flags the recording partial, same contract as a missing individual file.
   let shardCorrupt = not (null shards.decodeErrs) -- data-integrity event
   unless (null shards.decodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shards.decodeErrs) logCtx)
   unless (null shards.transportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shards.transportErrs) logCtx)
   (individuals, indivPartial, missingCount) <-
-    if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw conn bucket fileKeys logCtx
+    if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw manager conn bucket fileKeys logCtx
   let partial = indivPartial || not (null shards.transportErrs)
       -- Individuals collapse (sorted by first event) into one blob, ordered against
       -- the shards by first event. concatRawJsonArrays drops empty arrays.
@@ -741,8 +744,8 @@ maxFilesPerMerge = 25
 -- raw JSON bytes (already validated as a JSON value by the splitter) and
 -- streams them straight into MinIO with no AE.encode round-trip.
 {-# ANN saveReplayMinio ("HLint: ignore Use alternative" :: String) #-}
-saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
-saveReplayMinio envCfg jobsPool ackId payload =
+saveReplayMinio :: (DB es, Log :> es, Time :> es) => Manager -> EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
+saveReplayMinio manager envCfg jobsPool ackId payload =
   Projects.projectById payload.projectId >>= \case
     Nothing -> pure $ Just ackId
     Just p
@@ -754,7 +757,7 @@ saveReplayMinio envCfg jobsPool ackId payload =
               timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
               objKeyText = replayObjectPrefix payload.projectId now payload.sessionId <> timeStr <> ".json"
               body = payload.eventsBytes
-          liftIO (Minio.runMinio conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
+          liftIO (Storage.runMinio manager conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
               -- The object is durable BEFORE anything records its key, so a failure
@@ -824,7 +827,7 @@ fetchReplaySession p sessionId = do
       summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
   meta <- sessionMetadata pid sessionId summaryCtx
   let emptyResp userMsg = ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just userMsg, meta}
-  tryAny (getSessionEvents conn pid bucket sessionId) >>= \case
+  tryAny (getSessionEvents ctx.s3HttpManager conn pid bucket sessionId) >>= \case
     Right (Right (replayEvents, partial)) -> do
       Log.logInfo
         "Replay session served"
@@ -900,7 +903,7 @@ fetchReplayShard p sessionId mkey = do
   let (conn, bucket) = projectMinioConn ctx.config p
   case mkey of
     Just k | replayKeyScoped p.id.toText (UUID.toText sessionId) k -> do
-      liftIO (Minio.runMinio conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
+      liftIO (Storage.runMinio ctx.s3HttpManager conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
         Right raw -> pure $ RawJson raw
         -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
         -- as empty (the sealed shard carries its events). Any other error
@@ -998,7 +1001,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
           let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existingShards)
           nowForKey <- Time.currentTime
           let shardPrefix = replayObjectPrefix pid nowForKey sessionId
-          liftIO (try @MergeError $ mergeOneSession s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
+          liftIO (try @MergeError $ mergeOneSession ctx.s3HttpManager s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
             Left merr -> do
               let ctxWithErr = Log.withError merr logCtx
               case merr of
@@ -1107,13 +1110,13 @@ parseShardKey key = do
 -- on any decode/transport failure so history is never dropped; NoSuchKey is
 -- tolerated (a source already removed by a crashed prior run). `startIdx` is the
 -- next append index (from the DB shard count) so shard keys stay unique.
-mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> Text -> Int -> [Text] -> IO [Text]
-mergeOneSession conn bucket keyPrefix startIdx fileKeys = reverse <$> go startIdx (sort fileKeys) [] 0 []
+mergeOneSession :: Manager -> Minio.ConnectInfo -> Minio.Bucket -> Text -> Int -> [Text] -> IO [Text]
+mergeOneSession manager conn bucket keyPrefix startIdx fileKeys = reverse <$> go startIdx (sort fileKeys) [] 0 []
   where
     -- buf :: [(firstTs, raw, sourceKey)] for the current shard; sealed :: sealed keys (newest first)
     go idx [] buf _ sealed = seal idx buf sealed
     go idx (k : ks) buf !bufBytes sealed =
-      Minio.runMinio conn (fetchRawForMerge bucket k False) >>= \case
+      Storage.runMinio manager conn (fetchRawForMerge bucket k False) >>= \case
         Left me | isNoSuchKey me -> go idx ks buf bufBytes sealed
         Left me -> throwIO (MergeFetchFailed me)
         Right (Left de) -> throwIO (MergeDecodeFailed [(k, de)])
@@ -1130,7 +1133,7 @@ mergeOneSession conn bucket keyPrefix startIdx fileKeys = reverse <$> go startId
           !merged = concatRawJsonArrays [raw | (_, raw, _) <- sorted]
           !compressed = GZip.compress merged
           shardKey = shardKeyFor keyPrefix idx (round (firstTs :: Double))
-      putRes <- Minio.runMinio conn $ do
+      putRes <- Storage.runMinio manager conn $ do
         Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
         forM_ [k | (_, _, k) <- sorted] (Minio.removeObject bucket)
       whenLeft_ putRes (throwIO . MergePutFailed)
@@ -1181,7 +1184,7 @@ expireOldReplayData = do
       -- Separate `runMinio` per key so one transport error doesn't abort siblings;
       -- mirrors the `fetchIndividuals` pattern elsewhere in this module.
       perKey <- liftIO $ forM keyObjs $ \o ->
-        (o,) <$> Minio.runMinio conn (Minio.removeObject bucket o)
+        (o,) <$> Storage.runMinio ctx.s3HttpManager conn (Minio.removeObject bucket o)
       let fatal = [(o, e) | (o, Left e) <- perKey, not (isNoSuchKey e)]
       if null fatal
         then do
