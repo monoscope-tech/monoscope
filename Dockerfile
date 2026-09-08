@@ -96,16 +96,25 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # Vite chunks that aren't in the image (silent 404s for every web component).
 # `-v0` because list-bin's stdout is the path: at default verbosity cabal may prepend
 # source-repository-package sync chatter (git "HEAD is now at …"), which broke the cp.
+# BodyWrapper holds the viteAssetFile splice that embeds the entry path; its cached
+# object can survive with a stale entry (2026-09-08 incident), so evict it and let the
+# splice re-read the manifest this build just wrote. One module recompile is noise here.
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
+    find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
     cp "$(cabal list-bin -v0 exe:monoscope-server)" /build/dist/ && \
     entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
-    test -f "static/public/assets/web-components/dist/$entry" && \
-    grep -aFq "/public/assets/web-components/dist/$entry" /build/dist/monoscope-server || \
-      { echo "server binary was compiled against a different Vite manifest entry" >&2; exit 1; }
+    { test -f "static/public/assets/web-components/dist/$entry" || \
+      { echo "manifest entry $entry does not exist in dist" >&2; exit 1; }; } && \
+    { grep -aFq "/public/assets/web-components/dist/$entry" /build/dist/monoscope-server || \
+      { echo "server binary was compiled against a different Vite manifest entry" >&2; \
+        echo "manifest entry: $entry" >&2; \
+        echo "binary embeds:" >&2; \
+        grep -aoE '/public/assets/web-components/dist/[^"]{1,80}\.js' /build/dist/monoscope-server | sort -u >&2; \
+        exit 1; }; }
 
 # Final runtime image
 FROM debian:12-slim
