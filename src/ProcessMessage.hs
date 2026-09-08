@@ -890,7 +890,10 @@ commonFormatPatterns =
 -- >>> map valueToFormatStr ["v1"]
 --
 valueToFormatStr :: Text -> Maybe Text
-valueToFormatStr val = snd <$> find (\(regex, _) -> TDFA.matchTest (reRegex regex) val) commonFormatPatterns
+valueToFormatStr val = snd <$> find (\(regex, _) -> TDFA.matchTest (reRegex regex) chars) commonFormatPatterns
+  where
+    -- Share the input across patterns instead of unpacking Text for every match.
+    chars = toString val
 
 
 -- | Detect dynamic URL segments and replace them with named parameters.
