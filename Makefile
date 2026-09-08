@@ -419,6 +419,13 @@ CHECKS ?=
 ci:
 	./scripts/ci/ci.sh local $(CHECKS)
 
+# Run local checks, publish passing results, then show what GitHub still needs.
+ci-signoff:
+	@result=0; \
+	./scripts/ci/ci.sh local $(CHECKS) || result=$$?; \
+	./scripts/ci/ci.sh gate || exit $$?; \
+	exit $$result
+
 # What CI would do with the tree as it stands right now, without doing any of it.
 ci-status:
 	./scripts/ci/ci.sh gate $(CHECKS)
@@ -444,6 +451,6 @@ ci-selftest:
 deploy-image:
 	./scripts/ci/ci.sh image $(SHA)
 
-.PHONY: ci ci-status ci-shell ci-down ci-clean ci-selftest deploy-image
+.PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image
 
 .PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

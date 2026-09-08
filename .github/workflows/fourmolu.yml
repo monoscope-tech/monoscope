@@ -10,7 +10,7 @@ jobs:
   format:
     # Dependabot pushes use a read-only GITHUB_TOKEN; skip rather than 403.
     if: github.actor != 'dependabot[bot]'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

@@ -2,6 +2,11 @@ name: Build and Test PR
 
 on: pull_request
 
+# Only the newest revision of each PR needs remote checks.
+concurrency:
+  group: pullrequest-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   LANG: C.UTF-8
   # Kill switch for the attestation cache: set the repo variable to "true" and
@@ -18,7 +23,7 @@ jobs:
   # job below skips it. See docs/local-ci.md.
   gate:
     name: Gate
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       fingerprints: ${{ steps.checks.outputs.fingerprints }}
       skip_build: ${{ steps.checks.outputs.skip_build }}
@@ -44,7 +49,7 @@ jobs:
     name: Build Frontend
     needs: gate
     if: needs.gate.outputs.skip_haskell != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -81,7 +86,7 @@ jobs:
     name: Build and Test
     needs: [gate, frontend]
     if: needs.gate.outputs.skip_haskell != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # 60, matching Deploy. 30 was measured as below the floor there (~1.5m
     # containers + 16m build + 6m doctests leaves nothing for the integration
     # suite) and raised; this file kept the old number, so PR runs have been
@@ -264,7 +269,7 @@ jobs:
   lint:
     name: Lint (hlint)
     needs: gate
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -289,12 +294,14 @@ jobs:
       # Skip the push for them (and forks) but still run hlint below.
       - name: Commit and push refactorings
         if: steps.refactor.outputs.changed == 'true' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m "Apply hlint refactorings"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git push origin "HEAD:$PR_HEAD_REF"
       - name: Run hlint
         if: needs.gate.outputs.skip_hlint != 'true'
         # The refactor step can only push fixes on same-repository PRs. On forks it
@@ -319,7 +326,7 @@ jobs:
     name: UI Tests
     needs: gate
     if: needs.gate.outputs.skip_ui_tests != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Setup Node.js

@@ -1,19 +1,18 @@
 # Running CI on your own machine
 
-Our GitHub runners are 4 vCPU. A full `Deploy` run is ~20 minutes and a cold one
-is closer to 40. Most laptops here are considerably faster than that, and most of
-what CI does on any given push it has already done — the PR that produced the
-merge ran the same tests over the same bytes.
+Run checks locally before pushing. Use `make ci-signoff` to run the CI checks and publish passing results for GitHub to reuse.
+The final status output shows which checks still need a remote run.
 
-So CI now asks, before every check: **has anyone already proven this?** If yes it
-skips. It does not matter who proved it — a previous run, a re-run, or you.
+GitHub runs checks without matching attestations on standard GitHub-hosted runners.
+All workflows use GitHub runners, including releases and image builds.
 
-Nothing here is mandatory. Push and wait for CI as before, or run `make ci` and
-watch CI have almost nothing left to do.
+A signoff records passing checks for specific file contents. It does not bypass failed checks or approve different contents.
+Repository push access identifies who can publish these records. A Git `Signed-off-by` trailer does not replace CI results.
 
 ## The short version
 
 ```bash
+make ci-signoff     # local checks, published results, then remaining remote checks
 make ci             # run everything CI runs, in CI's own containers
 make ci-status      # what CI would run right now, without running any of it
 make ci CHECKS="doctests unit-tests"   # just these
@@ -22,6 +21,21 @@ make ci-down        # stop the containers (build caches kept)
 
 `make ci` publishes an attestation for every check that passes. Push, and the
 gate job finds them.
+
+## Before pushing
+
+1. Run `make ci-signoff`.
+2. Read the final status output for checks that still need GitHub.
+3. Commit the checked changes and push them.
+4. In the PR description, record the local commands, results, and any checks left for GitHub.
+
+If you edit check inputs after signoff, run signoff again. GitHub only reuses results with matching content fingerprints.
+If local checks fail, fix the failure before pushing.
+If services or tools are unavailable, record the missing checks and let GitHub run them.
+
+`CHECKS="..."` limits the local run. The final output still covers every check.
+`CI_NO_ATTEST=true` prevents publication. Without published results, GitHub must repeat the checks.
+If publication fails, the final output shows that GitHub still needs those results.
 
 ## How it works
 
@@ -89,6 +103,9 @@ Postgres-as-TimeFusion fallback. That is genuinely useful feedback and it is
 **not** attested — the dual-write TF leg is exactly what that check exists to
 exercise. On a Linux/amd64 box the real service starts and the whole suite
 attests.
+
+Dependency images rebuild when their declared inputs change or through a manual workflow run.
+There is no weekly rebuild. Use the manual run for base image or system package updates.
 
 ## Building the deploy image yourself
 

@@ -27,7 +27,7 @@ jobs:
   # is bounded by the image build. See docs/local-ci.md.
   gate:
     name: Gate
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       fingerprints: ${{ steps.checks.outputs.fingerprints }}
       skip_build: ${{ steps.checks.outputs.skip_build }}
@@ -51,7 +51,7 @@ jobs:
     name: Build Frontend
     needs: gate
     if: needs.gate.outputs.skip_haskell != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -88,7 +88,7 @@ jobs:
     name: Build and Test
     needs: [gate, frontend]
     if: needs.gate.outputs.skip_haskell != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # 30 was under budget and the job was silently truncating: on 2026-08-11 the
     # integration suite got 19 seconds before the wall, and the run before that
     # lost the doctests. Whichever step the wall lands on is a function of cache
@@ -274,7 +274,7 @@ jobs:
   # off the critical path. Only the CapRover call is gated.
   build-image:
     name: Build and Push Docker Image
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -283,8 +283,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Container Registry
         uses: docker/login-action@v4
@@ -324,7 +324,7 @@ jobs:
 
       - name: Build and push Docker Image
         if: steps.probe.outputs.exists != 'true'
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -332,16 +332,9 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-          # cache-from/cache-to and platforms are incompatible with docker driver.
-          # Caching is handled by --mount=type=cache in Dockerfile instead.
-          # Re-enable these if switching back to docker-container driver (ubuntu-latest).
-          # cache-from: |
-          #   type=gha
-          #   type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
-          # cache-to: |
-          #   type=gha,mode=max
-          #   type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
-          # platforms: linux/amd64
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
+          platforms: linux/amd64
           provenance: false
           build-args: |
             BUILDKIT_INLINE_CACHE=1
@@ -363,7 +356,7 @@ jobs:
       && needs.build-image.result == 'success'
       && (needs.build-and-test.result == 'success'
           || (needs.build-and-test.result == 'skipped' && needs.gate.outputs.skip_haskell == 'true'))
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
