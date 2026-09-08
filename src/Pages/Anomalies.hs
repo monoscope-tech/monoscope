@@ -712,7 +712,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
       span_ [class_ "text-2xs text-textWeak"] $ toHtml $ countNoun total "event" <> " before error"
-    div_ [class_ "max-h-80 overflow-y-auto py-1"]
+    div_ [class_ "py-1"]
       $ traverse_ (uncurry renderCrumb) (zip [0 :: Int ..] crumbList)
 
 
@@ -1103,7 +1103,10 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
           -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
           unless (issue.issueType == Issues.QueryAlert)
             $ div_
-              [ class_ "surface-raised rounded-2xl overflow-hidden group/inv"
+              [ -- overflow-clip, not overflow-hidden: hidden makes this a scroll container,
+                -- which would trap the sticky span-details panel and waterfall header inside
+                -- a box that no longer scrolls (the trace tab flows with the page scroll).
+                class_ "surface-raised rounded-2xl overflow-clip group/inv"
               , id_ "error-details-container"
               , makeAttribute "tabindex" "-1"
               , -- Same contract as the log explorer's #apiLogsPage: senders `send toggleFullscreen`
@@ -1164,10 +1167,14 @@ anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEven
                     button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #error-details-container|]] do
                       faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
                       faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
-                div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
+                div_ [class_ "max-md:p-1 p-2 w-full overflow-x-clip investigation-content"] do
                   -- The trace ships its own details panel (#trace_details_container), so this tab renders
                   -- no second one — clicking a span replaces the open panel instead of stacking another.
-                  div_ [class_ "hidden group-has-[.err-tab-trace:checked]/inv:block w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
+                  -- No fixed height: the trace tab flows at natural height so the page
+                  -- scroll carries the whole waterfall (see the .investigation-content
+                  -- overrides in tailwind.css). The Logs tab below keeps its 70vh because
+                  -- its table is virtualized over an unbounded result set.
+                  div_ [class_ "hidden group-has-[.err-tab-trace:checked]/inv:block w-full err-tab-content", id_ "span-content"] do
                     -- The waterfall arrives on its own: a cold read of a multi-thousand-span
                     -- trace took >56s and used to 504 this entire page. `load`, not
                     -- `intersect` — the pane is full-height and its trigger never scrolls
@@ -2447,13 +2454,16 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
       then pure []
       else Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{userIds}::uuid[]) |]
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
+  -- Issue events first: it is the short, high-signal section (often a single
+  -- "Created" row) and was buried under a journey scrollbox. The journey renders
+  -- last at natural height so the page scroll carries it instead of a nested box.
   addRespHeaders do
-    userJourneySection_ journeySpans
     div_ [class_ "border-t border-strokeWeak"] do
       div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
         faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
     issueActivityTimeline_ userMap now activities
+    userJourneySection_ journeySpans
 
 
 issueActivityTimeline_ :: Map.Map Projects.UserId Projects.User -> UTCTime -> [Issues.IssueActivity] -> Html ()

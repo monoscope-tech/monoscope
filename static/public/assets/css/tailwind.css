@@ -1721,6 +1721,34 @@ code, pre, .code, .monospace {
     max-height: calc(100vh - 120px) !important;
   }
 
+  /* Issue-page Investigation embeds the shared tracePage fragment, whose own
+     scroll containers (left column, waterfall) assume a bounded panel like the
+     log explorer's. On the issue page the trace tab has no fixed height — the
+     document scroll carries everything — so those inner scrollers are
+     neutralized here (clip, not hidden: hidden creates a scroll container that
+     would trap the sticky elements below). Fullscreen mode re-bounds the card
+     with its own !important overflow-y: auto above, which these don't fight. */
+  .investigation-content #trace_span_container {
+    overflow: clip;
+  }
+  .investigation-content #trace_span_container > div:first-child,
+  .investigation-content [id^='waterfall-container-'] {
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+  /* The span-details panel follows the reader down a tall waterfall instead of
+     sitting at the row top; below md it stays the fixed full-screen overlay. */
+  @media (min-width: 768px) {
+    .investigation-content #trace_details_container {
+      position: sticky;
+      top: 0.5rem;
+      align-self: flex-start;
+      /* The shell topbar + page padding sit above the scrollport (~5.5rem);
+         without subtracting them the panel bottom is always clipped. */
+      max-height: calc(100vh - 6.5rem);
+    }
+  }
+
   /* Hide close/collapse buttons in investigation panel context */
   .investigation-details .detail-close-btn,
   .investigation-content .trace-collapse-btn {
