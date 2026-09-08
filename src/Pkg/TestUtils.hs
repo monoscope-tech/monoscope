@@ -138,7 +138,9 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Client (createCookieJar, defaultRequest)
+import Network.HTTP.Client qualified as HC
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
+import Network.HTTP.Client.TLS qualified as HCTLS
 import Network.HTTP.Types.Status (ok200)
 import Network.HTTP.Types.Version (http11)
 import Network.Minio qualified as Minio
@@ -846,9 +848,11 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   liveTailBuffer <- LiveTail.newRelayBuffer
   let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
+  s3HttpManager <- HC.newManager HCTLS.tlsManagerSettings
   let atAuthCtx =
         AuthContext
           envConfig
+          s3HttpManager
           pool
           pool
           pool
