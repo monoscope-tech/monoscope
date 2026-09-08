@@ -23,15 +23,16 @@ module Pkg.PatternMerge (
 where
 
 import Control.Lens ((^..), (^?))
+import Control.Monad.ST (runST)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Map.Strict qualified as Map
-import Data.Sequence qualified as Seq
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Vector qualified as V
+import Data.Vector.Mutable qualified as VM
 import Data.Vector.Unboxed qualified as VU
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
@@ -344,24 +345,28 @@ jaccardMergeThreshold = 0.90
 -- Size-pruned: skips pairs where min(|A|,|B|)/max(|A|,|B|) < threshold
 -- (necessary condition for Jaccard ≥ threshold), avoiding most comparisons.
 mergeByJaccard :: Double -> V.Vector Drain.DrainResult -> V.Vector Drain.DrainResult
-mergeByJaccard threshold results = V.fromList $ map (\(dr, _, _) -> dr) $ toList $ foldl' tryMerge Seq.empty tagged
-  where
-    tagged = V.toList results <&> \dr -> let toks = contentTokens dr.templateStr in (dr, toks, S.size toks)
-    tryMerge acc (x, xToks, xLen) =
-      case Seq.findIndexL
-        ( \(_, aToks, aLen) ->
-            let lo = min aLen xLen; hi = max aLen xLen
-             in lo
-                  > 0
-                  && fromIntegral lo
-                  / fromIntegral hi
-                  >= threshold
-                  && jaccardOnSets aToks xToks
-                  >= threshold
-        )
-        acc of
-        Just idx -> let (a, aToks, aLen) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency, Drain.logIds = a.logIds <> x.logIds}, aToks, aLen) acc
-        Nothing -> acc Seq.|> (x, xToks, xLen)
+mergeByJaccard threshold results = runST $ do
+  candidates <- VM.new (V.length results)
+  let add !used x = do
+        let xToks = contentTokens x.templateStr
+            xLen = S.size xToks
+            scan !idx
+              | idx == used = do
+                  VM.write candidates used (x, xToks, xLen)
+                  pure (used + 1)
+              | otherwise = do
+                  (a, aToks, aLen) <- VM.read candidates idx
+                  let lo = min aLen xLen; hi = max aLen xLen
+                  if lo > 0 && fromIntegral lo / fromIntegral hi >= threshold && jaccardOnSets aToks xToks >= threshold
+                    then do
+                      VM.write candidates idx (a{Drain.frequency = a.frequency + x.frequency, Drain.logIds = a.logIds <> x.logIds}, aToks, aLen)
+                      pure used
+                    else scan (idx + 1)
+        scan 0
+  used <- V.foldM' add 0 results
+  V.generateM used $ \idx -> do
+    (result, _, _) <- VM.read candidates idx
+    pure result
 
 
 -- | Cluster-aware LLM judge prompt inspired by LogBatcher (batch-as-demonstration)
