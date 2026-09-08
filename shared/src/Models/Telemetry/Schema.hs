@@ -50,7 +50,7 @@ telemetrySchema =
           , ("parent_id", FieldInfo "string" "Parent span ID" Nothing)
           , ("hashes", FieldInfo "array" "All relevant hashes for item identification" Nothing)
           , ("name", FieldInfo "string" "Name of the span or log" Nothing)
-          , ("kind", FieldInfo "string" "Type of telemetry data (logs, span, request)" (Just ["logs", "span", "request"]))
+          , ("kind", FieldInfo "string" "Log record or span kind" (Just ["log", "internal", "server", "client", "producer", "consumer", "unspecified"]))
           , ("status_code", FieldInfo "string" "Status code of the span" (Just ["OK", "ERROR", "UNSET"]))
           , ("status_message", FieldInfo "string" "Status message" Nothing)
           , ("level", FieldInfo "string" "Log level (uppercase)" (Just ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]))
@@ -235,11 +235,11 @@ popularOtelQueries =
     PopularOtelQuery "duration > 5s" "Slow requests (>5 seconds)"
   , PopularOtelQuery "duration > 1s" "Requests taking more than 1 second"
   , PopularOtelQuery "duration > 500ms" "Requests slower than 500ms"
-  , PopularOtelQuery "kind == \"span\" AND duration > 100ms" "Slow spans (>100ms)"
+  , PopularOtelQuery "kind != \"log\" AND duration > 100ms" "Slow spans (>100ms)"
   , -- Service and trace queries
     PopularOtelQuery "resource.service.name == \"api\"" "Logs from API service"
-  , PopularOtelQuery "kind == \"span\"" "All span data"
-  , PopularOtelQuery "kind == \"logs\"" "All log entries"
+  , PopularOtelQuery "kind != \"log\"" "All span data"
+  , PopularOtelQuery "kind == \"log\"" "All log entries"
   , PopularOtelQuery "parent_id != null" "Child spans with parent relationships"
   , PopularOtelQuery "context.trace_id != null" "Logs with trace correlation"
   , -- Text search operations using new operators
@@ -271,7 +271,7 @@ popularOtelQueries =
   , -- Complex multi-condition queries
     PopularOtelQuery "(level == \"ERROR\" OR duration > 5s) AND resource.service.name != null" "Errors or slow requests from known services"
   , PopularOtelQuery "attributes.http.response.status_code >= 500 AND attributes.user.id != null" "Server errors affecting users"
-  , PopularOtelQuery "kind == \"span\" AND (name contains \"database\" OR attributes.db.operation.name != null)" "Database-related spans"
+  , PopularOtelQuery "kind != \"log\" AND (name contains \"database\" OR attributes.db.operation.name != null)" "Database-related spans"
   ]
 
 
