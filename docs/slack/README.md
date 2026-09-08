@@ -1,5 +1,12 @@
 # Incident message capture
 
+Install or reconnect Slack from the project's integrations page or onboarding.
+The initiating Monoscope user must be an active project admin and stay signed in
+as the same user when Slack returns to `/slack/oauth/callback`.
+Installation requests expire after 15 minutes and can be used once. If the
+exchange fails or the request expires, start again from Monoscope.
+Do not construct an OAuth URL with a project ID as `state`; the callback rejects it.
+
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
 An empty signing secret makes the events endpoint return 503. An empty app ID prevents root capture.

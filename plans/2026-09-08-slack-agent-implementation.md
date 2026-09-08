@@ -203,3 +203,25 @@ No push or deployment. CI signoff must be rerun for this tree before pushing;
 the earlier full-suite results do not attest this increment. Native Agent session
 status, stop handling, explicit project authorization, full conversation roles,
 and the remaining plan gates are still open.
+
+## Installation authorization (2026-09-09)
+
+OAuth installation no longer accepts a project ID supplied as `state`.
+Settings and onboarding start a 15-minute, single-use request through an
+authenticated route. Both start and callback require current, active admin
+membership. The callback also requires the initiating Monoscope user and consumes
+the request before exchanging the Slack code. Migration 0157 stores these requests.
+Existing installations continue to deliver notifications without a new OAuth flow.
+
+The workflow regression checks wrong-user access, concurrent consumption, replay,
+expiry, and membership revocation. Native validation passed 20 examples with:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+
+`make ci-signoff CHECKS=build` passed and published the build attestation.
+The final CI status still requires frontend, doctests, unit-tests, cli-tests,
+integration-tests, weeder, hlint, ui-tests, and e2e for this tree.
+Fourmolu and `git diff --check` passed. Three passes of each requested review skill
+are recorded in the review report. No push or deployment was performed.
+
+Personal Slack identity linking and per-investigation project authorization remain
+required. The new installation request is not an investigation access grant.

@@ -488,7 +488,7 @@ integrationsBody IntegrationsConfig{..} = do
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", Settings.TCEmail, "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-              , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
+              , ("slack", Settings.TCSlack, "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration pid slackData slackChannels extraSlackChannels existingSlackChannels slackChannelsError alertsOff)
               , ("discord", Settings.TCDiscord, "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
               , ("phone", Settings.TCWhatsapp, "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
               , ("pagerduty", Settings.TCPagerduty, "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
@@ -583,10 +583,9 @@ renderWhatsappIntegration :: Text -> Html ()
 renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_input" False $ Just $ tagInput_ "phones_input" "Enter phone numbers" [data_ "tagify-initial" tgs]
 
 
-renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Maybe Text -> [Text] -> Html ()
-renderSlackIntegration envCfg pid slackData channels extraChannels existingChannels channelsError alertsOff = do
-  let stateParam = if T.null pid then "" else "&state=" <> pid
-      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
+renderSlackIntegration :: Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Maybe Text -> [Text] -> Html ()
+renderSlackIntegration pid slackData channels extraChannels existingChannels channelsError alertsOff = do
+  let oauthUrl = "/p/" <> pid <> "/slack/install"
 
   case slackData of
     Just sd -> do

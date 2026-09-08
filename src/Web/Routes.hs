@@ -408,7 +408,6 @@ data Routes mode = Routes
   , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
@@ -459,6 +458,8 @@ type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
+  , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
   , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -732,7 +733,6 @@ server logger env tp otlpTraces otlpLogs =
     , otlpLogsPost = otlpHttpH otlpLogs
     , shareLinkGet = Share.shareLinkGetH
     , shareReplaySessionGet = Share.shareReplaySessionGetH
-    , slackLinkProjectGet = Slack.linkProjectGetH
     , discordLinkProjectGet = Discord.linkDiscordGetH
     , discordInteractions = Discord.discordInteractionsH
     , slackInteractions = Slack.slackInteractionsH
@@ -905,6 +905,8 @@ cookieProtectedServer =
   CookieProtectedRoutes
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
+    , slackInstallGet = Slack.startInstallGetH
+    , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , rumDashboardRedirect = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
     , dashboardsGet = Dashboards.dashboardGetH

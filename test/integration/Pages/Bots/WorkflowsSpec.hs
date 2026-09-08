@@ -9,24 +9,28 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (catchError)
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects qualified as Projects
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
-import UnliftIO.Async (concurrently_)
+import UnliftIO.Async (concurrently, concurrently_)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -34,6 +38,29 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
+    describe "Slack installation authorization" do
+      it "requires a current admin and consumes expiring state once for its initiating user" \tr -> do
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            stateId n = UUIDId $ UUID.fromWords 0 0 1 n
+            start n = toBaseServantResponse tr $ Slack.createSlackInstall (stateId n) userId testPid True
+            consume n uid = toBaseServantResponse tr $ Slack.consumeSlackInstall (stateId n) uid
+            execute query = withResource tr.trPool \conn -> void $ PGS.execute conn query (PGS.Only userId)
+        start 1 >>= (`shouldBe` True)
+        consume 1 (UUIDId UUID.nil) >>= (`shouldSatisfy` isNothing)
+        (left, right) <- concurrently (consume 1 userId) (consume 1 userId)
+        map (\request -> (request.projectId, request.onboarding)) (catMaybes [left, right]) `shouldBe` [(testPid, True)]
+        consume 1 userId >>= (`shouldSatisfy` isNothing)
+        start 2 >>= (`shouldBe` True)
+        withResource tr.trPool \conn -> void $ PGS.execute_ conn [sql|UPDATE apis.slack_install_requests SET expires_at = now() - interval '1 second'|]
+        consume 2 userId >>= (`shouldSatisfy` isNothing)
+        start 3 >>= (`shouldBe` True)
+        execute [sql|UPDATE projects.project_members SET permission = 'view' WHERE user_id = ?|]
+        start 4 >>= (`shouldBe` False)
+        consume 3 userId >>= (`shouldSatisfy` isNothing)
+        execute [sql|UPDATE projects.project_members SET permission = 'admin', active = FALSE WHERE user_id = ?|]
+        start 5 >>= (`shouldBe` False)
+        consume 3 userId >>= (`shouldSatisfy` isNothing)
+
     describe "Query → Process → Respond" do
       it "Slack: handles general query end-to-end" \tr -> do
         setupSlackData tr testPid "T_WF_SLACK"

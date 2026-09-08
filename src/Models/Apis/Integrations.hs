@@ -12,6 +12,9 @@ module Models.Apis.Integrations (
   getDashboardsForWhatsapp,
   getDiscordData,
   deleteSlackData,
+  SlackInstall (..),
+  createSlackInstall,
+  consumeSlackInstall,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -20,8 +23,41 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
+
+
+data SlackInstall = SlackInstall {projectId :: Projects.ProjectId, onboarding :: Bool}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Installation modifies credentials shared by the whole project. Check current
+-- admin membership, rather than the browser session's cached project list.
+createSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Projects.ProjectId -> Bool -> Eff es Bool
+createSlackInstall stateId userId projectId onboarding = do
+  affected <-
+    Hasql.interpExecute
+      [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
+      SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}
+      FROM projects.project_members
+      WHERE project_id = #{projectId} AND user_id = #{userId}
+        AND active AND deleted_at IS NULL AND permission = 'admin'|]
+  pure $ affected == 1
+
+
+-- | Consume before contacting Slack. A failed exchange requires a fresh request.
+-- The callback must have the same authenticated Monoscope user as the initiator.
+consumeSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Eff es (Maybe SlackInstall)
+consumeSlackInstall stateId userId =
+  Hasql.interpOne
+    [HI.sql|DELETE FROM apis.slack_install_requests request
+    USING projects.project_members member
+    WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
+      AND member.project_id = request.project_id AND member.user_id = request.user_id
+      AND member.active AND member.deleted_at IS NULL AND member.permission = 'admin'
+    RETURNING request.project_id, request.onboarding|]
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.

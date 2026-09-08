@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -40,27 +40,29 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackDefaultChannel)
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (statusIsSuccessful)
+import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, parseInstallState, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import PyF
 import Relude hiding (ask, asks)
 import Relude.Extra.Tuple (dup)
 import Servant.API (Header)
+import Servant.API qualified as Servant
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err401, err503)
+import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
-import System.Types (ATBackgroundCtx, ATBaseCtx, DB)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
 
@@ -137,37 +139,55 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
       Nothing <$ Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)])
 
 
-linkProjectGetH :: Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
+startInstallGetH :: Projects.ProjectId -> Bool -> ATAuthCtx (Headers '[Header "Location" Text] Servant.NoContent)
+startInstallGetH pid onboarding = do
+  sess <- Projects.getSession
+  stateId <- UUIDId <$> UUID.genUUID
+  allowed <- Integrations.createSlackInstall stateId sess.user.id pid onboarding
+  unless allowed $ throwError err403
+  envCfg <- asks env
+  let params =
+        [ ("client_id", envCfg.slackClientId)
+        , ("scope", "chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
+        , ("redirect_uri", envCfg.slackRedirectUri)
+        , ("state", stateId.toText)
+        ]
+      url = "https://slack.com/oauth/v2/authorize" <> decodeUtf8 (renderSimpleQuery True $ map (bimap encodeUtf8 encodeUtf8) params)
+  pure $ addHeader url Servant.NoContent
+
+
+linkProjectGetH :: Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
 linkProjectGetH slack_code stateM = do
-  let (pidM, isOnboarding) = parseInstallState stateM
+  sess <- Projects.getSession
+  stateId <- maybe (throwError err400) pure $ stateM >>= idFromText
+  install <- Integrations.consumeSlackInstall stateId sess.user.id >>= maybe (throwError err403) pure
+  let pid = install.projectId
+      isOnboarding = install.onboarding
   let bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Slack app installed"}
-  case pidM of
-    Nothing -> pure $ addHeader "" $ NoTokenFound $ PageCtx bwconf ()
-    Just pid -> do
-      envCfg <- asks env
-      pool <- asks pool
-      token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri (fromMaybe "" slack_code)
-      project <- Projects.projectById pid
-      case (token, project) of
-        (Just token', Just project') -> do
-          -- Cross-workspace re-install: if the previous apis.slack row was bound to a
-          -- different Slack workspace (team_id), channels on @everyone belonging to the
-          -- old workspace are orphaned by the new bot token and would produce
-          -- channel_not_found on every alert. Clear them before installing the new one.
-          existing <- getProjectSlackData pid
-          whenJust existing \prev -> when (prev.teamId /= token'.team.id) do
-            Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
-            ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
-          void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url
-          void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
-          wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
-          when wasAdded do
-            -- Bot isn't auto-joined to the picked channel (esp. private ones),
-            -- so post the welcome via the channel-bound incoming webhook URL.
-            result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
-            whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
-          pure $ installedResponse "Slack" pid isOnboarding bwconf
-        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
+  envCfg <- asks env
+  pool <- asks pool
+  token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri (fromMaybe "" slack_code)
+  project <- Projects.projectById pid
+  case (token, project) of
+    (Just token', Just project') -> do
+      -- Cross-workspace re-install: if the previous apis.slack row was bound to a
+      -- different Slack workspace (team_id), channels on @everyone belonging to the
+      -- old workspace are orphaned by the new bot token and would produce
+      -- channel_not_found on every alert. Clear them before installing the new one.
+      existing <- getProjectSlackData pid
+      whenJust existing \prev -> when (prev.teamId /= token'.team.id) do
+        Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
+        ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
+      void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url
+      void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
+      wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
+      when wasAdded do
+        -- Bot isn't auto-joined to the picked channel (esp. private ones),
+        -- so post the welcome via the channel-bound incoming webhook URL.
+        result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
+        whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
+      pure $ installedResponse "Slack" pid isOnboarding bwconf
+    _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value

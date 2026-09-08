@@ -113,3 +113,17 @@ This implements compatibility context storage, not the complete native Agent
 session lifecycle. Slack's current lifecycle uses `agents.sessions.setStatus`
 and `agent_session_stopped`; progress, stop handling, and explicit user/project
 binding remain required. See [Slack's session guide](https://docs.slack.dev/ai/agent-sessions/).
+
+## Installation authorization follow-up
+
+Three passes applied all three skills to the installation model, Slack handlers,
+routes, settings/onboarding links, and workflow regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Use a typed UUID request ID, derived row decoding, and `renderSimpleQuery`. | Replace the caller-selected project ID in OAuth state with a server-stored, expiring request. | Keep the installation redirect on ordinary anchor links. |
+| 2 | Consolidate the two copies of Slack OAuth scopes in the start handler; remove the now-unused renderer configuration argument and nested `do`. | Move the callback under cookie authentication. Match the initiating user and recheck active admin membership before consuming the request. | No client script or styling indirection was introduced. |
+| 3 | Re-read all changed consumers, including the unchanged installation side effects. No further derive or reuse changes required. | The database regression covers wrong users, expiry, revocation, replay, and concurrent consumption. No warning suppression or manual instance was added. | The regression requires database state transitions and concurrency, so Hspec is appropriate. |
+
+This secures installation authorization. It does not yet establish personal Slack
+identity bindings or authorize the legacy workspace-selected investigation path.
