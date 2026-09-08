@@ -251,6 +251,8 @@ tests:
       - grapesy
       - wreq
       - http-client
+      - http-client-tls
+      - warp
       - unliftio
       - bytestring
       - containers

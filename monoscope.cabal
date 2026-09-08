@@ -749,6 +749,7 @@ test-suite integration-tests
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-client
+    , http-client-tls
     , http-types
     , hw-kafka-client
     , kafka-effectful
@@ -795,6 +796,7 @@ test-suite integration-tests
     , vector
     , wai
     , wai-extra
+    , warp
     , wreq
     , zlib
   default-language: GHC2024
