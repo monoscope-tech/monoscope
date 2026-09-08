@@ -44,7 +44,7 @@ import Pkg.Minio qualified as Storage
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
 import Relude.Extra.Tuple (traverseToFst)
-import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
+import System.Config (AuthContext (config, jobsPool, s3HttpManager), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (finally, tryAny)
