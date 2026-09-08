@@ -94,12 +94,14 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # persistent cache mount, so find's arbitrary ordering can pick a binary left by an earlier
 # build — one compiled against a different static/ tree, which then serves pages referencing
 # Vite chunks that aren't in the image (silent 404s for every web component).
+# `-v0` because list-bin's stdout is the path: at default verbosity cabal may prepend
+# source-repository-package sync chatter (git "HEAD is now at …"), which broke the cp.
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
-    cp "$(cabal list-bin exe:monoscope-server)" /build/dist/ && \
+    cp "$(cabal list-bin -v0 exe:monoscope-server)" /build/dist/ && \
     entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
     test -f "static/public/assets/web-components/dist/$entry" && \
     grep -aFq "/public/assets/web-components/dist/$entry" /build/dist/monoscope-server || \
