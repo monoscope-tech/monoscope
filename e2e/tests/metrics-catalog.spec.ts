@@ -163,7 +163,9 @@ test.describe('metrics catalog', () => {
   test('mobile toolbar fits and remains usable in both themes', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     for (const colorScheme of ['light', 'dark'] as const) {
-      await page.emulateMedia({ colorScheme });
+      // The dashboard defaults to dark and only honours an explicit theme cookie;
+      // the OS colour scheme deliberately does not drive it.
+      await page.context().addCookies([{ name: 'theme', value: colorScheme, url: test.info().project.use.baseURL as string }]);
       await page.goto(url + '?q=uxcatalog');
       await expect(page.locator('body')).toHaveAttribute('data-theme', colorScheme);
       expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(390);

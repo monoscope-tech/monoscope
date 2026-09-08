@@ -1736,16 +1736,21 @@ code, pre, .code, .monospace {
     overflow-x: clip;
     overflow-y: visible;
   }
+  /* The page scroller's pt-8 is added to every sticky offset inside it, which
+     pinned these 32px below the issue action bar; the negative tops cancel it so
+     the waterfall ruler and span-details panel sit flush under the sticky chrome. */
+  .investigation-content [id^='waterfall-container-'] > .sticky {
+    top: -2rem;
+  }
   /* The span-details panel follows the reader down a tall waterfall instead of
      sitting at the row top; below md it stays the fixed full-screen overlay. */
   @media (min-width: 768px) {
     .investigation-content #trace_details_container {
       position: sticky;
-      top: 0.5rem;
+      top: -2rem;
       align-self: flex-start;
-      /* The shell topbar + page padding sit above the scrollport (~5.5rem);
-         without subtracting them the panel bottom is always clipped. */
-      max-height: calc(100vh - 6.5rem);
+      /* Viewport minus the topbar + issue bar above the scrollport (~5.5rem). */
+      max-height: calc(100vh - 5.5rem);
     }
   }
 
