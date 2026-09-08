@@ -92,25 +92,25 @@ ambiguousThreshold = 0.75
 -- Patterns below ambiguousThreshold remain standalone (not returned).
 -- Pre-computes centroid norms and uses unboxed vectors for O(n*m) with low constant factor.
 --
--- >>> assignToCentroids [("c1", [1,0,0])] [("n1", [1,0,0])]
+-- >>> assignToCentroids [("c1", VU.fromList [1,0,0])] [("n1", [1,0,0])]
 -- ([("n1","c1")],[])
 --
--- >>> assignToCentroids [("c1", [1,0,0])] [("n1", [0,1,0])]
+-- >>> assignToCentroids [("c1", VU.fromList [1,0,0])] [("n1", [0,1,0])]
 -- ([],[])
 --
 -- Equal scores keep the last centroid, including scores tied by rounding.
--- >>> assignToCentroids [("first", [1,0]), ("last", [1,0])] [("new", [1,0])]
+-- >>> assignToCentroids [("first", VU.fromList [1,0]), ("last", VU.fromList [1,0])] [("new", [1,0])]
 -- ([("new","last")],[])
 --
--- >>> assignToCentroids [("zero", [0,0]), ("short", [1])] [("new", [1,0])]
+-- >>> assignToCentroids [("zero", VU.fromList [0,0]), ("short", VU.fromList [1])] [("new", [1,0])]
 -- ([],[])
 --
--- >>> assignToCentroids [("c", [1,0])] [("new", [0.8,0.6])]
+-- >>> assignToCentroids [("c", VU.fromList [1,0])] [("new", [0.8,0.6])]
 -- ([],[("new","c")])
-assignToCentroids :: [(a, [Float])] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
+assignToCentroids :: [(a, VU.Vector Float)] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
 assignToCentroids centroids = foldl' classify ([], [])
   where
-    centroidsU = map (\(cid, emb) -> let v = VU.fromList emb in (cid, v, vecNorm v)) centroids
+    centroidsU = map (\(cid, v) -> (cid, v, vecNorm v)) centroids
     classify (merges, ambiguous) (newId, newEmb) =
       let v = VU.fromList newEmb
           newNormed = (v, vecNorm v)
