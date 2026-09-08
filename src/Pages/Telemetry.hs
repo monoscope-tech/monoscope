@@ -1558,7 +1558,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
     window.openTraceDetails = function(panel) {
       if (panel.offsetWidth > 5) return;
       const storedWidth = localStorage.getItem('resizer-trace_details_width');
-      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '38%');
+      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '33.333%');
       panel.classList.add('open');
       document.getElementById('trace-details-resizer-wrapper')?.classList.remove('hidden');
       window.dispatchEvent(new Event('loglist-resize'));
