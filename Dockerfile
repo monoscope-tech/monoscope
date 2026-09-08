@@ -94,8 +94,9 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # persistent cache mount, so find's arbitrary ordering can pick a binary left by an earlier
 # build — one compiled against a different static/ tree, which then serves pages referencing
 # Vite chunks that aren't in the image (silent 404s for every web component).
-# `-v0` because list-bin's stdout is the path: at default verbosity cabal may prepend
-# source-repository-package sync chatter (git "HEAD is now at …"), which broke the cp.
+# list-bin's stdout is the path, but source-repository-package sync chatter from the
+# git SUBPROCESS lands on stdout too and -v0 cannot silence it (it broke the cp twice
+# on 2026-09-08) — so keep only the line that is the binary path.
 # BodyWrapper holds the viteAssetFile splice that embeds the entry path; its cached
 # object can survive with a stale entry (2026-09-08 incident), so evict it and let the
 # splice re-read the manifest this build just wrote. One module recompile is noise here.
@@ -105,7 +106,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
-    cp "$(cabal list-bin -v0 exe:monoscope-server)" /build/dist/ && \
+    cp "$(cabal list-bin -v0 exe:monoscope-server | grep -a '/monoscope-server$' | tail -n1)" /build/dist/ && \
     entry="$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file")" && \
     { test -f "static/public/assets/web-components/dist/$entry" || \
       { echo "manifest entry $entry does not exist in dist" >&2; exit 1; }; } && \
