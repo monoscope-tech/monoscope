@@ -314,7 +314,7 @@ spec = around withTestResources do
       roundTrip events `shouldBe` Right events
 
     it "scans long event strings without allocating for each byte" $ \_ -> do
-      let events = AE.toJSON [T.replicate 1000000 "x"]
+      let events = AE.toJSON ([T.replicate 1000000 "x"] :: [Text])
           body = mkPayload events
       bodySize <- evaluateWHNF (BS.length body)
       allocated <- allocatedBy do
