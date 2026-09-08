@@ -181,3 +181,25 @@ The local results above prove the tested code, but their attestations do not cov
 The full log is `/tmp/monoscope-slack-agent/review-ci-signoff-final.log`.
 No PR currently exists for the local master branch. A future PR must include these commands, results, and outstanding checks in its description.
 No deployment was performed. The full Slack-agent goal remains in progress.
+# Event classification follow-up (2026-09-09)
+
+Signed ingress now retains each event object intact and validates human-message
+and assistant-context payloads through derived wire codecs. The worker separates
+messages, mentions, bots, edits, assistant starts, context changes, and unknown
+events. Non-message events no longer need top-level text or channel fields.
+
+Migration 0156 stores compatibility assistant context by workspace, channel, and
+thread. Numeric event timestamps prevent delayed events from restoring stale
+context. Owner conflicts fail processing and keep the receipt pending. This table
+does not bind a user to a Monoscope project or authorize investigation tools.
+
+Validation after the three follow-up skill passes:
+
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`: 19 examples passed, including event preservation, replay, context ordering, and owner-conflict checks.
+- The same command with `TEST_MATCH=Incident`: 11 examples passed, including signed root capture from the preserved event object.
+- Fourmolu on both changed Haskell files and `git diff --check`: passed.
+
+No push or deployment. CI signoff must be rerun for this tree before pushing;
+the earlier full-suite results do not attest this increment. Native Agent session
+status, stop handling, explicit project authorization, full conversation roles,
+and the remaining plan gates are still open.

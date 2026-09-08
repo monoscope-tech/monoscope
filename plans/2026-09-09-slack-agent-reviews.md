@@ -97,3 +97,19 @@ The signed-root fixture used a fresh UUID pool for every event. It now uses `run
 Unmatched incident-root observations emit an attention log instead of silently discarding the capture result.
 Final native runs passed 11 incident, 26 monitor, and 18 workflow examples. The build, 1,536 doctests, 308 unit tests, and 922 frontend tests passed.
 Weeder's existing findings, missing HLint/TimeFusion capabilities, and the concurrent workflow fingerprint change are recorded in the implementation log. These remain deployment gates.
+
+## Event classification and assistant context follow-up
+
+All three skills were applied in three further passes over `Pages/Bots/Slack.hs`,
+the workflow regression, and migration 0156.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse Aeson's parser and derive all wire codecs; keep the original event object instead of rebuilding it. | Separate human input, mentions, bots, edits, assistant starts, context changes, and unknown events. Reject malformed assistant timestamps and empty identities. | No client behavior added; the database/handler regression belongs in Hspec. |
+| 2 | Remove obsolete metadata/profile records and the redundant effect constraint. | Fix silent owner-conflict handling: fail the job and retain its pending receipt. Verify that older context cannot replace newer context. | No tier demotion or styling-locality change is needed. |
+| 3 | Re-read classifier, receipt persistence, worker dispatch, and signed-root SQL consumers. No further consolidation required. | Verify that raw event preservation retains fields required by root authentication; context storage grants no project authority. Existing legacy user-message authorization remains an open plan requirement. | The regression checks replay, storage, chronology, and owner conflicts; no pure one-expression spec was added. |
+
+This implements compatibility context storage, not the complete native Agent
+session lifecycle. Slack's current lifecycle uses `agents.sessions.setStatus`
+and `agent_session_stopped`; progress, stop handling, and explicit user/project
+binding remain required. See [Slack's session guide](https://docs.slack.dev/ai/agent-sessions/).

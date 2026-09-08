@@ -8,6 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Bool, _String)
+import Data.Aeson.Types qualified as AE
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (def))
@@ -572,30 +573,78 @@ data SlackEventPayload
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier DAE.CamelToSnake, DAE.SumTaggedObject "type" "contents"] SlackEventPayload
 
 
-data SlackEvent = SlackMessageEvent
+newtype SlackEvent = SlackEvent AE.Object
+  deriving stock (Generic, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON)
+
+
+data SlackEventHeader = SlackEventHeader
+  { eventType :: Text
+  , bot_id :: Maybe Text
+  , subtype :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier (DAE.Rename "eventType" "type")] SlackEventHeader
+
+
+data SlackMessage = SlackMessage
   { text :: Text
   , channel :: Text
   , thread_ts :: Maybe Text
-  , eventType :: Text
-  , bot_id :: Maybe Text
-  , subtype :: Maybe Text
-  , app_id :: Maybe Text
-  , bot_profile :: Maybe SlackBotProfile
-  , ts :: Maybe Text
-  , metadata :: Maybe SlackMessageMetadata
+  , user :: Text
+  , ts :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier (DAE.Rename "eventType" "type")] SlackEvent
+  deriving anyclass (AE.FromJSON)
 
 
-data SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}
+data SlackAssistantThread = SlackAssistantThread
+  { user_id :: Text
+  , channel_id :: Text
+  , thread_ts :: Text
+  , context :: AE.Object
+  }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data SlackMessageMetadata = SlackMessageMetadata {event_type :: Text, event_payload :: AE.Object}
+data SlackAssistantEvent = SlackAssistantEvent {assistant_thread :: SlackAssistantThread, event_ts :: Text}
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.FromJSON)
+
+
+data SlackEventKind
+  = UserMessage SlackMessage
+  | AppMention SlackMessage
+  | BotMessage
+  | MessageEdit
+  | AssistantStarted SlackAssistantEvent
+  | AssistantContextChanged SlackAssistantEvent
+  | UnknownEvent SlackEventHeader
+  deriving stock (Generic, Show)
+
+
+-- | Keep the wire object intact for receipt verification and future event types.
+-- Only ordinary human messages are decoded as investigation input.
+classifySlackEvent :: SlackEvent -> AE.Parser SlackEventKind
+classifySlackEvent wire = do
+  header <- AE.parseJSON @SlackEventHeader $ AE.toJSON wire
+  let decode :: AE.FromJSON a => AE.Parser a
+      decode = AE.parseJSON $ AE.toJSON wire
+      assistant constructor = do
+        value <- decode
+        unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.assistant_thread.thread_ts]) $ fail "Invalid Slack assistant timestamp"
+        when (any T.null [value.assistant_thread.user_id, value.assistant_thread.channel_id]) $ fail "Missing Slack assistant identity"
+        pure $ constructor value
+  case (header.eventType, header.subtype) of
+    ("message", Just "message_changed") -> pure MessageEdit
+    ("message", Just "bot_message") -> pure BotMessage
+    ("message", Nothing) | isJust header.bot_id -> pure BotMessage
+    ("message", Nothing) -> UserMessage <$> decode
+    ("app_mention", Nothing) | isNothing header.bot_id -> AppMention <$> decode
+    ("assistant_thread_started", _) -> assistant AssistantStarted
+    ("assistant_thread_context_changed", _) -> assistant AssistantContextChanged
+    _ -> pure $ UnknownEvent header
 
 
 -- | Verify Slack's raw request body before decoding it. Both past and future
@@ -622,7 +671,8 @@ slackEventsPostH body timestamp signature = do
   payload <- either (const $ throwError err400) pure $ AE.eitherDecodeStrict @SlackEventPayload body
   case payload of
     UrlVerification challenge -> pure $ AE.object ["challenge" AE..= challenge]
-    EventCallback{team_id, event_id} -> do
+    EventCallback{team_id, event_id, event} -> do
+      void $ either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
       receiptId <- UUIDId <$> UUID.genUUID
       let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
       Hasql.interpExecute_
@@ -645,7 +695,7 @@ processSlackEvent receiptId = do
     captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
     case payload of
       EventCallback{event}
-        | maybe False ((== "monoscope_incident_root") . (.event_type)) event.metadata && not captured ->
+        | Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured ->
             Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
       _ -> pure ()
     result <- runErrorNoCallStack @ServerError $ case payload of
@@ -654,14 +704,23 @@ processSlackEvent receiptId = do
     either (throwIO . ErrorCall . show) pure result
     Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
   where
-    handleEventCallback envCfg event workspaceId
-      | isJust event.bot_id || isJust event.subtype || event.eventType `notElem` ["message", "app_mention"] =
-          Log.logTrace "Slack event does not start an investigation" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= event.eventType, "subtype" AE..= event.subtype])
-      | otherwise = void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
-          Nothing -> do
-            Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
-            sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-          Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
+    handleEventCallback envCfg event workspaceId = do
+      kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
+      case kind of
+        UserMessage message -> handleMessage envCfg message workspaceId
+        AppMention message -> handleMessage envCfg message workspaceId
+        AssistantStarted session -> saveAssistantContext workspaceId session
+        AssistantContextChanged session -> saveAssistantContext workspaceId session
+        BotMessage -> Log.logTrace "Slack bot message retained without starting an investigation" (AE.object [])
+        MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
+        UnknownEvent header -> Log.logTrace "Unsupported Slack event retained" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= header.eventType, "subtype" AE..= header.subtype])
+
+    handleMessage envCfg event workspaceId =
+      void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
+        Nothing -> do
+          Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
+          sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
+        Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
 
     processThreadedEvent envCfg slackData event workspaceId threadTs = do
       let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
@@ -675,6 +734,24 @@ processSlackEvent receiptId = do
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)
       runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg slackData.projectId event.text resolveThread
+
+
+-- | Slack navigation context is untrusted input, not project authorization.
+-- Compare event timestamps so a delayed start cannot overwrite newer context.
+saveAssistantContext :: DB es => Text -> SlackAssistantEvent -> Eff es ()
+saveAssistantContext workspaceId event = do
+  let session = event.assistant_thread
+  accepted <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|INSERT INTO apis.slack_assistant_threads (team_id, channel_id, thread_ts, user_id, context, context_event_ts)
+      VALUES (#{workspaceId}, #{session.channel_id}, #{session.thread_ts}, #{session.user_id}, #{Aeson session.context}, #{event.event_ts}::text::numeric)
+      ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE
+      SET context = CASE WHEN slack_assistant_threads.context_event_ts < EXCLUDED.context_event_ts
+            THEN EXCLUDED.context ELSE slack_assistant_threads.context END,
+          context_event_ts = GREATEST(slack_assistant_threads.context_event_ts, EXCLUDED.context_event_ts)
+      WHERE slack_assistant_threads.user_id = EXCLUDED.user_id
+      RETURNING TRUE|]
+  when (isNothing accepted) $ throwIO $ ErrorCall "Slack assistant thread owner changed"
 
 
 newtype SlackThreadedMessage = SlackThreadedMessage {text :: Text}
