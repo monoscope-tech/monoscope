@@ -66,7 +66,7 @@ cosineSimWithNorms (xs, normA) (ys, normB)
   | normA == 0 || normB == 0 = 0.0
   | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
   where
-    -- Keep the accumulation strict without constructing a product vector.
+    -- Keep accumulation strict without allocating intermediate stream steps.
     -- Length equality is checked above; both indexed reads stay in bounds.
     dotP = go 0 0
     go !i !acc
