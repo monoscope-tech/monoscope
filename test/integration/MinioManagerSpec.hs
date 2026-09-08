@@ -18,8 +18,8 @@ import Test.Hspec
 spec :: Spec
 spec = describe "shared object-storage transport" do
   it "reuses transport while honoring each operation's credentials, region and endpoint" do
-    first <- newIORef []
-    second <- newIORef []
+    firstRequests <- newIORef []
+    secondRequests <- newIORef []
     let server observed = pure $ \request respond -> do
           body <- Wai.strictRequestBody request
           atomicModifyIORef' observed $ \requests -> ((Wai.remoteHost request, List.lookup hAuthorization (Wai.requestHeaders request), body) : requests, ())
@@ -30,13 +30,13 @@ spec = describe "shared object-storage transport" do
               config = Minio.setCreds (Minio.CredentialValue access "test-secret" Nothing) (Minio.setRegion region info)
           result <- Storage.runMinio manager config $ Minio.putObject "test-bucket" "object" (CC.sourceLazy "body") (Just 4) Minio.defaultPutObjectOptions
           result `shouldSatisfy` isRight
-    Warp.testWithApplication (server first) $ \firstPort ->
-      Warp.testWithApplication (server second) $ \secondPort -> do
+    Warp.testWithApplication (server firstRequests) $ \firstPort ->
+      Warp.testWithApplication (server secondRequests) $ \secondPort -> do
         upload firstPort "first-key" "us-east-1"
         upload firstPort "second-key" "eu-west-1"
         upload secondPort "third-key" "us-east-1"
-    [(peer1, auth1, body1), (peer2, auth2, body2)] <- reverse <$> readIORef first
-    [(_, auth3, body3)] <- readIORef second
+    [(peer1, auth1, body1), (peer2, auth2, body2)] <- reverse <$> readIORef firstRequests
+    [(_, auth3, body3)] <- readIORef secondRequests
     peer1 `shouldBe` peer2
     forM_ [body1, body2, body3] $ \body -> case BL.lines body of
       [chunkHeader, payload, finalChunk, blank] -> do
