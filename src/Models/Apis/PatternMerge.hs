@@ -43,6 +43,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -75,9 +76,9 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
+getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
 getCanonicalErrorPatterns pid =
-  map (second V.toList)
+  map (second (V.convert :: V.Vector Float -> VU.Vector Float))
     <$> Hasql.interp
       [HI.sql| SELECT id, embedding FROM apis.error_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
@@ -152,9 +153,9 @@ updateLogEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
+getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
 getCanonicalLogPatterns pid =
-  map (second V.toList)
+  map (second (V.convert :: V.Vector Float -> VU.Vector Float))
     <$> Hasql.interp
       [HI.sql| SELECT id, embedding FROM apis.log_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
