@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
-    # Investigation notes do not change the application; avoid restarting
-    # consumers just to publish a checkpoint. Mixed code/plan pushes still run.
+    # Investigation notes and prose do not change the application; avoid an
+    # ~85-minute image build and a consumer restart just to publish a checkpoint
+    # or edit a doc. `paths-ignore` skips only when EVERY changed path matches,
+    # so a commit touching code still deploys.
     paths-ignore:
       - 'plans/**'
+      - 'docs/**'
+      - '**/*.md'
 
 env:
   LANG: C.UTF-8
