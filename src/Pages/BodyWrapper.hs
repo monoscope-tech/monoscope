@@ -490,13 +490,9 @@ bodyWrapper bcfg child = do
             syncThemeToggles(newTheme);
           }
 
-          // System theme detection - respect OS preference if user hasn't manually set
-          (function() {
-            if (!getCookie('theme')) applyTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-              if (!getCookie('theme')) applyThemeSmooth(e.matches ? 'dark' : 'light');
-            });
-          })();
+          // Match the server default: dark until the user explicitly chooses light.
+          // OS theme changes must not override the dashboard's theme.
+          applyTheme(getCookie('theme') === 'light' ? 'light' : 'dark');
 
           window.addEventListener('DOMContentLoaded', () => syncThemeToggles(document.body.getAttribute('data-theme')));
       |]

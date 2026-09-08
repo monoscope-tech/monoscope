@@ -1,6 +1,6 @@
 ---
 name: Monoscope
-description: OpenTelemetry-native observability — dense, calm, incident-first. Light-first with full dark parity.
+description: OpenTelemetry-native observability — dense, calm, incident-first. Dark by default with full light parity.
 colors:
   brand: "oklch(56.7% 0.239 261)"
   brand-content: "oklch(100% 0 0)"
@@ -112,7 +112,7 @@ Monoscope is read like a cockpit, not browsed like a website. Its user is an on-
 
 Density is the load-bearing value. Experienced users scan; the waterfall, the log stream, and the field list are packed tight within rows and spaced generously between logical groups so structure reads at a glance. Color is strictly signal: brand blue means clickable, red means error, green means success, service and status hues identify. Where a color has no meaning, no color is used. The reference point is Datadog APM — information-rich, cross-linked, color-as-meaning — but stripped of its glossier edges. Progressive disclosure earns its keep during incidents: summary counts up front, detail one click away, never the exception type buried two clicks deep in a 29-error trace.
 
-The system is light-first with **full dark parity** — every semantic token is defined in both themes and verified in both. Shared views are first-class: a link may open on a stranger's phone mid-panic, so every surface must read standalone. This system explicitly rejects playful illustrations and mascots, decorative icons above headings, neon-on-dark, glassmorphism as decoration, gradient text, and cartoony empty states.
+The system defaults to dark until the user selects a theme, with **full light parity** — every semantic token is defined in both themes and verified in both. Shared views are first-class: a link may open on a stranger's phone mid-panic, so every surface must read standalone. This system explicitly rejects playful illustrations and mascots, decorative icons above headings, neon-on-dark, glassmorphism as decoration, gradient text, and cartoony empty states.
 
 **Key Characteristics:**
 - Instrument-panel density: tight within rows, generous between groups.
