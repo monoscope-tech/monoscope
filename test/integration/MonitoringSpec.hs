@@ -1,7 +1,10 @@
 module MonitoringSpec (spec) where
 
-import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue)
+import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, runSlackIncidentDeliveries)
+import Codec.Compression.GZip qualified as GZip
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString.Base64.URL qualified as B64URL
 import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
@@ -10,17 +13,19 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Bots.BotTestHelpers (setupDiscordData, setupSlackData)
+import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupDiscordData, setupSlackData, slackRootEvent)
 import Pages.Dashboards qualified as Dashboards
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
 import Pages.Projects qualified as ProjectPages
@@ -177,6 +182,16 @@ spec = sequential $ aroundAll withTestResources do
       duplicate <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       duplicate `shouldBe` []
 
+      -- A webhook accepts the root without returning its timestamp. Simulate
+      -- capture of the app's own message before delivering lifecycle replies.
+      Just monitor <- pure firedMonitor
+      [PGS.Only rootId] <- withResource tr.trPool \conn ->
+        PGS.query conn [sql|SELECT r.id FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.project_id = ? AND e.source_id = ? AND r.channel_id = 'C_NOTIF_CHANNEL'|] (testPid, monitor.id)
+      receipt <- receiveSlackEvent tr $ slackRootEvent "EvMonitorRoot" "T_MONITOR_SIM" "C_NOTIF_CHANNEL" rootId "1788900000.000001" "A_TEST"
+      runTestBgNoReset tr (Incidents.captureSlackRoot "A_TEST" receipt) `shouldReturn` True
+      (refresh, _) <- captureNotifs tr runSlackIncidentDeliveries
+      deliverySummary refresh `shouldBe` ["slack-update:C_NOTIF_CHANNEL"]
+
       let recoveryQuery = "name == \"search\""
           updatedWidget = savedWidget{Widget.query = Just recoveryQuery}
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
@@ -189,6 +204,7 @@ spec = sequential $ aroundAll withTestResources do
         `shouldBe` [ "discord:C_MONITOR"
                    , "email:alerts@example.com"
                    , "pagerduty:widget-monitor-test:PDResolve"
+                   , "slack-update:C_NOTIF_CHANNEL"
                    , "slack:C_NOTIF_CHANNEL"
                    , "whatsapp:+15550001111"
                    ]
@@ -286,6 +302,59 @@ spec = sequential $ aroundAll withTestResources do
   describe "Query Monitor Pipeline" do
     let pipelineMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "22222222-2222-2222-2222-222222222222"
         t0 = Unsafe.read "2025-06-01 12:00:00 UTC" :: UTCTime
+
+    it "records actual scalar readings once, scopes history to the project, and prunes old samples" \tr -> do
+      let mid = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 902
+          otherPid = UUIDId $ UUID.fromWords 0 0 0 999
+          from = addUTCTime (-300) t0
+          to = addUTCTime 60 t0
+      insertPipelineMonitor tr mid "SELECT 84::float8" 60 Nothing "above" Nothing Nothing
+      evalMonitorValueAt from tr mid 84
+      evalMonitorValueAt t0 tr mid 18
+      runTestBgNoReset tr $ Monitors.recordEvaluation testPid mid t0 999 Monitors.MSAlerting
+      runTestBgNoReset tr (Monitors.getEvaluations testPid mid from to)
+        `shouldReturn` [(from, 84), (t0, 18)]
+      runTestBgNoReset tr (Monitors.getEvaluations otherPid mid from to) `shouldReturn` []
+      runTestBgNoReset tr $ Monitors.pruneEvaluations t0
+      runTestBgNoReset tr (Monitors.getEvaluations testPid mid from to) `shouldReturn` [(t0, 18)]
+
+    it "does not invent a zero reading or recovery when an alerting gauge loses telemetry" \tr -> do
+      let mid = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 903
+          next = addUTCTime 120 t0
+      insertPipelineMonitor tr mid "" 60 Nothing "above" Nothing Nothing
+      evalMonitorValueAt t0 tr mid 84
+      setMonitorQuery tr mid "name == \"missing-slack-agent-gauge\" | summarize max(duration)"
+      evalMonitorsAt next tr
+      monitor <- fetchMonitor tr mid
+      (monitor.currentStatus, monitor.currentValue) `shouldBe` (Monitors.MSAlerting, 84)
+      runTestBgNoReset tr (Monitors.getEvaluations testPid mid t0 next) `shouldReturn` [(t0, 84)]
+
+    it "embeds a bounded snapshot of monitor readings with a gap instead of rewriting the scalar query" \tr -> do
+      let mid = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 904
+          earlier = addUTCTime (-300) t0
+          millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
+          row at value = AE.toJSON ([AE.toJSON (millis at), AE.toJSON value] :: [AE.Value])
+      insertRenotifyMonitor tr mid "SELECT 84::float8" 60
+      setMonitorRenotifyConfig tr mid (Just 1) Nothing 0
+      evalMonitorValueAt earlier tr mid 84
+      notifications <- evalMonitorValueWithNotifs t0 tr mid 100
+      suffix <-
+        maybe (fail "monitor notification had no chart snapshot") pure
+          $ listToMaybe [suffix | EmailNotification email <- notifications, suffix <- drop 1 $ T.splitOn "widgetZ=" email.htmlBody]
+      compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
+      widget <- either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
+      widget.query `shouldBe` Nothing
+      Widget.mapWidgetTypeToChartType widget.wType `shouldBe` "line"
+      widget.alertThreshold `shouldBe` Just 60
+      dataset <- maybe (fail "monitor snapshot had no dataset") pure widget.dataset
+      (dataset.from, dataset.to) `shouldBe` (Just $ millis $ addUTCTime (-900) t0, Just $ millis t0)
+      dataset.source
+        `shouldBe` AE.toJSON @[AE.Value]
+          [ AE.toJSON (["timestamp", "Monitor value"] :: [Text])
+          , row earlier (Just (84 :: Double))
+          , row (addUTCTime 60 earlier) (Nothing :: Maybe Double)
+          , row t0 (Just (100 :: Double))
+          ]
 
     it "alerts once, suppresses duplicate delivery, and recovers" \tr -> do
       insertPipelineMonitor tr pipelineMonId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
@@ -459,13 +528,13 @@ spec = sequential $ aroundAll withTestResources do
 
         setMonitorRenotifyConfig tr renotifyMonId (Just 30) Nothing 1
         resetLastEvaluated tr renotifyMonId
-        setAlertLastTriggered tr renotifyMonId (Just $ addUTCTime (6 * 60) t0)
-        early <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        setAlertLastTriggered tr renotifyMonId (Just $ addUTCTime (36 * 60) t0)
+        early <- evalMonitorValueWithNotifs (addUTCTime (65 * 60) t0) tr renotifyMonId 150
         length early `shouldBe` 0
 
         resetLastEvaluated tr renotifyMonId
         setAlertLastTriggered tr renotifyMonId (Just t0)
-        due <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        due <- evalMonitorValueWithNotifs (addUTCTime (66 * 60) t0) tr renotifyMonId 150
         dueMonitor <- fetchMonitor tr renotifyMonId
         dueMonitor.notificationCount `shouldBe` 2
         length due `shouldSatisfy` (> 0)
@@ -473,19 +542,19 @@ spec = sequential $ aroundAll withTestResources do
         setMonitorRenotifyConfig tr renotifyMonId (Just 30) (Just 3) 2
         resetLastEvaluated tr renotifyMonId
         setAlertLastTriggered tr renotifyMonId (Just t0)
-        finalReminder <- evalMonitorValueWithNotifs (addUTCTime (35 * 60) t0) tr renotifyMonId 150
+        finalReminder <- evalMonitorValueWithNotifs (addUTCTime (67 * 60) t0) tr renotifyMonId 150
         atLimit <- fetchMonitor tr renotifyMonId
         atLimit.notificationCount `shouldBe` 3
         length finalReminder `shouldSatisfy` (> 0)
 
         resetLastEvaluated tr renotifyMonId
         setAlertLastTriggered tr renotifyMonId (Just t0)
-        stopped <- evalMonitorValueWithNotifs (addUTCTime (70 * 60) t0) tr renotifyMonId 150
+        stopped <- evalMonitorValueWithNotifs (addUTCTime (100 * 60) t0) tr renotifyMonId 150
         stoppedMonitor <- fetchMonitor tr renotifyMonId
         stoppedMonitor.notificationCount `shouldBe` 3
         length stopped `shouldBe` 0
 
-        recoveryNotifs <- evalMonitorValueWithNotifs (addUTCTime (75 * 60) t0) tr renotifyMonId 50
+        recoveryNotifs <- evalMonitorValueWithNotifs (addUTCTime (105 * 60) t0) tr renotifyMonId 50
         recovered <- fetchMonitor tr renotifyMonId
         recovered.currentStatus `shouldBe` Monitors.MSNormal
         recovered.notificationCount `shouldBe` 0
@@ -526,7 +595,7 @@ deliverySummary :: [Notification] -> [Text]
 deliverySummary =
   sort . map \case
     EmailNotification d -> "email:" <> d.receiver
-    SlackNotification d -> "slack:" <> d.channelId
+    SlackNotification d -> (case d.payload of AE.Object obj | KM.member "ts" obj -> "slack-update:"; _ -> "slack:") <> d.channelId
     DiscordNotification d -> "discord:" <> d.channelId
     WhatsAppNotification d -> "whatsapp:" <> Notify.to d
     PagerdutyNotification d -> "pagerduty:" <> Notify.integrationKey d <> ":" <> show (Notify.eventAction d)

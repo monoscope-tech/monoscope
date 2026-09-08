@@ -1,7 +1,9 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
+import BackgroundJobs.Types (BgJobs (..))
+import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
@@ -17,6 +19,7 @@ import Data.Default (def)
 import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
@@ -69,6 +72,8 @@ import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -91,6 +96,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), JobOrdering (EarliestRunAtFirst), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Bots.Slack qualified as Slack
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
@@ -101,6 +107,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -121,107 +128,6 @@ import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatu
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
-
-
-data BgJobs
-  = InviteUserToProject Projects.UserId Projects.ProjectId Text Text
-  | CreatedProjectSuccessfully Projects.UserId Projects.ProjectId Text Text
-  | SendDiscordData Projects.UserId Projects.ProjectId Text [Text] Text
-  | NewAnomaly
-      { projectId :: Projects.ProjectId
-      , createdAt :: ZonedTime
-      , anomalyType :: Text
-      , anomalyAction :: Text
-      , targetHashes :: [Text]
-      }
-  | DailyReports Projects.ProjectId
-  | WeeklyReports Projects.ProjectId
-  | DailyJob
-  | HourlyJob UTCTime Int
-  | ReportUsage Projects.ProjectId
-  | TrialEndingReminder Projects.ProjectId Int
-  | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
-  | QueryMonitorsCheck
-  | DeletedProject Projects.ProjectId
-  | CleanupDemoProject
-  | SlackNotification Projects.ProjectId Text
-  | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
-  | ProcessIssuesEnhancement UTCTime
-  | GitSyncFromRepo Projects.ProjectId
-  | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
-  | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
-  | CompressReplaySessions
-  | MergeReplaySession Projects.ProjectId UUID.UUID
-  | ExpireReplayData
-  | ExpireShareEvents
-  | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
-  | LogPatternHourlyProcessing UTCTime Projects.ProjectId
-  | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
-  | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
-  | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
-  | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
-  | ErrorGroupReview UTCTime Projects.ProjectId
-  | EndpointTemplateDiscovery UTCTime Projects.ProjectId
-  | EndpointMergeCleanup UTCTime Projects.ProjectId
-  | -- | Per-minute dispatcher: atomically lease due Prometheus targets (SKIP LOCKED,
-    -- multi-node safe) and fan out one PrometheusScrapeOne per target.
-    PrometheusScrapeTick UTCTime
-  | -- | Scrape a single Prometheus target; drained by workers across all pods.
-    PrometheusScrapeOne PromCfg.PrometheusScrapeConfigId
-  | -- | Five-minute dispatcher: fan out one 'ServiceMapRollup' per active project for the
-    -- last closed bucket, so the expensive span self-join runs once per project per slice
-    -- instead of once per service-map page view.
-    ServiceMapRollupTick UTCTime
-  | -- | Roll one closed 5-minute bucket of one project's spans into
-    -- @service_dependency_edges_env@. Idempotent (upsert replaces), so re-running a bucket to
-    -- absorb late-arriving spans is safe.
-    ServiceMapRollup Projects.ProjectId UTCTime
-  | MonoscopeAdminDaily
-  | UsageAuditReport
-  | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
-    -- where processed_at IS NULL through the same submitBatch path as live
-    -- ingestion.
-    SafetyNetReprocess Projects.ProjectId
-  | -- | Daily host retention pass: bump last_seen_at from fresh traffic,
-    -- system-archive hosts idle 30 days, wake system-archived hosts whose
-    -- traffic returned and email the project a digest about them.
-    HostRetentionSweep Projects.ProjectId
-  | -- | Per-batch odd-job fired from the extraction worker's eager track, carrying
-    -- the error vector it decoded in-memory. Separated from the worker so
-    -- createJob failure aborts UPDATE-1 and safety-net retries the whole batch,
-    -- and so per-error odd-jobs retry semantics are preserved.
-    ProcessProjectErrorsJob Projects.ProjectId (V.Vector ErrorPatterns.ATError) UTCTime
-  | -- | Periodic (every 10 min) safety net for notify eligibility. Picks up
-    -- patterns whose inline notify on `ProcessProjectErrorsJob` was skipped
-    -- (worker down, rate limit overflow, channel configured after the event)
-    -- and re-enqueues itself. Bounded to patterns within the last 24h.
-    NotificationSweepJob UTCTime
-  | -- | Hourly flush of `apis.notification_digest_queue`. Re-enqueues itself.
-    -- Delivers one digest message per project per channel summarising
-    -- rate-limited + log-pattern issues from the past hour.
-    NotificationDigestJob UTCTime
-  | -- | Hourly external watchdog. Compares per-project TimescaleDB↔TimeFusion
-    -- row counts for the last settled hour (alerts on TF drift/stall), checks
-    -- the mainline + DLQ-replay consumer groups have live members, and reports
-    -- fresh inflow into the DLQ / parking topics. Added after the 2026-07-06
-    -- silent dual-write loss ran ~9h undetected. Alerts go to the admin
-    -- Discord webhook; the whole job is best-effort (never blocks ingestion).
-    InfraHealthCheck UTCTime
-  | -- | Hourly: create integration dashboards (postgres, redis, k8s, …) for
-    -- projects whose ingested metrics match a template's @discovery_metrics@
-    -- prefixes. Once-ever per (project, template) via a marker table, so a
-    -- user deleting an auto-created dashboard is a respected opt-out.
-    DashboardsAutoProvision UTCTime
-  | -- | Operator-triggered re-drive of the terminal parking topic
-    -- (@<dlq>-parking@) back into the base DLQ so the (now-fixed) tiered
-    -- replay re-attempts them. Reads up to @cap@ messages per run under a
-    -- dedicated committing group and self-reschedules until drained. This is
-    -- the sanctioned Haskell replacement for the ad-hoc parking_replay script;
-    -- enqueue it manually (see docs/runbooks/dlq-recovery.md) — it is never
-    -- auto-scheduled because parking is a forensic archive by design.
-    ReplayParkedMessages Int
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
@@ -366,6 +272,7 @@ processBackgroundJob authCtx bgJob =
         Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
     SlackNotification pid message -> sendSlackMessage pid message
+    ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     GitSyncFromRepo pid -> gitSyncFromRepo pid
@@ -406,19 +313,19 @@ processBackgroundJob authCtx bgJob =
       notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) errors)
     NotificationSweepJob scheduledTime -> do
       -- Re-enqueue first so a mid-tick failure still produces a next tick.
-      rescheduleSelf authCtx BackgroundJobs.NotificationSweepJob (addUTCTime 600 scheduledTime)
+      rescheduleSelf authCtx Jobs.NotificationSweepJob (addUTCTime 600 scheduledTime)
       unlessStale "NotificationSweepJob" scheduledTime 1800 $ runNotificationSweep scheduledTime
     NotificationDigestJob scheduledTime -> do
-      rescheduleSelf authCtx BackgroundJobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
+      rescheduleSelf authCtx Jobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
       unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
     InfraHealthCheck scheduledTime -> do
-      rescheduleSelf authCtx BackgroundJobs.InfraHealthCheck (addUTCTime 3600 scheduledTime)
+      rescheduleSelf authCtx Jobs.InfraHealthCheck (addUTCTime 3600 scheduledTime)
       unlessStale "InfraHealthCheck" scheduledTime (2 * 3600) $ runInfraHealthCheck authCtx
     ReplayParkedMessages cap -> do
       moved <- runParkingReplay authCtx cap
       Log.logInfo "ReplayParkedMessages moved parking -> DLQ" ("moved", moved)
       -- Still messages left (hit the cap): re-enqueue to keep draining.
-      when (moved >= cap) $ Time.currentTime >>= rescheduleSelf authCtx (const (BackgroundJobs.ReplayParkedMessages cap))
+      when (moved >= cap) $ Time.currentTime >>= rescheduleSelf authCtx (const (Jobs.ReplayParkedMessages cap))
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
 
@@ -873,7 +780,7 @@ runDailyJobScheduling authCtx =
       -- 'jobsWorkerInit' would re-insert one every half hour. Booking it at the start
       -- rather than the end means a crash mid-scheduling still leaves tomorrow covered;
       -- the backstop stays as the net for a crash before this line.
-      enqueueAt authCtx (UTCTime (addDays 1 currentDay) 0) [BackgroundJobs.DailyJob]
+      enqueueAt authCtx (UTCTime (addDays 1 currentDay) 0) [Jobs.DailyJob]
       hourlyJobsExist <-
         (>= (24 :: Int64))
           . HI.getOneColumn
@@ -890,28 +797,28 @@ runDailyJobScheduling authCtx =
         else do
           Log.logInfo "Scheduling hourly jobs for today" ()
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
-            void $ createJob conn "background_jobs" BackgroundJobs.UsageAuditReport
+            void $ createJob conn "background_jobs" Jobs.MonoscopeAdminDaily
+            void $ createJob conn "background_jobs" Jobs.UsageAuditReport
             -- 30-day replay retention sweep. The handler re-enqueues itself if
             -- it hit the batch cap, so backlog drains across multiple runs.
-            void $ createJob conn "background_jobs" BackgroundJobs.ExpireReplayData
-            void $ createJob conn "background_jobs" BackgroundJobs.ExpireShareEvents
+            void $ createJob conn "background_jobs" Jobs.ExpireReplayData
+            void $ createJob conn "background_jobs" Jobs.ExpireShareEvents
             -- background job to cleanup demo project
             when (dayOfWeek currentDay == Monday)
               $ void
-              $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
+              $ createJob conn "background_jobs" Jobs.CleanupDemoProject
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
             forM_ [0 .. 23 :: Int] \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
-              void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
-            seedJobs conn currentTime 24 3600 BackgroundJobs.ProcessIssuesEnhancement
-            seedJobs conn currentTime 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
-            seedJobs conn currentTime 1440 60 BackgroundJobs.PrometheusScrapeTick
-            seedJobs conn currentTime 288 300 BackgroundJobs.ServiceMapRollupTick
-            seedJobs conn currentTime 144 600 BackgroundJobs.NotificationSweepJob
-            seedJobs conn currentTime 24 3600 BackgroundJobs.NotificationDigestJob
-            seedJobs conn currentTime 24 3600 BackgroundJobs.InfraHealthCheck
+              void $ scheduleJob conn "background_jobs" (Jobs.HourlyJob at i) at
+            seedJobs conn currentTime 24 3600 Jobs.ProcessIssuesEnhancement
+            seedJobs conn currentTime 1440 60 (const Jobs.QueryMonitorsCheck)
+            seedJobs conn currentTime 1440 60 Jobs.PrometheusScrapeTick
+            seedJobs conn currentTime 288 300 Jobs.ServiceMapRollupTick
+            seedJobs conn currentTime 144 600 Jobs.NotificationSweepJob
+            seedJobs conn currentTime 24 3600 Jobs.NotificationDigestJob
+            seedJobs conn currentTime 24 3600 Jobs.InfraHealthCheck
 
       projects <- Projects.recentlyActiveProjectIds currentTime
       Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
@@ -935,8 +842,8 @@ runDailyJobScheduling authCtx =
         if projectJobsExist
           then Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
           else liftIO $ withResource authCtx.jobsPool \conn -> do
-            void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-            void $ createJob conn "background_jobs" $ BackgroundJobs.HostRetentionSweep p
+            void $ createJob conn "background_jobs" $ Jobs.ReportUsage p
+            void $ createJob conn "background_jobs" $ Jobs.HostRetentionSweep p
             let sched = seedJobs conn currentTime
             -- Derived-table maintenance jobs read from `apis.*` tables, not
             -- the hypertable, and are unaffected by the derivation path.
@@ -969,7 +876,7 @@ runDailyJobScheduling authCtx =
           unless (any (\(Only (c :: Int)) -> c > 0) existing)
             $ void
             $ createJob conn "background_jobs"
-            $ BackgroundJobs.WeeklyReports p
+            $ Jobs.WeeklyReports p
 
 
 -- | Announce a newly created project to the team Discord channel, once per project member.
@@ -1391,10 +1298,11 @@ runHourlyJob scheduledTime hour = do
   let projectBatches = chunksOf 10 activeProjects
 
   enqueueJobs ctx
-    $ map (\batch -> BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
-    <> concatMap (\pid -> [BackgroundJobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid]) activeProjects
+    $ map (\batch -> Jobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
+    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
+  tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
   deletedCount <- QueryCache.cleanupExpiredCache
   when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
 
@@ -1404,7 +1312,7 @@ runHourlyJob scheduledTime hour = do
   staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
   when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
-  enqueueJobs ctx [BackgroundJobs.CompressReplaySessions, BackgroundJobs.DashboardsAutoProvision scheduledTime]
+  enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
@@ -1565,7 +1473,7 @@ sendAlertToChannels alert pid project users alertUrl subj html refs =
       Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= pid])
       pure (refs, False)
     Just team -> do
-      let fan = Fanout{threads = Just refs, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
+      let fan = Fanout{slack = InlineSlack, threads = Just refs, email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}}
       (,True) <$> fanOutToTeam team fan alert pid project.title alertUrl
 
 
@@ -1573,7 +1481,7 @@ sendAlertToChannels alert pid project users alertUrl subj html refs =
 -- Email stays with the caller: recipients and body differ per alert kind.
 broadcastToEveryone :: Maybe ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ()
 broadcastToEveryone teamM alert pid title url =
-  whenJust teamM \t -> void $ fanOutToTeam t Fanout{threads = Nothing, email = Nothing} alert pid title url
+  whenJust teamM \t -> void $ fanOutToTeam t Fanout{slack = InlineSlack, threads = Nothing, email = Nothing} alert pid title url
 
 
 -- | Slack thread-ts / Discord message-id an alert threads its replies under.
@@ -1597,9 +1505,13 @@ instance Monoid ThreadRefs where
 data FanoutEmail = FanoutEmail {recipients :: [Text], subject :: Text, body :: Text}
 
 
--- | The two axes on which the fan-out callers differ.
+data SlackFanout = InlineSlack | QueuedSlack
+
+
+-- | Delivery routing and email content for a team fan-out.
 data Fanout = Fanout
-  { threads :: Maybe ThreadRefs
+  { slack :: SlackFanout
+  , threads :: Maybe ThreadRefs
   -- ^ 'Just': thread slack/discord under these ids and return the resulting ones.
   -- 'Nothing': post standalone messages and return 'mempty'.
   , email :: Maybe FanoutEmail
@@ -1617,7 +1529,9 @@ fanOutToTeam team fan alert pid title alertUrl = do
   whenJust fan.email \e ->
     when (ProjectMembers.isChannelEnabled ProjectMembers.Email team)
       $ forM_ e.recipients \to -> sendRenderedEmail to e.subject e.body
-  slackTs <- fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)
+  slackTs <- case fan.slack of
+    QueuedSlack -> pure Nothing
+    InlineSlack -> fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)
   discordMsgId <- fanChannel ProjectMembers.Discord team.discord_channels (.discordMsgId) \parent cid -> sendDiscordAlertWith parent alert pid title (Just cid)
   ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert pid title team.phone_numbers
   ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert title alertUrl
@@ -1700,9 +1614,27 @@ runtimeErrorAlert ctx pid now issueId issueTitle runtimeAlertType errorData firs
   pure (chartUrl, RuntimeErrorAlert{issueId, issueTitle, errorData, runtimeAlertType, chartUrl, occurrenceText, firstSeenText = Just $ firstSeenLine now firstSeenAt, ongoingFor})
 
 
-monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
-monitorTrendChartUrl ctx pid monitor =
-  trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
+monitorTrendChartUrl :: (DB es, Log :> es) => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> UTCTime -> Double -> Eff es (Maybe Text)
+monitorTrendChartUrl ctx pid monitor from to currentValue = do
+  history <- Monitors.getEvaluations pid monitor.id from to
+  let readings = filter ((< to) . fst) history <> [(to, currentValue)]
+  -- A null between non-adjacent checks breaks the line. No zero-fill or
+  -- interpolation across a period in which the monitor produced no reading.
+  let millis = floor . (* 1000) . utcTimeToPOSIXSeconds
+      row at value = AE.toJSON ([AE.toJSON (millis at :: Int), AE.toJSON value] :: [AE.Value])
+      cadence = fromIntegral (max 1 monitor.checkIntervalMins * 60)
+      withGaps =
+        concat
+          $ zipWith
+            ( \previous (at, value) ->
+                [row (addUTCTime cadence prev) (Nothing :: Maybe Double) | Just prev <- [previous], diffUTCTime at prev > cadence * 1.5]
+                  <> [row at (Just value)]
+            )
+            (Nothing : map (Just . fst) readings)
+            readings
+      dataset = def{Widget.source = AE.toJSON (AE.toJSON (["timestamp", "Monitor value"] :: [Text]) : withGaps), Widget.from = Just $ millis from, Widget.to = Just $ millis to}
+      widget = def{Widget.wType = Widget.WTTimeseriesLine, Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
+  trendChartUrl ctx pid widget (formatUTC from) (formatUTC to)
 
 
 -- | Fast inline path after ingestion: dispatch due notifications only for the
@@ -3060,43 +2992,71 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   void $ W.postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
 
 
--- | Send notifications for a query monitor status change (inline, no separate job)
-notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> ATBackgroundCtx ()
-notifyQueryMonitorStatusChange monitor value status = do
+-- | Commit monitor state, issue identity, and Slack delivery intent together.
+-- External delivery happens only after the transaction succeeds.
+commitQueryMonitorEvaluation :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Incidents.IncidentDelivery -> Tx.Transaction Bool -> ATBackgroundCtx Bool
+commitQueryMonitorEvaluation monitor value status observedAt delivery commitStatus = do
   let isRecovery = status == Monitors.MSNormal
-      threshold = case status of
-        -- Match the state machine when a prior warning remains in its recovery band.
-        Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold
-        _ -> monitor.alertThreshold
+      threshold = case status of Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold; _ -> monitor.alertThreshold
+      source = Incidents.MonitorIncident monitor.id
+      thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
   appCtx <- ask @Config.AuthContext
-  whenJustM (Projects.projectById monitor.projectId) \p -> do
-    teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
-    when (not (V.null monitor.teams) && null teams)
-      $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
-    let monitorListUrl = projectUrl appCtx monitor.projectId <> "/monitors"
-        thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
-    now <- Time.currentTime
-    let chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
-        chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) now
-    chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor (formatUTC chartFrom) (formatUTC now)
-    (alert, alertUrl) <-
-      if isRecovery
-        then pure (MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = monitorListUrl}, monitorListUrl)
-        else do
-          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
-          persistedId <- Issues.insertIssueReturningId issue
-          let issueUrl = projectUrl appCtx monitor.projectId <> "/issues/" <> persistedId.toText
-          pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl, chartUrl = chartUrlM}, issueUrl)
-    targetTeams <-
-      if null teams
-        then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId
-        else pure teams
-    let (subj, html) =
-          if isRecovery
-            then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
-            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value threshold (display thresholdDir) chartUrlM
-        renderedBody = ET.renderEmail subj html
-    for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj renderedBody
+  project <- Projects.activeProjectById monitor.projectId
+  case project of
+    Nothing -> Hasql.transaction TxS.ReadCommitted TxS.Write commitStatus
+    Just p -> do
+      teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
+      when (not (V.null monitor.teams) && null teams)
+        $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
+      targetTeams <- if null teams then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId else pure teams
+      installation <- Integrations.getProjectSlackData monitor.projectId
+      let baseUrl = projectUrl appCtx monitor.projectId
+          monitorUrl = baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview"
+          chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
+          chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
+          destinations = [Incidents.SlackDestination sd.teamId channel | sd <- maybeToList installation, team <- targetTeams, ProjectMembers.isChannelEnabled ProjectMembers.Slack team, channel <- toList team.slack_channels]
+      chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor chartFrom observedAt value
+      issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
+      committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+        accepted <- commitStatus
+        if not accepted
+          then pure (Right Nothing)
+          else do
+            previous <- Incidents.latestEpisodeTx monitor.projectId source
+            let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
+            persistedId <-
+              if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
+                then traverse Issues.insertIssueReturningIdTx issue
+                else pure Nothing
+            let issueId = (active >>= (.issueId)) <|> persistedId
+                alertUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
+                (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active alertUrl monitorUrl chartUrlM
+                change
+                  | isRecovery = Incidents.IncidentRecovered
+                  | status /= monitor.currentStatus = Incidents.IncidentAlert
+                  | delivery == Incidents.PublishIncident = Incidents.IncidentReminder
+                  | otherwise = Incidents.IncidentObservation
+                update = Incidents.IncidentUpdate{projectId = monitor.projectId, source, observedAt, change, delivery, issueId, rootPayload, replyPayload, destinations}
+            result <- Incidents.recordIncidentEventTx update
+            case result of
+              Incidents.Recorded _ _ -> pure $ Right $ Just alertUrl
+              Incidents.AlreadyRecorded _ _ -> pure $ Right $ Just alertUrl
+              Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
+              _ -> Tx.condemn $> Left result
+      case committed of
+        Left result -> throwIO $ MonitorIncidentError result
+        Right Nothing -> pure False
+        Right (Just alertUrl) -> do
+          let alert = if isRecovery then MonitorsRecoveryAlert monitor.alertConfig.title alertUrl else MonitorsAlert monitor.alertConfig.title alertUrl chartUrlM
+              (subj, html) = if isRecovery then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value threshold (display thresholdDir) chartUrlM
+          when (delivery == Incidents.PublishIncident) $ for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl subj (ET.renderEmail subj html)
+          tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+          pure True
+
+
+data MonitorIncidentError = MonitorIncidentError Incidents.RecordResult
+  deriving stock (Show)
+  deriving anyclass (CE.Exception)
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
@@ -3108,7 +3068,7 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
     $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
     $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
   void
-    $ fanOutToTeam team Fanout{threads = Nothing, email = Just FanoutEmail{recipients = map CI.original emails, subject = subj, body = renderedBody}} alert projectId projectTitle monitorUrl
+    $ fanOutToTeam team Fanout{slack = QueuedSlack, threads = Nothing, email = Just FanoutEmail{recipients = map CI.original emails, subject = subj, body = renderedBody}} alert projectId projectTitle monitorUrl
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
@@ -3296,7 +3256,7 @@ processAPIChangeAnomalies pid targetHashes = do
             else do
               issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
               Issues.insertIssue issue
-              enqueueJobs authCtx [BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
+              enqueueJobs authCtx [Jobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)]
               when unresolved
                 $ Log.logAttention
                   "Suppressed new-endpoint notification: anomaly missing method+url_path"
@@ -3680,7 +3640,7 @@ processIssuesEnhancement scheduledTime = do
 
   -- Create enhancement jobs for each project
   enqueueJobs ctx
-    $ mapMaybe (\pis -> (\((_, pid), _) -> BackgroundJobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) pis)) <$> V.uncons pis)
+    $ mapMaybe (\pis -> (\((_, pid), _) -> Jobs.EnhanceIssuesWithLLM pid (V.map (UUIDId . fst) pis)) <$> V.uncons pis)
     $ toList issuesByProject
 
 
@@ -4794,6 +4754,47 @@ checkTriggeredQueryMonitors = do
         Left err -> do
           Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
           void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+  tryStep "slack-incident-delivery" runSlackIncidentDeliveries
+
+
+-- | Resolve current installation credentials only when a queued message is sent.
+runSlackIncidentDeliveries :: ATBackgroundCtx ()
+runSlackIncidentDeliveries = do
+  ctx <- ask @Config.AuthContext
+  unless ctx.config.pauseNotifications do
+    now <- Time.currentTime
+    deliveries <- Incidents.claimSlackDeliveries now
+    void $ forConcurrently deliveries \delivery -> do
+      activeProject <- Projects.activeProjectById delivery.projectId
+      installation <- if isJust activeProject then Integrations.getProjectSlackData delivery.projectId else pure Nothing
+      outcome <- case installation of
+        Just sd | sd.teamId == delivery.teamId -> do
+          let (operation, parent) = case delivery.operation of
+                Incidents.PostRoot -> (Notify.SlackPost, Nothing)
+                Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
+                Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
+              message =
+                Notify.SlackData
+                  { Notify.channelId = delivery.channelId
+                  , Notify.botToken = sd.botToken
+                  , Notify.payload = AE.toJSON $ case delivery.operation of
+                      Incidents.PostReply _ -> delivery.payload
+                      _ -> Incidents.correlateSlackRoot delivery.rootId $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                  , Notify.threadTs = parent
+                  , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
+                  , Notify.projectIdCtx = delivery.projectId.toText
+                  , Notify.teamIdCtx = sd.teamId
+                  }
+          Notify.deliverSlack operation message <&> \case
+            Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
+            Notify.SlackAccepted -> Incidents.WebhookAccepted
+            Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
+            Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
+            Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
+        _ -> pure $ Incidents.DeliveryRejected "installation_replaced_or_removed"
+      finishedAt <- Time.currentTime
+      saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
+      unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
 
 
 evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
@@ -4815,19 +4816,18 @@ evaluateQueryMonitor monitor startWall = do
   results <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp (rawSql freshSql)
   end <- liftIO $ getTime Monotonic
 
-  -- No rows in the lookback window:
-  --   * greater-than monitor currently alerting/warning -> treat as 0 so it can recover
-  --   * otherwise skip, to avoid spuriously firing (triggerLessThan=True) or
-  --     spuriously recovering when data is simply missing.
+  -- Missing measurements cannot establish recovery. A complete COUNT query
+  -- returns an explicit zero; an absent/null gauge reading is different.
   let durationNs = toNanoSecs (diffTimeSpec end start)
   case catMaybes (results :: [Maybe Double]) of
-    []
-      | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
-          evaluateWithResults monitor startWall title 0 durationNs
     [] -> do
       Log.logInfo "Monitor query returned no rows in lookback window; skipping evaluation" (monitor.id, title, lookbackMins)
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
-    (v : vs) -> evaluateWithResults monitor startWall title (foldr max v vs) durationNs
+    values@(v : vs)
+      | any (\value -> isNaN value || isInfinite value) values -> do
+          Log.logWarn "Monitor query returned a non-finite measurement; skipping evaluation" (monitor.id, title)
+          void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+      | otherwise -> evaluateWithResults monitor startWall title (foldr max v vs) durationNs
 
 
 evaluateWithResults :: Monitors.QueryMonitor -> UTCTime -> Text -> Double -> Integer -> ATBackgroundCtx ()
@@ -4861,7 +4861,6 @@ evaluateWithResults monitor startWall title total durationNs = do
           { Telemetry.kind = Just "alert"
           , Telemetry.parent_id = Just monitor.id.toText
           }
-  insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
 
   -- Determine notification intent before UPDATE so we can set timestamps correctly
   let isRecovery = status == Monitors.MSNormal && prevStatus /= Monitors.MSNormal
@@ -4894,13 +4893,23 @@ evaluateWithResults monitor startWall title total durationNs = do
         | otherwise = monitor.notificationCount
 
   let monId = monitor.id
-  void
-    $ Hasql.interpExecute
-      [HI.sql| UPDATE monitors.query_monitors
-          SET current_status = #{status}, current_value = #{total}, last_evaluated = #{startWall},
-              warning_last_triggered = #{finalWarningAt}, alert_last_triggered = #{finalAlertAt},
-              notification_count = #{newNotifCount}
-          WHERE id = #{monId} |]
+      commitStatus = do
+        HI.RowsAffected changed <-
+          Tx.statement ()
+            $ HI.interp
+              True
+              [HI.sql| UPDATE monitors.query_monitors
+            SET current_status = #{status}, current_value = #{total}, last_evaluated = #{startWall},
+                warning_last_triggered = #{finalWarningAt}, alert_last_triggered = #{finalAlertAt},
+                notification_count = #{newNotifCount}
+            WHERE id = #{monId} AND project_id = #{monitor.projectId}
+              AND last_evaluated IS NOT DISTINCT FROM #{monitor.lastEvaluated}
+              AND current_status = #{prevStatus} AND notification_count = #{monitor.notificationCount}
+              AND muted_until IS NOT DISTINCT FROM #{monitor.mutedUntil}
+              AND (last_evaluated IS NULL OR last_evaluated < #{startWall})
+              AND deleted_at IS NULL AND deactivated_at IS NULL |]
+        when (changed == 1) $ Monitors.recordEvaluationTx monitor.projectId monId startWall total status
+        pure $ changed == 1
 
   let reason :: Text
       reason
@@ -4909,8 +4918,23 @@ evaluateWithResults monitor startWall title total durationNs = do
         | missedInitial = "missed_initial"
         | otherwise = "reminder"
   Log.logInfo "Monitor notify decision" (monitor.id, title, status, total, shouldNotify, isMuted, reason)
-  when (shouldNotify && not isMuted)
-    $ notifyQueryMonitorStatusChange monitor total status
+  committed <-
+    if status /= Monitors.MSNormal || prevStatus /= Monitors.MSNormal
+      then
+        commitQueryMonitorEvaluation
+          monitor
+          total
+          status
+          startWall
+          (if shouldNotify && not isMuted then Incidents.PublishIncident else Incidents.RefreshIncident)
+          commitStatus
+      else Hasql.transaction TxS.ReadCommitted TxS.Write commitStatus
+  when committed
+    $ tryStep "monitor-evaluation-telemetry"
+    $ insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
+  unless committed $ whenJustM (Monitors.queryMonitorById monId) \current ->
+    when (isNothing current.deletedAt && isNothing current.deactivatedAt && maybe True (< startWall) current.lastEvaluated)
+      $ evaluateWithResults current startWall title total durationNs
 
 
 -- | Feed a deterministic reading through the production monitor state machine.

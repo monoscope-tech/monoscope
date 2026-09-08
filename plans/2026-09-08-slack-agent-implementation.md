@@ -1,0 +1,183 @@
+# Slack agent implementation
+
+The full scope remains [the Slack-agent plan](2026-09-08-slack-agent.md).
+Status: in progress. No deployment or live Slack configuration changes.
+
+## Implemented: monitor chart data and exports
+
+- Migration `0152_monitor_evaluations.sql` stores successful measurements with monitor identity, timestamp, value, and status.
+- Duplicate timestamps preserve the original reading. Reads enforce project scope. Hourly cleanup retains seven days.
+- Monitor notification charts use signed snapshots of recorded values instead of rewriting scalar queries into event-count timeseries.
+- The snapshot includes exact bounds and null gap markers for missed checks. It contains no source query to rerun later.
+- Missing or non-finite gauge data no longer produces a synthetic zero or a false recovery. Explicit zero counts still pass through normal evaluation.
+- PNG exports use UTC, visible boundary labels, sans-serif text, straight lines, visible single readings, and gap preservation.
+- Single-measurement threshold charts include negative values and thresholds outside the observed range. Export controls and tooltips are disabled.
+
+A monitor starts collecting history after the migration. Older readings are not fabricated.
+Incident threading, chart failure messages, measurement units, and the remaining agent capabilities are still pending.
+
+## Verification
+
+| Command or check | Result |
+| --- | --- |
+| `cabal build monoscope:test:integration-tests --ghc-options=-O0` | Passed, including the changed library and integration tests. |
+| Node 25.2.1 running `web-components/node_modules/vitest/vitest.mjs run` from `web-components` | 57 files and 921 tests passed. |
+| Integration binary with `--match /Monitoring/ --jobs=1` | 15 examples passed against local container PostgreSQL and MinIO. TimeFusion was not exercised. |
+| `fourmolu --mode check src/BackgroundJobs.hs src/Models/Apis/Monitors.hs test/integration/MonitoringSpec.hs` | Passed after formatting. |
+| `git diff --check` | Passed for the worktree. |
+| Rendered PNG inspection | Full time window, threshold, individual readings, and a missing-check gap are visible. Fixture uses illustrative measurements. |
+| Haskell constraint review | No constraint-evasion findings in the changed Haskell code. Typed monitor/project IDs and timestamps remain intact. JSON nulls are chart gap markers. |
+
+The first frontend attempt used Node 20.5.0 and failed before tests. Node 25.2.1 is already installed and passed the suite.
+The native HLint 3.3.6 cannot parse the repository's `MultilineStrings` extension. Container HLint remains part of the CI run.
+The first native database attempt failed because Homebrew PostgreSQL lacks `timescaledb_toolkit`.
+Docker now supplies the repository's PostgreSQL and MinIO images. The monitor suite passed with `USE_EXTERNAL_DB=true` and local service endpoints.
+
+The design hook flagged existing export colors in `chart-png-options.ts`.
+These values predate this change and preserve the existing export theme. No new color overrides or hook suppressions were added.
+
+## Local CI result
+
+The first signoff attempt stopped because Docker was not running. It published no attestations for these changes.
+After Docker and the local services started, this command began:
+
+```sh
+CI_KEEP_GOING=true make ci-signoff CHECKS="frontend build doctests unit-tests integration-tests weeder hlint ui-tests"
+```
+
+The command finished with a failure status. Frontend, build, doctests, unit tests, and UI tests passed and published attestations.
+Weeder failed. Integration tests could not run because the amd64 TimeFusion service did not start on arm64.
+The container lacked the HLint capability. No passing attestation was published for those checks.
+The final gate still requires integration-tests, weeder, hlint, and e2e. The existing CLI-test attestation remains reusable.
+The log is `/tmp/monoscope-slack-agent/ci-signoff-retry.log`.
+Other local build, test, and rendering evidence is under `/tmp/monoscope-slack-agent/`.
+These attestations cover the chart changes, before the incident delivery draft is integrated.
+
+## Requested Haskell reviews
+
+Applied `hs-distill`, `hs-evasion-review`, and `hs-lob-review` from `/Users/tonyalaribe/.claude/commands/`.
+The incident draft now derives both JSON instances through `KeyMap`; all its instances are derived.
+Removed the redundant `payloadJSON` wrapper. The repository diff adds no manual instances or warning suppressions.
+Draft review findings remain: encode required thread timestamps in delivery constructors, use typed verified events for reconciliation, and construct credential-free payloads at the message boundary.
+ECharts export calculations appropriately remain in JavaScript. No UI interaction demotions were found.
+The detailed review is `/tmp/monoscope-slack-agent/haskell-review.md`.
+
+## Implemented: incident storage and delivery worker
+
+- Migration `0153_incident_delivery.sql` adds episodes, immutable events, destination roots, and an ordered outbox.
+- Source locks and unique constraints deduplicate events and roots. Recovery uses existing destinations even after team routing changes.
+- Claims use `SKIP LOCKED`. Expired sends become uncertain; late results must match the lease. Reply timestamps never replace roots.
+- Reply and update constructors require a root timestamp. All new instances are derived.
+- The notification effect now returns distinct confirmed, webhook-accepted, rate-limited, rejected, and ambiguous outcomes. Both transports preserve thread context.
+- The worker resolves current project/workspace credentials at delivery time. Replaced installations cannot receive old queued messages.
+- Monitor transitions now commit status, measurement, issue, event, and Slack outbox writes in one transaction.
+- A conditional update rejects concurrent stale evaluations. Retried work reads the current monitor state before recalculating hysteresis.
+- The monitor scheduler drains the outbox. Slack roots, replies, and updates use that worker; other notification channels retain their existing delivery path.
+- Ordinary readings refresh the root without posting a reminder. Migration `0154_incident_observations.sql` records these observations explicitly.
+- Muted monitors still record recovery. Root refreshes wait until the mute expires; global notification pause also stops the worker.
+- Recovery retains the original issue link, onset, initial measurement, and signed chart snapshot. The root includes current status and recovery time.
+
+Verification: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Incident make live-test-dev` passed 10 examples.
+Seven new examples cover the actual monitor path, database model, and notification worker. Three existing incident lifecycle examples also passed.
+The new cases cover concurrent claims, duplicate destinations, ordered recovery, recurrence, stale transitions, foreign sources, delayed replies, expired leases, and webhook timestamp waits.
+Compiler and database failures found during development were fixed without warning suppression or manual instances.
+The rollback test rejects outbox insertion and proves that monitor status, measurement, and issue creation also roll back.
+The monitor lifecycle test races initial evaluations and follows warning, escalation, recovery, and recurrence across two channels.
+The incident log is `/tmp/monoscope-slack-agent/incident-tests.log`.
+The watcher with `TEST_MATCH=Monitoring` passed 26 examples, including the monitor and real-user-monitoring suites.
+The widget test now captures a webhook root before asserting its recovery reply and root update. Reminder tests use a forward-moving clock.
+The monitor log is `/tmp/monoscope-slack-agent/monitor-lifecycle-tests.log`; the active watcher writes `build-test-dev.log`.
+These results do not validate live Slack HTTP responses or the full integration suite.
+
+The requested Haskell reviews were reapplied to the monitor integration. Issue insert SQL is shared by both interpreters; no manual instances or warning suppressions were added.
+The fan-out now uses an explicit inline/queued Slack choice. It does not alter team settings to encode transport behavior.
+
+Remaining foundation work includes runtime-error and manual-resolution integration, verified Slack root reconciliation, explicit missing-telemetry status, and transport failure fixtures.
+
+## Remaining implementation
+
+1. Incident episodes, durable delivery, and separate roots for each workspace/channel destination.
+2. Recovery and reminder replies, root status updates, installation migration, and delivery failure handling.
+3. Complete Slack chart presentation, text fallback, units, and source failure states.
+4. Native Agent installation, signed event handling, sessions, mentions, follow-ups, progress, and cancellation.
+5. Evidence-backed incident, deployment, code, dashboard, runbook, and similar-incident tools.
+6. Reviewable communication drafts and tested draft PRs with explicit action authority.
+7. Proactive investigation policies, evaluation fixtures, and controlled Slack acceptance.
+
+The plan's complete acceptance matrix remains the completion gate. The verified chart work does not complete the full goal.
+
+## Implemented: signed event requests
+
+The events route now receives raw JSON bytes and Slack's timestamp/signature headers.
+It verifies HMAC-SHA256 in constant time before JSON decoding or background dispatch.
+Past and future timestamps must be within five minutes. An empty `SLACK_SIGNING_SECRET` returns 503; invalid signatures return 401.
+The environment example includes the signing-secret setting. No live configuration was changed.
+The payload's `FromJSON` instance is now derived with a tagged-object codec; the handwritten instance and extra callback wrapper were removed.
+The protocol follows [Slack's request verification documentation](https://docs.slack.dev/authentication/verifying-requests-from-slack/).
+
+The workflow regression uses an independent Python hashlib signature fixture. It checks accepted challenges, changed bodies, missing signatures, invalid versions, expired/future timestamps, signed malformed JSON, and missing configuration.
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev` passed 15 examples for this change.
+These are local replay fixtures; they do not prove live Slack or LLM success.
+
+The workflow logs exposed a conversation-backfill cleanup failure: `pg_advisory_unlock` was decoded as a command instead of a row.
+Inspection also found that session locks crossed pooled database calls. Backfill insertion now uses one transaction and a conversation-row lock.
+The transaction checks for existing messages before inserting the fetched history. Fetches run outside the transaction, and failed fetches remain retryable.
+A regression retries failed fetches and races two successful history inserts. The same workflow command passed 16 examples with the transaction change.
+The old advisory-unlock background failure is absent from that run. Formatting and `git diff --check` pass.
+The workflow watcher remains active and writes `build-test-dev.log`; no new CI attestations were published for this work.
+
+Signed event deduplication and durable ingress, own-app root verification, native Agent sessions, and the other full-plan requirements remain unfinished.
+
+## Implemented: durable Slack event ingress
+
+Migration `0155_slack_events.sql` records signed callbacks with unique workspace/event IDs.
+A single SQL statement inserts the receipt and its `ProcessSlackEvent` job. The endpoint acknowledges only after that statement succeeds.
+Concurrent HTTP retries enqueue one job. A job-insertion failure also rolls back the receipt, so Slack can retry it.
+The existing job worker now handles stored callbacks. Completed receipts suppress later job replay.
+Job types moved to `BackgroundJobs.Types` to avoid a cycle between the worker and Slack handler; existing constructor names and derived JSON formats are preserved.
+Bot messages, subtyped messages, and unsupported message kinds do not start investigations.
+The full typed event model for edits, context updates, native Agent sessions, and unknown payloads remains unfinished.
+Run-level checkpoints and durable response delivery are still needed for interrupted investigations; receipt deduplication alone does not make external effects exactly-once.
+
+The workflow watcher passed 18 examples covering signatures, bot-loop avoidance, receipt/job atomicity, concurrent request retries, worker completion, and history backfill.
+The final replay test loads the stored job payload, uses the background dispatcher, and verifies that replay adds no conversation messages.
+The final run passed 18 examples; formatting and `git diff --check` also pass. The log is `/tmp/monoscope-slack-agent/durable-event-workflows.log`.
+No deployment, live Slack setting change, push, or new CI attestation was performed.
+
+## Implemented: verified root capture and review fixes
+
+Outgoing incident roots carry `monoscope_incident_root` metadata with their root ID.
+Capture reads a saved signed receipt. It checks the message's author app separately from the receiving app, then checks its workspace, channel, installation, root ID, and decimal timestamp.
+The former arbitrary-timestamp capture entry point is private. Conflicting observations cannot replace a root timestamp.
+`SLACK_APP_ID` selects the expected app. `docs/slack/` documents the metadata registration and event configuration required for controlled acceptance.
+No live Slack settings were changed.
+
+Delivery rows decode wire timestamps as text. A derived traversal validates each timestamp before exposing the domain delivery.
+Invalid stored timestamps roll back the claim transaction and raise a derived exception.
+All new JSON, database, traversal, and exception instances are derived.
+
+Oversized or rejected chart images now become a visible chart-unavailable notice. The fallback retains the block ID.
+PNG threshold scaling now excludes stacked charts and preserves their configured bounds.
+
+All three requested Haskell reviews ran in three rounds. Findings and fixes are recorded in `2026-09-09-slack-agent-reviews.md`.
+Validation also corrected two test issues: signed fixtures now share the existing UUID sequence, and concurrency tests use the already-declared `UnliftIO.Async` dependency.
+
+Final targeted native checks use `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000` with `make live-test-dev`:
+
+| Filter | Result | Log |
+| --- | --- | --- |
+| `TEST_MATCH=Incident` | 11 examples passed | `/tmp/monoscope-slack-agent/review-incident-final.log` |
+| `TEST_MATCH=Monitoring` | 26 examples passed | `/tmp/monoscope-slack-agent/review-monitor-final.log` |
+| `TEST_MATCH=Workflows` | 18 examples passed | `/tmp/monoscope-slack-agent/review-workflow-final.log` |
+
+The native services now use Compose project `monoscope-slack-dev`, separate from `monoscope-ci`.
+The first signoff run restarted shared services and interrupted a native test run. The isolated reruns above passed.
+The first signoff run passed frontend compilation and all 922 frontend tests, but its Haskell build found the undeclared `async` import. Failed checks were not attested.
+The corrected signoff command is `CI_KEEP_GOING=true make ci-signoff CHECKS="build doctests unit-tests integration-tests weeder hlint"`.
+The corrected run passed the build, 1,536 doctests, and 308 unit tests. Weeder reported existing unused symbols; none of the new incident or signed-ingress APIs appear in its findings. HLint was unavailable, and the real TimeFusion service could not start on arm64.
+The final run exited 2. It published only the passing build, doctest, and unit-test results.
+Workflow commit `df62e4a5c` landed during the run and changed the shared CI metadata fingerprint. The final gate therefore lists every check for GitHub: frontend, build, doctests, unit-tests, cli-tests, integration-tests, weeder, hlint, ui-tests, and e2e.
+The local results above prove the tested code, but their attestations do not cover that later workflow fingerprint.
+The full log is `/tmp/monoscope-slack-agent/review-ci-signoff-final.log`.
+No PR currently exists for the local master branch. A future PR must include these commands, results, and outstanding checks in its description.
+No deployment was performed. The full Slack-agent goal remains in progress.

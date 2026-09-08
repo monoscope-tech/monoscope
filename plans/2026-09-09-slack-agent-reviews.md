@@ -1,0 +1,99 @@
+# Slack agent reviews
+
+Scope: the Slack-agent worktree changes, including new incident storage, signed ingress, delivery workers, charts, and their tests.
+Unrelated production-sweep and chart-research documents were excluded.
+
+Each round applied these three instruction files:
+
+- `/Users/tonyalaribe/.claude/commands/hs-distill.md`
+- `/Users/tonyalaribe/.claude/commands/hs-evasion-review.md`
+- `/Users/tonyalaribe/.claude/commands/hs-lob-review.md`
+
+## Round 1
+
+### hs-distill
+
+| File | Reuse / combinators | Derives | Consolidation |
+| --- | --- | --- | --- |
+| `src/Models/Apis/Incidents.hs` | Use `Traversable` to validate wire timestamps through the delivery record. | Derived JSON, database, and traversal instances. | One parameterized representation serves wire and validated deliveries. |
+| `src/BackgroundJobs.hs` | Existing monitor evaluation, widget signing, and notification dispatch remain shared. | New exception instance is derived. | Job declarations move to `BackgroundJobs.Types` to remove an import cycle. |
+| `src/BackgroundJobs/Types.hs` | Existing job constructor names and JSON shapes retained. | Both JSON instances derived. | No duplicate worker implementation. |
+| `src/Data/Effectful/Notify.hs` | Shared Slack transport and outcome classification. | Response JSON derived. | Image fallback reviewed again in round 2. |
+| `src/Models/Apis/Issues.hs` | Shared insert SQL and transactional history seeding. | No new manual instance. | Removed session-lock acquisition/release across pooled calls. |
+| `src/Models/Apis/Monitors.hs` | Shared transactional evaluation insert. | No new manual instance. | No required change. |
+| `src/Models/Apis/Integrations.hs` | Existing installation lookup retained. | No new manual instance. | No required change. |
+| `src/Pkg/Mail.hs` | Existing Block Kit builders retained. | No new manual instance. | Snapshot retention stays with message construction. |
+| `src/Pages/Bots/Slack.hs` | Existing raw-body route and background queue reused. | Replaced handwritten payload decoder with derived tagged JSON. | Removed extra callback wrapper. |
+| `src/Pages/Bots/Utils.hs` | Shared history-seeding transaction. | No new manual instance. | Removed ineffective pooled session-lock plumbing. |
+| `src/System/Config.hs`, `src/Web/Routes.hs` | Existing environment and raw-JSON mechanisms. | No new manual instance. | No required change. |
+| Haskell integration tests | Multi-step database, handler, and worker tests remain in Hspec. | No manual instances. | Shared signed-root fixtures use the actual signed ingress handler. |
+
+### hs-evasion-review
+
+Fixed two blocking findings:
+
+1. `SlackTimestamp` had a derived decoder that bypassed its smart constructor. The wire delivery now decodes timestamps as `Text`. A derived traversal validates them before returning a domain delivery. Invalid stored values condemn the claim transaction and raise a derived exception.
+2. `observeSlackRoot` accepted arbitrary identifiers and relied on a caller-authentication comment. It is now private. Public capture requires a saved signed receipt and checks author app, receiving app, workspace, channel, root correlation, installation, and timestamp.
+
+No warning suppression, new manual instance, synthetic measurement, or untyped internal UUID was introduced.
+
+### hs-lob-review
+
+ECharts rendering calculations require JavaScript. No new client event handlers, visibility state machines, or hoisted Tailwind classes were found.
+The Haskell regression tests exercise database transactions and handler flows; they are not single-expression pure tests.
+
+## Round 2
+
+### hs-distill
+
+Re-read the changed transport, message builder, timestamp traversal, root capture, and their callers after round 1.
+Two image-removal helpers duplicated traversal and silently discarded chart blocks. They now share `replaceImages` and the existing `overBlocks` traversal.
+The replacement preserves block IDs and supports top-level and attachment block lists. No manual instance was needed.
+Estimated reduction: about ten implementation/comment lines after adding the fallback notice and doctests; correctness is the primary benefit.
+
+### hs-evasion-review
+
+Fixed a missing state in the user-visible output: a rejected or oversized chart disappeared without explanation.
+The retry now renders a chart-unavailable notice. Oversized URLs also emit an attention log.
+Rechecked claim rollback, lease matching, immutable onset evidence, and signed-receipt capture. No additional blocking type compromise was found in these changes.
+
+### hs-lob-review
+
+The fallback is a Slack Block Kit context block. It needs no browser behavior.
+Pure image-rewrite checks are Haddock doctests on the exported helper. Existing multi-step integration tests remain in Hspec.
+No demotion or styling-locality fix was required.
+
+## Round 3
+
+### hs-distill
+
+Re-read the final changed functions and their consumers. Removed the unused timestamp-operation alias and redundant exception import introduced during round 1.
+The new representations retain derived JSON and traversal instances. There are no added handwritten instances.
+No further reuse, combinator, or consolidation change was required.
+
+### hs-evasion-review
+
+Rechecked the final diff for warning suppression, sentinel readings, widened internal IDs, constructor abuse, and unsafe root-capture entry points.
+No new suppression or manual instance was found. Root-capture tests reject a foreign app, workspace, channel, malformed timestamp, and conflicting timestamp; valid replay is idempotent.
+The job test loads the persisted payload and uses the background dispatcher rather than only calling a helper.
+
+### hs-lob-review
+
+Found and fixed an export-scope mismatch: PNG bounds scaling claimed to apply only to unstacked charts, but omitted the stack guard.
+The renderer now excludes stacked charts. A regression verifies that their configured bounds remain intact.
+The numeric ECharts work remains at the JavaScript tier. No CSS, native HTML, or HTMX replacement was indicated.
+
+## Validation and deployment boundary
+
+Validation commands and final results are recorded in `2026-09-08-slack-agent-implementation.md`.
+These rounds review the implemented incident and ingress foundation. They do not certify completion of the full Slack-agent plan.
+Native Agent sessions, explicit user/project binding for agent tools, interrupted-run checkpoints, controlled live Slack acceptance, and the remaining plan gates are still required before deploying the complete agent.
+No live Slack configuration or deployment was performed during these reviews.
+
+## Validation follow-up
+
+The standalone integration build exposed an undeclared `async` import that the combined development target allowed. Both tests now use the existing `UnliftIO.Async` dependency.
+The signed-root fixture used a fresh UUID pool for every event. It now uses `runAsBase`, which retains the test-resource UUID sequence.
+Unmatched incident-root observations emit an attention log instead of silently discarding the capture result.
+Final native runs passed 11 incident, 26 monitor, and 18 workflow examples. The build, 1,536 doctests, 308 unit tests, and 922 frontend tests passed.
+Weeder's existing findings, missing HLint/TimeFusion capabilities, and the concurrent workflow fingerprint change are recorded in the implementation log. These remain deployment gates.

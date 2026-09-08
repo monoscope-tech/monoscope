@@ -413,7 +413,7 @@ data Routes mode = Routes
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
   , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
-  , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
+  , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata

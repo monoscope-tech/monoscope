@@ -22,6 +22,10 @@ module Models.Apis.Monitors (
   deleteMonitorsByWidgetIds,
   WidgetAlertStatus (..),
   getWidgetAlertStatuses,
+  recordEvaluation,
+  recordEvaluationTx,
+  getEvaluations,
+  pruneEvaluations,
 ) where
 
 import Data.Aeson qualified as AE
@@ -44,6 +48,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
@@ -70,6 +76,38 @@ data MonitorStatus = MSNormal | MSWarning | MSAlerting
 
 instance HI.DecodeRow MonitorStatus where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
+-- | The first completed evaluation at a timestamp is immutable. Retries must
+-- not rewrite the measurement behind an already delivered alert snapshot.
+recordEvaluation :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Eff es ()
+recordEvaluation pid mid at value status = Hasql.transaction TxS.ReadCommitted TxS.Write $ recordEvaluationTx pid mid at value status
+
+
+recordEvaluationTx :: Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Tx.Transaction ()
+recordEvaluationTx pid mid at value status =
+  void
+    $ Tx.statement ()
+    $ HI.interp @HI.RowsAffected
+      True
+      [HI.sql|INSERT INTO monitors.evaluations (monitor_id, evaluated_at, value, status)
+      SELECT id, #{at}, #{value}, #{status} FROM monitors.query_monitors
+      WHERE id = #{mid} AND project_id = #{pid}
+      ON CONFLICT (monitor_id, evaluated_at) DO NOTHING|]
+
+
+getEvaluations :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> UTCTime -> Eff es [(UTCTime, Double)]
+getEvaluations pid mid from to =
+  Hasql.interp
+    [HI.sql|SELECT e.evaluated_at, e.value FROM monitors.evaluations e
+      JOIN monitors.query_monitors m ON m.id = e.monitor_id
+      WHERE m.project_id = #{pid} AND m.id = #{mid}
+        AND e.evaluated_at >= #{from} AND e.evaluated_at <= #{to}
+      ORDER BY e.evaluated_at|]
+
+
+pruneEvaluations :: DB es => UTCTime -> Eff es ()
+pruneEvaluations before = Hasql.interpExecute_ [HI.sql|DELETE FROM monitors.evaluations WHERE evaluated_at < #{before}|]
 
 
 data MonitorAlertConfig = MonitorAlertConfig

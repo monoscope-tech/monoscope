@@ -576,10 +576,8 @@ withBotThread
 withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta
   existingHistory <- Issues.selectChatHistory convId
-  -- Advisory lock: only the first interaction seeds the thread's history.
-  when (null existingHistory) $ whenM (Issues.tryAcquireChatMigrationLock convId) do
-    result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (mapM_ \(role, txt) -> Issues.insertChatMessage pid convId role txt Nothing Nothing)
-    Issues.releaseChatMigrationLock convId
+  when (null existingHistory) do
+    result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (Issues.seedChatHistory pid convId)
     whenLeft_ result \err -> Log.logAttention "Bot thread backfill failed" $ AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId, "error" AE..= show @Text err]
   BotThread convId . formatHistoryAsContext (show target) . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory convId
   where

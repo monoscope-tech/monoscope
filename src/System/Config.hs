@@ -97,6 +97,8 @@ data EnvConfig = EnvConfig
   , enableBackgroundJobs :: Bool
   , slackClientId :: Text
   , slackClientSecret :: Text
+  , slackSigningSecret :: Text
+  , slackAppId :: Text
   , slackRedirectUri :: Text
   , slackBotToken :: Text
   , discordRedirectUri :: Text

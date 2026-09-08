@@ -6,6 +6,10 @@ module Data.Effectful.Notify (
   sendNotification,
   sendNotificationWithReply,
   getNotifications,
+  deliverSlack,
+  replaceImages,
+  SlackOperation (..),
+  SlackResult (..),
 
   -- * Notification types
   Notification (..),
@@ -40,7 +44,7 @@ import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
-import Data.Aeson.Lens (key, _Bool, _String)
+import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -50,10 +54,10 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
-import Network.HTTP.Types (statusIsSuccessful)
+import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
-import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults, header, postWith, responseBody, responseStatus)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults, header, postWith, responseBody, responseHeader, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
@@ -75,7 +79,7 @@ data EmailData = EmailData
 -- When @webhookUrl@ is @Just u@, the message is posted to @u@ directly — used
 -- for the OAuth-time default channel so we don't require the bot user to be a
 -- member (critical for private channels picked in Slack's install consent
--- screen). Threading is unavailable via webhook; @threadTs@ is ignored.
+-- screen). Webhooks accept @threadTs@ but do not return the posted timestamp.
 -- When @webhookUrl@ is @Nothing@, we use chat.postMessage with @botToken@,
 -- which supports threading but requires the bot to be in @channelId@.
 --
@@ -154,9 +158,28 @@ data Notify :: Effect where
   SendNotification :: Notification -> Notify m ()
   SendNotificationWithReply :: Notification -> Notify m (Maybe Text)
   GetNotifications :: Notify m [Notification]
+  DeliverSlack :: SlackOperation -> SlackData -> Notify m SlackResult
 
 
 type instance DispatchOf Notify = 'Dynamic
+
+
+data SlackOperation = SlackPost | SlackUpdate Text
+  deriving stock (Eq, Show)
+
+
+data SlackResult
+  = SlackSent Text
+  | SlackAccepted
+  | SlackRateLimited Int
+  | SlackRejected Text
+  | SlackAmbiguous
+  deriving stock (Eq, Show)
+
+
+data SlackResponse = SlackResponse {ok :: Bool, ts :: Maybe Text, error :: Maybe Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
 
 
 makeEffect ''Notify
@@ -179,10 +202,10 @@ slackThreadedNotification channelId botToken payload threadTs =
 
 -- | Post via the OAuth-time incoming webhook URL. Works for any channel the
 -- user picked during install (public or private) without requiring bot
--- membership; does not support threading.
-slackWebhookNotification :: Text -> Text -> AE.Value -> Notification
-slackWebhookNotification webhookUrl channelId payload =
-  SlackNotification SlackData{channelId, botToken = "", payload, threadTs = Nothing, webhookUrl = Just webhookUrl, projectIdCtx = "", teamIdCtx = ""}
+-- membership. Root timestamps must be captured separately from Slack events.
+slackWebhookNotification :: Text -> Text -> AE.Value -> Maybe Text -> Notification
+slackWebhookNotification webhookUrl channelId payload threadTs =
+  SlackNotification SlackData{channelId, botToken = "", payload, threadTs, webhookUrl = Just webhookUrl, projectIdCtx = "", teamIdCtx = ""}
 
 
 -- | Attach project + workspace ids to a Slack notification for log
@@ -222,34 +245,27 @@ overBlocks f (AE.Object o) = AE.Object $ AEK.mapWithKey rewrite o
 overBlocks _ v = v
 
 
--- | Slack rejects an @image_url@ of 3001+ characters with @invalid_attachments@
--- — and rejects the whole message with it, chart and alert together. Our signed
--- widget URLs are allowed to reach 8000 characters, so drop the image rather
--- than lose the alert.
+-- | Replace unavailable images with an explicit notice in every Block Kit list.
+-- Preserve the block ID so an incident's original chart remains identifiable.
 --
--- >>> let img u = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= (u :: Text)]
--- >>> let txt = AE.object ["type" AE..= ("section" :: Text)]
--- >>> let msg bs = AE.object ["attachments" AE..= ([AE.object ["blocks" AE..= (bs :: [AE.Value])]] :: [AE.Value])]
--- >>> dropOversizedImages (msg [txt, img (T.replicate 3001 "x")]) == msg [txt]
+-- >>> let img = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= ("https://chart" :: Text), "block_id" AE..= ("incident_chart" :: Text)]
+-- >>> let msg = AE.object ["blocks" AE..= ([img] :: [AE.Value])]
+-- >>> replaceImages (const False) msg == msg
 -- True
--- >>> dropOversizedImages (msg [txt, img "https://short"]) == msg [txt, img "https://short"]
+-- >>> let rendered = AE.encode (replaceImages (const True) msg)
+-- >>> all (`T.isInfixOf` decodeUtf8 (toStrict rendered)) ["Chart unavailable", "incident_chart"] && not ("image_url" `T.isInfixOf` decodeUtf8 (toStrict rendered))
 -- True
-dropOversizedImages :: AE.Value -> AE.Value
-dropOversizedImages = overBlocks $ filter \b -> case imageUrl b of
-  Just u -> T.length u <= 3000
-  Nothing -> True
-
-
--- | Strip image blocks entirely — the retry after Slack refuses to download a
--- chart it would otherwise have embedded.
---
--- >>> let img = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= ("u" :: Text)]
--- >>> let txt = AE.object ["type" AE..= ("section" :: Text)]
--- >>> let blocks bs = AE.object ["blocks" AE..= (bs :: [AE.Value])]
--- >>> dropImageBlocks (blocks [txt, img]) == blocks [txt]
--- True
-dropImageBlocks :: AE.Value -> AE.Value
-dropImageBlocks = overBlocks $ filter (isNothing . imageUrl)
+replaceImages :: (Text -> Bool) -> AE.Value -> AE.Value
+replaceImages unavailable = overBlocks $ map \block -> case block of
+  AE.Object obj
+    | Just url <- imageUrl block
+    , unavailable url ->
+        AE.object
+          $ [ "type" AE..= ("context" :: Text)
+            , "elements" AE..= ([AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= ("Chart unavailable. Use the message links to inspect the data." :: Text)]] :: [AE.Value])
+            ]
+          <> ["block_id" AE..= identifier | Just identifier <- [AEK.lookup "block_id" obj]]
+  _ -> block
 
 
 imageUrl :: AE.Value -> Maybe Text
@@ -359,104 +375,59 @@ runNotifyProduction = interpret $ \_ -> \case
     EmailNotification _ -> pure Nothing
     WhatsAppNotification _ -> pure Nothing
     PagerdutyNotification _ -> pure Nothing
+  DeliverSlack operation sd -> sendSlackRequest operation sd
   GetNotifications -> pure [] -- Production doesn't store notifications
   where
-    sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
-    sendSlack sd = case sd.webhookUrl of
-      Just url -> sendSlackWebhook sd url
-      Nothing -> sendSlackChatApi sd
+    sendSlack sd = do
+      result <- sendSlackRequest SlackPost sd
+      pure $ case result of SlackSent ts -> Just ts; _ -> Nothing
 
-    -- chat.postMessage: requires bot membership; supports threading.
-    --
-    -- Slack fetches every @image_url@ while validating the request, so a chart
-    -- our renderer is slow to produce (or serves with the wrong content type)
-    -- comes back as @invalid_attachments@ and takes the ENTIRE alert with it.
-    -- An alert without its chart still tells an on-call engineer what broke, so
-    -- a rejection that mentions the attachments is retried once with the image
-    -- blocks stripped rather than dropped.
-    sendSlackChatApi sd = case sd.payload of
+    sendSlackRequest operation sd = case sd.payload of
       AE.Object obj -> do
-        let withThread = maybe obj (\ts -> AEK.insert "thread_ts" (AE.String ts) obj) sd.threadTs
-            msg = AE.Object $ AEK.insert "channel" (AE.String sd.channelId) withThread
-            opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
-            fail_ tag extra = Nothing <$ Log.logAttention ("Slack chat.postMessage " <> tag) (chatApiLog sd extra)
-            -- Slack always returns HTTP 200; the real success flag is in the JSON body.
-            -- not_in_channel / channel_not_found / is_archived all come back as 200 with
-            -- ok:false. Treating 200 as success hides the "bot not invited" class of bug.
-            post body = liftIO (try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" body)
-            outcome = \case
-              Right re
-                | statusIsSuccessful (re ^. responseStatus) ->
-                    let b = AE.decode (re ^. responseBody) :: Maybe AE.Value
-                     in Right (b >>= (^? key "ok" . _Bool), b >>= (^? key "ts" . _String), fromMaybe "unknown" (b >>= (^? key "error" . _String)))
-              Right re -> Left ("HTTP failure" :: Text, ["status" AE..= show @Text (re ^. responseStatus)])
-              Left ex -> Left ("exception", ["error" AE..= displayException ex])
-        post (dropOversizedImages msg) >>= \r -> case outcome r of
-          Left (tag, extra) -> fail_ tag extra
-          Right (Just True, ts, _) -> pure ts
-          Right (_, _, err)
-            | err == "invalid_attachments" -> do
-                Log.logAttention "Slack chat.postMessage rejected the chart image; retrying without it" (chatApiLog sd ["error" AE..= err])
-                post (dropImageBlocks msg) >>= \r2 -> case outcome r2 of
-                  Right (Just True, ts, _) -> pure ts
-                  Right (_, _, err2) -> fail_ "rejected by API" ["error" AE..= err2, "retried_without_image" AE..= True]
-                  Left (tag, extra) -> fail_ tag extra
-            | otherwise -> fail_ "rejected by API" ["error" AE..= err]
-      _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
-
-    -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
-    -- Slack rejects the "channel" field on webhooks, so it is stripped; the
-    -- Block Kit payload is otherwise sent verbatim — identical to what
-    -- chat.postMessage receives, so an alert looks the same in every channel.
-    --
-    -- Webhooks DO accept Block Kit nested in legacy attachments, including
-    -- image/context blocks and styled buttons (probed against a live webhook
-    -- 2026-09-03). An earlier `invalid_blocks` reading blamed Block Kit for
-    -- what was really a rejected image URL — hence the shared image retry below.
-    -- Webhook endpoints return HTTP 200 + body "ok" on success.
-    sendSlackWebhook sd url = do
-      -- checkResponse = nop: wreq otherwise throws on 4xx and we lose the body
-      -- which is where Slack tells us which block/field it rejected.
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pass)
-          stripped = dropChannel $ dropOversizedImages sd.payload
-          fail_ tag extra body = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= body) : extra))
-          post body = liftIO (try @SomeException $ postWith opts (toString url) body)
-          -- A rejection is HTTP 400 with the reason as the bare body
-          -- ("invalid_attachments"), so the status is context for the log, not
-          -- the classifier — keying off it would skip the retry below entirely.
-          outcome = \case
-            Right re ->
-              let b = decodeUtf8 @Text $ toStrict $ re ^. responseBody
-                  ok = statusIsSuccessful (re ^. responseStatus) && (b == "ok" || b == "\"ok\"")
-               in Right $ if ok then Nothing else Just (b, ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= b])
-            Left ex -> Left ("exception" :: Text, ["error" AE..= displayException ex])
-      post stripped >>= \r -> case outcome r of
-        Left (tag, extra) -> fail_ tag extra stripped
-        Right Nothing -> pure Nothing
-        -- Same failure mode as the chat API: Slack downloads image_url while
-        -- validating, so a slow or wrong-typed chart takes the whole alert down.
-        -- An alert without its chart still tells an on-call engineer what broke.
-        Right (Just (err, extra))
-          | "invalid_attachments" `T.isInfixOf` err -> do
-              Log.logAttention "Slack webhook rejected the chart image; retrying without it" (webhookLog sd url extra)
-              let retry = dropImageBlocks stripped
-              post retry >>= \r2 -> case outcome r2 of
-                Right Nothing -> pure Nothing
-                Right (Just (_, extra2)) -> fail_ "rejected the alert" (("retried_without_image" AE..= True) : extra2) retry
-                Left (tag, extra2) -> fail_ tag extra2 retry
-          | otherwise -> fail_ "rejected the alert" extra stripped
-
-    -- Log context builders with transport pre-tagged at the call site.
-    slackLogCtx sd extra =
-      AE.object
-        $ ["project_id" AE..= sd.projectIdCtx, "team_id" AE..= sd.teamIdCtx, "channel_id" AE..= sd.channelId]
-        <> extra
-    chatApiLog sd extra = slackLogCtx sd (("transport" AE..= ("chat.postMessage" :: Text)) : extra)
-    webhookLog sd url extra = slackLogCtx sd (("transport" AE..= ("webhook" :: Text)) : ("webhook_suffix" AE..= redactedWebhookSuffix url) : extra)
-
-    -- Webhook URLs embed secrets (hooks.slack.com/services/T…/B…/SECRET).
-    -- Only include a short prefix for debugging; never the secret.
-    redactedWebhookSuffix url = T.take 16 (fromMaybe url $ T.stripPrefix "https://hooks.slack.com/services/" url) <> "…"
+        let webhook = case operation of SlackPost -> sd.webhookUrl; SlackUpdate _ -> Nothing
+            apiMethod = case operation of SlackPost -> "chat.postMessage"; SlackUpdate _ -> "chat.update"
+            url = fromMaybe ("https://slack.com/api/" <> apiMethod) webhook
+            routed = AEK.insert "channel" (AE.String sd.channelId) obj
+            body = AE.Object $ case operation of
+              SlackPost -> maybe routed (\ts -> AEK.insert "thread_ts" (AE.String ts) routed) sd.threadTs
+              SlackUpdate ts -> AEK.insert "ts" (AE.String ts) $ AEK.delete "thread_ts" routed
+            routedPayload = if isJust webhook then dropChannel body else body
+            prepared = replaceImages ((> 3000) . T.length) routedPayload
+            opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pass)
+            authenticated = if isJust webhook then opts else opts & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
+            context = AE.object ["project_id" AE..= sd.projectIdCtx, "team_id" AE..= sd.teamIdCtx, "channel_id" AE..= sd.channelId, "transport" AE..= if isJust webhook then "webhook" else apiMethod]
+            post payload = do
+              response <- liftIO $ try @SomeException $ timeout 30_000_000 $ postWith authenticated (toString url) payload
+              pure $ case response of
+                Right (Just re)
+                  | statusCode (re ^. responseStatus) == 429 ->
+                      SlackRateLimited $ max 1 $ fromMaybe 60 $ readMaybe $ toString $ decodeUtf8 @Text $ re ^. responseHeader "Retry-After"
+                  | statusCode (re ^. responseStatus) >= 500 -> SlackAmbiguous
+                  | isJust webhook ->
+                      let txt = decodeUtf8 @Text $ toStrict $ re ^. responseBody
+                       in if statusIsSuccessful (re ^. responseStatus) && txt `elem` ["ok", "\"ok\""]
+                            then SlackAccepted
+                            else SlackRejected txt
+                  | otherwise -> case AE.decode @SlackResponse (re ^. responseBody) of
+                      Just SlackResponse{ok = True, ts = Just ts} | statusIsSuccessful (re ^. responseStatus) -> SlackSent ts
+                      Just SlackResponse{ok = False, error = Just reason} -> SlackRejected reason
+                      _ -> SlackAmbiguous
+                _ -> SlackAmbiguous
+        when (prepared /= routedPayload) $ Log.logAttention "Slack chart URL exceeds the image limit; using a text fallback" context
+        initial <- post prepared
+        result <- case initial of
+          SlackRejected "invalid_attachments" -> do
+            Log.logAttention "Slack rejected the chart; retrying without the image" context
+            post $ replaceImages (const True) prepared
+          _ -> pure initial
+        case result of
+          SlackSent _ -> pass
+          SlackAccepted -> pass
+          SlackRateLimited seconds -> Log.logAttention "Slack delivery rate limited" (context, seconds)
+          SlackRejected reason -> Log.logAttention "Slack rejected the message" (context, reason)
+          SlackAmbiguous -> Log.logAttention "Slack delivery outcome is unknown; reconciliation required" context
+        pure result
+      _ -> pure $ SlackRejected "invalid_payload"
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do
@@ -492,15 +463,22 @@ runNotifyTest ref = interpret \_ -> \case
           PagerdutyNotification pagerdutyData -> ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
     Log.logTrace "Notification" notifInfo
     Log.logTrace "Notification payload" notification
-    liftIO $ modifyIORef ref (notification :)
+    liftIO $ atomicModifyIORef' ref (\notifications -> (notification : notifications, ()))
   SendNotificationWithReply notification -> do
-    notifications <- liftIO $ readIORef ref
-    liftIO $ modifyIORef ref (notification :)
-    let idx = length notifications + 1
+    idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (notification : notifications, length notifications + 1))
     pure $ case notification of
       SlackNotification _ -> Just $ "test-slack-ts-" <> show idx
       DiscordNotification _ -> Just $ "test-discord-id-" <> show idx
       EmailNotification _ -> Nothing
       WhatsAppNotification _ -> Nothing
       PagerdutyNotification _ -> Nothing
+  DeliverSlack operation sd -> do
+    let captured = case (operation, sd.payload) of
+          (SlackUpdate ts, AE.Object obj) -> (sd :: SlackData){payload = AE.Object $ AEK.insert "ts" (AE.String ts) obj}
+          _ -> sd
+    idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (SlackNotification captured : notifications, length notifications + 1))
+    let timestamp = "1788900000." <> T.justifyRight 6 '0' (show idx)
+    pure $ case operation of
+      SlackUpdate ts -> SlackSent ts
+      SlackPost -> maybe (SlackSent timestamp) (const SlackAccepted) sd.webhookUrl
   GetNotifications -> liftIO $ reverse <$> readIORef ref

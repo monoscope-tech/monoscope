@@ -34,8 +34,8 @@ import System.Types (DB)
 --
 -- Alert routing to this channel uses @webhookUrl@; routing to any additional
 -- channels the user adds (via /here or the dropdown) uses chat.postMessage
--- with @botToken@ and does require bot membership. Threading is available
--- only on the chat.postMessage path — webhooks don't accept thread_ts.
+-- with @botToken@ and does require bot membership. Both transports accept
+-- thread_ts; only chat.postMessage returns the timestamp for a new root.
 data SlackData = SlackData
   { projectId :: Projects.ProjectId
   , teamId :: Text

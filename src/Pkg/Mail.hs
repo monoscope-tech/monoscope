@@ -1,4 +1,4 @@
-module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -15,9 +15,11 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations (SlackData (..), getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), RateChangeDirection (..), parseIssueType)
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -141,14 +143,8 @@ sendSlackAlert = sendSlackAlertWith Nothing
 -- for private channels picked at install time. Otherwise post via
 -- chat.postMessage which supports threading but needs bot membership.
 --
--- Both transports carry the SAME Block Kit payload, so an alert renders
--- identically wherever it lands; only threading differs.
---
--- Threading caveat: @threadTsM@ is silently dropped on the webhook branch
--- — Slack's incoming-webhook API does not accept @thread_ts@. If a feature
--- relies on threaded replies, the thread parent must have been posted via
--- chat.postMessage (i.e. the target is NOT the OAuth-default channel, or no
--- webhook URL is on file).
+-- Both transports preserve thread context. Webhook root timestamps require
+-- separate capture through Slack events or message retrieval.
 sendSlackAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
@@ -175,7 +171,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
           when (isDefaultChannel && isNothing sd.webhookUrl)
             $ Log.logAttention "Slack default channel has no webhook URL; falling back to chat.postMessage (will fail for private channels — user must re-OAuth)" (AE.object ["project_id" AE..= pid, "team_id" AE..= sd.teamId, "channel_id" AE..= cid])
           let notif = case (isDefaultChannel, sd.webhookUrl) of
-                (True, Just url) -> Notify.slackWebhookNotification url cid payload
+                (True, Just url) -> Notify.slackWebhookNotification url cid payload threadTsM
                 _ -> Notify.slackThreadedNotification cid sd.botToken payload threadTsM
           Notify.sendNotificationWithReply $ Notify.withSlackContext pid.toText sd.teamId notif
     _ -> Nothing <$ Log.logAttention "Slack alert skipped: missing channel or slack data" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_slack" AE..= isJust slackData])
@@ -301,6 +297,47 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
     $ [slackSection ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
     <> maybeToList (slackImage "Monitor trend" Nothing <$> chartUrlM)
     <> [slackActions [slackButton "🔍 View monitor" (Just "primary") monitorUrl]]
+
+
+-- | A lifecycle message uses the same Block Kit components as other alerts.
+-- The root retains onset evidence; thread replies contain only the new observation.
+monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
+  (message (current : snapshot <> [actions]), message [current, slackContext ["<" <> issueUrl <> "|Open incident>"]])
+  where
+    label = case status of Monitors.MSNormal -> "RECOVERED"; Monitors.MSWarning -> "WARNING"; Monitors.MSAlerting -> "ALERTING"
+    threshold = case status of
+      Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold
+      Monitors.MSAlerting -> monitor.alertThreshold
+      Monitors.MSNormal
+        | monitor.currentStatus == Monitors.MSWarning -> fromMaybe monitor.alertThreshold (monitor.warningRecoveryThreshold <|> monitor.warningThreshold)
+        | otherwise -> fromMaybe monitor.alertThreshold monitor.alertRecoveryThreshold
+    title = T.replace ">" "&gt;" $ T.replace "<" "&lt;" $ T.replace "&" "&amp;" $ T.take 160 monitor.alertConfig.title
+    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+    started = maybe observedAt (.startedAt) episode
+    detail = "Value: " <> show value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> show threshold <> " · Observed " <> at observedAt
+    seconds = max 0 $ floor (diffUTCTime observedAt started) :: Int
+    recovery = ["Recovery condition passed · Duration: " <> (if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min") | status == Monitors.MSNormal]
+    text = label <> " · " <> title <> "\n" <> detail <> foldMap ("\n" <>) recovery
+    current = slackSection text
+    snapshot =
+      [ tagged "incident_onset" $ slackContext ["Started " <> at started <> " · Initial value: " <> show value]
+      , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
+      ]
+    actions = tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") issueUrl, slackButton "Open monitor" Nothing monitorUrl]
+    tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.String identifier) block
+    tagged _ block = block
+    message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+-- | Updating status must not replace the original onset and chart snapshot.
+retainSlackSnapshot :: Incidents.SlackPayload -> Incidents.SlackPayload -> Incidents.SlackPayload
+retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload current) =
+  Incidents.SlackPayload $ KEM.insert "blocks" (AE.toJSON (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))) current
+  where
+    blocks obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
+    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) ["incident_onset", "incident_chart", "incident_actions"]
+    snapshot _ = False
 
 
 -- | Markdown bullet list shared by Slack + Discord new-endpoint renderers.

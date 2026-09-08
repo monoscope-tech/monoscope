@@ -180,6 +180,10 @@ extra-source-files:
     static/migrations/0149_report_previews.sql
     static/migrations/0150_background_job_notification_channel.sql
     static/migrations/0151_background_job_updated_at.sql
+    static/migrations/0152_monitor_evaluations.sql
+    static/migrations/0153_incident_delivery.sql
+    static/migrations/0154_incident_observations.sql
+    static/migrations/0155_slack_events.sql
 
 source-repository head
   type: git
@@ -194,6 +198,7 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
+      BackgroundJobs.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -202,6 +207,7 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.ErrorPatterns
+      Models.Apis.Incidents
       Models.Apis.Integrations
       Models.Apis.IssueEnhancement
       Models.Apis.Issues
@@ -640,6 +646,7 @@ test-suite integration-tests
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
+      IncidentDeliverySpec
       Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
       MinioManagerSpec
@@ -806,6 +813,7 @@ test-suite test-dev
   main-is: Main.hs
   other-modules:
       BackgroundJobs
+      BackgroundJobs.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -814,6 +822,7 @@ test-suite test-dev
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.ErrorPatterns
+      Models.Apis.Incidents
       Models.Apis.Integrations
       Models.Apis.IssueEnhancement
       Models.Apis.Issues
@@ -933,6 +942,7 @@ test-suite test-dev
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
+      IncidentDeliverySpec
       Lifecycle.LogPatternIncidentSpec
       LiveTailSpec
       MinioManagerSpec

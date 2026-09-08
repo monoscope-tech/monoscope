@@ -39,6 +39,7 @@ module Models.Apis.Issues (
   -- * Database Operations
   insertIssue,
   insertIssueReturningId,
+  insertIssueReturningIdTx,
   selectIssueById,
   selectIssues,
   IssueProjection (..),
@@ -91,8 +92,7 @@ module Models.Apis.Issues (
   getOrCreateConversation,
   insertChatMessage,
   selectChatHistory,
-  tryAcquireChatMigrationLock,
-  releaseChatMigrationLock,
+  seedChatHistory,
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
@@ -125,7 +125,6 @@ import Data.Char (isAscii, isPrint)
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
-import Data.Hashable (hash)
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -146,6 +145,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -393,10 +394,16 @@ insertIssue = void . insertIssueReturningId
 
 -- | Return the persisted identity, including when this insert updates an open issue.
 insertIssueReturningId :: DB es => Issue -> Eff es IssueId
-insertIssueReturningId (i :: Issue) =
-  HI.getOneRow
-    <$> Hasql.interp
-      [HI.sql|
+insertIssueReturningId = fmap HI.getOneRow . Hasql.interp . insertIssueSql
+
+
+insertIssueReturningIdTx :: Issue -> Tx.Transaction IssueId
+insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True . insertIssueSql
+
+
+insertIssueSql :: Issue -> HI.Sql
+insertIssueSql i =
+  [HI.sql|
 INSERT INTO apis.issues (
   id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
@@ -975,8 +982,12 @@ getOrCreateConversation pid convId convType ctx = do
 -- | Insert a new chat message
 insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
 insertChatMessage pid convId chatRole chatContent widgetsM metadataM =
-  Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+  Hasql.interpExecute_ $ insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM
+
+
+insertChatMessageSql :: Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
+insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
+  [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
             VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}) |]
 
 
@@ -1000,21 +1011,24 @@ slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
 
-chatMigrationLockKey :: UUIDId "conversation" -> Int64
-chatMigrationLockKey convId = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
-
-
--- | Try to acquire an advisory lock for chat migration to prevent race conditions.
--- Returns True if lock was acquired, False if already locked (another request is migrating).
--- Uses PostgreSQL advisory locks which are automatically released on connection close.
-tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
-tryAcquireChatMigrationLock convId = or <$> Hasql.interp [HI.sql| SELECT pg_try_advisory_lock(#{chatMigrationLockKey convId}) |]
-
-
--- | Release a chat migration advisory lock so that a failed migration can be retried
--- on a subsequent event instead of being silently blocked for the connection's lifetime.
-releaseChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es ()
-releaseChatMigrationLock convId = Hasql.interpExecute_ [HI.sql| SELECT pg_advisory_unlock(#{chatMigrationLockKey convId}) |]
+-- | Serialize first-contact history insertion on one connection. Failed fetches
+-- never enter this transaction; concurrent successful fetches seed at most once.
+seedChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> [(ChatRole, Text)] -> Eff es ()
+seedChatHistory pid convId messages = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  locked <-
+    Tx.statement ()
+      $ HI.interp @[UUIDId "conversation"]
+        True
+        [HI.sql|SELECT conversation_id FROM apis.ai_conversations
+      WHERE project_id = #{pid} AND conversation_id = #{convId} FOR UPDATE|]
+  existing <-
+    Tx.statement ()
+      $ HI.interp @[Bool]
+        True
+        [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_chat_messages
+      WHERE project_id = #{pid} AND conversation_id = #{convId})|]
+  when (not (null locked) && not (or existing)) $ for_ messages \(role, content) ->
+    void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ insertChatMessageSql pid convId role content Nothing Nothing
 
 
 -- | Create an issue for a log pattern rate change

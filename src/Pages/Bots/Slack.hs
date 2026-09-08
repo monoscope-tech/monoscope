@@ -1,13 +1,18 @@
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+{-# LANGUAGE PackageImports #-}
 
-import BackgroundJobs qualified as BgJobs
+module Pages.Bots.Slack (processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+
+import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
-import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Bool, _String)
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (def))
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (
   HTTP,
   defaults,
@@ -17,14 +22,22 @@ import Data.Effectful.Wreq (
  )
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Hasql.Interpolate qualified as HI
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 import Control.Exception (ErrorCall (..))
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
-import Effectful.Error.Static (throwError)
+import Effectful.Error.Static (runErrorNoCallStack, throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
+import Effectful.Time qualified as Time
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackDefaultChannel)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
@@ -37,16 +50,16 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, parseInstallState, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
-import Pkg.DeriveUtils (idFromText)
+import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import PyF
 import Relude hiding (ask, asks)
 import Relude.Extra.Tuple (dup)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400)
+import Servant.Server (ServerError (errBody), err400, err401, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
-import System.Types (ATBaseCtx, DB)
+import System.Types (ATBackgroundCtx, ATBaseCtx, DB)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
 
@@ -552,52 +565,103 @@ sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
     <> toString (decodeUtf8 @Text (toStrict body))
 
 
-data EventCallbackData = EventCallbackData
-  { team_id :: Text
-  , event :: SlackEvent
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
-
-
 data SlackEventPayload
-  = UrlVerification Text
-  | EventCallback EventCallbackData
-  deriving stock (Show)
-
-
-instance AE.FromJSON SlackEventPayload where
-  parseJSON = withObject "SlackEventPayload" \v ->
-    v AE..: "type" >>= \case
-      ("url_verification" :: Text) -> UrlVerification <$> v AE..: "challenge"
-      "event_callback" -> EventCallback <$> AE.parseJSON (AE.Object v)
-      other -> fail $ "Unsupported Slack event type: " <> show other
+  = UrlVerification {challenge :: Text}
+  | EventCallback {team_id :: Text, event_id :: Text, api_app_id :: Text, event :: SlackEvent}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier DAE.CamelToSnake, DAE.SumTaggedObject "type" "contents"] SlackEventPayload
 
 
 data SlackEvent = SlackMessageEvent
   { text :: Text
   , channel :: Text
   , thread_ts :: Maybe Text
+  , eventType :: Text
+  , bot_id :: Maybe Text
+  , subtype :: Maybe Text
+  , app_id :: Maybe Text
+  , bot_profile :: Maybe SlackBotProfile
+  , ts :: Maybe Text
+  , metadata :: Maybe SlackMessageMetadata
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier (DAE.Rename "eventType" "type")] SlackEvent
 
 
-slackEventsPostH :: SlackEventPayload -> ATBaseCtx AE.Value
-slackEventsPostH payload = do
+data SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data SlackMessageMetadata = SlackMessageMetadata {event_type :: Text, event_payload :: AE.Object}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Verify Slack's raw request body before decoding it. Both past and future
+-- timestamps are bounded to five minutes; the digest comparison is constant-time.
+verifySlackSignature :: Text -> UTCTime -> Maybe Text -> Maybe Text -> ByteString -> Bool
+verifySlackSignature secret now timestamp signature body = fromMaybe False do
+  guard $ not $ T.null secret
+  ts <- timestamp
+  guard $ not (T.null ts) && T.all (\c -> c >= '0' && c <= '9') ts
+  seconds <- readMaybe @Integer $ toString ts
+  guard $ abs (utcTimeToPOSIXSeconds now - fromInteger seconds) <= 300
+  digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
+  let signed = "v0:" <> encodeUtf8 ts <> ":" <> body
+      expected = BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) signed :: HMAC.HMAC SHA256) :: ByteString
+  pure $ BA.constEq expected digest
+
+
+slackEventsPostH :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
+slackEventsPostH body timestamp signature = do
   envCfg <- asks env
-  scopeM <- asks @AuthContext (.backgroundScope)
+  when (T.null envCfg.slackSigningSecret) $ throwError err503
+  now <- Time.currentTime
+  unless (verifySlackSignature envCfg.slackSigningSecret now timestamp signature body) $ throwError err401
+  payload <- either (const $ throwError err400) pure $ AE.eitherDecodeStrict @SlackEventPayload body
   case payload of
     UrlVerification challenge -> pure $ AE.object ["challenge" AE..= challenge]
-    EventCallback cb -> do
-      forkBackground scopeM ("Slack event callback (team " <> cb.team_id <> ")") $ handleEventCallback envCfg cb.event cb.team_id
+    EventCallback{team_id, event_id} -> do
+      receiptId <- UUIDId <$> UUID.genUUID
+      let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
+      Hasql.interpExecute_
+        [HI.sql|WITH receipt AS (
+          INSERT INTO apis.slack_events (id, team_id, event_id, payload)
+          VALUES (#{receiptId}, #{team_id}, #{event_id}, #{Aeson payload})
+          ON CONFLICT (team_id, event_id) DO NOTHING RETURNING id
+        ) INSERT INTO background_jobs (run_at, status, payload)
+          SELECT now(), 'queued', #{job} FROM receipt|]
       pure $ AE.object []
+
+
+processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
+processSlackEvent receiptId = do
+  pending <-
+    Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
+      [HI.sql|SELECT payload FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
+  for_ pending \(HI.OneColumn (Aeson payload)) -> do
+    envCfg <- asks env
+    captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
+    case payload of
+      EventCallback{event}
+        | maybe False ((== "monoscope_incident_root") . (.event_type)) event.metadata && not captured ->
+            Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
+      _ -> pure ()
+    result <- runErrorNoCallStack @ServerError $ case payload of
+      UrlVerification _ -> throwError err400{errBody = "Stored Slack event is not a callback"}
+      EventCallback{team_id, event} -> handleEventCallback envCfg event team_id
+    either (throwIO . ErrorCall . show) pure result
+    Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
   where
-    handleEventCallback envCfg event workspaceId = void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
-      Nothing -> do
-        Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
-        sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-      Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
+    handleEventCallback envCfg event workspaceId
+      | isJust event.bot_id || isJust event.subtype || event.eventType `notElem` ["message", "app_mention"] =
+          Log.logTrace "Slack event does not start an investigation" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= event.eventType, "subtype" AE..= event.subtype])
+      | otherwise = void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
+          Nothing -> do
+            Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
+            sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
+          Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
 
     processThreadedEvent envCfg slackData event workspaceId threadTs = do
       let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])

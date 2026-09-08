@@ -3,6 +3,8 @@
 module Pages.Bots.BotTestHelpers (
   -- * Setup Helpers
   setupSlackData,
+  receiveSlackEvent,
+  slackRootEvent,
   setupDiscordData,
   setupWhatsappNumber,
 
@@ -28,6 +30,7 @@ module Pages.Bots.BotTestHelpers (
   extractResponseText,
 
   -- * Notification Helpers
+
   -- (Use runTestBackgroundWithNotifications from Pkg.TestUtils instead)
 
   -- * JSON Response Helpers
@@ -54,9 +57,7 @@ module Pages.Bots.BotTestHelpers (
   hasRequiredTemplateVars,
 ) where
 
-import "cryptonite" Crypto.Error qualified as Crypto
-import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
-import Control.Lens ((^?), each, filtered, has, lengthOf, to)
+import Control.Lens (each, filtered, has, lengthOf, to, (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Aeson.Key qualified as AEK
@@ -67,19 +68,27 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Pages.Bots.Slack qualified as SlackEvents
+import Pkg.DeriveUtils (UUIDId)
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import Test.Hspec (expectationFailure, shouldBe)
-
+import "cryptonite" Crypto.Error qualified as Crypto
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
 -- * Config Helpers
@@ -155,8 +164,9 @@ readGoldenFile path = do
 
 
 -- * Discord Signature Helpers
--- Deterministic test keypair from a fixed 32-byte seed
 
+
+-- Deterministic test keypair from a fixed 32-byte seed
 
 -- | Test secret key derived from deterministic seed (32 bytes of 0x42)
 testDiscordSecretKey :: Ed25519.SecretKey
@@ -210,8 +220,9 @@ extractResponseText val = case val of
 
 
 -- * Notification Helpers
--- Note: Use runTestBackgroundWithNotifications from Pkg.TestUtils to capture notifications
 
+
+-- Note: Use runTestBackgroundWithNotifications from Pkg.TestUtils to capture notifications
 
 -- * JSON Response Helpers
 
@@ -275,12 +286,14 @@ hasComponentsV2Flag val = val ^? key "data" . key "flags" . _Number . to round =
 
 hasContainerComponent :: AE.Value -> Bool
 hasContainerComponent val = has (key "data" . key "components" . _Array . each . filtered isContainer) val
-  where isContainer v = v ^? key "type" . _Number . to round == Just (17 :: Int)
+  where
+    isContainer v = v ^? key "type" . _Number . to round == Just (17 :: Int)
 
 
 countTextComponents :: AE.Value -> Int
 countTextComponents val = lengthOf (key "data" . key "components" . _Array . each . key "components" . _Array . each . filtered isText) val
-  where isText v = v ^? key "type" . _Number . to round == Just (10 :: Int)
+  where
+    isText v = v ^? key "type" . _Number . to round == Just (10 :: Int)
 
 
 -- * WhatsApp Body Detection
@@ -310,3 +323,38 @@ hasRequiredTemplateVars :: AE.Value -> Bool
 hasRequiredTemplateVars val = case val of
   AE.Object obj -> AEKM.member "1" obj
   _ -> False
+
+
+receiveSlackEvent :: TestResources -> AE.Value -> IO (UUIDId "slack_event")
+receiveSlackEvent tr payload = do
+  now <- getTestTime tr.trTestClock
+  let timestamp = show @Text (floor (utcTimeToPOSIXSeconds now) :: Integer)
+      body = toStrict $ AE.encode payload
+      secret = "test-slack-signing-secret" :: ByteString
+      signature = "v0=" <> decodeUtf8 (Base16.encode $ BA.convert (HMAC.hmac secret ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
+      cfg = tr.trATCtx.env{Config.slackSigningSecret = decodeUtf8 secret}
+  void $ runAsBase tr{trATCtx = tr.trATCtx{Config.env = cfg}} $ SlackEvents.slackEventsPostH body (Just timestamp) (Just signature)
+  [PGS.Only receipt] <- withResource tr.trPool \conn ->
+    PGS.query conn [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (Aeson payload, Aeson payload)
+  pure receipt
+
+
+slackRootEvent :: Text -> Text -> Text -> Incidents.SlackRootId -> Text -> Text -> AE.Value
+slackRootEvent eventId workspace channel rootId timestamp authorApp =
+  AE.object
+    [ "type" AE..= ("event_callback" :: Text)
+    , "team_id" AE..= workspace
+    , "event_id" AE..= eventId
+    , "api_app_id" AE..= ("A_TEST" :: Text)
+    , "event"
+        AE..= AE.object
+          [ "type" AE..= ("message" :: Text)
+          , "subtype" AE..= ("bot_message" :: Text)
+          , "bot_id" AE..= ("B_TEST" :: Text)
+          , "app_id" AE..= authorApp
+          , "text" AE..= ("Monitor alert" :: Text)
+          , "channel" AE..= channel
+          , "ts" AE..= timestamp
+          , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_incident_root" :: Text), "event_payload" AE..= AE.object ["root_id" AE..= rootId]]
+          ]
+    ]

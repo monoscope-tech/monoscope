@@ -1,0 +1,495 @@
+module Models.Apis.Incidents (
+  EpisodeId,
+  IncidentEventId,
+  SlackRootId,
+  SlackDeliveryId,
+  IncidentSource (..),
+  IncidentChange (..),
+  IncidentDelivery (..),
+  EpisodePhase (..),
+  Episode (..),
+  SlackDestination (..),
+  SlackPayload (..),
+  slackPayload,
+  IncidentUpdate (..),
+  RecordResult (..),
+  recordIncidentEvent,
+  recordIncidentEventTx,
+  getEpisode,
+  latestEpisodeTx,
+  SlackTimestamp,
+  slackTimestamp,
+  slackTimestampText,
+  DeliveryOperation (..),
+  SlackDelivery,
+  SlackDeliveryF (..),
+  DeliveryOutcome (..),
+  claimSlackDeliveries,
+  finishSlackDelivery,
+  captureSlackRoot,
+  correlateSlackRoot,
+) where
+
+import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
+import Data.Char (isDigit)
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
+import Data.UUID qualified as UUID
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Effectful (Eff)
+import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
+import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Relude
+import System.Types (DB)
+import UnliftIO.Exception (throwIO)
+
+
+type EpisodeId = UUIDId "incident_episode"
+type IncidentEventId = UUIDId "incident_event"
+type SlackRootId = UUIDId "slack_incident_root"
+type SlackDeliveryId = UUIDId "slack_incident_delivery"
+
+
+data IncidentSource = MonitorIncident Monitors.QueryMonitorId | IssueIncident Issues.IssueId
+  deriving stock (Eq, Show)
+
+
+data IncidentChange = IncidentAlert | IncidentObservation | IncidentReminder | IncidentRecovered | IncidentResolved Projects.UserId
+  deriving stock (Eq, Show)
+
+
+data IncidentDelivery = PublishIncident | RefreshIncident
+  deriving stock (Eq, Show)
+
+
+data EpisodePhase = EpisodeActive | EpisodeRecovered | EpisodeResolved
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
+
+
+data Episode = Episode
+  { id :: EpisodeId
+  , projectId :: Projects.ProjectId
+  , issueId :: Maybe Issues.IssueId
+  , phase :: EpisodePhase
+  , startedAt :: UTCTime
+  , lastEventAt :: UTCTime
+  , closedAt :: Maybe UTCTime
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data SlackDestination = SlackDestination {teamId :: Text, channelId :: Text}
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | A Slack protocol object. Message builders supply content; the worker adds credentials.
+--
+-- >>> isNothing (AE.decode @SlackPayload "null") && isNothing (AE.decode @SlackPayload "[]")
+-- True
+-- >>> fmap (AE.decode . AE.encode) (slackPayload (AE.object [])) == fmap Just (slackPayload (AE.object []))
+-- True
+newtype SlackPayload = SlackPayload (KM.KeyMap AE.Value)
+  deriving stock (Eq, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue, HI.EncodeValue) via Aeson SlackPayload
+
+
+slackPayload :: AE.Value -> Maybe SlackPayload
+slackPayload (AE.Object obj) = Just $ SlackPayload obj
+slackPayload _ = Nothing
+
+
+data IncidentUpdate = IncidentUpdate
+  { projectId :: Projects.ProjectId
+  , source :: IncidentSource
+  , observedAt :: UTCTime
+  , change :: IncidentChange
+  , delivery :: IncidentDelivery
+  , issueId :: Maybe Issues.IssueId
+  , rootPayload :: SlackPayload
+  , replyPayload :: SlackPayload
+  , destinations :: [SlackDestination]
+  }
+  deriving stock (Show)
+
+
+data RecordResult
+  = Recorded Episode IncidentEventId
+  | AlreadyRecorded EpisodeId IncidentEventId
+  | OlderThanCurrentEpisode
+  | NoOpenEpisode
+  | UnknownIncidentSource
+  | IncidentIssueMismatch
+  deriving stock (Eq, Show)
+
+
+sourceFields :: IncidentSource -> (Text, UUID.UUID)
+sourceFields (MonitorIncident mid) = ("monitor", mid.unQueryMonitorId)
+sourceFields (IssueIncident iid) = ("issue", iid.unUUIDId)
+
+
+changeFields :: IncidentChange -> (Text, EpisodePhase, Maybe Projects.UserId)
+changeFields IncidentAlert = ("alert", EpisodeActive, Nothing)
+changeFields IncidentObservation = ("observation", EpisodeActive, Nothing)
+changeFields IncidentReminder = ("reminder", EpisodeActive, Nothing)
+changeFields IncidentRecovered = ("recovered", EpisodeRecovered, Nothing)
+changeFields (IncidentResolved actor) = ("resolved", EpisodeResolved, Just actor)
+
+
+queryTx :: HI.DecodeResult a => HI.Sql -> Tx.Transaction a
+queryTx = Tx.statement () . HI.interp True
+
+
+executeTx :: HI.Sql -> Tx.Transaction ()
+executeTx sql = void (queryTx sql :: Tx.Transaction HI.RowsAffected)
+
+
+oneTx :: HI.DecodeRow a => HI.Sql -> Tx.Transaction a
+oneTx sql = HI.getOneRow <$> queryTx sql
+
+
+episodeSelect :: HI.Sql
+episodeSelect = [HI.sql|SELECT id, project_id, issue_id, phase, started_at, last_event_at, closed_at FROM apis.incident_episodes |]
+
+
+getEpisode :: DB es => Projects.ProjectId -> EpisodeId -> Eff es (Maybe Episode)
+getEpisode pid eid = Hasql.interpOne (episodeSelect <> [HI.sql|WHERE project_id = #{pid} AND id = #{eid}|])
+
+
+latestEpisodeTx :: Projects.ProjectId -> IncidentSource -> Tx.Transaction (Maybe Episode)
+latestEpisodeTx pid source =
+  let (sourceKind, sourceId) = sourceFields source
+   in listToMaybe
+        <$> queryTx @[Episode]
+          ( episodeSelect
+              <> [HI.sql|WHERE project_id = #{pid} AND source_kind = #{sourceKind} AND source_id = #{sourceId}
+          ORDER BY started_at DESC, last_event_at DESC LIMIT 1|]
+          )
+
+
+recordIncidentEvent :: DB es => IncidentUpdate -> Eff es RecordResult
+recordIncidentEvent = Hasql.transaction TxS.ReadCommitted TxS.Write . recordIncidentEventTx
+
+
+-- | Export the transaction as well as its interpreter so the monitor can commit
+-- its status, event, and delivery outbox in one database transaction.
+-- No network operation occurs while this source lock is held.
+recordIncidentEventTx :: IncidentUpdate -> Tx.Transaction RecordResult
+recordIncidentEventTx update = do
+  let pid = update.projectId
+      (sourceKind, sourceId) = sourceFields update.source
+      (eventKind, nextPhase, actorId) = changeFields update.change
+      at = update.observedAt
+      issueId = update.issueId
+  -- Hash collisions only serialize unrelated sources. The exact project/source
+  -- fields below still determine identity and authorization.
+  void
+    $ queryTx @[Text]
+      [HI.sql|SELECT pg_advisory_xact_lock(hashtextextended(concat_ws('/', #{pid}::text, #{sourceKind}, #{sourceId}::text), 0))::text|]
+  validSource <-
+    oneTx @Bool
+      [HI.sql|SELECT CASE WHEN #{sourceKind} = 'monitor'
+    THEN EXISTS (SELECT 1 FROM monitors.query_monitors WHERE id = #{sourceId} AND project_id = #{pid})
+    ELSE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{sourceId} AND project_id = #{pid}) END|]
+  validIssue <-
+    oneTx @Bool
+      [HI.sql|SELECT #{issueId}::uuid IS NULL OR EXISTS
+    (SELECT 1 FROM apis.issues WHERE id = #{issueId} AND project_id = #{pid})|]
+  if not validSource
+    then pure UnknownIncidentSource
+    else
+      if not validIssue
+        then pure IncidentIssueMismatch
+        else do
+          duplicate <-
+            queryTx @[(EpisodeId, IncidentEventId)]
+              [HI.sql|SELECT episode_id, id FROM apis.incident_events
+        WHERE project_id = #{pid} AND source_kind = #{sourceKind} AND source_id = #{sourceId}
+          AND observed_at = #{at} AND event_kind = #{eventKind}|]
+          case listToMaybe duplicate of
+            Just (eid, eventId) -> pure $ AlreadyRecorded eid eventId
+            Nothing -> do
+              latest <- latestEpisodeTx pid update.source
+              case latest of
+                Just episode | at < episode.lastEventAt -> pure OlderThanCurrentEpisode
+                _ | nextPhase /= EpisodeActive && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
+                _ -> do
+                  episode <- case latest of
+                    Just existing | existing.phase == EpisodeActive -> pure existing
+                    _ ->
+                      oneTx @Episode
+                        [HI.sql|INSERT INTO apis.incident_episodes
+                (project_id, source_kind, source_id, issue_id, phase, started_at, last_event_at)
+                VALUES (#{pid}, #{sourceKind}, #{sourceId}, #{issueId}, 'active', #{at}, #{at})
+                RETURNING id, project_id, issue_id, phase, started_at, last_event_at, closed_at|]
+                  let eid = episode.id
+                      closedAt = if nextPhase == EpisodeActive then Nothing else Just at
+                  current <-
+                    oneTx @Episode
+                      [HI.sql|UPDATE apis.incident_episodes
+              SET phase = #{nextPhase}, last_event_at = #{at}, closed_at = #{closedAt},
+                  issue_id = COALESCE(issue_id, #{issueId}) WHERE id = #{eid}
+              RETURNING id, project_id, issue_id, phase, started_at, last_event_at, closed_at|]
+                  eventId <-
+                    oneTx @IncidentEventId
+                      [HI.sql|INSERT INTO apis.incident_events
+              (episode_id, project_id, source_kind, source_id, event_kind, observed_at, actor_id, root_payload, reply_payload)
+              VALUES (#{eid}, #{pid}, #{sourceKind}, #{sourceId}, #{eventKind}, #{at}, #{actorId}, #{update.rootPayload}, #{update.replyPayload})
+              RETURNING id|]
+                  existingDestinations <-
+                    queryTx @[SlackDestination]
+                      [HI.sql|SELECT team_id, channel_id FROM apis.slack_incident_roots WHERE episode_id = #{eid}|]
+                  let destinations = case update.delivery of
+                        RefreshIncident -> existingDestinations
+                        PublishIncident -> existingDestinations <> [destination | nextPhase == EpisodeActive, destination <- update.destinations]
+                  forM_ (ordNub destinations) \destination -> do
+                    rootId <-
+                      oneTx @SlackRootId
+                        [HI.sql|INSERT INTO apis.slack_incident_roots
+                        (episode_id, team_id, channel_id, first_event_id)
+                        VALUES (#{eid}, #{destination.teamId}, #{destination.channelId}, #{eventId})
+                        ON CONFLICT (episode_id, team_id, channel_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
+                        RETURNING id|]
+                    executeTx
+                      [HI.sql|INSERT INTO apis.slack_incident_deliveries
+                        (root_id, episode_id, event_id, operation, available_at)
+                        SELECT #{rootId}, #{eid}, #{eventId}, 'post_root', #{at}
+                        FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id = #{eventId}
+                        ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
+                    let operations :: [Text]
+                        operations = case update.delivery of
+                          PublishIncident -> ["post_reply", "update_root"]
+                          RefreshIncident -> ["update_root"]
+                    forM_ operations \operation ->
+                      executeTx
+                        [HI.sql|INSERT INTO apis.slack_incident_deliveries
+                          (root_id, episode_id, event_id, operation, available_at)
+                          SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
+                          FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
+                          ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
+                  pure $ Recorded current eventId
+
+
+newtype SlackTimestamp = SlackTimestamp Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON, HI.EncodeValue)
+
+
+-- | Parse Slack's decimal timestamp without losing precision.
+--
+-- >>> fmap slackTimestampText (slackTimestamp "1788900000.000001")
+-- Just "1788900000.000001"
+-- >>> all (isNothing . slackTimestamp) ["", "1", ".1", "1.", "1.2.3", "-1.1"]
+-- True
+slackTimestamp :: Text -> Maybe SlackTimestamp
+slackTimestamp value =
+  let (seconds, fraction) = T.breakOn "." value
+      digits text = not (T.null text) && T.all isDigit text
+   in SlackTimestamp value <$ guard (digits seconds && digits (T.drop 1 fraction))
+
+
+slackTimestampText :: SlackTimestamp -> Text
+slackTimestampText (SlackTimestamp value) = value
+
+
+data DeliveryOperation timestamp = PostRoot | PostReply timestamp | UpdateRoot timestamp
+  deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson (DeliveryOperation timestamp)
+
+
+type SlackDelivery = SlackDeliveryF SlackTimestamp
+
+
+data SlackDeliveryF timestamp = SlackDelivery
+  { id :: SlackDeliveryId
+  , rootId :: SlackRootId
+  , episodeId :: EpisodeId
+  , projectId :: Projects.ProjectId
+  , teamId :: Text
+  , channelId :: Text
+  , operation :: DeliveryOperation timestamp
+  , payload :: SlackPayload
+  , initialPayload :: SlackPayload
+  , leaseToken :: UUID.UUID
+  , attempts :: Int32
+  }
+  deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
+  deriving anyclass (HI.DecodeRow)
+
+
+data DeliveryOutcome
+  = DeliveryConfirmed SlackTimestamp
+  | WebhookAccepted
+  | DeliveryRetry UTCTime Text
+  | DeliveryRejected Text
+  | DeliveryUncertain Text
+  deriving stock (Eq, Show)
+
+
+-- | An expired send lease is ambiguous, not permission to post another message.
+-- Its owner can still confirm it, or a Slack event can reconcile its root.
+-- Only the first unsettled delivery for a root is eligible, across all workers.
+claimSlackDeliveries :: DB es => UTCTime -> Eff es [SlackDelivery]
+claimSlackDeliveries now = do
+  result <- Hasql.transaction TxS.ReadCommitted TxS.Write $ claimSlackDeliveriesTx now
+  maybe (throwIO InvalidStoredSlackTimestamp) pure result
+
+
+data IncidentDecodeError = InvalidStoredSlackTimestamp
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+claimSlackDeliveriesTx :: UTCTime -> Tx.Transaction (Maybe [SlackDelivery])
+claimSlackDeliveriesTx now = do
+  executeTx
+    [HI.sql|UPDATE apis.slack_incident_deliveries
+    SET state = 'uncertain', last_error = 'send_lease_expired'
+    WHERE state = 'sending' AND lease_until < #{now}|]
+  let leaseUntil = addUTCTime 120 now
+  stored <-
+    queryTx @[SlackDeliveryF Text]
+      [HI.sql|WITH candidates AS (
+      SELECT d.id FROM apis.slack_incident_deliveries d
+      JOIN apis.slack_incident_roots r ON r.id = d.root_id
+      JOIN apis.incident_episodes episode ON episode.id = d.episode_id
+      WHERE d.state = 'pending' AND d.available_at <= #{now}
+        AND NOT EXISTS (SELECT 1 FROM monitors.query_monitors monitor
+          WHERE episode.source_kind = 'monitor' AND monitor.id = episode.source_id AND monitor.muted_until > #{now})
+        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM apis.slack_incident_deliveries earlier
+          WHERE earlier.root_id = d.root_id AND earlier.sequence < d.sequence
+            AND earlier.state NOT IN ('delivered', 'failed'))
+      ORDER BY d.sequence LIMIT 50 FOR UPDATE OF d SKIP LOCKED
+    ), claimed AS (
+      UPDATE apis.slack_incident_deliveries d
+      SET state = 'sending', lease_token = gen_random_uuid(), lease_until = #{leaseUntil}, attempts = attempts + 1
+      FROM candidates c WHERE d.id = c.id RETURNING d.*
+    ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id,
+        CASE d.operation
+          WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
+          WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
+          WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
+        END,
+        CASE WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
+        initial.root_payload,
+        d.lease_token, d.attempts
+      FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
+      JOIN apis.slack_incident_roots r ON r.id = d.root_id
+      JOIN LATERAL (SELECT root_payload FROM apis.incident_events
+        WHERE episode_id = d.episode_id ORDER BY observed_at, id LIMIT 1) initial ON TRUE
+      ORDER BY d.sequence|]
+  let deliveries = traverse (traverse slackTimestamp) stored
+  when (isNothing deliveries) Tx.condemn
+  pure deliveries
+
+
+-- | A completion only belongs to the worker's exact lease. Late results from a
+-- previous retry cannot overwrite a newer attempt or replace the thread root.
+finishSlackDelivery :: DB es => UTCTime -> SlackDelivery -> DeliveryOutcome -> Eff es Bool
+finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  let (deliveryState, availableAt, messageTs, err) = case outcome of
+        DeliveryConfirmed ts -> ("delivered", now, Just ts, Nothing)
+        WebhookAccepted -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
+        DeliveryRetry retryAt reason -> ("pending", max now retryAt, Nothing, Just reason)
+        DeliveryRejected reason -> ("failed", now, Nothing, Just reason)
+        DeliveryUncertain reason -> ("uncertain", now, Nothing, Just reason)
+  completed <-
+    queryTx @[SlackRootId]
+      [HI.sql|UPDATE apis.slack_incident_deliveries
+    SET state = #{deliveryState :: Text}, available_at = #{availableAt}, message_ts = #{messageTs},
+        last_error = #{err}, lease_until = NULL
+    WHERE id = #{delivery.id} AND lease_token = #{delivery.leaseToken} AND state IN ('sending', 'uncertain')
+    RETURNING root_id|]
+  case (listToMaybe completed, delivery.operation, outcome) of
+    (Just rid, PostRoot, DeliveryConfirmed ts) -> do
+      roots <-
+        queryTx @[SlackRootId]
+          [HI.sql|UPDATE apis.slack_incident_roots SET message_ts = #{ts}
+        WHERE id = #{rid} AND (message_ts IS NULL OR message_ts = #{ts}) RETURNING id|]
+      when (null roots)
+        $ executeTx
+          [HI.sql|UPDATE apis.slack_incident_deliveries
+        SET state = 'failed', last_error = 'root_timestamp_conflict' WHERE id = #{delivery.id}|]
+      pure $ not $ null roots
+    _ -> pure $ not $ null completed
+
+
+-- | Correlate a sent root using Slack's message metadata protocol.
+correlateSlackRoot :: SlackRootId -> SlackPayload -> SlackPayload
+correlateSlackRoot rootId (SlackPayload payload) =
+  SlackPayload
+    $ KM.insert
+      "metadata"
+      (AE.object ["event_type" AE..= ("monoscope_incident_root" :: Text), "event_payload" AE..= AE.object ["root_id" AE..= rootId]])
+      payload
+
+
+data RootObservation = RootObservation
+  { rootId :: SlackRootId
+  , projectId :: Projects.ProjectId
+  , teamId :: Text
+  , channelId :: Text
+  , timestamp :: Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Only persisted signed receipts can supply observations. Verify the message's
+-- author app independently of the receiving app, then bind its destination/root.
+captureSlackRoot :: DB es => Text -> UUIDId "slack_event" -> Eff es Bool
+captureSlackRoot appId receiptId = do
+  observation <-
+    Hasql.interpOne @RootObservation
+      [HI.sql|SELECT r.id, e.project_id, r.team_id, r.channel_id, se.payload #>> '{event,ts}'
+      FROM apis.slack_events se
+      JOIN apis.slack_incident_roots r ON r.id::text = se.payload #>> '{event,metadata,event_payload,root_id}'
+      JOIN apis.incident_episodes e ON e.id = r.episode_id
+      JOIN apis.slack s ON s.project_id = e.project_id AND s.team_id = r.team_id
+      WHERE se.id = #{receiptId} AND #{appId} <> ''
+        AND se.team_id = r.team_id AND se.payload->>'api_app_id' = #{appId}
+        AND se.payload #>> '{event,channel}' = r.channel_id
+        AND se.payload #>> '{event,type}' = 'message'
+        AND COALESCE(se.payload #>> '{event,subtype}', 'bot_message') = 'bot_message'
+        AND COALESCE(se.payload #>> '{event,app_id}', se.payload #>> '{event,bot_profile,app_id}') = #{appId}
+        AND COALESCE(se.payload #>> '{event,bot_id}', '') <> ''
+        AND se.payload #>> '{event,metadata,event_type}' = 'monoscope_incident_root'
+        AND se.payload #>> '{event,ts}' IS NOT NULL
+        AND COALESCE(se.payload #>> '{event,thread_ts}', se.payload #>> '{event,ts}') = se.payload #>> '{event,ts}'|]
+  case observation of
+    Just observed
+      | Just timestamp <- slackTimestamp observed.timestamp ->
+          observeSlackRoot observed.projectId (SlackDestination observed.teamId observed.channelId) observed.rootId timestamp
+    _ -> pure False
+
+
+observeSlackRoot :: DB es => Projects.ProjectId -> SlackDestination -> SlackRootId -> SlackTimestamp -> Eff es Bool
+observeSlackRoot pid destination rootId timestamp = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  roots <-
+    queryTx @[SlackRootId]
+      [HI.sql|UPDATE apis.slack_incident_roots r SET message_ts = #{timestamp}
+    FROM apis.incident_episodes e WHERE r.id = #{rootId} AND r.episode_id = e.id
+      AND e.project_id = #{pid} AND r.team_id = #{destination.teamId} AND r.channel_id = #{destination.channelId}
+      AND (r.message_ts IS NULL OR r.message_ts = #{timestamp})
+      AND EXISTS (SELECT 1 FROM apis.slack_incident_deliveries d
+        WHERE d.root_id = r.id AND d.operation = 'post_root' AND d.attempts > 0)
+    RETURNING r.id|]
+  unless (null roots)
+    $ executeTx
+      [HI.sql|UPDATE apis.slack_incident_deliveries
+    SET state = 'delivered', message_ts = #{timestamp}, last_error = NULL, lease_until = NULL
+    WHERE root_id = #{rootId} AND operation = 'post_root'
+      AND state <> 'delivered'|]
+  pure $ not $ null roots
