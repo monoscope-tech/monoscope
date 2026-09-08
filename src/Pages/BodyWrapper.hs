@@ -755,10 +755,10 @@ navbar bcfg menuL =
         let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
             keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
         case targetPageM of
-          Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+          Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
           Nothing -> case bcfg.pageTitleModalId of
-            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
-            Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
+            Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
         -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
         span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
           faSprite_ "chevron-right" "regular" "w-3 h-3"
