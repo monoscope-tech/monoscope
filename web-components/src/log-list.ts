@@ -28,6 +28,7 @@ import {
   MIN_COLUMN_WIDTH,
   calculateColumnWidth,
   parseSummaryElement,
+  unescapeBasic,
   unescapeJsonString,
   calculateAutoBinWidth,
   createCachedIconRenderer,
@@ -2970,10 +2971,21 @@ export class LogList extends LitElement {
         if (p.type !== 'plain' && RIGHT_PREFIX_REGEX.test(p.style)) continue;
 
         if (p.type === 'plain') {
-          if (this.mode === 'patterns') {
-            result.push(html`<span class=${`fill-textStrong ${plainWrapClass}`}>${highlightPlaceholders(p.content)}</span>`);
+          // In nowrap mode a multiline body would render its newlines (whitespace-pre)
+          // and blow the row open: clamp to the first line with a "+N lines" hint and
+          // put the full message in the hover tooltip instead.
+          const nl = wrapLines ? -1 : p.content.indexOf('\n');
+          const content = nl === -1 ? p.content : p.content.slice(0, nl);
+          const body = this.mode === 'patterns' ? highlightPlaceholders(content) : unsafeHTML(getCachedUnescape(content));
+          if (nl === -1) {
+            result.push(html`<span class=${`fill-textStrong ${plainWrapClass}`}>${body}</span>`);
           } else {
-            result.push(html`<span class=${`fill-textStrong ${plainWrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
+            const more = p.content.split('\n').length - 1;
+            result.push(
+              html`<span class=${`fill-textStrong ${plainWrapClass}`} title=${unescapeBasic(p.content)}
+                >${body}<span class="text-textWeak"> ⏎ +${more} lines</span></span
+              >`
+            );
           }
           continue;
         }

@@ -2137,7 +2137,7 @@ code, pre, .code, .monospace {
   }
 
   .log-item-field-value {
-    @apply ml-2.5 text-textBrand;
+    @apply ml-2.5 text-textBrand whitespace-pre-wrap break-words;
   }
 
   /* ======= CODEMIRROR */
