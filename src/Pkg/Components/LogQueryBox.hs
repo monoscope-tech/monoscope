@@ -434,7 +434,7 @@ popularQueries =
   , ("duration > 1000000000", "Slow requests (>1s)", Nothing)
   , ("attributes.exception.type != null", "Exceptions", Nothing)
   , ("attributes.error.type != null", "Error types", Nothing)
-  , ("kind == \"span\" and duration > 5000000000", "Slow spans (>5s)", Nothing)
+  , ("kind != \"log\" and duration > 5000000000", "Slow spans (>5s)", Nothing)
   , ("status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource.service.name", "Errors by service", Just "Bar chart — error rate per service over time")
   , ("| summarize count(*) by bin_auto(timestamp), level", "Volume by level", Just "Bar chart — log volume breakdown")
   , ("| summarize percentiles(duration, 50, 90, 99) by bin_auto(timestamp)", "Latency percentiles", Just "Line chart — p50/p90/p99 over time")
