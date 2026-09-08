@@ -87,8 +87,8 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (DB)
-import Text.RE.Replace (matched)
-import Text.RE.TDFA (RE, re, (?=~))
+import Text.RE.TDFA (RE, re, reRegex)
+import Text.Regex.TDFA qualified as TDFA
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
@@ -888,7 +888,7 @@ commonFormatPatterns =
 -- >>> map valueToFormatStr ["v1"]
 --
 valueToFormatStr :: Text -> Maybe Text
-valueToFormatStr val = snd <$> find (\(regex, _) -> matched (val ?=~ regex)) commonFormatPatterns
+valueToFormatStr val = snd <$> find (\(regex, _) -> TDFA.matchTest (reRegex regex) val) commonFormatPatterns
 
 
 -- | Detect dynamic URL segments and replace them with named parameters.
