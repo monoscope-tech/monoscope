@@ -873,15 +873,18 @@ Verification completed during this increment:
 
 - `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=ErrorPatterns make live-test-dev`: 30 examples, zero failures. Tests use advancing notification times and inspect per-channel Slack roots while preserving trace-link/schema checks.
 - The same command with `TEST_MATCH=Notifications`: 10 examples, zero failures. This includes rate limits, project alert settings, acknowledgements, and older subscriptions. An unrelated Slack query fixture logs a missing agentic golden file; this is not proof of that background query's success.
-- The same command with `TEST_MATCH=Incident`: 14 examples, zero failures before removal of the unused helper. The watcher is rechecking that final deletion. The new test covers outbox/token rollback, concurrent ingestion, destination deduplication, reminders, newer-issue acknowledgement, and manual resolution.
+- The same command with `TEST_MATCH=Incident`: 14 examples, zero failures, including the final run after deleting the unused helper. The new test covers outbox/token rollback, concurrent ingestion, destination deduplication, reminders, newer-issue acknowledgement, and manual resolution.
 - Scoped Fourmolu and `git diff --no-ext-diff --check` passed. Scoped HLint exited 1 because installed 3.3.6 rejects `MultilineStrings`.
 - Weeder exited 228 with 142 report lines. Its newly unused `revertLastNotifiedAt` finding was removed; repository-wide remaining findings are not a passing check.
 - Each of `/hs-distill`, `/hs-evasion-review`, and `/hs-lob-review` ran three times; findings and fixes are in the review log.
 
 `make ci-signoff CHECKS="build doctests unit-tests"` was started, then stopped
-before any attestation to remove the Weeder finding. A fresh final-tree run is
-active; `/tmp/monoscope-slack-agent/runtime-ci-signoff-final.log` records its
-results. Do not treat the pending run as passed. TimeFusion cannot start on this
+before any attestation to remove the Weeder finding. The final run passed the build, all 1,536 doctests, and all 308 unit tests.
+It published passing attestations for `182607f34` with fingerprints
+`1311e6271dc7ffd52749669932c3f45815a15610c274e7791245addc97b1d21e` (build),
+`ccf023fdfafeb86b12b08f530a7d698681e48c22ae0ebd15de0f4668aff5cc04` (doctests),
+and `a61bfb491da150514ec3e8e206d0e164b3eeb91c49a961864f6d1f2f7da2d190` (unit tests).
+`/tmp/monoscope-slack-agent/runtime-ci-signoff-final.log` records the results. TimeFusion cannot start on this
 ARM laptop, so full supported integration remains a GitHub-runner requirement.
 No branch push or deployment has occurred.
 
@@ -889,3 +892,6 @@ Remaining durability gaps include earlier pattern-upsert/issue-creation and
 spike-state/issue-creation transactions, automatic error lifecycle transitions,
 and non-Slack transports. The full five-release plan, chart acceptance, live Slack
 validation, evidence tools, action drafts, and proactive policies remain incomplete.
+
+The final CI status reused the existing CLI attestation. It still requires
+frontend, integration-tests, weeder, hlint, ui-tests, and e2e on GitHub.
