@@ -1219,13 +1219,13 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
       | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
           handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
     _ -> pure fallback
-  let width = clamp (100, 2000) $ fromMaybe 900 widthM
-      height = clamp (100, 2000) $ fromMaybe 300 heightM
-
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
+  let (defaultWidth, defaultHeight) = Widget.pngExportSize widget.pngProfile
+      width = clamp (100, 2000) $ fromMaybe defaultWidth widthM
+      height = clamp (100, 2000) $ fromMaybe defaultHeight heightM
   -- The signature covers the dataset as well as the query. Saved report charts
   -- carry their measured data, and must remain usable after telemetry expires.
   processedWidget <- case widget.dataset of
@@ -1236,6 +1236,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
         AE.encode
           $ AE.object
             [ "echarts" AE..= Widget.widgetToECharts (processedWidget & #_staticRender ?~ True)
+            , "profile" AE..= fromMaybe Widget.PngStandard processedWidget.pngProfile
             , "width" AE..= width
             , "height" AE..= height
             , "theme" AE..= fromMaybe "default" processedWidget.theme

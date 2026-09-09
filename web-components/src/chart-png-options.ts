@@ -1,5 +1,7 @@
+export type PngProfile = "standard" | "slack";
+
 // PNG layout uses ECharts pixel/percentage units and the email color scheme.
-export function preparePngOptions(finalOptions: any, width: number, height: number, darkMode: boolean): void {
+export function preparePngOptions(finalOptions: any, width: number, height: number, darkMode: boolean, profile: PngProfile = "standard"): void {
   finalOptions.backgroundColor = darkMode ? "#111827" : (finalOptions.backgroundColor || "#ffffff");
   finalOptions.useUTC = true;
   finalOptions.textStyle = { ...finalOptions.textStyle, fontFamily: 'sans-serif' };
@@ -37,10 +39,41 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     item.lineStyle = { ...item.lineStyle, width: 2 };
   }
 
+  if (profile === "slack") {
+    finalOptions.backgroundColor = darkMode ? "#111827" : "#ffffff";
+    finalOptions.textStyle.fontSize = 14;
+    finalOptions.grid.left = Math.max(finalOptions.grid.left, 24);
+    finalOptions.grid.right = Math.max(finalOptions.grid.right, 24);
+    finalOptions.grid.top = Math.max(finalOptions.grid.top, 16);
+    finalOptions.grid.bottom = Math.max(finalOptions.grid.bottom, 24);
+    finalOptions.grid.containLabel = true;
+    if (series.length === 1) finalOptions.legend = { ...finalOptions.legend, show: false };
+    for (const key of ["xAxis", "yAxis"] as const) {
+      const axes = Array.isArray(finalOptions[key]) ? finalOptions[key] : [finalOptions[key]];
+      for (const axis of axes) {
+        if (!axis) continue;
+        // ECharts otherwise expands bar axes by a data band even with min/max.
+        if (axis.type === "time") axis.containShape = false;
+        axis.axisLabel = { ...axis.axisLabel, fontSize: 14 };
+        axis.splitLine = { ...axis.splitLine, lineStyle: { ...axis.splitLine?.lineStyle, opacity: 0.35 } };
+      }
+    }
+    for (const item of series) {
+      if (item.markLine) item.markLine.label = { ...item.markLine.label, fontSize: 14 };
+      if (series.length === 1 && item.type === "bar") {
+        // Keep boundary buckets visible without changing their timestamps or
+        // stretching the requested time window. The grid reserves half a bar.
+        item.barMaxWidth = 24;
+        item.clip = false;
+      }
+    }
+  }
+
   // A monitor's threshold can sit outside its observed values, especially for
   // "below" conditions. Keep it visible, and allow negative gauge readings.
-  // Limit this scaling to a single unstacked measurement's threshold chart.
-  if (series.length === 1 && series[0].type === 'line' && !series[0].stack && series[0].markLine?.data?.length && !Array.isArray(finalOptions.yAxis)) {
+  // A single Slack gauge cannot stack with another series; the widget generator
+  // still supplies a stack name. Preserve standard exports with explicit stacking.
+  if (series.length === 1 && series[0].type === 'line' && (profile === 'slack' || !series[0].stack) && series[0].markLine?.data?.length && !Array.isArray(finalOptions.yAxis)) {
     const source = finalOptions.dataset?.source;
     const yColumn = series[0].encode?.y ?? 1;
     const values = Array.isArray(source) ? source.slice(1).map((row: any) => row[yColumn]).filter((v: unknown) => typeof v === 'number' && Number.isFinite(v)) : [];

@@ -969,3 +969,38 @@ passed, and 308 unit examples passed. Published fingerprints are
 The existing CLI attestation was reused. Frontend, integration-tests, weeder,
 hlint, ui-tests, and e2e remain for GitHub. The complete log is
 `/tmp/monoscope-slack-agent/lifecycle-ci-signoff.log`. No deployment was triggered.
+
+
+## Compact chart profile and captured gauge evidence
+
+Notification chart URLs now carry a derived PngProfile value inside the signed
+widget. Slack exports default to 960 × 320; absent profiles retain 900 × 300.
+The existing renderer supplies larger labels, restrained grids, single-series
+legend removal, and boundary-bar margins. Disabling ECharts time-axis shape
+containment fixes sparse bars mapping a 15-minute window to only about 448 pixels.
+The dataset timestamps and requested bounds remain unchanged.
+
+The captured monitor widget exposed another defect: its default stack name skipped
+gauge scaling. The Slack single-series path now includes negative measurements and
+thresholds outside the observed range. Three captured-options regression cases
+failed before the fix; all 12 renderer tests now pass. The standard stacked-export
+regression remains passing. The captured request, dataset, complete final options,
+and visually inspected light/dark PNGs are in
+`web-components/test/fixtures/slack-monitor-gap/`. This is controlled integration
+evidence signed with a public fixture key, not a production screenshot capture.
+
+Verification: native `make live-test-dev` with `TEST_MATCH=Monitoring`,
+`DB_HOST=127.0.0.1`, `MINIO_ENDPOINT=http://127.0.0.1:19000`, and
+`SLACK_CHART_FIXTURE_PATH=/tmp/monoscope-slack-agent/monitor-chart-fixture.json`
+compiled the changed Haskell and passed 26 examples with zero failures. The log is
+`/tmp/monoscope-slack-agent/slack-chart-monitor-tests.log`. Node 25.2.1 running
+`web-components/node_modules/vitest/vitest.mjs run --root web-components test/chart-png-options.test.ts`
+passed 12 tests using the normal repository config. Fourmolu check and scoped
+`git diff --check` passed. HLint 3.3.6 cannot parse MultilineStrings. Weeder exited
+228; its findings are in `/tmp/monoscope-slack-agent/chart-weeder.log`.
+
+Three rounds of all requested skills are recorded in the review log. Full CI
+signoff for this increment is still outstanding; the preceding lifecycle signoff
+does not cover these edits. Chart coverage/failure labels, measurement units,
+production captures, live Slack acceptance, and later releases remain incomplete.
+No deployment or deployment-branch push occurred.

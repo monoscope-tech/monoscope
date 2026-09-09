@@ -1550,7 +1550,7 @@ trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget
 trendChartUrl ctx pid widget fromTxt toTxt =
   mfilter (not . T.null)
     . Just
-    <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget Nothing (Just fromTxt) (Just toTxt)
+    <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just fromTxt) (Just toTxt)
 
 
 errorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)

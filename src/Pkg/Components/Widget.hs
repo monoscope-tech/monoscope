@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -152,6 +152,24 @@ summarizeByPrefix SBMean = ""
 summarizeByPrefix SBRate = ""
 
 
+data PngProfile = PngStandard | PngSlack
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Png" PngProfile
+
+
+-- | Export dimensions are part of the profile carried by the signed widget.
+--
+-- >>> pngExportSize Nothing
+-- (900,300)
+-- >>> pngExportSize (Just PngSlack)
+-- (960,320)
+pngExportSize :: Maybe PngProfile -> (Int, Int)
+pngExportSize profile = case fromMaybe PngStandard profile of
+  PngStandard -> (900, 300)
+  PngSlack -> (960, 320)
+
+
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
@@ -223,6 +241,7 @@ data Widget = Widget
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
+  , pngProfile :: Maybe PngProfile
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   , dbSource :: Maybe Text -- "postgres" or "timefusion"; Nothing = default routing
   }

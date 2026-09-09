@@ -5,6 +5,7 @@ import Codec.Compression.GZip qualified as GZip
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Base64.URL qualified as B64URL
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
@@ -35,6 +36,7 @@ import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Environment qualified as Env
 import Test.Hspec
 
 
@@ -344,6 +346,28 @@ spec = sequential $ aroundAll withTestResources do
       compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
       widget <- either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
       widget.query `shouldBe` Nothing
+      widget.pngProfile `shouldBe` Just Widget.PngSlack
+      Widget.pngExportSize widget.pngProfile `shouldBe` (960, 320)
+      -- Optional artifact capture uses a public fixture key, never installation secrets.
+      fixturePath <- Env.lookupEnv "SLACK_CHART_FIXTURE_PATH"
+      for_ fixturePath \path -> do
+        request <- runTestBgNoReset tr $ Widget.widgetPngUrl "slack-chart-fixture-key" "http://localhost/" testPid widget Nothing (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" $ addUTCTime (-900) t0) (Just $ toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" t0)
+        LBS.writeFile path
+          $ AE.encode
+          $ AE.object
+            [ "request_url" AE..= request
+            , "widget" AE..= widget
+            , "dataset" AE..= widget.dataset
+            , "renderer_input"
+                AE..= AE.object
+                  [ "echarts" AE..= Widget.widgetToECharts widget{Widget._staticRender = Just True}
+                  , "profile" AE..= Widget.PngSlack
+                  , "width" AE..= (960 :: Int)
+                  , "height" AE..= (320 :: Int)
+                  , "theme" AE..= fromMaybe "default" widget.theme
+                  , "darkMode" AE..= False
+                  ]
+            ]
       Widget.mapWidgetTypeToChartType widget.wType `shouldBe` "line"
       widget.alertThreshold `shouldBe` Just 60
       dataset <- maybe (fail "monitor snapshot had no dataset") pure widget.dataset

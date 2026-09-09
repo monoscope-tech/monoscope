@@ -5,7 +5,7 @@
 
 import { createCanvas } from "@napi-rs/canvas";
 import * as echarts from "echarts";
-import { preparePngOptions } from "./chart-png-options";
+import { preparePngOptions, type PngProfile } from "./chart-png-options";
 
 interface RenderInput {
   echarts: any;
@@ -13,6 +13,7 @@ interface RenderInput {
   height?: number;
   theme?: string;
   darkMode?: boolean;
+  profile?: PngProfile;
 }
 
 // Global formatters for ECharts callbacks (referenced in Haskell-generated formatter strings)
@@ -66,7 +67,7 @@ async function main() {
   const chunks: Buffer[] = [];
   for await (const chunk of Bun.stdin.stream()) chunks.push(Buffer.from(chunk));
   const input: RenderInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-  const { echarts: options, width = 900, height = 300, theme = "default", darkMode = false } = input;
+  const { echarts: options, width = 900, height = 300, theme = "default", darkMode = false, profile = "standard" } = input;
 
   if (process.env.DEBUG_CHART) console.error("INPUT:", JSON.stringify(input, null, 2));
 
@@ -75,9 +76,9 @@ async function main() {
 
   const finalOptions = convertFunctionStrings(options);
   finalOptions.animation = false;
-  preparePngOptions(finalOptions, canvas.width, canvas.height, darkMode);
+  preparePngOptions(finalOptions, canvas.width, canvas.height, darkMode, profile);
 
-  if (process.env.DEBUG_CHART) console.error("FINAL OPTIONS:", JSON.stringify(finalOptions, null, 2));
+  if (process.env.DEBUG_CHART) console.error("FINAL OPTIONS:", JSON.stringify(finalOptions, (_, value) => typeof value === "function" ? value.toString() : value, 2));
 
   chart.setOption(finalOptions);
   await Bun.write(Bun.stdout, canvas.toBuffer("image/png"));

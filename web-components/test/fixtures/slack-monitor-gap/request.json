@@ -1,0 +1,228 @@
+{
+  "dataset": {
+    "from": 1748778300000,
+    "source": [
+      [
+        "timestamp",
+        "Monitor value"
+      ],
+      [
+        1748778900000,
+        84
+      ],
+      [
+        1748778960000,
+        null
+      ],
+      [
+        1748779200000,
+        100
+      ]
+    ],
+    "to": 1748779200000
+  },
+  "renderer_input": {
+    "darkMode": false,
+    "echarts": {
+      "animation": false,
+      "dataset": {
+        "source": [
+          [
+            "timestamp",
+            "Monitor value"
+          ],
+          [
+            1748778900000,
+            84
+          ],
+          [
+            1748778960000,
+            null
+          ],
+          [
+            1748779200000,
+            100
+          ]
+        ]
+      },
+      "grid": {
+        "bottom": 8,
+        "containLabel": true,
+        "left": "0%",
+        "show": false,
+        "top": 8,
+        "width": "100%"
+      },
+      "legend": {
+        "bottom": 2,
+        "data": [
+          "Monitor value"
+        ],
+        "itemGap": 9,
+        "itemHeight": 9,
+        "itemWidth": 9,
+        "padding": [
+          3,
+          6,
+          3,
+          6
+        ],
+        "show": false,
+        "textStyle": {
+          "fontSize": 12,
+          "padding": [
+            0,
+            0,
+            0,
+            -2
+          ]
+        },
+        "tooltip": {
+          "show": true
+        },
+        "type": "plain"
+      },
+      "series": [
+        {
+          "areaStyle": null,
+          "barCategoryGap": "30%",
+          "barMaxWidth": 10,
+          "encode": {
+            "x": 0,
+            "y": 1
+          },
+          "itemStyle": {
+            "borderRadius": [
+              2,
+              2,
+              0,
+              0
+            ],
+            "color": "#5470c6"
+          },
+          "lineStyle": {
+            "width": 1
+          },
+          "markLine": {
+            "data": [
+              {
+                "label": {
+                  "formatter": "Alert: {c}",
+                  "position": "insideEndTop"
+                },
+                "lineStyle": {
+                  "color": "#dc2626",
+                  "type": "dashed",
+                  "width": 2
+                },
+                "yAxis": 60
+              }
+            ],
+            "silent": true,
+            "symbol": "none"
+          },
+          "name": "Monitor value",
+          "stack": "Stack",
+          "type": "line"
+        }
+      ],
+      "toolbox": {},
+      "tooltip": {
+        "appendToBody": true,
+        "axisPointer": {
+          "type": "shadow"
+        },
+        "show": true,
+        "trigger": "axis",
+        "valueFormatter": "function(value) { return formatNumber(value); }"
+      },
+      "xAxis": {
+        "axisLabel": {
+          "hideOverlap": true,
+          "margin": 8,
+          "show": true
+        },
+        "axisLine": {
+          "lineStyle": {
+            "color": "#000833A6",
+            "opacity": 0.1,
+            "type": "solid"
+          },
+          "show": true
+        },
+        "boundaryGap": [
+          0,
+          0.01
+        ],
+        "max": 1748779200000,
+        "min": 1748778300000,
+        "scale": true,
+        "show": true,
+        "splitLine": {
+          "show": false
+        },
+        "type": "time"
+      },
+      "yAxis": {
+        "axisLabel": {
+          "formatter": "function(value, index) { return formatNumber(value); }",
+          "hideOverlap": true,
+          "inside": false,
+          "margin": 8,
+          "show": true
+        },
+        "axisLine": {
+          "show": false
+        },
+        "axisTick": {
+          "show": false
+        },
+        "max": null,
+        "min": 0,
+        "show": true,
+        "splitLine": {
+          "interval": null,
+          "lineStyle": {
+            "color": "#0011661A",
+            "type": "dotted"
+          },
+          "show": true
+        },
+        "type": "value"
+      }
+    },
+    "height": 320,
+    "profile": "slack",
+    "theme": "default",
+    "width": 960
+  },
+  "request_url": "http://localhost/p/00000000-0000-0000-0000-000000000000/widget.png?widgetZ=H4sIAAAAAAAAE02PbQqDMAxArzLyu4y6iV932AlEpGicZbEtbRwM8e6r043l58t7kCzAL4dQAesJA3qNoSVtEASMuseW8I6mh4r9jAJ6xSogQ7VAsLPvYljXe8pqcjG6WaPZ-tNT0YzQiDrJ0yLPi1JuI4r0D2UfZGaiHywvu5dI2TQCBm8nqA7_uq-A7Rcd9ipAEXpuefQYRkvx3kyeo-rMvXXeDpq2FwOp7gHrG2VswzzzAAAA&from=2025-06-01T11%3A45%3A00Z&to=2025-06-01T12%3A00%3A00Z&sig=0f9395cc9a416319455ab2e7606e841571e32e43cc8a7c1aeb58b9f1ecf6b770",
+  "widget": {
+    "alert_threshold": 60,
+    "dataset": {
+      "from": 1748778300000,
+      "source": [
+        [
+          "timestamp",
+          "Monitor value"
+        ],
+        [
+          1748778900000,
+          84
+        ],
+        [
+          1748778960000,
+          null
+        ],
+        [
+          1748779200000,
+          100
+        ]
+      ],
+      "to": 1748779200000
+    },
+    "hide_legend": true,
+    "png_profile": "slack",
+    "type": "timeseries_line"
+  }
+}
