@@ -1858,3 +1858,54 @@ TEST_MATCH=Workflows make live-test-dev. Evidence:
 Three skill passes are recorded. Fourmolu and whitespace checks pass. HLint cannot
 parse MultilineStrings; Weeder exits 228 with repository findings.
 CI for the previous commit 22da705a3 remains live. No deployment or branch push.
+
+### Incident-root history recovery
+
+Migration 0179 adds a persisted cursor, retry deadline and lease token to unresolved
+incident roots. Search claims include attempted webhook/ambiguous roots and expired
+send leases, excluding inactive projects and replaced installations before the cap.
+A stale search cannot update a newer lease's cursor. The existing delivery sweep
+sends ready notifications before searching unresolved roots, so history lookups
+do not delay those notifications. Recovered lifecycle updates become eligible
+for the following delivery sweep.
+
+Channel history uses conversations.history, include_all_metadata=true and limit=15.
+The app must have history access and membership for the channel; notification-only
+private webhooks retain their existing delivery state when history is unavailable.
+Contract checked: https://docs.slack.dev/reference/methods/conversations.history/.
+Only own-app root metadata and a root-message timestamp can confirm a publication.
+The installation is checked again after HTTP. Confirmation uses observeSlackRoot,
+so pending recovery replies keep the original root. Empty/malformed/conflicting
+history remains pending and never permits another root post. Shared reply/progress
+matching now retains the validated SlackTimestamp type throughout the search result.
+
+A parameterized native regression covers WebhookAccepted and DeliveryUncertain:
+an abandoned search lease, pagination after mismatched messages, stale cursor write,
+installation replacement during matching response, and later confirmation that
+unblocks a reply under the recovered root timestamp. Native IncidentDelivery verification passed: 14 examples, zero failures, 12.3671
+seconds on the final execution order. Command: DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=IncidentDelivery make live-test-dev. Evidence:
+/tmp/monoscope-slack-agent/slack-root-history-incident-complete.log.
+The initial run exposed a fixture that edited an absent thread_ts field and left
+a valid root unchanged; it now explicitly inserts the mismatched thread field.
+The existing observeSlackRoot transaction is exported for the verified history
+caller; its destination/timestamp invariants are unchanged.
+The final-code Workflows regression passed: 46 examples, zero failures, 155.8408
+seconds, using the same native command with TEST_MATCH=Workflows. Evidence:
+/tmp/monoscope-slack-agent/slack-root-history-workflows-complete.log.
+The final IncidentDelivery rerun also passed after moving history lookup behind
+ready deliveries.
+Three skill passes are recorded. Fourmolu/whitespace pass; HLint cannot parse MultilineStrings and final Weeder
+exits 228 with repository findings.
+
+Previous commit 22da705a3 passed make ci-signoff CHECKS="build doctests unit-tests"
+and all three were attested. Session reset is now main commit 476af87d0; its CI is
+live at /tmp/monoscope-slack-agent/slack-session-reset-ci-signoff.log.
+No deployment or branch push. Investigation evaluation, action drafts, proactive
+policies, full required CI and live Slack acceptance remain unfinished.
+
+Remaining delivery gap found while reviewing this increment: claimSlackDeliveriesTx
+marks expired post_reply and update_root leases uncertain as well as roots, and
+finishSlackDelivery retains uncertain outcomes for those operations. Root history
+recovery does not reconcile those lifecycle deliveries. They need their own recovery
+before the full incident-delivery requirement can be considered complete.

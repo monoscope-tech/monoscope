@@ -1,8 +1,10 @@
 module IncidentDeliverySpec (spec) where
 
 import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
+import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens (key, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Notify qualified as Notify
@@ -19,12 +21,15 @@ import Models.Apis.Incidents qualified as I
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
+import Network.Wreq qualified as Wreq
 import Pages.Anomalies qualified as Anomalies
-import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent)
+import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
+import Pages.Bots.Slack qualified as SlackPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant qualified
+import System.Config qualified as Config
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
 import UnliftIO.Async (concurrently)
@@ -504,6 +509,65 @@ spec = around withTestResources do
       run (I.captureSlackRoot "A_TEST" receipt) `shouldReturn` True
       conflict <- receiveSlackEvent tr $ slackRootEvent "EvConflict" "T1" "C1" root.rootId "1788900000.000002" "A_TEST"
       run (I.captureSlackRoot "A_TEST" conflict) `shouldReturn` False
+
+    for_ [I.WebhookAccepted, I.DeliveryUncertain "lost_ack"] $ \accepted ->
+      it ("recovers an incident root through leased history pages after " <> show accepted) \tr -> do
+        update <- setup tr
+        setupSlackData tr testPid "T1"
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_TEST"}}}
+            run :: ATBackgroundCtx a -> IO a
+            run = runTestBgNoReset resources
+        void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+        [root] <- run $ I.claimSlackDeliveries frozenTime
+        run (I.finishSlackDelivery frozenTime root accepted) `shouldReturn` True
+        void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_roots SET history_retry_at = ? WHERE id = ?|] (frozenTime, root.rootId)
+        [abandoned] <- run $ I.claimRootSearches frozenTime
+        AE.Object fields <- maybe (fail "Expected root event") pure $ slackRootEvent "unused" "T1" "C1" root.rootId "1788900000.000001" "A_TEST" ^? key "event"
+        let message = AE.Object fields
+            page messages next = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= (next :: Text)]]
+            wrong = page [message & key "app_id" . _String .~ "A_OTHER", AE.Object $ KM.insert "thread_ts" (AE.String "1788900000.000002") fields, message & key "metadata" . key "event_payload" . key "root_id" . _String .~ "00000000-0000-0000-0000-000000000000"] "next"
+            matching = page [message] ""
+        pages <- newIORef [(Nothing, wrong), (Just "next", matching), (Just "next", matching)]
+        replaceInstallation <- newIORef True
+        let work = do
+              now <- getTestTime tr.trTestClock
+              runTestBgRecordingHTTP now resources
+                $ withHTTPResponses
+                  ( \opts endpoint -> do
+                      endpoint `shouldBe` "https://slack.com/api/conversations.history"
+                      opts ^. Wreq.param "channel" `shouldBe` ["C1"]
+                      opts ^. Wreq.param "include_all_metadata" `shouldBe` ["true"]
+                      opts ^. Wreq.param "limit" `shouldBe` ["15"]
+                      next <- atomicModifyIORef' pages $ \case
+                        [] -> ([], Nothing)
+                        item : rest -> (rest, Just item)
+                      (cursor, body) <- maybe (fail "Unexpected root history request") pure next
+                      opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
+                      when (cursor == Just "next") do
+                        replace <- atomicModifyIORef' replaceInstallation (\flag -> (False, flag))
+                        when replace $ withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET team_id = 'T_OTHER' WHERE project_id = ?|] (PGS.Only testPid)
+                      pure $ Just $ AE.encode body
+                  )
+                  SlackPage.reconcileIncidentRoots
+        (leased, _) <- work
+        leased `shouldBe` []
+        advanceMinutes tr 3
+        (searched, _) <- work
+        map fst searched `shouldBe` ["https://slack.com/api/conversations.history"]
+        run $ I.saveRootSearchCursor abandoned (Just "stale") frozenTime
+        cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_roots WHERE id = ?|] (PGS.Only root.rootId)
+        cursors `shouldBe` [PGS.Only (Just "next" :: Maybe Text)]
+        advanceMinutes tr 1
+        void work
+        run (I.claimSlackDeliveries (addUTCTime 300 frozenTime)) `shouldReturn` []
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET team_id = 'T1' WHERE project_id = ?|] (PGS.Only testPid)
+        advanceMinutes tr 1
+        void work
+        [reply] <- run $ I.claimSlackDeliveries (addUTCTime 300 frozenTime)
+        expected <- timestamp "1788900000.000001"
+        reply.operation `shouldBe` I.PostReply expected
+        readIORef pages >>= (`shouldBe` [])
 
 
 setup :: TestResources -> IO I.IncidentUpdate

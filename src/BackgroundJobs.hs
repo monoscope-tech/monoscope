@@ -4814,6 +4814,7 @@ runSlackIncidentDeliveries = do
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
+    Slack.reconcileIncidentRoots
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.

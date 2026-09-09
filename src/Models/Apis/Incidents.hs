@@ -31,6 +31,10 @@ module Models.Apis.Incidents (
   claimSlackDeliveries,
   finishSlackDelivery,
   captureSlackRoot,
+  observeSlackRoot,
+  RootSearch (..),
+  claimRootSearches,
+  saveRootSearchCursor,
   correlateSlackRoot,
 ) where
 
@@ -602,6 +606,47 @@ captureSlackRoot appId receiptId = do
       | Just timestamp <- slackTimestamp observed.timestamp ->
           observeSlackRoot observed.projectId (SlackDestination observed.teamId observed.channelId) observed.rootId timestamp
     _ -> pure False
+
+
+-- | Each history page has its own lease so a stale search cannot replace a cursor.
+data RootSearch = RootSearch
+  { rootId :: SlackRootId
+  , projectId :: Projects.ProjectId
+  , teamId :: Text
+  , channelId :: Text
+  , cursor :: Maybe Text
+  , leaseToken :: UUID.UUID
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+claimRootSearches :: DB es => UTCTime -> Eff es [RootSearch]
+claimRootSearches now =
+  Hasql.interp
+    [HI.sql|WITH candidates AS (
+      SELECT r.id FROM apis.slack_incident_roots r
+      WHERE r.message_ts IS NULL AND r.history_retry_at <= #{now}
+        AND EXISTS (SELECT 1 FROM apis.incident_episodes e
+          JOIN projects.projects p ON p.id = e.project_id
+          JOIN apis.slack s ON s.project_id = e.project_id
+          WHERE e.id = r.episode_id AND p.active AND p.deleted_at IS NULL AND s.team_id = r.team_id)
+        AND EXISTS (SELECT 1 FROM apis.slack_incident_deliveries d WHERE d.root_id = r.id
+          AND d.operation = 'post_root' AND d.attempts > 0
+          AND (d.state IN ('uncertain', 'waiting_root') OR (d.state = 'sending' AND d.lease_until < #{now})))
+      ORDER BY r.history_retry_at, r.id LIMIT 20 FOR UPDATE OF r SKIP LOCKED
+    ), claimed AS (
+      UPDATE apis.slack_incident_roots r SET history_retry_at = #{addUTCTime 120 now}, history_lease_token = gen_random_uuid()
+      FROM candidates c WHERE r.id = c.id RETURNING r.*
+    ) SELECT r.id, e.project_id, r.team_id, r.channel_id, r.history_cursor, r.history_lease_token
+      FROM claimed r JOIN apis.incident_episodes e ON e.id = r.episode_id|]
+
+
+saveRootSearchCursor :: DB es => RootSearch -> Maybe Text -> UTCTime -> Eff es ()
+saveRootSearchCursor search next retryAt =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.slack_incident_roots SET history_cursor = #{next}, history_retry_at = #{retryAt}, history_lease_token = NULL
+    WHERE id = #{search.rootId} AND message_ts IS NULL AND history_lease_token = #{search.leaseToken}|]
 
 
 observeSlackRoot :: DB es => Projects.ProjectId -> SlackDestination -> SlackRootId -> SlackTimestamp -> Eff es Bool

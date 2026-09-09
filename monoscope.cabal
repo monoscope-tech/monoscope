@@ -207,6 +207,7 @@ extra-source-files:
     static/migrations/0176_slack_reply_history_cursor.sql
     static/migrations/0177_requeue_slack_deferrals.sql
     static/migrations/0178_slack_progress_history_cursor.sql
+    static/migrations/0179_slack_root_history.sql
 
 source-repository head
   type: git
