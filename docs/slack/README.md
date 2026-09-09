@@ -15,10 +15,10 @@ after 15 minutes and works once. This follows [Slack's account-binding flow](htt
 
 A Slack identity cannot be reassigned to a different Monoscope account through
 this flow. A new link can change the same user's default project. Existing
-investigation threads retain their original project, and new incoming questions
-recheck membership and installation access. Per-tool checks during long-running
-investigations and the remaining native Agent lifecycle gates are still required
-before rollout.
+investigation threads retain their original project. Signed-event investigations
+recheck access before model calls, before and after tools, and before delivery.
+Slash-command and button authorization, plus the remaining native Agent lifecycle
+gates, are still required before rollout.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.

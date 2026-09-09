@@ -266,3 +266,31 @@ The final status reuses those three checks and an existing CLI-test attestation.
 Frontend, integration-tests, weeder, hlint, ui-tests, and e2e still need checks.
 Real TimeFusion remains unavailable in the local CI runner (`linux/amd64` on
 arm64); the native workflow tests do not replace the full integration gate.
+
+
+## Investigation access checkpoints (2026-09-09)
+
+Signed-event investigations retain the requesting Slack and Monoscope identities
+through model calls, tool execution, response rendering, and delivery. Each
+boundary reuses the live principal resolver; revocation denies further work.
+The access-denied exception is derived. Other bot callers explicitly retain their
+existing service authorization policy. Legacy Slack slash/actions authorization
+remains a deployment gate.
+
+Chat-history reads now require both project and conversation IDs. All callers,
+including the web history endpoint, supply the project. The regression seeds the
+same conversation ID in two projects and verifies isolation. A second regression
+revokes membership during both tool-calling and final model responses, verifies
+access denial, and checks that no tool database query follows revocation.
+
+Three passes of each requested Haskell skill are recorded in the review report.
+Fourmolu and `git diff --check` passed. Native checks on the final code passed:
+
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`: 22 examples, 0 failures.
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Agentic make live-test-dev`: 12 examples, 0 failures.
+
+These targeted checks do not replace full integration or live acceptance.
+`make ci-signoff` must be refreshed before pushing this increment; the previous
+commit's attestations do not cover these edits. No push or deployment occurred.
+Native Agent lifecycle, complete conversation roles, evidence tools, drafts,
+and the other remaining implementation gates are still open.

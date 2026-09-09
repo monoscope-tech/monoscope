@@ -146,3 +146,19 @@ single-use link without sending a live Slack message. The authenticated form the
 binds the identity, and the authorized replay creates an investigation conversation.
 The final database pass added an index for the incident-thread lookup performed
 on incoming messages. CI must cover that final migration as well.
+
+## Investigation access checkpoints
+
+Three passes applied all three skills to the AI loop, bot query pipeline and
+callers, history model and callers, and the workflow/agentic regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse the live Slack principal resolver; derive the access-denied exception. Require an explicit access mode at bot-query call sites. | Preserve the initiating Slack and Monoscope identities through model/tool execution; deny before and after data use and before delivery. | No client behavior added; provider-interposition tests belong in Hspec. |
+| 2 | Remove a duplicate access check immediately before the loop's first check. | Fix the existing global conversation-history lookup: the function now requires a project ID, and every caller supplies it. Verify the selected installation still belongs to the receiving workspace. | History-isolation checks require database setup and remain with the integration flow. |
+| 3 | Re-read all changed functions and their callers. No new manual instance or warning suppression. | Tests revoke access during both a tool-calling model response and a final model response. Exactly one denying DB query runs afterward; the tool query does not run. History tests use the same conversation ID in two projects. | No styling or behavior migration needed. |
+
+`ServiceAccess` retains each caller's existing authorization policy. The legacy
+Slack slash-command path still uses it and remains a deployment gate until signed
+requests and personal authorization are applied there. Signed-event investigations
+always construct `SlackAccess` from the resolved principal.

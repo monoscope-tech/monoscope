@@ -292,12 +292,13 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery useTf pid userQuery threadCtx model apiKey = do
+processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery useTf access pid userQuery threadCtx model apiKey = do
+  AI.requireAgentAccess access pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx, AI.useTimefusion = useTf}
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx, AI.useTimefusion = useTf, AI.access = access}
   result <- AI.runAgenticQuery config userQuery model apiKey
   whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
   pure result
@@ -502,31 +503,37 @@ runBotQuery
   => BotType
   -> (BotReply -> Eff es ())
   -> EnvConfig
+  -> AI.AgentAccess
   -> Projects.ProjectId
   -> Text
   -> Eff es (Maybe BotThread)
   -- ^ resolves the conversation thread; run only for agentic queries, so a
   -- report request never pays for a thread backfill
   -> Eff es ()
-runBotQuery target send envCfg pid userQuery resolveThread = case detectReportIntent userQuery of
-  ReportIntent reportType ->
-    processReportQuery pid reportType envCfg
-      >>= send
-      . ReplyText
-      . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
-  GeneralQueryIntent -> do
-    threadM <- resolveThread
-    result <- processAIQuery envCfg.enableTimefusionReads pid userQuery ((.context) <$> threadM) envCfg.openaiModel envCfg.openaiApiKey
-    whenJust threadM \t -> do
-      Issues.insertChatMessage pid t.convId Issues.ChatUser userQuery Nothing Nothing
-      whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage pid t.convId Issues.ChatAssistant q Nothing Nothing
-    case result of
-      Left _ -> send $ ReplyText $ formatBotError target ServiceError
-      Right resp -> dispatchAIResponse resp
+runBotQuery target deliver envCfg access pid userQuery resolveThread =
+  AI.requireAgentAccess access pid >> case detectReportIntent userQuery of
+    ReportIntent reportType ->
+      processReportQuery pid reportType envCfg
+        >>= send
+        . ReplyText
+        . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
+    GeneralQueryIntent -> do
+      threadM <- resolveThread
+      result <- processAIQuery envCfg.enableTimefusionReads access pid userQuery ((.context) <$> threadM) envCfg.openaiModel envCfg.openaiApiKey
+      AI.requireAgentAccess access pid
+      whenJust threadM \t -> do
+        Issues.insertChatMessage pid t.convId Issues.ChatUser userQuery Nothing Nothing
+        whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage pid t.convId Issues.ChatAssistant q Nothing Nothing
+      case result of
+        Left _ -> send $ ReplyText $ formatBotError target ServiceError
+        Right resp -> dispatchAIResponse resp
   where
+    send reply = AI.requireAgentAccess access pid >> deliver reply
+
     -- Renders a chart when the model picked a visualization, a result table when
     -- it produced a bare query, then any accompanying explanation.
     dispatchAIResponse resp = do
+      AI.requireAgentAccess access pid
       now <- Time.currentTime
       let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
       case resp.query of
@@ -575,11 +582,11 @@ withBotThread
   -> Eff es BotThread
 withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta
-  existingHistory <- Issues.selectChatHistory convId
+  existingHistory <- Issues.selectChatHistory pid convId
   when (null existingHistory) do
     result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (Issues.seedChatHistory pid convId)
     whenLeft_ result \err -> Log.logAttention "Bot thread backfill failed" $ AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId, "error" AE..= show @Text err]
-  BotThread convId . formatHistoryAsContext (show target) . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory convId
+  BotThread convId . formatHistoryAsContext (show target) . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory pid convId
   where
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]
 

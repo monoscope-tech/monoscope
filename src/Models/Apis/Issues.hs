@@ -993,12 +993,12 @@ insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
 
 
 -- | Select chat history for a conversation (oldest first)
-selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
-selectChatHistory convId =
+selectChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es [AIChatMessage]
+selectChatHistory pid convId =
   Hasql.interp
     [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
             FROM apis.ai_chat_messages
-            WHERE conversation_id = #{convId}
+            WHERE project_id = #{pid} AND conversation_id = #{convId}
             ORDER BY created_at ASC
             LIMIT 200 |]
 

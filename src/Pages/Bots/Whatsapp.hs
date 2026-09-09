@@ -15,6 +15,7 @@ import Models.Projects.Dashboards (Dashboard (..))
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq
 import Pages.Bots.Utils (BotReply (..), BotType (..), runBotQuery, withDashboardTemplate)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Relude
 import System.Config (AuthContext (backgroundScope))
@@ -63,7 +64,7 @@ whatsappIncomingPostH val = do
       sendWhatsappResponse (getWhatsappList "dashboard" "Please select a dashboard" dashboards skip) val.from envCfg.whatsappDashboardList Nothing
     WidgetsLoad dashboardId skip -> handleDashboard p dashboardId skip
     WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId p
-    Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ runBotQuery WhatsApp send envCfg p.id val.body (pure Nothing)
+    Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ runBotQuery WhatsApp send envCfg AI.ServiceAccess p.id val.body (pure Nothing)
   pure $ AE.object []
 
 

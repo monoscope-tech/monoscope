@@ -52,6 +52,7 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import PyF
@@ -249,7 +250,7 @@ slackInteractionsH interaction = do
       forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
         $ maybe
           (sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError))
-          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env sd.projectId interaction.text (pure Nothing))
+          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env AI.ServiceAccess sd.projectId interaction.text (pure Nothing))
           slackDataM
       traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
@@ -800,10 +801,11 @@ processSlackEvent receiptId = do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
               void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
-                processThreadedEvent envCfg slackData event workspaceId threadTs
+                processThreadedEvent principal envCfg slackData event workspaceId threadTs
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
-    processThreadedEvent envCfg slackData event workspaceId threadTs = do
+    processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
+      unless (slackData.teamId == workspaceId) $ throwError err403
       let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           resolveThread =
             Just
@@ -814,7 +816,7 @@ processSlackEvent receiptId = do
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)
-      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg slackData.projectId event.text resolveThread
+      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId event.text resolveThread
 
 
 -- | Slack navigation context is untrusted input, not project authorization.

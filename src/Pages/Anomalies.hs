@@ -1552,7 +1552,7 @@ aiChatHistoryGetH pid issueId = do
     Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
     Just issue -> do
       systemPrompt <- buildSystemPromptForIssue pid issue now
-      messages <- Issues.selectChatHistory (UUIDId issueId.unUUIDId :: UUIDId "conversation")
+      messages <- Issues.selectChatHistory pid (UUIDId issueId.unUUIDId :: UUIDId "conversation")
       addRespHeaders $ aiChatHistoryWithSystemPrompt_ pid systemPrompt messages
 
 

@@ -22,6 +22,9 @@ module Pkg.AI (
 
   -- * Agentic Configuration
   AgenticConfig (..),
+  AgentAccess (..),
+  AgentAccessDenied (..),
+  requireAgentAccess,
   ToolLimits (..),
 
   -- * Natural-language search
@@ -66,6 +69,7 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -82,6 +86,7 @@ import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue
 import Relude
 import System.Tracing (Tracing)
 import System.Types (DB)
+import UnliftIO.Exception (throwIO)
 import Utils (unwrapJsonPrimValue)
 
 
@@ -387,9 +392,28 @@ defaultLimits =
     }
 
 
+data AgentAccess = ServiceAccess | SlackAccess Text Text Projects.UserId
+  deriving stock (Generic, Show)
+
+
+data AgentAccessDenied = AgentAccessDenied
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+-- | ServiceAccess leaves authorization to its caller. Slack investigations
+-- retain the requesting identity and revalidate it at each data-use boundary.
+requireAgentAccess :: DB es => AgentAccess -> Projects.ProjectId -> Eff es ()
+requireAgentAccess ServiceAccess _ = pure ()
+requireAgentAccess (SlackAccess teamId slackUserId userId) projectId = do
+  principal <- Integrations.resolveSlackPrincipal teamId slackUserId (Just projectId)
+  unless (maybe False (\p -> p.userId == userId && p.projectId == projectId) principal) $ throwIO AgentAccessDenied
+
+
 data AgenticConfig = AgenticConfig
   { maxIterations :: Int
   , projectId :: Projects.ProjectId
+  , access :: AgentAccess
   , timeRange :: (Maybe UTCTime, Maybe UTCTime)
   , facetContext :: Maybe FacetSummary
   , limits :: ToolLimits
@@ -408,6 +432,7 @@ defaultAgenticConfig pid =
   AgenticConfig
     { maxIterations = 5
     , projectId = pid
+    , access = ServiceAccess
     , timeRange = (Nothing, Nothing)
     , facetContext = Nothing
     , limits = defaultLimits
@@ -659,11 +684,12 @@ runAgenticChatWithHistory
   -> Text
   -> Eff es (Either Text AgenticChatResult)
 runAgenticChatWithHistory config userQuery model apiKey = do
+  requireAgentAccess config.access config.projectId
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   -- history is read before the new user message is persisted, so it isn't duplicated
   historyMsgs <-
     config.conversationId & maybe (pure []) \convId ->
-      map dbMessageToLLMMessage <$> (Issues.selectChatHistory convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing)
+      map dbMessageToLLMMessage <$> (Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing)
   runAgenticLoopRaw config apiKey (systemMsg :| (historyMsgs <> [userMsg])) params 0 []
 
 
@@ -671,9 +697,11 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
+      requireAgentAccess config.access config.projectId
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
       ELLM.callAgenticChat chatHistory params{OpenAIV1.tools = Nothing} apiKey >>= either handleError (finalResponse "AI final response")
   | otherwise = do
+      requireAgentAccess config.access config.projectId
       let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
       ELLM.callAgenticChat chatHistory params apiKey >>= either handleError \responseMsg ->
@@ -681,7 +709,8 @@ runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   where
     handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
 
-    finalResponse label responseMsg =
+    finalResponse label responseMsg = do
+      requireAgentAccess config.access config.projectId
       Log.logTrace label (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
         $> Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
 
@@ -723,6 +752,7 @@ addMessagesToMemory maxTokens history newMsgs = do
 
 executeToolCall :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
+  requireAgentAccess config.access config.projectId
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
       noRaw t = ToolResult t Nothing
@@ -737,6 +767,7 @@ executeToolCall config tc = do
     "run_query" -> executeRunQuery config args
     "run_sql_query" -> noRaw <$> executeSqlQuery config args
     _ -> pure $ noRaw $ "Unknown tool: " <> funcName
+  requireAgentAccess config.access config.projectId
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length result.formatted, "resultPreview" AE..= T.take 200 result.formatted])
   pure result
 

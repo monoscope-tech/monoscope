@@ -9,13 +9,17 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.LLM qualified as ELLM
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
+import Langchain.LLM.Core qualified as Chat
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
@@ -26,6 +30,7 @@ import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH
 import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
+import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -73,7 +78,30 @@ spec = around withTestResources do
         [PGS.Only conversations] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
         (conversations :: Int64) `shouldBe` 1
         toBaseServantResponse tr (Slack.slackThreadProject "T_IDENTITY" "C_IDENTITY" "1735689601.000001") >>= (`shouldBe` Just testPid)
-        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE user_id = ?|] (PGS.Only userId)
+        let access = AI.SlackAccess "T_IDENTITY" "U0123ABCDEF" userId
+            config = (AI.defaultAgenticConfig testPid){AI.access = access}
+            setActive active = withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = ? WHERE user_id = ?|] (active, userId)
+        for_ ([Nothing, Just [Chat.ToolCall "tool-1" "function" (Chat.ToolFunction "get_services" mempty)]] :: [Maybe [Chat.ToolCall]]) \toolCalls -> do
+          setActive True
+          revoked <- newIORef False
+          queriesAfterRevocation <- newIORef (0 :: Int)
+          let provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat{} -> do
+                  liftIO $ setActive False
+                  writeIORef revoked True
+                  pure $ Right $ Chat.Message Chat.Assistant "A result that must not be released" Chat.defaultMessageData{Chat.toolCalls = toolCalls}
+                ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+              database = interpose @Hasql.Hasql \_ effect -> do
+                whenM (readIORef revoked) $ modifyIORef' queriesAfterRevocation (+ 1)
+                case effect of
+                  Hasql.UseStatement params statement -> send $ Hasql.UseStatement params statement
+                  Hasql.UseSession session -> send $ Hasql.UseSession session
+                  Hasql.UseLabeledSession label attributes session -> send $ Hasql.UseLabeledSession label attributes session
+          runTestBg frozenTime tr (database $ provider $ AI.runAgenticQuery config "revocation check" "model" "key")
+            `shouldThrow` (\AI.AgentAccessDenied -> True)
+          -- Only the denying access query runs after revocation, never the requested tool's query.
+          readIORef queriesAfterRevocation >>= (`shouldBe` 1)
         resolve >>= (`shouldSatisfy` isNothing)
 
       it "rejects cross-workspace linking and keeps a thread on its original project after selection changes" \tr -> do
@@ -305,7 +333,7 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
-      it "retries failed backfills and seeds successful history only once" \tr -> do
+      it "seeds history once, retries failures, and isolates projects" \tr -> do
         attempts <- newIORef (0 :: Int)
         let convId = Issues.slackThreadToConversationId "C_RETRY_BACKFILL" "1735689600.000001"
             backfill = liftIO (modifyIORef' attempts (+ 1)) $> Nothing
@@ -315,7 +343,11 @@ spec = around withTestResources do
         let history = [(Issues.ChatUser, "What changed?"), (Issues.ChatAssistant, "The error rate increased.")]
         let seed = toBaseServantResponse tr $ Issues.seedChatHistory testPid convId history
         concurrently_ seed seed
-        saved <- toBaseServantResponse tr $ Issues.selectChatHistory convId
+        otherPid <- createTestProject tr "Private history"
+        toBaseServantResponse tr do
+          void $ Issues.getOrCreateConversation otherPid convId Issues.CTSlackThread (AE.object [])
+          Issues.insertChatMessage otherPid convId Issues.ChatUser "Another project's private question" Nothing Nothing
+        saved <- toBaseServantResponse tr $ Issues.selectChatHistory testPid convId
         map (\message -> (message.role, message.content)) saved `shouldBe` history
 
       it "Slack: deduplicates unrelated threaded events without starting a conversation" \tr -> do
