@@ -312,16 +312,17 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
       Monitors.MSNormal
         | monitor.currentStatus == Monitors.MSWarning -> fromMaybe monitor.alertThreshold (monitor.warningRecoveryThreshold <|> monitor.warningThreshold)
         | otherwise -> fromMaybe monitor.alertThreshold monitor.alertRecoveryThreshold
+    reading number = show number <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit
     title = slackEscape $ T.take 160 monitor.alertConfig.title
     at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
     started = maybe observedAt (.startedAt) episode
-    detail = "Value: " <> show value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> show threshold <> " · Observed " <> at observedAt
+    detail = "Value: " <> reading value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> reading threshold <> " · Observed " <> at observedAt
     seconds = max 0 $ floor (diffUTCTime observedAt started) :: Int
     recovery = ["Recovery condition passed · Duration: " <> (if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min") | status == Monitors.MSNormal]
     text = label <> " · " <> title <> "\n" <> detail <> foldMap ("\n" <>) recovery
     current = slackSection text
     snapshot =
-      [ tagged "incident_onset" $ slackContext ["Started " <> at started <> " · Initial value: " <> show value]
+      [ tagged "incident_onset" $ slackContext ["Started " <> at started <> " · Initial value: " <> reading value]
       , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
       ]
     actions = tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") issueUrl, slackButton "Open monitor" Nothing monitorUrl]
@@ -342,7 +343,7 @@ monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl 
       Monitors.NoMeasurements -> "No measurements in the evaluation window."
       Monitors.NonFiniteMeasurements -> "The evaluation returned a non-finite measurement."
       Monitors.EvaluationFailed -> "The evaluation failed."
-    previous = maybe "No retained reading is available." (\(time, value) -> "Last verified value: " <> show value <> " · Observed " <> at time) reading
+    previous = maybe "No retained reading is available." (\(time, value) -> "Last verified value: " <> show value <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit <> " · Observed " <> at time) reading
     text = "DATA UNAVAILABLE · " <> slackEscape (T.take 160 monitor.alertConfig.title) <> "\n" <> explanation <> " Recovery is unconfirmed.\n" <> previous <> "\nChecked " <> at now
 
 

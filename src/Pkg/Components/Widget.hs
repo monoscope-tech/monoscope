@@ -1119,7 +1119,7 @@ unitValueExprJS :: Maybe Text -> Text
 unitValueExprJS unitM
   | Just u <- durationUnit = "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
   | isBytes = "formatBytes(value)"
-  | otherwise = "formatNumber(value)"
+  | otherwise = "formatNumber(value)" <> foldMap (\u -> " + " <> encodeText (" " <> u)) unitM
   where
     durationUnit = guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM
     -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
@@ -1264,7 +1264,7 @@ addMarkLinesToFirstSeries widget series
       AE.object
         [ "yAxis" AE..= threshold
         , "lineStyle" AE..= AE.object ["color" AE..= (color :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-        , "label" AE..= AE.object ["formatter" AE..= ((label <> ": {c}") :: Text), "position" AE..= ("insideEndTop" :: Text)]
+        , "label" AE..= AE.object ["formatter" AE..= (("function(params) { var value = params.value; return " <> encodeText (label <> ": " :: Text) <> " + " <> unitValueExprJS widget.unit <> "; }") :: Text), "position" AE..= ("insideEndTop" :: Text)]
         ]
 
     markLineData :: [AE.Value]

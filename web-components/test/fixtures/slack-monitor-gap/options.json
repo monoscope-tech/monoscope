@@ -82,7 +82,7 @@
         "data": [
           {
             "label": {
-              "formatter": "Alert: {c}",
+              "formatter": "function(params) { var value = params.value; return \"Alert: \" + formatDuration(convertToNanoseconds(value, 's')); }",
               "position": "insideEndTop"
             },
             "lineStyle": {
@@ -150,7 +150,7 @@
   },
   "yAxis": {
     "axisLabel": {
-      "formatter": "function(value, index) { return formatNumber(value); }",
+      "formatter": "function(value, index) { return formatDuration(convertToNanoseconds(value, 's')); }",
       "hideOverlap": true,
       "inside": false,
       "margin": 8,

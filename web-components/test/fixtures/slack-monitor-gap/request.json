@@ -107,7 +107,7 @@
             "data": [
               {
                 "label": {
-                  "formatter": "Alert: {c}",
+                  "formatter": "function(params) { var value = params.value; return \"Alert: \" + formatDuration(convertToNanoseconds(value, 's')); }",
                   "position": "insideEndTop"
                 },
                 "lineStyle": {
@@ -134,7 +134,7 @@
         },
         "show": true,
         "trigger": "axis",
-        "valueFormatter": "function(value) { return formatNumber(value); }"
+        "valueFormatter": "function(value) { return formatDuration(convertToNanoseconds(value, 's')); }"
       },
       "xAxis": {
         "axisLabel": {
@@ -165,7 +165,7 @@
       },
       "yAxis": {
         "axisLabel": {
-          "formatter": "function(value, index) { return formatNumber(value); }",
+          "formatter": "function(value, index) { return formatDuration(convertToNanoseconds(value, 's')); }",
           "hideOverlap": true,
           "inside": false,
           "margin": 8,
@@ -196,7 +196,7 @@
     "theme": "default",
     "width": 960
   },
-  "request_url": "http://localhost/p/00000000-0000-0000-0000-000000000000/widget.png?widgetZ=H4sIAAAAAAAAE02PbQqDMAxArzLyu4y6iV932AlEpGicZbEtbRwM8e6r043l58t7kCzAL4dQAesJA3qNoSVtEASMuseW8I6mh4r9jAJ6xSogQ7VAsLPvYljXe8pqcjG6WaPZ-tNT0YzQiDrJ0yLPi1JuI4r0D2UfZGaiHywvu5dI2TQCBm8nqA7_uq-A7Rcd9ipAEXpuefQYRkvx3kyeo-rMvXXeDpq2FwOp7gHrG2VswzzzAAAA&from=2025-06-01T11%3A45%3A00Z&to=2025-06-01T12%3A00%3A00Z&sig=0f9395cc9a416319455ab2e7606e841571e32e43cc8a7c1aeb58b9f1ecf6b770",
+  "request_url": "http://localhost/p/00000000-0000-0000-0000-000000000000/widget.png?widgetZ=H4sIAAAAAAAAE02P3QqDMAxGX2XkugzdxL932BOISNE4y2Jb2nQwxHdfnW4sV-Hk5CNZgF8WoQZWM3p0Cn1HSiMICFpxHPjYTmrAjvCOeoCaXUABg2TpMQoLeBNcHzOaZk9hOdu4dDMxwLjTU1JAaEWTFllZFGWVbCXK7A_lH6QD0Q9Wl91Lk6RtBYzOzFAf_nUfAZsvOuxVgCR03PHk0E-G4r15co6q1ffOOjMq2r71JPsHrG8hR81c_gAAAA==&from=2025-06-01T11%3A45%3A00Z&to=2025-06-01T12%3A00%3A00Z&sig=6cb05eeb9239175419d01619f584e93f0d97cf4f75dcd8e4ff290531747b40f1",
   "widget": {
     "alert_threshold": 60,
     "dataset": {
@@ -223,6 +223,7 @@
     },
     "hide_legend": true,
     "png_profile": "slack",
-    "type": "timeseries_line"
+    "type": "timeseries_line",
+    "unit": "s"
   }
 }

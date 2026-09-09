@@ -1,7 +1,7 @@
 # Slack monitor chart evidence
 
 This controlled integration fixture comes from the scalar-monitor notification test
-in `test/integration/MonitoringSpec.hs`. It records 84 at 11:55 UTC and 100 at
+in `test/integration/MonitoringSpec.hs`. Its configured unit is seconds. It records 84 at 11:55 UTC and 100 at
 12:00 UTC on June 1, 2025. A null at 11:56 breaks the line across missing checks. The export labels that gap
 without claiming a cause for the missing measurements.
 The requested window remains 11:45–12:00 UTC. No readings are invented before 11:55.
@@ -39,6 +39,7 @@ by a data band, despite explicit min/max. The Slack profile disables that expans
 and reserves margins for boundary bars.
 
 Still outstanding: production screenshot captures, count coverage provenance,
-measurement units, and desktop/mobile Slack checks. Signed failed/empty request
+desktop/mobile Slack checks. Existing unitless monitors need an explicit unit;
+the renderer does not infer one from a query or title. Signed failed/empty request
 images are recorded separately in docs/slack/chart-fixtures/query-failure/.
 This fixture does not establish those acceptance criteria.

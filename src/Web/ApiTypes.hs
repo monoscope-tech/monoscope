@@ -88,7 +88,8 @@ deriving via JsonValueSchema Widget.Widget instance ToSchema Widget.Widget
 -- | Input for creating or replacing (PUT) a monitor. Maps onto `QueryMonitor`
 -- fields without surfacing db-internal lifecycle columns.
 data MonitorInput = MonitorInput
-  { title :: Text
+  { unit :: Maybe Text
+  , title :: Text
   , query :: Text
   , severity :: Maybe Text
   , subject :: Maybe Text
@@ -118,7 +119,8 @@ data MonitorInput = MonitorInput
 
 -- | Patch: all fields optional; only provided fields are updated.
 data MonitorPatch = MonitorPatch
-  { title :: Maybe Text
+  { unit :: Maybe Text
+  , title :: Maybe Text
   , query :: Maybe Text
   , severity :: Maybe Text
   , subject :: Maybe Text

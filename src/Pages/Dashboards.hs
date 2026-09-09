@@ -1397,7 +1397,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
       -- Monitor Schedule section (shared component)
       Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded")
       -- Thresholds section (shared component)
-      Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
+      Alerts.thresholdsSection_ widget.unit (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
       -- Widget-specific: Show threshold lines option
       let currentLines = fromMaybe "always" widget.showThresholdLines
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"]
@@ -1421,7 +1421,8 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
 --
 
 data WidgetAlertForm = WidgetAlertForm
-  { widgetId :: Text
+  { unit :: Maybe Text
+  , widgetId :: Text
   , query :: Text
   , vizType :: Maybe Text
   , alertEnabled :: Maybe Text -- "on" when checked
@@ -1461,7 +1462,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   whenJust dashboardIdM \dashId -> do
     let dashboardId = UUIDId dashId
     (_, dash) <- getDashAndVM pid dashboardId Nothing
-    let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines} else w
+    let updateWidget w = if w.id == Just form.widgetId then w{Widget.showThresholdLines = form.showThresholdLines, Widget.unit = mfilter (not . T.null) $ T.strip <$> form.unit} else w
         dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
     void $ Dashboards.updateSchema dashboardId dash' Nothing
 
@@ -1475,7 +1476,8 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
       -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
       let alertForm =
             Alerts.AlertUpsertForm
-              { alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+              { unit = form.unit
+              , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
               , alertThreshold = form.alertThreshold
               , warningThreshold = form.warningThreshold
               , recipientEmails = []

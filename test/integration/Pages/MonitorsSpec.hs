@@ -27,7 +27,8 @@ alertId = UUID.nil
 alertForm :: Alerts.AlertUpsertForm
 alertForm =
   Alerts.AlertUpsertForm
-    { title = "Test Alert"
+    { unit = Nothing
+    , title = "Test Alert"
     , message = "This is a test alert"
     , severity = "warning"
     , subject = "Test Alert"

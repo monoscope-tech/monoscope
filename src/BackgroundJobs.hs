@@ -1627,7 +1627,7 @@ monitorTrendChartUrl ctx pid monitor from to currentValue = do
             (Nothing : map (Just . fst) readings)
             readings
       dataset = def{Widget.source = AE.toJSON (AE.toJSON (["timestamp", "Monitor value"] :: [Text]) : withGaps), Widget.from = Just $ millis from, Widget.to = Just $ millis to}
-      widget = def{Widget.wType = Widget.WTTimeseriesLine, Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
+      widget = def{Widget.unit = monitor.alertConfig.unit, Widget.wType = Widget.WTTimeseriesLine, Widget.dataset = Just dataset, Widget.hideLegend = Just True, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
   trendChartUrl ctx pid widget (formatUTC from) (formatUTC to)
 
 

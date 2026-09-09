@@ -78,10 +78,6 @@ data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "MS" MonitorStatus
 
 
-instance HI.DecodeRow MonitorStatus where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
-
-
 -- | The first completed evaluation at a timestamp is immutable. Retries must
 -- not rewrite the measurement behind an already delivered alert snapshot.
 recordEvaluation :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Eff es ()
@@ -115,7 +111,8 @@ pruneEvaluations before = Hasql.interpExecute_ [HI.sql|DELETE FROM monitors.eval
 
 
 data MonitorAlertConfig = MonitorAlertConfig
-  { title :: Text
+  { unit :: Maybe Text
+  , title :: Text
   , severity :: Text
   , subject :: Text
   , message :: Text

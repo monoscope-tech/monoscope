@@ -1080,3 +1080,35 @@ or instance changed in this increment. Full CI remains pending for these changes
 and the preceding query-failure increment. Count-coverage provenance, units, full
 production evidence, live Slack acceptance, and later releases remain incomplete.
 No deployment or deployment-branch push occurred.
+
+
+## Monitor units across configuration and Slack
+
+Monitor alert configuration now carries an optional unit using derived codecs.
+The editor, widget alert form, API create/patch/export, and saved dashboard widget
+preserve it. Threshold controls no longer assume all measurements are events.
+Units travel into signed chart snapshots and appear in Slack values, thresholds,
+onset readings, and data-unavailable readings. Axis and threshold formatters share
+duration/byte formatting; custom unit literals are JSON-escaped. Unit metadata does
+not convert stored measurements. Existing configurations without units still decode.
+
+The native monitor regression first reproduced a missing unit in the signed widget
+(expected Just s, got Nothing). After propagation, `TEST_MATCH=Monitor make
+live-test-dev` passed 45 examples with zero failures, including API round-trips,
+patch retention/export, and widget-created monitors. Environment:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+SLACK_CHART_FIXTURE_PATH=/tmp/monoscope-slack-agent/monitor-unit-fixture.json`.
+Log: `/tmp/monoscope-slack-agent/monitor-unit-tests.log`. Updated actual notification
+fixtures and inspected light/dark PNGs are under
+`web-components/test/fixtures/slack-monitor-gap/`. The focused renderer suite passed
+19 tests (`monitor-unit-renderer-tests.log` in the same log directory).
+
+All three requested skills ran three times. Fourmolu and scoped whitespace checks
+passed. HLint remains blocked by MultilineStrings; Weeder exited 228 with repository
+findings in `monitor-unit-weeder.log`. The unused handwritten MonitorStatus row
+decoder was removed after the compiler rejected deriving-via through Hasql's nominal
+Row type; no caller needs that instance. No new handwritten instance or migration.
+Full CI signoff is pending for units and the preceding failure/label changes.
+The next implementation slice is evidence-led incident conversation; live Slack
+acceptance, code/deployment context, drafts, and proactive policy remain incomplete.
+No deployment or deployment-branch push occurred.

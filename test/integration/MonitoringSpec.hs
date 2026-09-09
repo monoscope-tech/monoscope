@@ -32,6 +32,7 @@ import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
 import Pages.Projects qualified as ProjectPages
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
@@ -51,7 +52,8 @@ spec = sequential $ aroundAll withTestResources do
       let queryMonitor =
             convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
-                { alertId = Nothing
+                { unit = Nothing
+                , alertId = Nothing
                 , warningThreshold = Just "3"
                 , alertThreshold = 4
                 , recipientEmails = ["test@monoscope.tech"]
@@ -129,7 +131,8 @@ spec = sequential $ aroundAll withTestResources do
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let alertForm =
             Dashboards.WidgetAlertForm
-              { widgetId
+              { unit = Just "events"
+              , widgetId
               , query = "name == \"checkout\""
               , vizType = Just "timeseries"
               , alertEnabled = Just "on"
@@ -171,6 +174,7 @@ spec = sequential $ aroundAll withTestResources do
       advanceMinutes tr 1
       fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
+      (firedMonitor >>= (.alertConfig.unit)) `shouldBe` Just "events"
       ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
       deliverySummary fired
         `shouldBe` [ "discord:C_MONITOR"
@@ -245,7 +249,8 @@ spec = sequential $ aroundAll withTestResources do
       let queryMonitor =
             convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
               $ AlertUpsertForm
-                { alertId = Just "11111111-1111-1111-1111-111111111111"
+                { unit = Nothing
+                , alertId = Just "11111111-1111-1111-1111-111111111111"
                 , warningThreshold = Just "80"
                 , alertThreshold = 100
                 , recipientEmails = []
@@ -337,6 +342,8 @@ spec = sequential $ aroundAll withTestResources do
           millis = floor . (* 1000) . utcTimeToPOSIXSeconds :: UTCTime -> Int
           row at value = AE.toJSON ([AE.toJSON (millis at), AE.toJSON value] :: [AE.Value])
       insertRenotifyMonitor tr mid "SELECT 84::float8" 60
+      original <- fetchMonitor tr mid
+      void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert original{Monitors.alertConfig = original.alertConfig{Monitors.unit = Just "s"}}
       setMonitorRenotifyConfig tr mid (Just 1) Nothing 0
       evalMonitorValueAt earlier tr mid 84
       notifications <- evalMonitorValueWithNotifs t0 tr mid 100
@@ -346,6 +353,13 @@ spec = sequential $ aroundAll withTestResources do
       compressed <- either (fail . toString) pure $ B64URL.decodeBase64Untyped $ encodeUtf8 $ T.takeWhile (/= '&') suffix
       widget <- either fail pure $ AE.eitherDecode @Widget.Widget $ GZip.decompress $ fromStrict compressed
       widget.query `shouldBe` Nothing
+      widget.unit `shouldBe` Just "s"
+      configured <- fetchMonitor tr mid
+      let (root, _) = Mail.monitorIncidentMessages configured 100 Monitors.MSAlerting t0 Nothing "https://example.com/incident" "https://example.com/monitor" Nothing
+          unavailable = Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor"
+      decodeUtf8 @Text (toStrict $ AE.encode root) `shouldSatisfy` T.isInfixOf "100.0 s"
+      decodeUtf8 @Text (toStrict $ AE.encode root) `shouldSatisfy` T.isInfixOf "60.0 s"
+      decodeUtf8 @Text (toStrict $ AE.encode unavailable) `shouldSatisfy` T.isInfixOf "84.0 s"
       widget.pngProfile `shouldBe` Just Widget.PngSlack
       Widget.pngExportSize widget.pngProfile `shouldBe` (960, 320)
       -- Optional artifact capture uses a public fixture key, never installation secrets.
