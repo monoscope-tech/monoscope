@@ -2134,6 +2134,15 @@ them with no sandbox. Every earlier green signoff in this log was run from the m
 repository. Signing off this work therefore requires its commits to be on master
 first, or the runner to be given the parent gitdir.
 
+Doctests were run directly instead, since ghcid cannot see them and worktree CI
+cannot run at all: 1555 examples, 1555 tried, zero errors and zero failures.
+Command: make test-doctests. Evidence:
+/tmp/monoscope-slack-agent/slack-runbooks-doctests.log. The count rose from the
+1554 of the preceding increment, which is the new validRunbookPath acceptance and
+rejection example being discovered and executed; that earlier run also tried only
+1261 examples before its interpreter was killed. Unit tests and every remaining
+check are unrun on this tree.
+
 No deployment or branch push occurred. The branch is 23 commits ahead of master and
 has never been pushed. Investigation quality evaluation, tested action drafts,
 proactive policies and live Slack acceptance remain unfinished.
