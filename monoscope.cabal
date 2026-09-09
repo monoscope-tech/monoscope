@@ -203,6 +203,7 @@ extra-source-files:
     static/migrations/0172_slack_progress_publication.sql
     static/migrations/0173_slack_api_cooldowns.sql
     static/migrations/0174_slack_reply_batches.sql
+    static/migrations/0175_slack_reply_publications.sql
 
 source-repository head
   type: git

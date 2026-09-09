@@ -130,6 +130,20 @@
             "publication_id"
           ]
         }
+      },
+      {
+        "event_type": "monoscope_investigation_reply",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "publication_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "publication_id"
+          ]
+        }
       }
     ]
   }

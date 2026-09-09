@@ -1677,3 +1677,52 @@ acknowledgement or interruption before saving the position still needs a durable
 publication reservation and observation/history reconciliation. Those remain part
 of the full answer-outbox requirement, alongside live Slack acceptance and the
 remaining investigation, action-draft and proactive-policy releases.
+
+
+### Reserve reply publications and reconcile lost acknowledgements
+
+Migration 0175 adds one publication reservation per scoped reply-batch part. A
+reservation is committed before chat.postMessage and its UUID is included as
+monoscope_investigation_reply/publication_id metadata. Existing unacknowledged
+reservations prevent reposting. Valid Slack timestamps confirm a publication and
+advance the batch position in one SQL operation; repeated matching evidence is
+idempotent and conflicting timestamps cannot move the position.
+
+Known rejected envelopes and persisted HTTP rate limits release an unacknowledged
+reservation. Ambiguous replies and transport exceptions retain it. The typed
+SlackReplyPending outcome schedules a database-clock retry sixty seconds ahead
+without consuming job failure retries. Diagnostics identify the publication
+without logging request credentials. Each later send retains current-access checks.
+
+Signed stored message observations confirm only the configured receiving/author
+app, workspace, channel, thread, installation and publication ID. Observations
+advance delivery state without posting; the deferred original receipt resumes the
+remaining batch. The manifest registers the new metadata schema. No new Slack
+scope or live installation change was made.
+
+Native command: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev`. The own watcher was restarted after the
+migration was registered. Final result: 44 examples, zero failures, 36.3017 seconds,
+209 modules. Evidence:
+/tmp/monoscope-slack-agent/slack-reply-publication-workflows-complete.log.
+Two lost-ack cases cover missing timestamps and a transport exception after the
+recorded submission. They verify actual outgoing publication metadata, no second
+post/model call, rejection of five mismatched observation scopes, recovery from a
+matching signed observation, conflicting timestamp rejection and completed replay.
+Existing multipart, definite rejection, rate-limit, steering and stop cases pass.
+
+Three passes of each requested skill are recorded. Fourmolu, manifest JSON and
+whitespace checks pass. HLint exits 1 on unsupported MultilineStrings; Weeder exits
+228 with repository findings. Logs: slack-reply-publication-hlint.log and
+slack-reply-publication-weeder.log in /tmp/monoscope-slack-agent/.
+
+Previous commit 68e336d0d passed `make ci-signoff CHECKS="build doctests unit-tests"`,
+including 1,554 doctest examples and 308 unit examples. Passing results were
+attested; integration-tests, weeder, hlint and e2e remain outstanding.
+Log: /tmp/monoscope-slack-agent/slack-reply-batch-ci-signoff.log.
+CI for this publication increment is pending. No deployment or branch push.
+
+Absent observations remain unresolved; elapsed time is not proof a message was
+rejected. History-based reconciliation and live Slack metadata delivery still need
+implementation/acceptance. This does not claim complete delivery liveness or
+exactly-once Slack delivery. The rest of the five-release objective remains active.

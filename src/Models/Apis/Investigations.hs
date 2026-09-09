@@ -16,7 +16,10 @@ module Models.Apis.Investigations (
   ReplyBatch (..),
   loadReplyBatch,
   saveReplyBatch,
-  confirmReplyPart,
+  claimReplyPart,
+  confirmReplyPublication,
+  rejectReplyPublication,
+  captureReplyPublication,
   Event (..),
   Followup (..),
   pendingFollowups,
@@ -292,20 +295,65 @@ saveReplyBatch turn replies = do
   maybe (throwIO $ ErrorCall "Saving Slack reply batch returned no row") (pure . (\(HI.OneColumn (Aeson batch)) -> batch)) saved
 
 
-confirmReplyPart :: DB es => Turn -> Int -> Eff es ()
-confirmReplyPart turn part = do
+-- | Reserve before HTTP. An existing unacknowledged reservation must not repost.
+claimReplyPart :: DB es => Turn -> Text -> Text -> Text -> Int -> Eff es (Maybe (UUIDId "slack_reply"))
+claimReplyPart turn team channel thread part =
+  fmap HI.getOneColumn
+    <$> Hasql.interpOne
+      [HI.sql|INSERT INTO apis.slack_reply_publications
+      (project_id, conversation_id, user_id, message_ts, part, team_id, channel_id, thread_ts)
+    SELECT project_id, conversation_id, user_id, message_ts, #{part}, #{team}, #{channel}, #{thread}
+    FROM apis.slack_reply_batches WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
+      AND delivered_count = #{part} AND delivered_count < jsonb_array_length(replies)
+    ON CONFLICT (project_id, conversation_id, user_id, message_ts, part) DO NOTHING
+    RETURNING publication_id|]
+
+
+-- | Acknowledgement and batch advancement are atomic. Repeated matching evidence
+-- is harmless; a conflicting timestamp cannot change the delivery position.
+confirmReplyPublication :: DB es => UUIDId "slack_reply" -> Text -> Eff es Bool
+confirmReplyPublication publicationId timestamp = do
   confirmed <-
     Hasql.interpOne @(HI.OneColumn Bool)
-      [HI.sql|UPDATE apis.slack_reply_batches SET delivered_count = delivered_count + 1
-    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
-      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
-      AND delivered_count = #{part} RETURNING TRUE|]
-  unless (isJust confirmed) $ throwIO ReplyDeliveryConflict
+      [HI.sql|WITH confirmed AS (
+      UPDATE apis.slack_reply_publications SET slack_ts = #{timestamp}
+      WHERE publication_id = #{publicationId} AND (slack_ts IS NULL OR slack_ts = #{timestamp}) RETURNING *
+    ), advanced AS (
+      UPDATE apis.slack_reply_batches b SET delivered_count = delivered_count + 1 FROM confirmed p
+      WHERE b.project_id = p.project_id AND b.conversation_id = p.conversation_id
+        AND b.user_id = p.user_id AND b.message_ts = p.message_ts AND b.delivered_count = p.part
+    ) SELECT TRUE FROM confirmed|]
+  pure $ isJust confirmed
 
 
-data ReplyDeliveryConflict = ReplyDeliveryConflict
-  deriving stock (Generic, Show)
-  deriving anyclass (Exception)
+rejectReplyPublication :: DB es => UUIDId "slack_reply" -> Eff es ()
+rejectReplyPublication publicationId =
+  Hasql.interpExecute_
+    [HI.sql|DELETE FROM apis.slack_reply_publications WHERE publication_id = #{publicationId} AND slack_ts IS NULL|]
+
+
+-- | Only a signed observation from the configured app in the stored destination
+-- can confirm a send whose HTTP acknowledgement was lost.
+captureReplyPublication :: DB es => Text -> UUIDId "slack_event" -> Eff es ()
+captureReplyPublication appId receiptId = do
+  observed <-
+    Hasql.interp @[(UUIDId "slack_reply", Text)]
+      [HI.sql|SELECT p.publication_id, se.payload #>> '{event,ts}'
+    FROM apis.slack_reply_publications p, apis.slack_events se, apis.slack s
+    WHERE se.id = #{receiptId} AND #{appId} <> ''
+      AND s.project_id = p.project_id AND s.team_id = p.team_id
+      AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'
+      AND se.team_id = p.team_id AND se.payload->>'api_app_id' = #{appId}
+      AND se.payload #>> '{event,channel}' = p.channel_id
+      AND se.payload #>> '{event,thread_ts}' = p.thread_ts
+      AND se.payload #>> '{event,type}' = 'message'
+      AND COALESCE(se.payload #>> '{event,subtype}', 'bot_message') = 'bot_message'
+      AND COALESCE(se.payload #>> '{event,app_id}', se.payload #>> '{event,bot_profile,app_id}') = #{appId}
+      AND COALESCE(se.payload #>> '{event,bot_id}', '') <> ''
+      AND se.payload #>> '{event,metadata,event_type}' = 'monoscope_investigation_reply'
+      AND (se.payload #>> '{event,ts}') ~ '^[0-9]+\.[0-9]+$'|]
+  for_ observed $ \(publication, timestamp) -> void $ confirmReplyPublication publication timestamp
 
 
 -- | Exact model context and progress for one round. The API key is supplied by

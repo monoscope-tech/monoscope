@@ -802,11 +802,14 @@ slackEventsPostH body timestamp signature = do
 
 processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
 processSlackEvent receiptId =
-  (runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> defer retryAt)
-    `catch` \SlackWorkerBusy -> do
-      HI.OneColumn retryAt <- Hasql.interpOne @(HI.OneColumn UTCTime) [HI.sql|SELECT clock_timestamp() + interval '1 second'|] >>= maybe (throwIO $ ErrorCall "Slack retry clock returned no row") pure
-      defer retryAt
+  ( (runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> defer retryAt)
+      `catch` \SlackWorkerBusy -> retryAfter (1 :: Int)
+  )
+    `catch` \SlackReplyPending -> retryAfter 60
   where
+    retryAfter seconds = do
+      HI.OneColumn retryAt <- Hasql.interpOne @(HI.OneColumn UTCTime) [HI.sql|SELECT clock_timestamp() + #{seconds} * interval '1 second'|] >>= maybe (throwIO $ ErrorCall "Slack retry clock returned no row") pure
+      defer retryAt
     defer retryAt = do
       let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
       Hasql.transaction TxS.ReadCommitted TxS.Write do
@@ -838,6 +841,7 @@ processSlackEvent receiptId =
                 stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
                 when (isJust stillPending) do
                   envCfg <- asks env
+                  Investigations.captureReplyPublication envCfg.slackAppId receiptId
                   observedProgress <- Investigations.captureProgress envCfg.slackAppId receiptId
                   for_ observedProgress $ \(target, timestamp) ->
                     withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress target timestamp
@@ -956,8 +960,46 @@ processSlackEvent receiptId =
                   pure
             for_ (zip [batch.deliveredCount ..] $ drop batch.deliveredCount $ toList batch.replies) $ \(part, reply) -> do
               AI.requireAgentAccess access slackData.projectId
-              sendSlackChatMessageChecked slackData.botToken $ addThread reply
-              Investigations.confirmReplyPart turn part
+              publication <- Investigations.claimReplyPart turn workspaceId event.channel threadTs part
+              case publication of
+                Nothing -> do
+                  current <- Investigations.loadReplyBatch turn
+                  unless (maybe False ((> part) . (.deliveredCount)) current) $ throwIO SlackReplyPending
+                Just reserved -> do
+                  response <-
+                    tryAny
+                      $ postWith
+                        (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
+                        "https://slack.com/api/chat.postMessage"
+                        ( mergeSlackContent (addThread reply)
+                            $ AE.object
+                              [ "metadata"
+                                  AE..= AE.object
+                                    ["event_type" AE..= ("monoscope_investigation_reply" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= reserved]]
+                              ]
+                        )
+                  case response of
+                    Left err -> case fromException @RateLimit.SlackRateLimited err of
+                      Just limited -> Investigations.rejectReplyPublication reserved >> throwIO limited
+                      Nothing -> do
+                        Log.logAttention "Slack reply transport failed; publication awaits reconciliation" $ AE.object ["publication_id" AE..= reserved]
+                        throwIO SlackReplyPending
+                    Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
+                      Just ack
+                        | statusIsSuccessful (received ^. Wreq.responseStatus)
+                        , ack.ok
+                        , Just timestamp <- ack.ts >>= Incidents.slackTimestamp -> do
+                            confirmed <- Investigations.confirmReplyPublication reserved $ Incidents.slackTimestampText timestamp
+                            unless confirmed $ throwIO $ ErrorCall "Conflicting Slack reply acknowledgement"
+                        | statusIsSuccessful (received ^. Wreq.responseStatus)
+                        , not ack.ok
+                        , Just reason <- ack.error
+                        , definiteSlackRejection reason -> do
+                            Investigations.rejectReplyPublication reserved
+                            throwIO $ ErrorCall $ "Slack reply rejected: " <> toString reason
+                      _ -> do
+                        Log.logAttention "Slack reply acknowledgement is ambiguous; publication awaits reconciliation" $ AE.object ["publication_id" AE..= reserved]
+                        throwIO SlackReplyPending
       ( do
           AI.requireAgentAccess access slackData.projectId
           bracket_
@@ -1020,7 +1062,7 @@ withInvestigationProgress slackData access action = case access of
                                 )
                             )
                               `catch` \limited@RateLimit.SlackRateLimited{} -> Investigations.rejectProgress publication.publicationId >> throwIO limited
-                          case AE.decode @SlackProgressAck (response ^. responseBody) of
+                          case AE.decode @SlackMessageAck (response ^. responseBody) of
                             Just ack
                               | statusIsSuccessful (response ^. Wreq.responseStatus)
                               , ack.ok
@@ -1031,7 +1073,7 @@ withInvestigationProgress slackData access action = case access of
                               | statusIsSuccessful (response ^. Wreq.responseStatus)
                               , not ack.ok
                               , Just reason <- ack.error
-                              , reason `elem` ["ratelimited", "channel_not_found", "not_in_channel", "is_archived", "missing_scope", "invalid_auth", "token_revoked", "account_inactive"] -> do
+                              , definiteSlackRejection reason -> do
                                   Investigations.rejectProgress publication.publicationId
                                   throwIO $ ErrorCall $ "Slack progress rejected: " <> toString reason
                             _ -> throwIO $ ErrorCall "Slack progress publication awaits reconciliation"
@@ -1062,9 +1104,18 @@ refreshObservedProgress target timestamp = do
       either (throwIO . ErrorCall . toString) pure result
 
 
-data SlackProgressAck = SlackProgressAck {ok :: Bool, ts :: Maybe Text, error :: Maybe Text}
+data SlackMessageAck = SlackMessageAck {ok :: Bool, ts :: Maybe Text, error :: Maybe Text}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
+
+
+data SlackReplyPending = SlackReplyPending
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+definiteSlackRejection :: Text -> Bool
+definiteSlackRejection = (`elem` ["ratelimited", "channel_not_found", "not_in_channel", "is_archived", "missing_scope", "invalid_auth", "token_revoked", "account_inactive"])
 
 
 data SlackWorkerBusy = SlackWorkerBusy
