@@ -917,7 +917,7 @@ processSlackEvent receiptId = do
             )
             ( race_
                 (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
-                (runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+                (runBotQuery Slack (sendSlackChatMessageChecked slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
             )
         )
         `catch` \AI.AgentStopped -> do

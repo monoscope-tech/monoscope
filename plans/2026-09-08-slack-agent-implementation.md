@@ -1306,3 +1306,54 @@ attestations; frontend, CLI, and UI results were reused. Integration-tests,
 weeder, hlint, and e2e remain outstanding. TimeFusion did not start in the local
 CI environment. Log: /tmp/monoscope-slack-agent/deployment-context-ci-signoff.log.
 These results do not attest the subsequent journal increment.
+
+
+## Replay completed Slack answers without duplicating conversation turns
+
+Slack user messages now carry the originating message timestamp in a dedicated
+column. A unique index prevents retries from inserting the same role twice for
+that turn; preparation excludes the current turn from history before the caller
+appends its one user message. Identical text at a different Slack timestamp stays
+a separate turn. Generic conversation callers retain their existing behavior.
+
+A completed Slack answer is saved with its assistant message in one database
+operation before delivery. AgenticChatResult and ToolCallInfo moved to the
+investigation model with their existing derived codecs and remain re-exported by
+Pkg.AI. Stored results retain tool metadata and raw data. Replay checks current
+project access and cancellation, validates the conversation ID against the
+project/workspace/channel/thread binding, and reads the original requester's
+answer. It avoids another model invocation for that completed turn.
+
+The Slack investigation path now reuses sendSlackChatMessageChecked. A non-OK
+Slack response leaves the event unprocessed for retry instead of logging and
+marking it complete. Existing history and status-cleanup fixtures now explicitly
+return Slack's success envelope when they intend delivery to succeed.
+
+The regression exercises a worker interruption, then a completed answer whose
+Slack delivery is rejected, then successful cached replay. It checks model-call
+counts, one current question in the model history, full stored tool metadata,
+one user/assistant pair, receipt replay, a distinct identical-text follow-up,
+wrong-channel denial, and revoked access. The final native
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows
+make live-test-dev` run passed 37 examples, zero failures, in 19.2478 seconds.
+Log: /tmp/monoscope-slack-agent/slack-answer-replay-workflows-complete.log.
+All three requested skills ran three passes; Fourmolu and whitespace checks pass.
+HLint is blocked by MultilineStrings; Weeder exits 228 with repository findings.
+Logs: slack-answer-replay-hlint.log and slack-answer-replay-weeder.log under
+/tmp/monoscope-slack-agent/. CI signoff for this increment remains pending.
+Migration 0169 and the regenerated Cabal manifest include the new column/index
+and completed-answer table. No handwritten instance or new dependency.
+
+This replays completed answers. Partial model/tool checkpoints still do not resume
+automatically. Ambiguous Slack sends and multi-message answers still need a durable
+response outbox and reconciliation; this does not claim exactly-once remote
+publication. Live progress, investigation quality evaluation, tested drafts,
+proactive policy and live Slack acceptance remain unfinished. No deployment.
+
+The preceding journal commit d6bc74aaf ran
+`make ci-signoff CHECKS="build doctests unit-tests integration-tests"`. Build,
+1,543 doctests and 308 unit examples passed and were attested. The command failed
+because integration-tests require tf-real, which the local environment lacks.
+No integration result was attested. Frontend/CLI/UI results were reused; full
+integration-tests, weeder, hlint and e2e remain outstanding. Log:
+/tmp/monoscope-slack-agent/investigation-journal-ci-signoff.log.

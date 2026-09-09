@@ -596,6 +596,72 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "retries a failed Slack delivery without repeating the model or duplicating conversation turns" \tr -> do
+        setupLinkedSlackData tr testPid "T_REPLAY"
+        calls <- newIORef (0 :: Int)
+        questionCounts <- newIORef ([] :: [Int])
+        rejectDelivery <- newIORef True
+        let event ts = slackThreadedEvent "T_REPLAY" "C_REPLAY" "Investigate the checkout issue" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                modifyIORef' calls (+ 1)
+                attempt <- readIORef calls
+                modifyIORef' questionCounts (<> [length [() | message <- toList history, Chat.role message == Chat.User, Chat.content message == "Investigate the checkout issue"]])
+                if attempt == 1
+                  then liftIO $ throwIO $ ErrorCall "simulated worker interruption"
+                  else
+                    pure
+                      $ Right
+                      $ if any ((== Chat.Tool) . Chat.role) history
+                        then Chat.Message Chat.Assistant "Schema evidence retained." Chat.defaultMessageData
+                        else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            transport = withHTTPResponses \_ endpoint ->
+              if endpoint == "https://slack.com/api/chat.postMessage"
+                then do
+                  reject <- atomicModifyIORef' rejectDelivery (\old -> (False, old))
+                  pure $ Just $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true}"
+                else pure $ Just "{\"ok\":true,\"messages\":[]}"
+            work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
+            convId = Issues.slackScopedConversationId testPid "T_REPLAY" "C_REPLAY" "1735689600.000001"
+            turn = Investigations.Turn testPid convId (getResponse tr.trSessAndHeader).user.id "1735689602.000001"
+        receipt <- receiveSlackEvent tr $ event "1735689602.000001"
+        (_, interrupted) <- work receipt
+        interrupted `shouldSatisfy` isLeft
+        (_, rejected) <- work receipt
+        rejected `shouldSatisfy` isLeft
+        saved <- runQueryEffect tr $ Investigations.loadAnswer turn
+        case saved of
+          Just answer -> map (.name) answer.toolCalls `shouldBe` ["get_schema"]
+          Nothing -> fail "Expected the full answer to be saved before delivery"
+        (_, delivered) <- work receipt
+        delivered `shouldSatisfy` isRight
+        readIORef calls >>= (`shouldBe` 3)
+        readIORef questionCounts >>= (`shouldBe` [1, 1, 1])
+        history <- runQueryEffect tr $ Issues.selectChatHistory testPid convId
+        map (.role) history `shouldBe` [Issues.ChatUser, Issues.ChatAssistant]
+        (duplicateRequests, duplicate) <- work receipt
+        duplicate `shouldSatisfy` isRight
+        duplicateRequests `shouldBe` []
+        next <- receiveSlackEvent tr $ event "1735689603.000001"
+        (_, continued) <- work next
+        continued `shouldSatisfy` isRight
+        readIORef calls >>= (`shouldBe` 5)
+        later <- runQueryEffect tr $ Issues.selectChatHistory testPid convId
+        map (.role) later `shouldBe` [Issues.ChatUser, Issues.ChatAssistant, Issues.ChatUser, Issues.ChatAssistant]
+        let cached channel =
+              let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_REPLAY" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id channel "1735689600.000001" "1735689602.000001"
+                  config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.conversationId = Just convId}
+               in runTestBg frozenTime tr $ provider $ tryAny do
+                    answer <- AI.runAgenticChatWithHistory config "Investigate the checkout issue" "model" "key"
+                    liftIO $ answer `shouldSatisfy` isRight
+        cached "C_REPLAY" >>= (`shouldSatisfy` isRight)
+        cached "C_OTHER" >>= (`shouldSatisfy` isLeft)
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+        cached "C_REPLAY" >>= (`shouldSatisfy` isLeft)
+        readIORef calls >>= (`shouldBe` 5)
+
       it "retains interrupted investigation evidence and exposes it only inside the authorized thread" \tr -> do
         setupLinkedSlackData tr testPid "T_JOURNAL"
         let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_JOURNAL" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_JOURNAL" "1735689600.000001" "1735689602.000001"
@@ -884,6 +950,7 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             transport secondPage = withHTTPResponses \opts url -> case url of
               "https://slack.com/api/agents.sessions.setStatus" -> pure $ Just "{\"ok\":true}"
+              "https://slack.com/api/chat.postMessage" -> pure $ Just "{\"ok\":true}"
               "https://slack.com/api/conversations.replies" -> do
                 opts ^. Wreq.param "latest" `shouldBe` ["1735689603.000001"]
                 case opts ^. Wreq.param "cursor" of
@@ -950,7 +1017,7 @@ spec = around withTestResources do
                   modifyIORef' statusCalls (+ 1)
                   count <- readIORef statusCalls
                   pure $ Just $ AE.encode $ AE.object ["ok" AE..= (count == 1)]
-                else pure Nothing
+                else pure $ if url == "https://slack.com/api/chat.postMessage" then Just "{\"ok\":true}" else Nothing
         (_, completed) <- runTestBgRecordingHTTP frozenTime resources $ cleanupFailure $ provider $ tryAny $ processSlackEvent cleanupReceipt
         completed `shouldSatisfy` isRight
         readIORef statusCalls >>= (`shouldBe` 2)

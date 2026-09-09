@@ -65,7 +65,6 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -76,7 +75,7 @@ import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Integrations
-import Models.Apis.Investigations (ToolResult (..))
+import Models.Apis.Investigations (AgenticChatResult (..), ToolCallInfo (..), ToolResult (..))
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
@@ -98,26 +97,6 @@ import System.Tracing (Tracing)
 import System.Types (DB)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (unwrapJsonPrimValue)
-
-
--- | Information about a tool call made during agentic execution
-data ToolCallInfo = ToolCallInfo
-  { name :: Text
-  , args :: Map.Map Text AE.Value
-  , resultPreview :: Text
-  , rawData :: Maybe AE.Value -- Structured query results for widget data reuse
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ToolCallInfo
-
-
--- | Result of an agentic chat with tool call history
-data AgenticChatResult = AgenticChatResult
-  { response :: Text
-  , toolCalls :: [ToolCallInfo]
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- | Unified LLM response type for all AI interactions
@@ -749,11 +728,23 @@ runAgenticChatWithHistory
 runAgenticChatWithHistory config userQuery model apiKey = do
   requireAgentAccess config.access config.projectId
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
-  -- history is read before the new user message is persisted, so it isn't duplicated
-  historyMsgs <-
-    config.conversationId & maybe (pure []) \convId ->
-      map dbMessageToLLMMessage <$> (Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing)
-  withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw journal config apiKey (systemMsg :| (historyMsgs <> [userMsg])) params 0 []
+  let run history = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw journal config apiKey (systemMsg :| (map dbMessageToLLMMessage history <> [userMsg])) params 0 []
+  case (config.access, config.conversationId) of
+    (SlackInvestigationAccess investigation, Just convId) -> do
+      unless (convId == Issues.slackScopedConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs) $ throwIO AgentAccessDenied
+      let turn = Investigations.Turn config.projectId convId investigation.userId investigation.messageTs
+      Investigations.loadAnswer turn >>= \case
+        Just answer -> requireAgentAccess config.access config.projectId $> Right answer
+        Nothing -> do
+          history <- Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
+          result <- run history
+          requireAgentAccess config.access config.projectId
+          traverse (Investigations.saveAnswer turn) result
+    _ -> do
+      history <-
+        config.conversationId & maybe (pure []) \convId ->
+          Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
+      run history
 
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.

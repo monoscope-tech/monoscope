@@ -92,6 +92,7 @@ module Models.Apis.Issues (
   getOrCreateConversation,
   insertChatMessage,
   selectChatHistory,
+  prepareSlackTurn,
   seedChatHistory,
 
   -- * Thread ID Helpers
@@ -990,6 +991,22 @@ insertChatMessageSql :: Projects.ProjectId -> UUIDId "conversation" -> ChatRole 
 insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
   [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata, created_at)
             VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}, clock_timestamp()) |]
+
+
+-- | Persist a Slack question once, and exclude that turn from the history passed
+-- to the model: the caller appends its current user message exactly once.
+prepareSlackTurn :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Eff es [AIChatMessage]
+prepareSlackTurn pid convId messageTs question =
+  reverse
+    <$> Hasql.interp
+      [HI.sql|WITH inserted AS (
+    INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+    VALUES (#{pid}, #{convId}, 'user', #{question}, #{messageTs}, clock_timestamp())
+    ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING
+  ) SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+    FROM apis.ai_chat_messages WHERE project_id = #{pid} AND conversation_id = #{convId}
+      AND slack_message_ts IS DISTINCT FROM #{messageTs}
+    ORDER BY created_at DESC, id DESC LIMIT 200|]
 
 
 -- | Select the latest 200 messages, returned oldest first for the model.
