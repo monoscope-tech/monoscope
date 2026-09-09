@@ -1167,3 +1167,40 @@ not yet tools in the Slack agent. fetchSnippet currently needs the shared blob
 cache, EnvConfig, and HTTP effect; Pkg.AI currently receives none of those source
 reader dependencies. Preserve those authorization and test interception boundaries
 when exposing repository evidence. No new repository integration is claimed here.
+
+
+## Repository source evidence
+
+Slack investigations now expose get_code_context when server source configuration
+is available. The tool accepts a stack-frame path, explicit full commit hash,
+optional service, and positive line number. It reads only through project-linked
+repository mappings and credentials. The existing HTTP effect remains explicit
+for test interception. Each agent read fetches afresh instead of consuming the
+shared source cache. Missing mappings, credentials, files, and invalid arguments
+remain errors; no branch fallback or speculative source is presented as evidence.
+
+The derived response carries host, configured origin, repository, revision, path,
+and numbered snippet context. Long lines are clipped at 1,000 characters and
+marked as truncated. Repository path resolution rejects traversal and absolute
+paths. Existing source panels retain fetchSnippet, which projects the richer
+reader result. GitHost JSON instances now derive with explicit Rename options,
+preserving github/gitlab/bitbucket/gitea spellings without handwritten JSON codecs.
+
+Native validation in /tmp/monoscope-slack-incident-context:
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`: 34 examples, zero failures, 20.4803 seconds. Actual request/model-tool regression covers commit-specific reads, service isolation, invalid arguments, and ignoring shared-cache content. Log: /tmp/monoscope-slack-agent/source-context-workflows.log.
+- Same command with TEST_MATCH=CodeContext: 10 examples, zero failures, 8.7702 seconds. Existing panel and cache workflows remain passing. Log: /tmp/monoscope-slack-agent/source-context-reader-tests-complete.log.
+- Fourmolu and whitespace checks pass. HLint cannot parse MultilineStrings; Weeder exits 228 with repository findings. Logs use source-context-hlint.log and source-context-weeder.log in the same directory.
+
+All three requested skills ran three times. The new pure path/JSON doctests and
+full CI signoff remain pending for this increment. No live Slack or repository
+mutation was performed. Deployment correlation, representative investigation
+evaluation, durable model/tool checkpoints and response outbox, action drafts,
+and proactive policies remain unfinished.
+
+The preceding incident-context increment (7ed58cde3, with notes at e57a4fafd) passed
+`make ci-signoff CHECKS="build doctests unit-tests cli-tests"`: build, 1,538
+doctests, 308 unit examples, and 16 CLI examples. Passing attestations were
+published for linux-aarch64/bun.ghc.minio.node.pg. Log:
+/tmp/monoscope-slack-agent/incident-context-ci-signoff.log. Frontend/UI results
+were reused. Integration-tests, weeder, hlint, and e2e still require GitHub. These
+results precede the repository-source increment and do not attest its code.

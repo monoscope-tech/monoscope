@@ -8,7 +8,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
-import Data.Effectful.Wreq (Options, header)
+import Data.Effectful.Wreq (HTTP, Options, header)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
@@ -291,13 +291,13 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery useTf access pid userQuery conversationId model apiKey = do
+processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery sourceConfig useTf access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.conversationId = conversationId, AI.useTimefusion = useTf, AI.access = access}
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.conversationId = conversationId, AI.useTimefusion = useTf, AI.access = access, AI.sourceConfig = sourceConfig}
   rawResult <- AI.runAgenticChatWithHistory config userQuery model apiKey
   whenRight_ rawResult \answer -> whenJust conversationId \convId -> do
     AI.requireAgentAccess access pid
@@ -483,7 +483,7 @@ botReplyPayload = \case
 -- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
 -- Discord interaction followup, Twilio).
 runBotQuery
-  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => BotType
   -> (BotReply -> Eff es ())
   -> EnvConfig
@@ -503,7 +503,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
         . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
     GeneralQueryIntent -> do
       threadM <- resolveThread
-      result <- processAIQuery envCfg.enableTimefusionReads access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
+      result <- processAIQuery (Just envCfg) envCfg.enableTimefusionReads access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
       case result of
         Left _ -> send $ ReplyText $ formatBotError target ServiceError
         Right resp -> dispatchAIResponse resp

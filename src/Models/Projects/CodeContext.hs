@@ -18,8 +18,11 @@ module Models.Projects.CodeContext (
   deriveMapping,
   sliceAround,
   fetchSnippet,
+  SourceEvidence (..),
+  fetchSourceEvidence,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
 import Data.Default (Default (..))
@@ -122,6 +125,18 @@ data Snippet = Snippet
   , body :: [Text]
   }
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data SourceEvidence = SourceEvidence
+  { host :: Git.GitHost
+  , apiOrigin :: Maybe Text
+  , repository :: Text
+  , revision :: Text
+  , snippet :: Snippet
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
 getCodeMappings :: DB es => ProjectId -> Eff es [CodeMapping]
@@ -172,11 +187,18 @@ deleteCodeMapping pid mid = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.co
 --
 -- >>> snd <$> resolveRepoPath [m Nothing "" "src"] Nothing "app/main.go"
 -- Just "src/app/main.go"
+-- >>> resolveRepoPath [m Nothing "/srv/app/" "src"] Nothing "/srv/app/../../other-repo/file" & isNothing
+-- True
+-- >>> resolveRepoPath [m Nothing "" ""] Nothing "/absolute/file" & isNothing
+-- True
 resolveRepoPath :: [CodeMapping] -> Maybe Text -> Text -> Maybe (CodeMapping, Text)
 resolveRepoPath mappings svc path = do
   (cm, rest) <- listToMaybe $ sortOn (Down . T.length . (.pathPrefix) . fst) candidates
   let root = T.dropWhileEnd (== '/') cm.sourceRoot
-  pure (cm, if T.null root then rest else root <> "/" <> rest)
+      repoPath = if T.null root then rest else root <> "/" <> rest
+      segments = T.splitOn "/" $ T.replace "\\" "/" repoPath
+  guard $ not (T.null repoPath || T.isPrefixOf "/" repoPath || ".." `elem` segments)
+  pure (cm, repoPath)
   where
     candidates =
       [ (cm, rest)
@@ -292,7 +314,20 @@ fetchSnippet
   -> Text
   -> Int
   -> Eff es (Either SnippetError Snippet)
-fetchSnippet blobCache cfg pid svc revM path lineNo = runExceptT do
+fetchSnippet blobCache cfg pid svc revM path lineNo = fmap (.snippet) <$> fetchSourceEvidence blobCache cfg pid svc revM path lineNo
+
+
+fetchSourceEvidence
+  :: (DB es, Log :> es, W.HTTP :> es)
+  => Cache Config.CodeBlobKey ByteString
+  -> Config.EnvConfig
+  -> ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Text
+  -> Int
+  -> Eff es (Either SnippetError SourceEvidence)
+fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
   mappings <- lift $ getCodeMappings pid
   (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
@@ -311,5 +346,5 @@ fetchSnippet blobCache cfg pid svc revM path lineNo = runExceptT do
       b <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
       liftIO $ Cache.insert blobCache blobKey b
       pure b
-  (\s -> s{path = repoPath})
+  (\s -> SourceEvidence cred.host cred.apiBase (cm.owner <> "/" <> cm.repo) repoRef.ref s{path = repoPath})
     <$> hoistEither (maybeToRight (LineOutOfRange repoPath lineNo repoRef.ref) $ sliceAround 5 lineNo (lines (decodeUtf8 blob)))

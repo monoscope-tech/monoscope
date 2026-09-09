@@ -53,9 +53,11 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Lens (key, _Array, _Number, _String)
 import Data.Aeson.Types (parseMaybe)
-import Data.Char (isAlphaNum)
+import Data.Cache qualified as Cache
+import Data.Char (isAlphaNum, isHexDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -76,6 +78,7 @@ import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
@@ -87,6 +90,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude
+import System.Config qualified as Config
 import System.Tracing (Tracing)
 import System.Types (DB)
 import UnliftIO.Exception (throwIO)
@@ -443,6 +447,7 @@ data AgenticConfig = AgenticConfig
   , timeRange :: (Maybe UTCTime, Maybe UTCTime)
   , facetContext :: Maybe FacetSummary
   , limits :: ToolLimits
+  , sourceConfig :: Maybe Config.EnvConfig
   , customContext :: Maybe Text
   , conversationId :: Maybe (UUIDId "conversation")
   , conversationType :: Maybe Issues.ConversationType
@@ -462,6 +467,7 @@ defaultAgenticConfig pid =
     , timeRange = (Nothing, Nothing)
     , facetContext = Nothing
     , limits = defaultLimits
+    , sourceConfig = Nothing
     , customContext = Nothing
     , conversationId = Nothing
     , conversationType = Nothing
@@ -514,7 +520,7 @@ nlSearchConfig pid useTf facets tzRaw =
 -- @search_events_nl@ tool; each maps 'Left' onto its own error shape (a toast
 -- plus 502, or an MCP tool error) and returns the 'Right' payload verbatim.
 runNlSearch
-  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
   => Projects.ProjectId -> Bool -> Maybe Text -> Text -> Text -> Text -> Eff es (Either Text AE.Value)
 runNlSearch pid useTf tzRaw input model apiKey = do
   now <- Time.currentTime
@@ -683,7 +689,7 @@ stripCodeBlock t
     stripped = T.strip t
 
 
-runAgenticQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   -- Text only: these consumers (MCP, bots, log explorer) never read toolCalls; the
@@ -704,7 +710,9 @@ agenticSetup config userQuery model =
             , OpenAIV1.reasoning_effort = effort $> OpenAIV1.ReasoningEffort_None
             , OpenAIV1.tools =
                 Just $ V.fromList $ allToolDefs <> case config.access of
-                  SlackInvestigationAccess{} -> [mkToolDef "get_incident_context" "Get the stored incident state, onset and latest notification, evidence links, and current monitor query for this Slack thread. No arguments; project and thread scope are fixed by authorization." []]
+                  SlackInvestigationAccess{} ->
+                    [mkToolDef "get_incident_context" "Get the stored incident state, onset and latest notification, evidence links, and current monitor query for this Slack thread. No arguments; project and thread scope are fixed by authorization." []]
+                      <> [mkToolDef "get_code_context" "Read source around a stack-frame line from a project-linked repository at an explicit commit hash. Use a revision observed in telemetry or supplied by the engineer; never invent one." [("path", "string", "Stack-frame file path"), ("revision", "string", "Required full 40- or 64-character hexadecimal commit hash"), ("line", "integer", "Positive line number, default 1"), ("service", "string", "Service name for selecting its repository mapping")] | isJust config.sourceConfig]
                   _ -> []
             , OpenAIV1.messages = V.empty
             }
@@ -727,7 +735,7 @@ dbMessageToLLMMessage msg =
 -- | Run agentic chat with DB-persisted history; returns the raw response plus tool call info
 -- (unlike runAgenticQuery, which parses the response and drops tool metadata)
 runAgenticChatWithHistory
-  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
   => AgenticConfig
   -> Text
   -> Text
@@ -744,7 +752,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 
 
 -- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       requireAgentAccess config.access config.projectId
@@ -800,7 +808,7 @@ addMessagesToMemory maxTokens history newMsgs = do
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
-executeToolCall :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
+executeToolCall :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   requireAgentAccess config.access config.projectId
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
@@ -814,6 +822,7 @@ executeToolCall config tc = do
           maybe "No incident is bound to this Slack thread." (decodeUtf8 . AE.encode)
             <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
         _ -> pure "Incident context requires an authorized Slack investigation."
+    "get_code_context" -> noRaw <$> executeGetCodeContext config args
     "get_field_values" -> noRaw <$> executeGetFieldValues config args
     "get_services" -> noRaw <$> executeGetServices config
     "count_query" -> noRaw <$> executeCountQuery config args
@@ -826,6 +835,39 @@ executeToolCall config tc = do
   requireAgentAccess config.access config.projectId
   Log.logTrace "AI tool result" (AE.object ["tool" AE..= funcName, "resultLength" AE..= T.length result.formatted, "resultPreview" AE..= T.take 200 result.formatted])
   pure result
+
+
+-- | Source reads retain the tool loop's before/after access checks and use only
+-- project-linked credentials. No caller-supplied repository URL or token is accepted.
+executeGetCodeContext :: (DB es, Log :> es, W.HTTP :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeGetCodeContext config args = case (config.access, config.sourceConfig) of
+  (SlackInvestigationAccess{}, Just cfg) -> withArg "get_code_context" "path" args \path ->
+    withArg "get_code_context" "revision" args \revision ->
+      if T.length revision `notElem` [40, 64] || not (T.all isHexDigit revision)
+        then pure "Source evidence requires a full commit hash. Find the deployed revision in telemetry or ask the engineer."
+        else case traverse (parseMaybe AE.parseJSON) (Map.lookup "line" args) of
+          Just lineM
+            | let line = fromMaybe 1 lineM
+            , line > 0 ->
+                do
+                  -- Each agent read checks the repository grant remotely; do not
+                  -- serve source cached under another credential or git host.
+                  cache <- liftIO $ Cache.newCache Nothing
+                  CodeContext.fetchSourceEvidence cache cfg config.projectId (getTextArg "service" args) (Just revision) path (fromMaybe 1 lineM)
+                    <&> either
+                      CodeContext.snippetErrorMessage
+                      ( \evidence ->
+                          let source = evidence.snippet
+                              clipped = any ((> 1000) . T.length) source.body
+                           in decodeUtf8
+                                $ AE.encode
+                                $ AE.object
+                                  [ "evidence" AE..= evidence{CodeContext.snippet = source{CodeContext.body = map (T.take 1000) source.body}}
+                                  , "sourceLinesTruncated" AE..= clipped
+                                  ]
+                      )
+          _ -> pure "Source line must be a positive integer."
+  _ -> pure "Source evidence is unavailable for this conversation."
 
 
 -- * Tool Execution

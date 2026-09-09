@@ -62,6 +62,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
@@ -89,11 +90,19 @@ import "memory" Data.ByteArray qualified as BA
 -- | Which REST dialect a connection speaks.
 --
 -- The DB stores the slug, not the constructor name: @show GitHub@ would snake-case to
--- @git_hub@, which is nobody's idea of a host name. 'hostSlug' and 'parseHostSlug' are the one
--- place that mapping lives.
+-- @git_hub@. The derived JSON tags preserve the same lowercase spellings as
+-- 'hostSlug' and 'parseHostSlug'.
+--
+-- >>> map AE.toJSON [GitHub, GitLab, Bitbucket, Gitea]
+-- [String "github",String "gitlab",String "bitbucket",String "gitea"]
+-- >>> map (AE.fromJSON @GitHost . AE.String) ["github", "gitlab", "bitbucket", "gitea"]
+-- [Success GitHub,Success GitLab,Success Bitbucket,Success Gitea]
+-- >>> AE.decode @GitHost "\"GitHub\"" == Nothing
+-- True
 data GitHost = GitHub | GitLab | Bitbucket | Gitea
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.Rename "GitHub" "github", DAE.Rename "GitLab" "gitlab", DAE.Rename "Bitbucket" "bitbucket", DAE.Rename "Gitea" "gitea"]] GitHost
 
 
 -- | How the host is spelled to a human — which is exactly how it is spelled as a constructor.
@@ -130,17 +139,8 @@ parseHostSlug :: Text -> Maybe GitHost
 parseHostSlug = inverseMap hostSlug
 
 
--- | Hand-written rather than via 'WrappedEnumSC': that wrapper snake-cases the constructor,
--- which would make @GitHub@ into @git_hub@ — a value 0125's CHECK constraint rejects, and not
--- what anyone would type into a URL either. 'hostSlug' is the single source of the spelling.
-instance AE.ToJSON GitHost where
-  toJSON = AE.toJSON . hostSlug
-
-
-instance AE.FromJSON GitHost where
-  parseJSON = AE.withText "GitHost" $ maybe (fail "unknown git host") pure . parseHostSlug
-
-
+-- JSON derives lowercase constructor tags, matching hostSlug and the database
+-- slugs. The DB codecs below retain their TEXT representation.
 instance ToField GitHost where
   toField = toField . hostSlug
 
