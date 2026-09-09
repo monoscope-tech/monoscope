@@ -15,6 +15,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.Wreq qualified as HTTP
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
@@ -32,6 +33,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Types (status429)
 import Network.Wreq qualified as Wreq
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
@@ -43,6 +45,7 @@ import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
+import Pkg.SlackRateLimit qualified as RateLimit
 import Pkg.TestUtils
 import Relude
 import Servant.API.ResponseHeaders (getResponse)
@@ -597,6 +600,70 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "persists Slack cooldowns, releases rejected progress, and defers answer delivery without repeating the model" \tr -> do
+        setupLinkedSlackData tr testPid "T_RATE_LIMIT"
+        entered <- newEmptyMVar
+        release <- newEmptyMVar
+        posts <- newIORef (0 :: Int)
+        modelCalls <- newIORef (0 :: Int)
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                modifyIORef' modelCalls (+ 1)
+                liftIO $ putMVar entered () >> takeMVar release
+                pure $ Right $ Chat.Message Chat.Assistant "The investigation answer is ready." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            responses = withHTTPResponses $ \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+            throttle = interpose @HTTP.HTTP $ \_ request -> case request of
+              HTTP.PostWith options url body | url == "https://slack.com/api/chat.postMessage" -> do
+                number <- atomicModifyIORef' posts (\n -> (n + 1, n))
+                response <- send $ HTTP.PostWith options url body
+                pure
+                  $ if number == 0
+                    then response & Wreq.responseStatus .~ status429 & Wreq.responseHeaders .~ [("Retry-After", "60")] & Wreq.responseBody .~ "{\"ok\":false,\"error\":\"ratelimited\"}"
+                    else response
+              _ -> send @HTTP.HTTP $ coerce request
+            work receipt = runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ provider $ tryAny $ processSlackEvent receipt
+        receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_RATE_LIMIT" "C_RATE_LIMIT" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        withAsync (work receipt) $ \worker -> do
+          timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          timeout
+            10_000_000
+            ( fix $ \retry -> do
+                rows <- withResource tr.trPool $ \conn -> PGS.query_ conn [sql|SELECT EXISTS (SELECT 1 FROM apis.slack_api_cooldowns WHERE team_id = 'T_RATE_LIMIT' AND method = 'chat.postMessage' AND retry_at > clock_timestamp() + interval '50 seconds')|]
+                unless (rows == [PGS.Only True]) $ threadDelay 20_000 >> retry
+            )
+            >>= (`shouldBe` Just ())
+          putMVar release ()
+          result <- timeout 10_000_000 $ wait worker
+          case result of
+            Just (_, outcome) -> outcome `shouldSatisfy` isRight
+            Nothing -> fail "Rate-limited answer was not deferred"
+        let target = Investigations.ProgressTarget testPid "T_RATE_LIMIT" "C_RATE_LIMIT" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+        runQueryEffect tr (Investigations.loadProgress target) >>= (`shouldSatisfy` isNothing)
+        (_, deferredAgain) <- work receipt
+        deferredAgain `shouldSatisfy` isRight
+        readIORef posts >>= (`shouldBe` 1)
+        readIORef modelCalls >>= (`shouldBe` 1)
+        scheduled <- withResource tr.trPool $ \conn ->
+          PGS.query
+            conn
+            [sql|SELECT count(*) FROM background_jobs j, apis.slack_api_cooldowns c
+            WHERE j.payload = ? AND j.status = 'pending' AND j.run_at >= c.retry_at
+              AND c.team_id = 'T_RATE_LIMIT' AND c.method = 'chat.postMessage'|]
+            (PGS.Only $ Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt)
+        scheduled `shouldBe` [PGS.Only (1 :: Int)]
+        (_, otherWorkspace) <- runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ RateLimit.withRateLimits "T_OTHER" $ tryAny $ void $ HTTP.postWith Wreq.defaults "https://slack.com/api/chat.postMessage" (AE.object [])
+        otherWorkspace `shouldSatisfy` isRight
+        readIORef posts >>= (`shouldBe` 2)
+        withResource tr.trPool $ \conn -> void $ PGS.execute_ conn [sql|UPDATE apis.slack_api_cooldowns SET retry_at = clock_timestamp() - interval '1 second' WHERE team_id = 'T_RATE_LIMIT'|]
+        (_, delivered) <- work receipt
+        delivered `shouldSatisfy` isRight
+        readIORef posts >>= (`shouldBe` 3)
+        readIORef modelCalls >>= (`shouldBe` 1)
+        (replayed, _) <- work receipt
+        replayed `shouldBe` []
+
       it "reconciles a lost progress acknowledgement only from the matching signed app observation" \tr -> do
         let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_PROGRESS"}}}
             target = Investigations.ProgressTarget testPid "T_RECONCILE" "C_RECONCILE" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"

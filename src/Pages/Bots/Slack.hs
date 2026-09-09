@@ -28,6 +28,8 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Lucid qualified as H
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -62,6 +64,7 @@ import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, bo
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.SlackRateLimit qualified as RateLimit
 import PyF
 import Relude hiding (ask, asks)
 import Servant.API (Header)
@@ -798,33 +801,53 @@ slackEventsPostH body timestamp signature = do
 
 
 processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
-processSlackEvent receiptId = do
-  pending <-
-    Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
-      [HI.sql|SELECT payload FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
-  for_ pending \(HI.OneColumn (Aeson payload)) -> case payload of
-    UrlVerification _ -> throwIO $ ErrorCall "Stored Slack event is not a callback"
-    EventCallback{team_id, event_id, event} -> do
-      kind <- either (throwIO . ErrorCall) pure $ AE.parseEither (classifySlackEvent team_id) event
-      let process = do
-            stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
-            when (isJust stillPending) do
-              envCfg <- asks env
-              observedProgress <- Investigations.captureProgress envCfg.slackAppId receiptId
-              for_ observedProgress $ \(target, timestamp) ->
-                withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress target timestamp
-              captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
-              when (Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured)
-                $ Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
-              result <- runErrorNoCallStack @ServerError $ handleEventCallback envCfg kind team_id event_id
-              either (throwIO . ErrorCall . show) pure result
-              Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
-      case kind of
-        UserMessage message -> withThreadLock team_id message process
-        AppMention message -> withThreadLock team_id message process
-        AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (toStrict $ AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
-        _ -> process
+processSlackEvent receiptId =
+  runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> do
+    let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
+    Hasql.transaction TxS.ReadCommitted TxS.Write do
+      pending <-
+        Tx.statement ()
+          $ HI.interp @[UUIDId "slack_event"]
+            True
+            [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]
+      unless (null pending)
+        $ void
+        $ Tx.statement ()
+        $ HI.interp @HI.RowsAffected
+          True
+          [HI.sql|WITH delayed AS (
+          UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
+          WHERE payload = #{job} AND status = 'pending' AND run_at > clock_timestamp()
+          RETURNING id
+        ) INSERT INTO background_jobs (run_at, status, payload)
+          SELECT #{retryAt}, 'pending', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
   where
+    runReceipt = do
+      pending <-
+        Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
+          [HI.sql|SELECT payload FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
+      for_ pending \(HI.OneColumn (Aeson payload)) -> case payload of
+        UrlVerification _ -> throwIO $ ErrorCall "Stored Slack event is not a callback"
+        EventCallback{team_id, event_id, event} -> do
+          kind <- either (throwIO . ErrorCall) pure $ AE.parseEither (classifySlackEvent team_id) event
+          let process = RateLimit.withRateLimits team_id do
+                stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
+                when (isJust stillPending) do
+                  envCfg <- asks env
+                  observedProgress <- Investigations.captureProgress envCfg.slackAppId receiptId
+                  for_ observedProgress $ \(target, timestamp) ->
+                    withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress target timestamp
+                  captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
+                  when (Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured)
+                    $ Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
+                  result <- runErrorNoCallStack @ServerError $ handleEventCallback envCfg kind team_id event_id
+                  either (throwIO . ErrorCall . show) pure result
+                  Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
+          case kind of
+            UserMessage message -> withThreadLock team_id message process
+            AppMention message -> withThreadLock team_id message process
+            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (toStrict $ AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
+            _ -> process
     -- A transaction-scoped advisory lock stays on one checked-out connection.
     -- Other DB operations use their usual pools; stop ingress never waits on it.
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
@@ -962,19 +985,21 @@ withInvestigationProgress slackData access action = case access of
                     >>= traverse_
                       ( \publication -> do
                           response <-
-                            postWith
-                              (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
-                              "https://slack.com/api/chat.postMessage"
-                              ( mergeSlackContent body
-                                  $ AE.object
-                                    [ "thread_ts" AE..= run.threadTs
-                                    , "metadata"
-                                        AE..= AE.object
-                                          [ "event_type" AE..= ("monoscope_investigation_progress" :: Text)
-                                          , "event_payload" AE..= AE.object ["publication_id" AE..= publication.publicationId]
-                                          ]
-                                    ]
-                              )
+                            ( postWith
+                                (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
+                                "https://slack.com/api/chat.postMessage"
+                                ( mergeSlackContent body
+                                    $ AE.object
+                                      [ "thread_ts" AE..= run.threadTs
+                                      , "metadata"
+                                          AE..= AE.object
+                                            [ "event_type" AE..= ("monoscope_investigation_progress" :: Text)
+                                            , "event_payload" AE..= AE.object ["publication_id" AE..= publication.publicationId]
+                                            ]
+                                      ]
+                                )
+                            )
+                              `catch` \limited@RateLimit.SlackRateLimited{} -> Investigations.rejectProgress publication.publicationId >> throwIO limited
                           case AE.decode @SlackProgressAck (response ^. responseBody) of
                             Just ack
                               | statusIsSuccessful (response ^. Wreq.responseStatus)

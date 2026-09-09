@@ -201,6 +201,7 @@ extra-source-files:
     static/migrations/0170_slack_turn_checkpoints.sql
     static/migrations/0171_slack_investigation_progress.sql
     static/migrations/0172_slack_progress_publication.sql
+    static/migrations/0173_slack_api_cooldowns.sql
 
 source-repository head
   type: git
@@ -310,6 +311,7 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock
       Pkg.TestUtils
@@ -928,6 +930,7 @@ test-suite test-dev
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.SlackRateLimit
       Pkg.StackTrace
       Pkg.TestClock
       Pkg.TestUtils

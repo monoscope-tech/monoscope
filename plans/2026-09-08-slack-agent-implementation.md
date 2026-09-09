@@ -1515,3 +1515,47 @@ Absent observations remain unresolved instead of being treated as proof of a
 failed send. History-based reconciliation, HTTP rate-limit handling across all
 reply paths, multi-part answer durability, live Slack acceptance, active steering,
 quality evaluation, tested drafts and proactive policies remain unfinished.
+
+
+### Durable native-worker Slack rate limits
+
+The native event worker now wraps its Slack PostWith/GetWith requests with a
+workspace/method cooldown. HTTP 429 stores Retry-After as an absolute database
+deadline; overlapping limits retain the later deadline. Other HTTP failures
+still fail, and non-Slack requests retain their original options and handling.
+The typed SlackRateLimited exception carries the persisted deadline.
+
+A deferred event stays unprocessed and schedules a future background job. A
+receipt row lock serializes scheduling; an existing future job moves to the later
+deadline rather than adding another job. Progress POSTs release their reservation
+when a rate limit proves they were not sent. The model's completed answer remains
+cached through deferred delivery. Database cooldowns protect new worker attempts
+without depending on an in-memory sleep.
+
+Native validation: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` passed 41 examples, zero failures,
+in 31.2972 seconds. The watcher was restarted for the new module. The regression
+uses HTTP 429 and Retry-After: 60, observes the persisted deadline, verifies no
+additional post during a new attempt, checks future-job coalescing and workspace
+isolation, expires the fixture deadline, and confirms delivery without repeating
+the model. Log: /tmp/monoscope-slack-agent/slack-rate-limit-workflows-complete.log.
+
+Three passes of each requested skill are recorded. Fourmolu and whitespace checks
+pass. HLint cannot parse MultilineStrings; Weeder reports repository findings.
+Logs: slack-rate-limit-hlint.log and slack-rate-limit-weeder.log in the same
+folder. CI for this increment is pending. No deployment or branch push.
+The response contract is documented at https://docs.slack.dev/apis/web-api/rate-limits/.
+
+The preceding reconciliation commit 28f3e8ba3 passed
+`make ci-signoff CHECKS="build doctests unit-tests"`, including 1,551 doctest
+examples and 308 unit examples. Passing results were attested. Full
+integration-tests, weeder, hlint and e2e remain outstanding; local full integration
+requires unavailable tf-real. Log:
+/tmp/monoscope-slack-agent/slack-progress-publication-ci-signoff.log.
+
+This wrapper applies to native event-worker Web API calls. Direct slash/form,
+webhook and other notification paths still have separate delivery handling.
+Best-effort progress/status cleanup does not yet have its own durable update
+outbox. Multi-part answer durability, missing-observation history reconciliation,
+live Slack acceptance, active steering, diagnosis evaluation, tested drafts and
+proactive policies remain unfinished.
