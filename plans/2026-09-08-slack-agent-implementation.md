@@ -793,3 +793,61 @@ regression explicitly seeds an issue episode and does not prove that upstream
 integration. Missing-telemetry semantics, chart acceptance, live Slack acceptance,
 and the remaining releases stay open. No push, deployment, or live Slack change
 occurred.
+
+
+## Stable error-pattern incident sources (2026-09-09)
+
+Runtime-error escalation can create another issue row for the same error pattern.
+Added `ErrorIncident ErrorPatternId` so those rows can share one incident episode.
+Migration 0166 permits the explicit `error` source kind in episodes and events;
+JSON and database value codecs for the source sum are derived. New active error
+incidents require a runtime-exception issue from the same project and error hash.
+The episode retains its original issue link when subsequent events name a newer
+issue for the same pattern.
+
+The event recorder locks the error row before the advisory source lock, matching
+the resolution transaction. New active events for resolved or merged patterns
+return `InactiveIncidentSource`; replay of a recorded event still returns its
+existing identity. A real recurrence after resolution can open a new episode.
+Manual resolution now handles both legacy issue sources and error-pattern
+sources in the same transaction.
+
+A deleted issue leaves the episode's issue ID empty by schema design. Resolution
+now preserves that absence explicitly and still closes the error episode. Its
+message links to the project issue list, labeled “Open project issues”. Root
+updates retain the original onset and chart, but use current action links so a
+deleted issue's link is not restored from the initial snapshot.
+
+The new source regression initially failed when recording the unsupported error
+source. The final native command was:
+
+```sh
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Incident make live-test-dev
+```
+
+It passed 13 examples, zero failures. The scenario covers changed issue IDs,
+original link retention, project/hash validation, missing initial issue,
+resolution, stale-event rejection, replay, recurrence, merged-pattern suppression,
+and resolution after issue deletion. Existing monitor, manual-resolution, and
+transport tests also pass. Log: `/tmp/monoscope-slack-agent/error-source-tests.log`.
+Fourmolu and scoped whitespace checks passed; Hpack includes migration 0166.
+Scoped HLint again could not run because installed 3.3.6 rejects
+`MultilineStrings`; `/tmp/monoscope-slack-agent/error-source-hlint.log` records it.
+All three requested skills ran three times and found no added handwritten
+instances or warning suppressions.
+
+One watcher attempt failed while renaming an object file. Inspection found
+orphaned test compiler processes from earlier watcher shutdowns sharing the same
+build directory. Those orphaned test processes were stopped, the app watcher was
+left running, and one native test watcher completed the final run. No build cache
+was deleted.
+
+The runtime-error transport switch is still pending. Initial alerts, subscription
+reminders, and spike notifications need their notification claim and outbox intent
+committed together. Merely enqueueing in `sendAlertToChannels` after the current
+claim would leave a crash window that suppresses an undelivered alert. Their
+message builders must use the episode's original issue link when issues change.
+The source/closure regression explicitly seeds episodes; it is not evidence that
+the ingestion paths already create them. Current-tree CI signoff, full supported
+TimeFusion integration, live Slack acceptance, charts, and the remaining releases
+are still required. No push or deployment occurred.

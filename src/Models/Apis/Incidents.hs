@@ -60,8 +60,10 @@ type SlackRootId = UUIDId "slack_incident_root"
 type SlackDeliveryId = UUIDId "slack_incident_delivery"
 
 
-data IncidentSource = MonitorIncident Monitors.QueryMonitorId | IssueIncident Issues.IssueId
-  deriving stock (Eq, Show)
+data IncidentSource = MonitorIncident Monitors.QueryMonitorId | IssueIncident Issues.IssueId | ErrorIncident ErrorPatterns.ErrorPatternId
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson IncidentSource
 
 
 data IncidentChange = IncidentAlert | IncidentObservation | IncidentReminder | IncidentRecovered | IncidentResolved Projects.UserId
@@ -132,6 +134,7 @@ data RecordResult
   | OlderThanCurrentEpisode
   | NoOpenEpisode
   | UnknownIncidentSource
+  | InactiveIncidentSource
   | IncidentIssueMismatch
   deriving stock (Eq, Show)
 
@@ -139,6 +142,7 @@ data RecordResult
 sourceFields :: IncidentSource -> (Text, UUID.UUID)
 sourceFields (MonitorIncident mid) = ("monitor", mid.unQueryMonitorId)
 sourceFields (IssueIncident iid) = ("issue", iid.unUUIDId)
+sourceFields (ErrorIncident eid) = ("error", eid.unErrorPatternId)
 
 
 changeFields :: IncidentChange -> (Text, EpisodePhase, Maybe Projects.UserId)
@@ -186,7 +190,7 @@ data ErrorResolution = ErrorResolved | ErrorAlreadyResolved | ErrorResolutionDen
 
 -- | Commit operator attribution, activity, and updates to existing incident threads
 -- together. Legacy errors without roots still resolve without creating a channel post.
-resolveErrorIncident :: DB es => Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> Projects.UserId -> UTCTime -> (Issues.IssueId -> SlackPayload) -> Eff es ErrorResolution
+resolveErrorIncident :: DB es => Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> Projects.UserId -> UTCTime -> (Maybe Issues.IssueId -> SlackPayload) -> Eff es ErrorResolution
 resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadCommitted TxS.Write do
   matched <-
     queryTx @[(Text, ErrorPatterns.ErrorState)]
@@ -207,25 +211,33 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
         [HI.sql|UPDATE apis.error_patterns SET state = 'resolved', resolved_at = #{now}, resolved_by = #{actor}, updated_at = #{now}
         WHERE id = #{errorId} AND project_id = #{pid}|]
       sources <-
-        queryTx @[Issues.IssueId]
-          [HI.sql|SELECT DISTINCT issue.id FROM apis.issues issue
-          JOIN apis.incident_episodes episode ON episode.source_kind = 'issue' AND episode.source_id = issue.id AND episode.project_id = issue.project_id
-          WHERE issue.project_id = #{pid} AND issue.target_hash = #{hash} AND issue.issue_type = 'runtime_exception' AND episode.phase = 'active'
-          ORDER BY issue.id|]
-      results <- forM sources \iid ->
+        queryTx @[(IncidentSource, Maybe Issues.IssueId)]
+          [HI.sql|SELECT DISTINCT
+            CASE episode.source_kind
+              WHEN 'error' THEN jsonb_build_object('tag', 'ErrorIncident', 'contents', episode.source_id)
+              WHEN 'issue' THEN jsonb_build_object('tag', 'IssueIncident', 'contents', episode.source_id)
+            END,
+            CASE WHEN episode.source_kind = 'issue' THEN issue.id ELSE episode.issue_id END
+          FROM apis.incident_episodes episode
+          LEFT JOIN apis.issues issue ON issue.id = episode.source_id AND episode.source_kind = 'issue'
+          WHERE episode.project_id = #{pid} AND episode.phase = 'active' AND
+            ((episode.source_kind = 'error' AND episode.source_id = #{errorId}) OR
+             (episode.source_kind = 'issue' AND issue.project_id = #{pid} AND issue.target_hash = #{hash} AND issue.issue_type = 'runtime_exception'))
+          ORDER BY 1, 2|]
+      results <- forM sources \(source, iid) ->
         recordIncidentEventTx
           IncidentUpdate
             { projectId = pid
-            , source = IssueIncident iid
+            , source
             , observedAt = now
             , change = IncidentResolved actor
             , delivery = PublishIncident
-            , issueId = Just iid
+            , issueId = iid
             , rootPayload = message iid
             , replyPayload = message iid
             , destinations = []
             }
-      case find (\case Recorded{} -> False; AlreadyRecorded{} -> False; NoOpenEpisode -> False; OlderThanCurrentEpisode -> True; UnknownIncidentSource -> True; IncidentIssueMismatch -> True) results of
+      case find (\case Recorded{} -> False; AlreadyRecorded{} -> False; NoOpenEpisode -> False; OlderThanCurrentEpisode -> True; UnknownIncidentSource -> True; InactiveIncidentSource -> True; IncidentIssueMismatch -> True) results of
         Nothing -> pure ErrorResolved
         Just conflict -> Tx.condemn $> ErrorResolutionConflict conflict
 
@@ -244,6 +256,16 @@ recordIncidentEventTx update = do
       (eventKind, nextPhase, actorId) = changeFields update.change
       at = update.observedAt
       issueId = update.issueId
+  -- Match the resolution transaction's lock order before taking the source lock.
+  sourceActionable <- case update.source of
+    ErrorIncident eid ->
+      fromMaybe False
+        . listToMaybe
+        <$> queryTx @[Bool]
+          [HI.sql|SELECT (state <> 'resolved' AND canonical_id IS NULL) OR #{nextPhase}::text <> 'active'
+          FROM apis.error_patterns WHERE id = #{eid} AND project_id = #{pid} FOR UPDATE|]
+    MonitorIncident _ -> pure True
+    IssueIncident _ -> pure True
   -- Hash collisions only serialize unrelated sources. The exact project/source
   -- fields below still determine identity and authorization.
   void
@@ -253,11 +275,17 @@ recordIncidentEventTx update = do
     oneTx @Bool
       [HI.sql|SELECT CASE WHEN #{sourceKind} = 'monitor'
     THEN EXISTS (SELECT 1 FROM monitors.query_monitors WHERE id = #{sourceId} AND project_id = #{pid})
-    ELSE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{sourceId} AND project_id = #{pid}) END|]
+    WHEN #{sourceKind} = 'issue' THEN EXISTS (SELECT 1 FROM apis.issues WHERE id = #{sourceId} AND project_id = #{pid})
+    WHEN #{sourceKind} = 'error' THEN EXISTS (SELECT 1 FROM apis.error_patterns WHERE id = #{sourceId} AND project_id = #{pid}) ELSE FALSE END|]
   validIssue <-
     oneTx @Bool
-      [HI.sql|SELECT #{issueId}::uuid IS NULL OR EXISTS
-    (SELECT 1 FROM apis.issues WHERE id = #{issueId} AND project_id = #{pid})|]
+      [HI.sql|SELECT CASE WHEN #{sourceKind} = 'error' THEN
+        (#{issueId}::uuid IS NULL AND #{nextPhase}::text <> 'active') OR EXISTS
+        (SELECT 1 FROM apis.issues issue JOIN apis.error_patterns pattern
+          ON pattern.project_id = issue.project_id AND pattern.hash = issue.target_hash
+          WHERE pattern.id = #{sourceId} AND issue.id = #{issueId} AND issue.project_id = #{pid} AND issue.issue_type = 'runtime_exception')
+      ELSE #{issueId}::uuid IS NULL OR EXISTS
+        (SELECT 1 FROM apis.issues WHERE id = #{issueId} AND project_id = #{pid}) END|]
   if not validSource
     then pure UnknownIncidentSource
     else
@@ -271,6 +299,7 @@ recordIncidentEventTx update = do
           AND observed_at = #{at} AND event_kind = #{eventKind}|]
           case listToMaybe duplicate of
             Just (eid, eventId) -> pure $ AlreadyRecorded eid eventId
+            Nothing | not sourceActionable -> pure InactiveIncidentSource
             Nothing -> do
               latest <- latestEpisodeTx pid update.source
               case latest of

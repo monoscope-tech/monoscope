@@ -194,6 +194,7 @@ extra-source-files:
     static/migrations/0163_slack_native_context.sql
     static/migrations/0164_slack_link_delivery.sql
     static/migrations/0165_error_resolution_actor.sql
+    static/migrations/0166_error_incident_source.sql
 
 source-repository head
   type: git

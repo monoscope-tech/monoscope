@@ -1436,7 +1436,8 @@ resolveErrorPostH pid errUuid = do
       | otherwise -> do
           now <- Time.currentTime
           ctx <- ask @AuthContext
-          let message iid = Mail.resolvedErrorMessage err sess.user now (hostPath ctx.env.hostUrl $ "p/" <> pid.toText <> "/issues/" <> iid.toText)
+          let projectUrl = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
+              message iid = Mail.resolvedErrorMessage err sess.user now projectUrl (((projectUrl <> "/issues/") <>) . (.toText) <$> iid)
               resolved = do
                 addSuccessToast "Error resolved" Nothing
                 addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True

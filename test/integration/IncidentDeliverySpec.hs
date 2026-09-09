@@ -33,6 +33,88 @@ import UnliftIO.Async (concurrently)
 spec :: Spec
 spec = around withTestResources do
   describe "Incident delivery" do
+    it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
+      update <- setup tr
+      setupSlackData tr testPid "T1"
+      let sample = def{Errors.when = frozenTime, Errors.hash = "stable-error-episode", Errors.errorType = "CheckoutError"}
+      void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample] frozenTime
+      Just err <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
+      issue <- runTestBgNoReset tr do
+        created <- Issues.createNewErrorIssue testPid err
+        Issues.insertIssue created
+        pure created
+      let payload iid =
+            I.SlackPayload
+              $ KM.fromList
+                [ "text" AE..= ("Error observed" :: Text)
+                , "blocks"
+                    AE..= ( [ AE.object
+                                [ "type" AE..= ("section" :: Text)
+                                , "block_id" AE..= ("incident_actions" :: Text)
+                                , "text" AE..= AE.object ["type" AE..= ("mrkdwn" :: Text), "text" AE..= ("<https://app.monoscope.tech/p/" <> testPid.toText <> "/issues/" <> iid.toText <> "|Open incident>")]
+                                ]
+                            ]
+                              :: [AE.Value]
+                          )
+                ]
+          initial = update{I.source = I.ErrorIncident err.id, I.issueId = Just issue.id, I.rootPayload = payload issue.id}
+      I.Recorded episode firstEvent <- runTestBgNoReset tr $ I.recordIncidentEvent initial
+      void $ captureNotifs tr runSlackIncidentDeliveries
+      -- Escalation can produce another issue row while the error remains active.
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, issue.id)
+      advanceMinutes tr 1
+      nextIssue <- runTestBgNoReset tr do
+        created <- Issues.createNewErrorIssue testPid err
+        Issues.insertIssue created
+        pure created
+      nextIssue.id `shouldNotBe` issue.id
+      now <- getTestTime tr.trTestClock
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.UnknownIncidentSource
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Nothing}) `shouldReturn` I.IncidentIssueMismatch
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = 'another-error' WHERE id = ?|] (PGS.Only nextIssue.id)
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now}) `shouldReturn` I.IncidentIssueMismatch
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = ? WHERE id = ?|] (sample.hash, nextIssue.id)
+      I.Recorded ongoing _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now, I.change = I.IncidentReminder}
+      (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
+      void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
+      advanceMinutes tr 1
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
+      (resolution, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
+      let messages = [sd | Notify.SlackNotification sd <- resolution]
+      length messages `shouldBe` 4
+      for_ messages \sd -> do
+        let body = decodeUtf8 @Text $ toStrict $ AE.encode sd.payload
+        body `shouldSatisfy` T.isInfixOf issue.id.toText
+        body `shouldSatisfy` not . T.isInfixOf nextIssue.id.toText
+      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT channel_id FROM apis.slack_incident_roots WHERE episode_id = ? ORDER BY channel_id|] (PGS.Only episode.id)
+      roots `shouldBe` [PGS.Only ("C1" :: Text), PGS.Only "C2"]
+      closedAt <- getTestTime tr.trTestClock
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = addUTCTime 1 closedAt}) `shouldReturn` I.InactiveIncidentSource
+      runTestBgNoReset tr (I.recordIncidentEvent initial) `shouldReturn` I.AlreadyRecorded episode.id firstEvent
+      advanceMinutes tr 1
+      againAt <- getTestTime tr.trTestClock
+      let canonicalSample = sample{Errors.hash = "canonical-error"} :: Errors.ATError
+      void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample{Errors.when = againAt}, canonicalSample] againAt
+      Just canonical <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid canonicalSample.hash
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ?|] (canonical.id, err.id)
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = againAt}) `shouldReturn` I.InactiveIncidentSource
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = NULL WHERE id = ?|] (PGS.Only err.id)
+      I.Recorded recurring _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = againAt, I.rootPayload = payload nextIssue.id}
+      recurring.id `shouldNotBe` episode.id
+      void $ captureNotifs tr runSlackIncidentDeliveries
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
+      advanceMinutes tr 1
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
+      (orphaned, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
+      let orphanedMessages = [sd | Notify.SlackNotification sd <- orphaned]
+      length orphanedMessages `shouldBe` 4
+      for_ orphanedMessages \sd -> do
+        let body = decodeUtf8 @Text $ toStrict $ AE.encode sd.payload
+        body `shouldSatisfy` T.isInfixOf "Open project issues"
+        body `shouldSatisfy` not . T.isInfixOf nextIssue.id.toText
+
     it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
       update <- setup tr
       setupSlackData tr testPid "T1"

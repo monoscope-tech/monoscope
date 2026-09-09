@@ -330,14 +330,15 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
     message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
 
 
-resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Incidents.SlackPayload
-resolvedErrorMessage err actor now issueUrl =
+resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Maybe Text -> Incidents.SlackPayload
+resolvedErrorMessage err actor now projectUrl issueUrl =
   Incidents.SlackPayload
     $ KEM.fromList
       [ "text" AE..= text
-      , "blocks" AE..= ([slackSection text, slackContext ["<" <> issueUrl <> "|Open incident>"]] :: [AE.Value])
+      , "blocks" AE..= ([slackSection text, slackContext ["<" <> url <> "|" <> label <> ">"]] :: [AE.Value])
       ]
   where
+    (url, label) = maybe (projectUrl <> "/issues", "Open project issues") (,"Open incident") issueUrl
     name = T.strip $ actor.firstName <> " " <> actor.lastName
     text =
       "RESOLVED · "
@@ -359,7 +360,7 @@ retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload cur
   Incidents.SlackPayload $ KEM.insert "blocks" (AE.toJSON (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))) current
   where
     blocks obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
-    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) ["incident_onset", "incident_chart", "incident_actions"]
+    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) ["incident_onset", "incident_chart"]
     snapshot _ = False
 
 

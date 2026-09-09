@@ -336,3 +336,26 @@ No further LoC reduction is proposed. Remaining plan work includes connecting
 runtime-error alert creation/reminders to this outbox, truthful missing-telemetry
 handling, and live Slack acceptance. The model regression seeds an issue episode;
 it does not claim the legacy runtime-error notification path already creates it.
+
+
+## Stable runtime-error incident identity
+
+Three passes applied all three requested skills to source identity, event storage,
+manual resolution, snapshot retention, and the lifecycle regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Extend the existing source sum and episode/outbox records. Derive JSON and the Hasql value codec via `Aeson`; reuse the existing source-lock and delivery code. | Error-pattern IDs are a separate constructor and database source kind. Issue IDs can change during escalation and must not become a new episode identity. Validate project, runtime issue type, and matching error hash. | No client interaction added. The existing resolution route and native Slack blocks remain sufficient. |
+| 2 | Reuse the same resolution recorder for legacy issue sources and new error sources. | Lock the error row before the advisory source lock, matching resolution's lock order. Reject new active events for resolved or merged patterns while retaining replay deduplication. Preserve the episode's original issue link. | Keep lifecycle, transport, and authorization assertions together in Hspec; no pure one-line Spec tests added. |
+| 3 | Keep missing issue links explicit as `Maybe`, and reuse the existing message builder with a project fallback. | Handle a deleted original issue without silently dropping the error episode from resolution. Stop restoring obsolete action links from the initial snapshot; retain onset and chart, and use current links. Test recurrence, merged suppression, wrong project/hash, absent initial issue, replay after closure, and deleted-issue resolution. | The fallback is labeled “Open project issues”; no custom JS, hyperscript, styling binding, or fabricated investigation action. |
+
+| File | Reuse / combinators | Derives | Consolidation / bloat |
+| --- | --- | --- | --- |
+| `src/Models/Apis/Incidents.hs` | Existing query helpers, source/event recorder, locks, and resolution transaction. | Source JSON and Hasql codecs are derived. | One resolution loop handles both source types; no parallel delivery table. |
+| `src/Pages/Anomalies.hs` | Existing URL and response helpers; map a present issue ID to its URL. | No instances. | One base URL supplies the incident or project fallback. |
+| `src/Pkg/Mail.hs` | Existing message builder and `maybe`. | Existing derived payload. | Remove action blocks from retained historical snapshots. |
+| `test/integration/IncidentDeliverySpec.hs` | Existing database, clock, handler, and notification fixtures. | No fixture instances. | One multi-step scenario verifies identity across changing/deleted issue records. |
+
+No further LoC reduction is proposed. The legacy notification claim/dispatch
+paths still need an atomic outbox integration. This prerequisite does not claim
+that normal ingestion already creates error-source episodes.
