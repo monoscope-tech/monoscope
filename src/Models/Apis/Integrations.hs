@@ -25,6 +25,8 @@ module Models.Apis.Integrations (
   resolveSlackPrincipal,
   slackThreadProject,
   bindSlackInvestigation,
+  recordSlackStop,
+  slackInvestigationStopped,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -160,6 +162,38 @@ bindSlackInvestigation principal teamId channelId threadTs = do
       ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE SET thread_ts = EXCLUDED.thread_ts
       WHERE slack_investigation_threads.project_id = EXCLUDED.project_id RETURNING TRUE|]
   pure $ isJust result
+
+
+-- | Only an authenticated, linked project member can stop an existing thread.
+-- Source identity and coordinates come from the stored signed receipt.
+recordSlackStop :: DB es => Text -> Text -> Eff es ()
+recordSlackStop teamId eventId =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.slack_investigation_threads thread
+    SET stopped_through = GREATEST(thread.stopped_through, (receipt.payload->'event'->>'event_ts')::numeric)
+    FROM apis.slack_events receipt
+    JOIN apis.slack_identities identity ON identity.team_id = receipt.team_id AND identity.slack_user_id = receipt.payload->'event'->>'user'
+    JOIN projects.project_members member ON member.user_id = identity.user_id
+    JOIN users.users account ON account.id = member.user_id
+    JOIN projects.projects project ON project.id = member.project_id
+    JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = receipt.team_id
+    WHERE receipt.team_id = #{teamId} AND receipt.event_id = #{eventId}
+      AND receipt.payload->'event'->>'type' = 'agent_session_stopped'
+      AND thread.team_id = receipt.team_id AND thread.project_id = member.project_id
+      AND thread.channel_id = receipt.payload->'event'->>'channel'
+      AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'
+      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+      AND project.active AND project.deleted_at IS NULL|]
+
+
+slackInvestigationStopped :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Bool
+slackInvestigationStopped pid teamId channelId threadTs messageTs = do
+  stopped <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|SELECT TRUE FROM apis.slack_investigation_threads
+      WHERE project_id = #{pid} AND team_id = #{teamId} AND channel_id = #{channelId}
+        AND thread_ts = #{threadTs} AND stopped_through >= #{messageTs}::text::numeric|]
+  pure $ isJust stopped
 
 
 data SlackInstall = SlackInstall {projectId :: Projects.ProjectId, onboarding :: Bool}

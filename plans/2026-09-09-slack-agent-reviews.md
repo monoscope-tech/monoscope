@@ -243,3 +243,19 @@ startup/cleanup, the status request types, and recorded-HTTP worker tests.
 | 1 | Derive the status enum and request record JSON; reuse `slackApi` and the existing access guard. | Use the current `agents.sessions.setStatus` API with explicit channel and thread. Require a successful startup acknowledgement before work. | Use Slack's native loading state; no custom client code. |
 | 2 | Generalize the existing HTTP response fixture instead of duplicating effect forwarding. Use `bracket_` for startup/cleanup. | Recheck project access before startup. Test cleanup on API-page failures and mid-fetch revocation, and reject failed startup before the model runs. | Keep lifecycle and failure checks in the worker integration flow. |
 | 3 | Re-read all modified functions and their unchanged receipt/history consumers. No manual instance or warning suppression. | Fix cleanup-error replay: log an unsuccessful reset without rerunning a completed answer. Verify the receipt's replay emits no requests and no second answer. Stop events, concurrent-run coordination, and durable status reconciliation remain explicit plan gates. | No styling or behavior-tier changes; native status is scoped to the existing thread. |
+
+
+## Durable investigation stops
+
+All three requested skills were applied in three passes to the stop migration,
+receipt ingress/worker, access types, backfill exception handling, and tests.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive the stop payload and exception instances. Reuse the timestamp validator, access guard, async race, and existing thread table. | Connect the previously incomplete storage/access additions to signed ingress and the worker. Interrupt blocked work rather than only checking after model completion. | Use Slack's native stop interaction and threaded confirmation; no browser behavior added. |
+| 2 | Remove a redundant MVar import; use Relude and the existing recorded-HTTP/provider fixtures. | Authorize from the stored signed receipt against current membership, account, project, and workspace installation. Keep the cutoff monotonic and validate timestamps before storage. | Keep the multi-step cancellation, replay, and authorization checks in Hspec. No styling indirection or client-tier escalation. |
+| 3 | Preserve backfill exceptions with `onException`, removing the broad exception-to-503 conversion. Re-read changed functions and their existing callers; no manual instance or warning suppression. | Fix cancellation swallowed during history retrieval. Regress blocked model cancellation, stop during backfill, ignored unlinked users, old-stop ordering, successful newer work, and completed-receipt replay. | Recheck the final diff: no JS, hyperscript, CSS, or Lucid behavior changes; no simple pure assertions needing relocation. |
+
+Remaining plan limitations: concurrent questions can still race native status
+updates; cleanup and confirmation delivery lack durable reconciliation. This
+change does not establish live Slack acceptance or authorize deployment.

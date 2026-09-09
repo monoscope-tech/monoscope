@@ -38,8 +38,9 @@ import Relude
 import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
+import System.Timeout (timeout)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
-import UnliftIO.Async (concurrently, concurrently_)
+import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -420,6 +421,9 @@ spec = around withTestResources do
         for_ ([(body <> " ", Just "1735689600", signature), ("not-json", Nothing, Nothing), (body, Just "1735689600", Just "v1=bad"), (body, Just "1735689299", Just $ signSlackBody "1735689299" body), (body, Just "1735689901", Just $ signSlackBody "1735689901" body)] :: [(ByteString, Maybe Text, Maybe Text)]) \(bytes, timestamp, sig) ->
           status signedTr bytes timestamp sig >>= (`shouldBe` 401)
         status signedTr "not-json" (Just "1735689600") (Just $ signSlackBody "1735689600" "not-json") >>= (`shouldBe` 400)
+        for_ (["bad", "-1.1", "NaN"] :: [Text]) \ts -> do
+          let invalidStop = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_STOP" :: Text), "event_id" AE..= ("EvInvalidStop" :: Text), "event" AE..= AE.object ["type" AE..= ("agent_session_stopped" :: Text), "event_ts" AE..= ts, "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U_STOP" :: Text), "channel" AE..= ("C_STOP" :: Text)]]
+          status signedTr invalidStop (Just "1735689600") (Just $ signSlackBody "1735689600" invalidStop) >>= (`shouldBe` 400)
         let unconfigured = tr{trATCtx = tr.trATCtx{Config.env = cfg{Config.slackSigningSecret = ""}}}
         status unconfigured body (Just "1735689600") signature >>= (`shouldBe` 503)
 
@@ -576,6 +580,56 @@ spec = around withTestResources do
         (replayed, _) <- runTestBgRecordingHTTP frozenTime resources $ cleanupFailure $ provider $ tryAny $ processSlackEvent cleanupReceipt
         replayed `shouldBe` []
         length <$> readIORef observed >>= (`shouldBe` 3)
+
+      it "signed stops interrupt running work and only cancel questions through their timestamp" \tr -> do
+        setupLinkedSlackData tr testPid "T_STOP"
+        entered <- newEmptyMVar
+        blocked <- newEmptyMVar
+        interrupted <- newIORef False
+        let event ts = slackThreadedEvent "T_STOP" "C_STOP" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
+            stop user ts = event ts & key "event_id" . _String .~ ("stop-" <> user <> ts) & key "event" .~ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "channel" AE..= ("C_STOP" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text)]
+            transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> liftIO $ bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked)
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            stopped ts = toBaseServantResponse tr $ Slack.slackInvestigationStopped testPid "T_STOP" "C_STOP" "1735689600.000001" ts
+        receipt <- receiveSlackEvent tr $ event "1735689601.000001"
+        withAsync (runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt) \worker -> do
+          timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          void $ receiveSlackEvent tr $ stop "U_UNLINKED" "1735689603.000001"
+          stopped "1735689601.000001" >>= (`shouldBe` False)
+          stopReceipt <- receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689602.000001"
+          stopped "1735689601.000001" >>= (`shouldBe` True)
+          result <- timeout 10_000_000 $ wait worker
+          case result of
+            Nothing -> fail "Stop did not interrupt the model call"
+            Just (requests, outcome) -> do
+              outcome `shouldSatisfy` isRight
+              mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) requests `shouldBe` ["processing", "active"]
+              mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "text" . _String)) requests `shouldBe` ["Investigation stopped. Send another message to continue."]
+          readIORef interrupted >>= (`shouldBe` True)
+          void $ runTestBgRecordingHTTP frozenTime tr $ processSlackEvent stopReceipt
+        void $ receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689600.000002"
+        stopped "1735689601.000001" >>= (`shouldBe` True)
+        stopped "1735689603.000001" >>= (`shouldBe` False)
+        putMVar blocked $ Right $ Chat.Message Chat.Assistant "A new investigation can proceed." Chat.defaultMessageData
+        nextReceipt <- receiveSlackEvent tr $ event "1735689603.000001"
+        (_, resumed) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent nextReceipt
+        resumed `shouldSatisfy` isRight
+        history <- toBaseServantResponse tr $ Issues.selectChatHistory testPid $ Issues.slackScopedConversationId testPid "T_STOP" "C_STOP" "1735689600.000001"
+        map (.content) (filter ((== Issues.ChatAssistant) . (.role)) history) `shouldBe` ["A new investigation can proceed."]
+        let inOtherThread payload = payload & key "event" . key "channel" . _String .~ "C_STOP_BACKFILL"
+            stopDuringBackfill = withHTTPResponses \_ url -> do
+              when (url == "https://slack.com/api/conversations.replies") $ void $ receiveSlackEvent tr $ inOtherThread $ stop "U0123ABCDEF" "1735689605.000001"
+              pure $ Just "{\"ok\":true,\"messages\":[]}"
+        backfillReceipt <- receiveSlackEvent tr $ inOtherThread $ event "1735689604.000001"
+        duringBackfill <- timeout 10_000_000 $ runTestBgRecordingHTTP frozenTime tr $ stopDuringBackfill $ provider $ tryAny $ processSlackEvent backfillReceipt
+        case duringBackfill of
+          Just (_, outcome) -> outcome `shouldSatisfy` isRight
+          Nothing -> fail "Stop during backfill did not terminate the investigation"
+        (replayed, _) <- runTestBgRecordingHTTP frozenTime tr $ processSlackEvent receipt
+        replayed `shouldBe` []
 
       it "seeds history once, retries failures, and isolates projects" \tr -> do
         attempts <- newIORef (0 :: Int)

@@ -491,3 +491,39 @@ Stop-event handling, concurrent-run coordination, durable status reconciliation,
 tool-message replay/checkpoints, installation capability upgrade, and the other
 remaining plan gates are unfinished. CI signoff must be refreshed before push.
 No push, app-manifest publication, or deployment occurred.
+
+
+## Durable stop handling (2026-09-09)
+
+Signed stop events now persist a monotonic cutoff on an existing investigation
+thread. The stored receipt supplies workspace, channel, thread, user, and event
+time. Current linked membership, account/project state, and workspace installation
+must authorize the stop. Ingress records the cutoff immediately; the queued worker
+repeats the operation for crash recovery. Old stops cannot lower the cutoff.
+
+Investigations carry explicit access context and a derived `AgentStopped`
+exception. Access checks enforce cancellation before and after model/tool work and
+before output. A half-second watchdog also interrupts blocked calls. Bracket
+cleanup attempts the native active status, followed by a threaded confirmation.
+Backfill preserves cancellation exceptions instead of converting them into a
+retryable 503. A question newer than the cutoff can proceed.
+
+Migration 0161 adds the nullable numeric cutoff; Hpack includes it in source
+packaging. The workflow fixture covers malformed timestamps, unlinked stops,
+interruption of a blocked model, status cleanup/confirmation, monotonic ordering,
+a newer successful question, cancellation during backfill, and receipt replay.
+The fixture uses distinct event IDs for stops and questions, as Slack does.
+
+Validation command:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+Final result: 27 examples, 0 failures. Fourmolu check and scoped
+`git diff --check` passed. The existing unused import warning in
+`BackgroundJobs.hs` remains unrelated. Recorded provider-error fixtures in other
+bot workflows are not live-provider acceptance.
+Three passes of each requested skill are recorded in the review report.
+
+Current-tree CI signoff remains outstanding before push. Earlier attestations do
+not cover these changes. Concurrent-run status coordination, durable status and
+confirmation reconciliation, tool-message replay/checkpoints, installation
+capabilities, live Slack acceptance, and the wider plan remain unfinished.
+No push, app-manifest publication, or deployment occurred.

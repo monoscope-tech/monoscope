@@ -24,6 +24,8 @@ module Pkg.AI (
   AgenticConfig (..),
   AgentAccess (..),
   AgentAccessDenied (..),
+  SlackInvestigation (..),
+  AgentStopped (..),
   requireAgentAccess,
   ToolLimits (..),
 
@@ -392,8 +394,24 @@ defaultLimits =
     }
 
 
-data AgentAccess = ServiceAccess | SlackAccess Text Text Projects.UserId
+data AgentAccess = ServiceAccess | SlackAccess Text Text Projects.UserId | SlackInvestigationAccess SlackInvestigation
   deriving stock (Generic, Show)
+
+
+data SlackInvestigation = SlackInvestigation
+  { teamId :: Text
+  , slackUserId :: Text
+  , userId :: Projects.UserId
+  , channelId :: Text
+  , threadTs :: Text
+  , messageTs :: Text
+  }
+  deriving stock (Generic, Show)
+
+
+data AgentStopped = AgentStopped
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
 
 
 data AgentAccessDenied = AgentAccessDenied
@@ -408,6 +426,9 @@ requireAgentAccess ServiceAccess _ = pure ()
 requireAgentAccess (SlackAccess teamId slackUserId userId) projectId = do
   principal <- Integrations.resolveSlackPrincipal teamId slackUserId (Just projectId)
   unless (maybe False (\p -> p.userId == userId && p.projectId == projectId) principal) $ throwIO AgentAccessDenied
+requireAgentAccess (SlackInvestigationAccess run) projectId = do
+  requireAgentAccess (SlackAccess run.teamId run.slackUserId run.userId) projectId
+  whenM (Integrations.slackInvestigationStopped projectId run.teamId run.channelId run.threadTs run.messageTs) $ throwIO AgentStopped
 
 
 data AgenticConfig = AgenticConfig

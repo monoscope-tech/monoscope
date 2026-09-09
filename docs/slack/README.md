@@ -44,7 +44,14 @@ and attempt to return it to `active` on completion or failure, using
 [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
 A rejected startup status prevents the investigation and retains the pending
 receipt. Failed status cleanup is logged without replaying a completed answer.
-Stop-event handling and durable status reconciliation remain rollout gates.
+Signed `agent_session_stopped` events persist a cancellation cutoff for an existing
+project thread. Only a linked, current project member can stop its investigation.
+Running work checks that cutoff at access boundaries and every half second while
+waiting for model/tool work. Cancellation attempts to clear the processing status
+and posts a threaded confirmation. Later questions can start new work. Subscribe
+to [the stop event](https://docs.slack.dev/reference/events/agent_session_stopped/)
+before enabling this flow. Concurrent-run coordination and durable status
+reconciliation remain rollout gates.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.

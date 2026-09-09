@@ -31,10 +31,12 @@ import Lucid qualified as H
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..))
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
+import Effectful.Concurrent.Async (race_)
 import Effectful.Error.Static (runErrorNoCallStack, throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
@@ -65,7 +67,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO.Exception (bracket_, throwIO, tryAny)
+import UnliftIO.Exception (bracket_, catch, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -657,9 +659,15 @@ data SlackAssistantEvent = SlackAssistantEvent {assistant_thread :: SlackAssista
   deriving anyclass (AE.FromJSON)
 
 
+data SlackStopEvent = SlackStopEvent {channel :: Text, thread_ts :: Text, user :: Text, event_ts :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
 data SlackEventKind
   = UserMessage SlackMessage
   | AppMention SlackMessage
+  | AgentSessionStopped SlackStopEvent
   | BotMessage
   | MessageEdit
   | AssistantStarted SlackAssistantEvent
@@ -691,6 +699,11 @@ classifySlackEvent wire = do
     ("message", Nothing) | isJust header.bot_id -> pure BotMessage
     ("message", Nothing) -> human UserMessage
     ("app_mention", Nothing) | isNothing header.bot_id -> human AppMention
+    ("agent_session_stopped", _) -> do
+      value <- decode
+      unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.thread_ts]) $ fail "Invalid Slack stop timestamp"
+      when (any T.null [value.user, value.channel]) $ fail "Missing Slack stop identity"
+      pure $ AgentSessionStopped value
     ("assistant_thread_started", _) -> assistant AssistantStarted
     ("assistant_thread_context_changed", _) -> assistant AssistantContextChanged
     _ -> pure $ UnknownEvent header
@@ -732,7 +745,7 @@ slackEventsPostH body timestamp signature = do
   case payload of
     UrlVerification challenge -> pure $ AE.object ["challenge" AE..= challenge]
     EventCallback{team_id, event_id, event} -> do
-      void $ either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
+      kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
       receiptId <- UUIDId <$> UUID.genUUID
       let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
       Hasql.interpExecute_
@@ -742,6 +755,9 @@ slackEventsPostH body timestamp signature = do
           ON CONFLICT (team_id, event_id) DO NOTHING RETURNING id
         ) INSERT INTO background_jobs (run_at, status, payload)
           SELECT now(), 'queued', #{job} FROM receipt|]
+      case kind of
+        AgentSessionStopped _ -> Integrations.recordSlackStop team_id event_id
+        _ -> pure ()
       pure $ AE.object []
 
 
@@ -760,13 +776,14 @@ processSlackEvent receiptId = do
       _ -> pure ()
     result <- runErrorNoCallStack @ServerError $ case payload of
       UrlVerification _ -> throwError err400{errBody = "Stored Slack event is not a callback"}
-      EventCallback{team_id, event} -> handleEventCallback envCfg event team_id
+      EventCallback{team_id, event_id, event} -> handleEventCallback envCfg event team_id event_id
     either (throwIO . ErrorCall . show) pure result
     Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
   where
-    handleEventCallback envCfg event workspaceId = do
+    handleEventCallback envCfg event workspaceId eventId = do
       kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
       case kind of
+        AgentSessionStopped _ -> Integrations.recordSlackStop workspaceId eventId
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
         AssistantStarted session -> saveAssistantContext workspaceId session
@@ -802,7 +819,7 @@ processSlackEvent receiptId = do
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
-      let access = AI.SlackAccess workspaceId event.user principal.userId
+      let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
           addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           historyMessage message =
             (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
@@ -815,13 +832,21 @@ processSlackEvent receiptId = do
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
-      AI.requireAgentAccess access slackData.projectId
-      bracket_
-        (setSessionStatus slackData.botToken event.channel threadTs Processing)
-        ( whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active) \err ->
-            Log.logAttention "Slack session status cleanup failed" $ AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "error" AE..= show @Text err]
+      ( do
+          AI.requireAgentAccess access slackData.projectId
+          bracket_
+            (setSessionStatus slackData.botToken event.channel threadTs Processing)
+            ( whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active) \err ->
+                Log.logAttention "Slack session status cleanup failed" $ AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "error" AE..= show @Text err]
+            )
+            ( race_
+                (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
+                (runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+            )
         )
-        (runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+        `catch` \AI.AgentStopped -> do
+          AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId
+          sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
 
 
 data SlackSessionStatus = Processing | Active

@@ -189,6 +189,7 @@ extra-source-files:
     static/migrations/0158_slack_identities.sql
     static/migrations/0159_slack_investigation_threads.sql
     static/migrations/0160_slack_incident_thread_lookup.sql
+    static/migrations/0161_slack_investigation_stops.sql
 
 source-repository head
   type: git

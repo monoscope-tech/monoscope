@@ -42,7 +42,7 @@ import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (onException)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 
 
@@ -564,10 +564,10 @@ withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta
   existingHistory <- Issues.selectChatHistory pid convId
   when (null existingHistory) do
-    result <- tryAny backfill
+    result <- backfill `onException` Log.logAttention "Bot thread backfill failed" ctx
     case result of
-      Right (Just messages) -> Issues.seedChatHistory pid convId messages
-      _ -> do
+      Just messages -> Issues.seedChatHistory pid convId messages
+      Nothing -> do
         Log.logAttention "Bot thread backfill failed" ctx
         throwError err503
   pure convId
