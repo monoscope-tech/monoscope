@@ -1658,10 +1658,17 @@ spec = around withTestResources do
         blocked <- newEmptyMVar
         interrupted <- newIORef False
         rejectRefresh <- newIORef True
+        rejectReset <- newIORef True
+        sessionCalls <- newIORef (0 :: Int)
         let event ts = slackThreadedEvent "T_STOP" "C_STOP" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
             stop user ts = event ts & key "event_id" . _String .~ ("stop-" <> user <> ts) & key "event" .~ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "channel" AE..= ("C_STOP" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text)]
             transport = withHTTPResponses \_ endpoint -> do
-              reject <- if endpoint == "https://slack.com/api/chat.update" then readIORef rejectRefresh else pure False
+              reject <- case endpoint of
+                "https://slack.com/api/chat.update" -> readIORef rejectRefresh
+                "https://slack.com/api/agents.sessions.setStatus" -> do
+                  attempt <- atomicModifyIORef' sessionCalls (\n -> (n + 1, n))
+                  if attempt == 0 then pure False else readIORef rejectReset
+                _ -> pure False
               pure $ Just $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat{} -> liftIO $ bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked)
@@ -1669,8 +1676,17 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             stopped ts = toBaseServantResponse tr $ Slack.slackInvestigationStopped testPid "T_STOP" "C_STOP" "1735689600.000001" ts
         receipt <- receiveSlackEvent tr $ event "1735689601.000001"
+        let uid = (getResponse tr.trSessAndHeader).user.id
+            resetJob = Jobs.ResetSlackSession testPid uid receipt
+            reset = runTestBgRecordingHTTP frozenTime tr $ transport $ tryAny $ SlackPage.resetSlackSession testPid uid receipt
+            resetCount = withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued'|] (PGS.Only $ Aeson $ AE.toJSON resetJob)
         withAsync (runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt) \worker -> do
           timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          withResource tr.trPool $ \conn -> assertDeferredJobRunnable conn $ AE.toJSON resetJob
+          (busyRequests, busyReset) <- reset
+          busyReset `shouldSatisfy` isRight
+          busyRequests `shouldBe` []
+          resetCount >>= (`shouldBe` [PGS.Only (1 :: Int)])
           -- Wait for the acknowledged progress row, not merely the HTTP request.
           timeout
             10_000_000
@@ -1705,6 +1721,21 @@ spec = around withTestResources do
                 value ^? key "blocks" . _Array . ix 0 . key "tasks" . _Array . ix 0 . key "status" . _String `shouldBe` Just "error"
           readIORef interrupted >>= (`shouldBe` True)
           void $ runTestBgRecordingHTTP frozenTime tr $ processSlackEvent stopReceipt
+        resetCount >>= (`shouldBe` [PGS.Only (1 :: Int)])
+        (_, failedReset) <- reset
+        failedReset `shouldSatisfy` isRight
+        resetCount >>= (`shouldBe` [PGS.Only (1 :: Int)])
+        writeIORef rejectReset False
+        (resetRequests, resetOutcome) <- reset
+        resetOutcome `shouldSatisfy` isRight
+        map fst resetRequests `shouldBe` ["https://slack.com/api/agents.sessions.setStatus"]
+        mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) resetRequests `shouldBe` ["active"]
+        resetCount >>= (`shouldBe` [PGS.Only (0 :: Int)])
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+        (revokedRequests, revokedReset) <- reset
+        revokedReset `shouldSatisfy` isRight
+        revokedRequests `shouldBe` []
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = TRUE WHERE project_id = ?|] (PGS.Only testPid)
         let target = Investigations.ProgressTarget testPid "T_STOP" "C_STOP" "1735689600.000001" "1735689601.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
         publication <- runQueryEffect tr (Investigations.loadProgress target) >>= maybe (fail "Expected stopped progress publication") pure
         let refresh = runTestBgRecordingHTTP frozenTime tr $ transport $ tryAny $ SlackPage.refreshSlackProgress publication.publicationId

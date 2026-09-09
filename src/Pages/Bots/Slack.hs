@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, resetSlackSession, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -809,24 +809,15 @@ processSlackEvent receiptId =
   where
     retryAfter seconds = slackRetryTime seconds >>= defer
     defer retryAt = do
-      let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
+      let job = BgJobs.ProcessSlackEvent receiptId
       Hasql.transaction TxS.ReadCommitted TxS.Write do
         pending <-
           Tx.statement ()
             $ HI.interp @[UUIDId "slack_event"]
               True
               [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]
-        unless (null pending)
-          $ void
-          $ Tx.statement ()
-          $ HI.interp @HI.RowsAffected
-            True
-            [HI.sql|WITH delayed AS (
-            UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
-            WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
-            RETURNING id
-          ) INSERT INTO background_jobs (run_at, status, payload)
-            SELECT #{retryAt}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+        unless (null pending) $ scheduleSlackJob job retryAt
+
     runReceipt = do
       pending <-
         Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
@@ -985,10 +976,12 @@ processSlackEvent receiptId =
                         throwIO SlackPublicationPending
       ( do
           AI.requireAgentAccess access slackData.projectId
+          let resetJob = BgJobs.ResetSlackSession slackData.projectId principal.userId receiptId
+          slackRetryTime 60 >>= scheduleSessionReset receiptId resetJob
           bracket_
             (setSessionStatus slackData.botToken event.channel threadTs Processing)
-            ( whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active) \err ->
-                Log.logAttention "Slack session status cleanup failed" $ AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "error" AE..= show @Text err]
+            ( whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active >> clearQueuedSlackJob resetJob) \_ ->
+                Log.logAttention "Slack session status cleanup remains queued" $ AE.object ["receipt_id" AE..= receiptId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs]
             )
             ( race_
                 (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
@@ -1024,24 +1017,76 @@ withEventLock lockKey action = do
 -- | A final refresh failure must be queued before its original receipt completes.
 scheduleProgressRefresh :: DB es => UUIDId "slack_progress" -> UTCTime -> Eff es ()
 scheduleProgressRefresh publicationId retryAt = do
-  let job = Aeson $ AE.toJSON $ BgJobs.RefreshSlackProgress publicationId
+  let job = BgJobs.RefreshSlackProgress publicationId
   Hasql.transaction TxS.ReadCommitted TxS.Write do
     target <-
       Tx.statement ()
         $ HI.interp @[UUIDId "slack_progress"]
           True
           [HI.sql|SELECT publication_id FROM apis.slack_investigation_progress WHERE publication_id = #{publicationId} FOR UPDATE|]
-    unless (null target)
-      $ void
-      $ Tx.statement ()
-      $ HI.interp @HI.RowsAffected
-        True
-        [HI.sql|WITH delayed AS (
-          UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
-          WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
-          RETURNING id
-        ) INSERT INTO background_jobs (run_at, status, payload)
-          SELECT #{retryAt}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+    unless (null target) $ scheduleSlackJob job retryAt
+
+
+-- | Call under the receipt/publication row lock; queued jobs use OddJobs' status.
+scheduleSlackJob :: BgJobs.BgJobs -> UTCTime -> Tx.Transaction ()
+scheduleSlackJob payload retryAt = do
+  let job = Aeson $ AE.toJSON payload
+  void
+    $ Tx.statement ()
+    $ HI.interp @HI.RowsAffected
+      True
+      [HI.sql|WITH delayed AS (
+        UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
+        WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
+        RETURNING id
+      ) INSERT INTO background_jobs (run_at, status, payload)
+        SELECT #{retryAt}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+
+
+scheduleSessionReset :: DB es => UUIDId "slack_event" -> BgJobs.BgJobs -> UTCTime -> Eff es ()
+scheduleSessionReset receiptId job retryAt = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  receipt <- Tx.statement () $ HI.interp @[UUIDId "slack_event"] True [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} FOR UPDATE|]
+  unless (null receipt) $ scheduleSlackJob job retryAt
+
+
+clearQueuedSlackJob :: DB es => BgJobs.BgJobs -> Eff es ()
+clearQueuedSlackJob job =
+  Hasql.interpExecute_ [HI.sql|DELETE FROM background_jobs WHERE payload = #{Aeson $ AE.toJSON job} AND status IN ('queued', 'retry')|]
+
+
+-- | Recover even when the original receipt has completed. The thread lock keeps
+-- an older reset from clearing the status of an investigation that is still running.
+resetSlackSession :: Projects.ProjectId -> Projects.UserId -> UUIDId "slack_event" -> ATBackgroundCtx ()
+resetSlackSession projectId userId receiptId = do
+  let job = BgJobs.ResetSlackSession projectId userId receiptId
+      defer = scheduleSessionReset receiptId job
+      retry = slackRetryTime 60 >>= defer
+  outcome <- tryAny do
+    receipt <- Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload)) [HI.sql|SELECT payload FROM apis.slack_events WHERE id = #{receiptId}|]
+    for_ receipt \(HI.OneColumn (Aeson payload)) -> case payload of
+      UrlVerification _ -> throwIO $ ErrorCall "Slack session reset requires a message callback"
+      EventCallback{team_id, event} -> do
+        kind <- either (throwIO . ErrorCall) pure $ AE.parseEither (classifySlackEvent team_id) event
+        message <- case kind of
+          UserMessage human -> pure human
+          AppMention human -> pure human
+          _ -> throwIO $ ErrorCall "Slack session reset requires a human message"
+        let thread = fromMaybe message.ts message.thread_ts
+        withInvestigationLock team_id message.channel thread $ RateLimit.withRateLimits team_id do
+          AI.requireAgentAccess (AI.SlackAccess team_id message.user userId) projectId
+          connection <- getProjectSlackData projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
+          unless (connection.teamId == team_id) $ throwIO AI.AgentAccessDenied
+          setSessionStatus connection.botToken message.channel thread Active
+          clearQueuedSlackJob job
+  for_ (leftToMaybe outcome) $ \err -> case fromException @RateLimit.SlackRateLimited err of
+    Just (RateLimit.SlackRateLimited retryAt) -> defer retryAt
+    Nothing | isJust (fromException @SlackWorkerBusy err) -> retry
+    Nothing | isJust (fromException @AI.AgentAccessDenied err) -> do
+      Log.logAttention "Slack session reset stopped because requester access was revoked" $ AE.object ["receipt_id" AE..= receiptId]
+      clearQueuedSlackJob job
+    Nothing -> do
+      Log.logAttention "Slack session reset failed and remains queued" $ AE.object ["receipt_id" AE..= receiptId]
+      retry
 
 
 slackRetryTime :: DB es => Int -> Eff es UTCTime

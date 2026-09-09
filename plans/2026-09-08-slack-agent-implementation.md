@@ -1832,3 +1832,29 @@ Three skill passes are recorded; HLint cannot parse MultilineStrings and Weeder
 exits 228. Previous commit b21c93ef9 passed make ci-signoff CHECKS="build doctests unit-tests";
 all three results were attested. Integration-tests, weeder, hlint and e2e remain
 outstanding. CI for this history increment is pending. No deployment.
+
+### Durable native session-status cleanup
+
+ResetSlackSession is queued before agents.sessions.setStatus marks processing.
+It stores the original project/user/receipt IDs through the derived BgJobs codec;
+the signed receipt retains the workspace, channel, thread and Slack requester.
+A successful inline cleanup clears queued reset copies. Failed or interrupted
+cleanup remains recoverable even after the original event is marked processed.
+
+The reset worker takes the same thread lock as an investigation, so it cannot
+clear processing while another turn holds the lock. It checks current requester
+access and the installation workspace before setting active. It preserves Slack
+retry deadlines, coalesces future reset jobs under the receipt row lock, and stops
+requests on revoked access. Shared scheduling SQL also serves existing event and
+progress deferrals without changing their target locks or pending-event check.
+
+The stop workflow now checks that cleanup is already runnable before the blocked
+model is stopped, a busy reset makes no HTTP request, cleanup failure stays queued,
+a later reset marks active and removes queued copies, and revoked access sends
+nothing. Fresh native verification passed: 46 examples, zero failures, 45.3121 seconds.
+Command: DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev. Evidence:
+/tmp/monoscope-slack-agent/slack-session-reset-workflows-complete.log.
+Three skill passes are recorded. Fourmolu and whitespace checks pass. HLint cannot
+parse MultilineStrings; Weeder exits 228 with repository findings.
+CI for the previous commit 22da705a3 remains live. No deployment or branch push.

@@ -276,6 +276,7 @@ processBackgroundJob authCtx bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
+    ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     GitSyncFromRepo pid -> gitSyncFromRepo pid
