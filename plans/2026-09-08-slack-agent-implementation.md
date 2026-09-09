@@ -294,3 +294,29 @@ These targeted checks do not replace full integration or live acceptance.
 commit's attestations do not cover these edits. No push or deployment occurred.
 Native Agent lifecycle, complete conversation roles, evidence tools, drafts,
 and the other remaining implementation gates are still open.
+
+
+## Signed form ingress (2026-09-09)
+
+Slash commands, actions, and external-option routes now retain raw form bytes and
+check Slack's timestamp and signature before decoding or dispatching. Events reuse
+the same guard. Missing signing configuration returns 503; invalid signatures
+return 401; authenticated malformed forms return 400. The external-option endpoint
+now accepts Slack's form envelope. `Accept` is derived from `FormUrlEncoded`, and
+existing form codecs remain derived.
+
+The final native workflow run passed 23 examples, 0 failures:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+The handler regression verifies rejection before dispatch and preservation of
+percent-encoded and plus-encoded input. Fourmolu and `git diff --check` passed.
+The review report records three passes of each requested skill.
+
+Personal slash/action authorization and dashboard metadata validation remain
+required. No push or deployment occurred.
+
+Local CI: `make ci-signoff CHECKS="build"` passed and published the build
+attestation for this tree, including the preceding access-check increment. It
+compiled the full route wiring and linked the server and test executables.
+The final status reuses build and CLI tests. Frontend, doctests, unit-tests,
+integration-tests, weeder, hlint, ui-tests, and e2e still require current-tree
+results. This build signoff does not attest execution of those test suites.

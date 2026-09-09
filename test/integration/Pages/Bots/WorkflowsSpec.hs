@@ -304,6 +304,32 @@ spec = around withTestResources do
         let unconfigured = tr{trATCtx = tr.trATCtx{Config.env = cfg{Config.slackSigningSecret = ""}}}
         status unconfigured body (Just "1735689600") signature >>= (`shouldBe` 503)
 
+      it "authenticates form bytes before decoding and dispatching Slack commands and actions" \tr -> do
+        calls <- newIORef (0 :: Int)
+        let cfg = tr.trATCtx.env{Config.slackSigningSecret = "test-slack-signing-secret"}
+            signedTr = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
+            body = "payload=%7B%22text%22%3A%22a+b%2Bc%22%7D"
+            timestamp = Just "1735689600"
+            signature = Just $ signSlackBody "1735689600" body
+            handler = SlackPage.slackFormPostH \form -> do
+              modifyIORef' calls (+ 1)
+              SlackPage.externalOptionsH form
+            status resources bytes ts sig =
+              toBaseServantResponse resources
+                $ catchError @ServerError (handler bytes ts sig $> 200) (\_ err -> pure err.errHTTPCode)
+        status signedTr body timestamp signature >>= (`shouldBe` 200)
+        for_ [(body <> "&extra=1", timestamp, signature), (body, Nothing, Nothing), (body, Just "1735689299", Just $ signSlackBody "1735689299" body)] \(bytes, ts, sig) ->
+          status signedTr bytes ts sig >>= (`shouldBe` 401)
+        status signedTr "missing=payload" timestamp (Just $ signSlackBody "1735689600" "missing=payload") >>= (`shouldBe` 400)
+        let unconfigured = tr{trATCtx = tr.trATCtx{Config.env = cfg{Config.slackSigningSecret = ""}}}
+        status unconfigured body timestamp signature >>= (`shouldBe` 503)
+        readIORef calls >>= (`shouldBe` 1)
+        let command = "team_id=T_TEST&command=%2Fmonoscope&text=a+b%2Bc&response_url=https%3A%2F%2Fexample.com&trigger_id=trigger&channel_id=C_TEST&channel_name=test&user_id=U_TEST"
+        decoded <-
+          toBaseServantResponse signedTr
+            $ SlackPage.slackFormPostH (\(interaction :: SlackPage.SlackInteraction) -> pure $ AE.String interaction.text) command timestamp (Just $ signSlackBody "1735689600" command)
+        decoded `shouldBe` AE.String "a b+c"
+
       it "records bot events without starting another conversation" \tr -> do
         setupSlackData tr testPid "T_BOT_EVENT"
         let body = "{\"type\":\"event_callback\",\"team_id\":\"T_BOT_EVENT\",\"api_app_id\":\"A_TEST\",\"event_id\":\"EvBot\",\"event\":{\"type\":\"message\",\"bot_id\":\"B_TEST\",\"text\":\"An answer\",\"channel\":\"C_BOT_EVENT\",\"thread_ts\":\"1735689600.000001\"}}"

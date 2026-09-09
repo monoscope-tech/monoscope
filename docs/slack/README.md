@@ -22,7 +22,9 @@ gates, are still required before rollout.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
-An empty signing secret makes the events endpoint return 503. An empty app ID prevents root capture.
+Events, slash commands, actions, and external-option requests verify the original body
+before decoding. Missing or invalid signatures return 401; an empty signing secret
+makes these endpoints return 503. An empty app ID prevents root capture.
 
 Merge `incident-metadata.json` into the app manifest's metadata configuration before enabling incident messages.
 It registers the `monoscope_incident_root` event and its `root_id` field.

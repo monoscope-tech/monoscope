@@ -174,6 +174,15 @@ instance MimeUnrender RawJSON BS.ByteString where
   mimeUnrender _ = Right . toStrict
 
 
+-- | Preserve Slack's form bytes until the handler verifies their signature.
+data RawForm
+  deriving (Accept) via FormUrlEncoded
+
+
+instance MimeUnrender RawForm BS.ByteString where
+  mimeUnrender _ = Right . toStrict
+
+
 -- | OTLP/HTTP wire format (raw protobuf bytes; decoding happens in the handler).
 data OTLPProto
 
@@ -410,10 +419,10 @@ data Routes mode = Routes
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
-  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
-  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
+  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
+  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
-  , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
+  , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
@@ -737,10 +746,10 @@ server logger env tp otlpTraces otlpLogs =
     , shareReplaySessionGet = Share.shareReplaySessionGetH
     , discordLinkProjectGet = Discord.linkDiscordGetH
     , discordInteractions = Discord.discordInteractionsH
-    , slackInteractions = Slack.slackInteractionsH
-    , slackActionsPost = Slack.slackActionsH
+    , slackInteractions = Slack.slackFormPostH Slack.slackInteractionsH
+    , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
     , slackEventsPost = Slack.slackEventsPostH
-    , externalOptionsGet = Slack.externalOptionsH
+    , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH

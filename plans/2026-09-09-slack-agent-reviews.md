@@ -162,3 +162,19 @@ callers, history model and callers, and the workflow/agentic regressions.
 Slack slash-command path still uses it and remains a deployment gate until signed
 requests and personal authorization are applied there. Signed-event investigations
 always construct `SlackAccess` from the resolved principal.
+
+
+## Signed form ingress
+
+All three requested skills ran in three passes over the Slack handlers, public
+routes, and workflow regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Extract the existing signature guard and reuse derived `FromForm` decoders. | Verify original bytes before parsing slash commands, actions, and external-option requests. Missing secrets fail closed. | No client-side behavior added. |
+| 2 | Derive `Accept` via `FormUrlEncoded`; retain only the necessary raw-byte `MimeUnrender` implementation. | Read all three route declarations and server bindings. External options must accept Slack's form envelope, not JSON. | Keep the multi-step handler regression in Hspec. |
+| 3 | Re-read the complete wrapper, signature guard, route bindings, and decoder consumers; no further consolidation. | Check tampering, absent signatures, expiry, malformed signed forms, unavailable secrets, and escaped values. Dispatch count proves rejected forms never reach the handler. No suppression or hand-written derivable instance. | No styling or behavior-tier changes. |
+
+The signature boundary is now shared across Slack ingress. Personal authorization
+for legacy slash commands and dashboard actions remains unfinished; signed payloads
+do not by themselves grant Monoscope project access.

@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -66,7 +66,7 @@ import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (throwIO, tryAny)
-import Web.FormUrlEncoded (FromForm)
+import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
 -- | Log-and-return-Nothing helper: missing slackData is always an anomaly (the caller
@@ -534,7 +534,7 @@ dashboardSelectBlock selectId heading options =
     opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= if T.null text then "Untitled" else text], "value" AE..= value]) options
 
 
-externalOptionsH :: AE.Value -> ATBaseCtx AE.Value
+externalOptionsH :: SlackActionForm -> ATBaseCtx AE.Value
 externalOptionsH _ =
   pure
     $ AE.object
@@ -726,12 +726,23 @@ verifySlackSignature secret now timestamp signature body = fromMaybe False do
   pure $ BA.constEq expected digest
 
 
-slackEventsPostH :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
-slackEventsPostH body timestamp signature = do
+requireSlackSignature :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx ()
+requireSlackSignature body timestamp signature = do
   envCfg <- asks env
   when (T.null envCfg.slackSigningSecret) $ throwError err503
   now <- Time.currentTime
   unless (verifySlackSignature envCfg.slackSigningSecret now timestamp signature body) $ throwError err401
+
+
+slackFormPostH :: FromForm a => (a -> ATBaseCtx AE.Value) -> ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
+slackFormPostH handler body timestamp signature = do
+  requireSlackSignature body timestamp signature
+  either (const $ throwError err400) handler $ urlDecodeAsForm $ fromStrict body
+
+
+slackEventsPostH :: ByteString -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
+slackEventsPostH body timestamp signature = do
+  requireSlackSignature body timestamp signature
   payload <- either (const $ throwError err400) pure $ AE.eitherDecodeStrict @SlackEventPayload body
   case payload of
     UrlVerification challenge -> pure $ AE.object ["challenge" AE..= challenge]
