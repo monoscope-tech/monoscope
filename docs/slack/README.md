@@ -39,6 +39,13 @@ all returned cursors and rechecks access before and after each page. A failed or
 incomplete fetch stops the investigation before any model call and leaves the
 receipt pending for retry. Durable tool-message replay remains incomplete.
 
+Signed-event investigations set the native session to `processing` before work
+and attempt to return it to `active` on completion or failure, using
+[`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
+A rejected startup status prevents the investigation and retains the pending
+receipt. Failed status cleanup is logged without replaying a completed answer.
+Stop-event handling and durable status reconciliation remain rollout gates.
+
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
 Events, slash commands, actions, and external-option requests verify the original body

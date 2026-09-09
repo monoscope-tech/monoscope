@@ -75,7 +75,7 @@ spec = around withTestResources do
         principal <- resolve
         fmap (\p -> (p.userId, p.projectId)) principal `shouldBe` Just (userId, testPid)
         toBaseServantResponse tr (Slack.completeSlackLink linkId userId testPid) >>= (`shouldBe` False)
-        void $ runTestBgRecordingHTTP frozenTime tr $ withHTTPGetBody (\_ _ -> pure "{\"ok\":true,\"messages\":[]}") $ processSlackEvent receiptId
+        void $ runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}") $ processSlackEvent receiptId
         [PGS.Only conversations] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
         (conversations :: Int64) `shouldBe` 1
         toBaseServantResponse tr (Slack.slackThreadProject "T_IDENTITY" "C_IDENTITY" "1735689601.000001") >>= (`shouldBe` Just testPid)
@@ -501,13 +501,16 @@ spec = around withTestResources do
                 pure $ Right $ Chat.Message Chat.Assistant answer Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-            transport secondPage = withHTTPGetBody \opts url -> do
-              url `shouldBe` "https://slack.com/api/conversations.replies"
-              opts ^. Wreq.param "latest" `shouldBe` ["1735689603.000001"]
-              case opts ^. Wreq.param "cursor" of
-                [] -> pure $ AE.encode firstPage
-                ["page2"] -> AE.encode <$> secondPage
-                _ -> fail "Unexpected history cursor"
+            transport secondPage = withHTTPResponses \opts url -> case url of
+              "https://slack.com/api/agents.sessions.setStatus" -> pure $ Just "{\"ok\":true}"
+              "https://slack.com/api/conversations.replies" -> do
+                opts ^. Wreq.param "latest" `shouldBe` ["1735689603.000001"]
+                case opts ^. Wreq.param "cursor" of
+                  [] -> pure $ Just $ AE.encode firstPage
+                  ["page2"] -> Just . AE.encode <$> secondPage
+                  _ -> fail "Unexpected history cursor"
+              _ -> pure Nothing
+            statuses requests = mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) requests
             event text ts = slackThreadedEvent "T_HISTORY" "C_HISTORY" text ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
         receipt <- receiveSlackEvent resources $ event "First question" "1735689603.000001"
         let convId = Issues.slackScopedConversationId testPid "T_HISTORY" "C_HISTORY" "1735689600.000001"
@@ -518,10 +521,25 @@ spec = around withTestResources do
                   [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|]
                   (PGS.Only testPid)
             failures = [pure $ AE.object ["ok" AE..= False], pure firstPage, pure $ AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value]), "has_more" AE..= True], revoke $> lastPage]
+        (rejectedRequests, rejected) <-
+          runTestBgRecordingHTTP frozenTime resources
+            $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":false,\"error\":\"missing_scope\"}")
+            $ provider
+            $ tryAny
+            $ processSlackEvent receipt
+        rejected `shouldSatisfy` isLeft
+        length rejectedRequests `shouldBe` 1
+        statuses rejectedRequests `shouldBe` ["processing"]
+        readIORef observed >>= (`shouldBe` [])
         for_ failures \secondPage -> do
           (requests, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport secondPage $ provider $ tryAny $ processSlackEvent receipt
           outcome `shouldSatisfy` isLeft
-          length requests `shouldBe` 2
+          length requests `shouldBe` 4
+          statuses requests `shouldBe` ["processing", "active"]
+          for_ (filter ((== "https://slack.com/api/agents.sessions.setStatus") . fst) requests) \(_, body) -> do
+            let update = AE.decode @AE.Value body
+            (update >>= (^? key "channel_id" . _String)) `shouldBe` Just "C_HISTORY"
+            (update >>= (^? key "thread_ts" . _String)) `shouldBe` Just "1735689600.000001"
           toBaseServantResponse resources (Issues.selectChatHistory testPid convId) >>= (\messages -> length messages `shouldBe` 0)
           readIORef observed >>= (`shouldBe` [])
           withResource tr.trPool \conn ->
@@ -532,8 +550,9 @@ spec = around withTestResources do
                 (PGS.Only testPid)
         for_ ([("First question", "1735689603.000001"), ("Follow-up question", "1735689604.000001")] :: [(Text, Text)]) \(question, ts) -> do
           turnReceipt <- receiveSlackEvent resources $ event question ts
-          (_, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport (pure lastPage) $ provider $ tryAny $ processSlackEvent turnReceipt
+          (requests, outcome) <- runTestBgRecordingHTTP frozenTime resources $ transport (pure lastPage) $ provider $ tryAny $ processSlackEvent turnReceipt
           outcome `shouldSatisfy` isRight
+          statuses requests `shouldBe` ["processing", "active"]
         histories <- readIORef observed
         let previous = [(Chat.User, earlier), (Chat.Assistant, "Earlier assistant answer"), (Chat.User, "Other bot evidence"), (Chat.User, "First question")]
         map (drop 1) histories `shouldBe` [previous, previous <> [(Chat.Assistant, answer), (Chat.User, "Follow-up question")]]
@@ -542,6 +561,21 @@ spec = around withTestResources do
           _ -> fail "Missing system message"
         saved <- toBaseServantResponse resources $ Issues.selectChatHistory testPid convId
         map (.content) (filter ((== Issues.ChatAssistant) . (.role)) saved) `shouldBe` ["Earlier assistant answer", answer, answer]
+        statusCalls <- newIORef (0 :: Int)
+        cleanupReceipt <- receiveSlackEvent resources $ event "One more question" "1735689605.000001"
+        let cleanupFailure = withHTTPResponses \_ url ->
+              if url == "https://slack.com/api/agents.sessions.setStatus"
+                then do
+                  modifyIORef' statusCalls (+ 1)
+                  count <- readIORef statusCalls
+                  pure $ Just $ AE.encode $ AE.object ["ok" AE..= (count == 1)]
+                else pure Nothing
+        (_, completed) <- runTestBgRecordingHTTP frozenTime resources $ cleanupFailure $ provider $ tryAny $ processSlackEvent cleanupReceipt
+        completed `shouldSatisfy` isRight
+        readIORef statusCalls >>= (`shouldBe` 2)
+        (replayed, _) <- runTestBgRecordingHTTP frozenTime resources $ cleanupFailure $ provider $ tryAny $ processSlackEvent cleanupReceipt
+        replayed `shouldBe` []
+        length <$> readIORef observed >>= (`shouldBe` 3)
 
       it "seeds history once, retries failures, and isolates projects" \tr -> do
         attempts <- newIORef (0 :: Int)

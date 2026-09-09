@@ -4,7 +4,7 @@ module Pages.Bots.BotTestHelpers (
   -- * Setup Helpers
   setupSlackData,
   setupLinkedSlackData,
-  withHTTPGetBody,
+  withHTTPResponses,
   receiveSlackEvent,
   slackRootEvent,
   setupDiscordData,
@@ -131,22 +131,23 @@ setupLinkedSlackData tr pid teamId = do
         (teamId, (getResponse tr.trSessAndHeader).user.id, pid)
 
 
--- | Replace GET bodies while retaining the recording interpreter for every request.
-withHTTPGetBody :: (HTTP.HTTP :> es, IOE :> es) => (HTTP.Options -> String -> IO LByteString) -> Eff es a -> Eff es a
-withHTTPGetBody fixture = interpose @HTTP.HTTP \_ -> \case
-  HTTP.GetWith opts url -> do
-    response <- send $ HTTP.GetWith opts url
-    body <- liftIO $ fixture opts url
-    pure $ response & Wreq.responseBody .~ body
-  HTTP.Get url -> send $ HTTP.Get url
-  HTTP.Post url value -> send $ HTTP.Post url value
-  HTTP.Put url value -> send $ HTTP.Put url value
-  HTTP.Patch url value -> send $ HTTP.Patch url value
-  HTTP.Delete url -> send $ HTTP.Delete url
-  HTTP.PostWith opts url value -> send $ HTTP.PostWith opts url value
-  HTTP.PutWith opts url value -> send $ HTTP.PutWith opts url value
-  HTTP.PatchWith opts url value -> send $ HTTP.PatchWith opts url value
-  HTTP.DeleteWith opts url -> send $ HTTP.DeleteWith opts url
+-- | Override selected HTTP responses while retaining request recording.
+withHTTPResponses :: (HTTP.HTTP :> es, IOE :> es) => (HTTP.Options -> String -> IO (Maybe LByteString)) -> Eff es a -> Eff es a
+withHTTPResponses fixture = interpose @HTTP.HTTP \_ -> \case
+  HTTP.GetWith opts url -> send (HTTP.GetWith opts url) >>= respond opts url
+  HTTP.Get url -> send (HTTP.Get url) >>= respond Wreq.defaults url
+  HTTP.Post url value -> send (HTTP.Post url value) >>= respond Wreq.defaults url
+  HTTP.Put url value -> send (HTTP.Put url value) >>= respond Wreq.defaults url
+  HTTP.Patch url value -> send (HTTP.Patch url value) >>= respond Wreq.defaults url
+  HTTP.Delete url -> send (HTTP.Delete url) >>= respond Wreq.defaults url
+  HTTP.PostWith opts url value -> send (HTTP.PostWith opts url value) >>= respond opts url
+  HTTP.PutWith opts url value -> send (HTTP.PutWith opts url value) >>= respond opts url
+  HTTP.PatchWith opts url value -> send (HTTP.PatchWith opts url value) >>= respond opts url
+  HTTP.DeleteWith opts url -> send (HTTP.DeleteWith opts url) >>= respond Wreq.defaults url
+  where
+    respond opts url response = do
+      body <- liftIO $ fixture opts url
+      pure $ maybe response (\value -> response & Wreq.responseBody .~ value) body
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

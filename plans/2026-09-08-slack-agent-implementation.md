@@ -460,3 +460,34 @@ the base-handler test separately verifies the retriable HTTP 503 result.
 CI signoff must be refreshed before push. Durable tool-message replay, native
 Agent sessions/progress/cancellation, evidence tools, drafts, proactive policy,
 and controlled live acceptance remain incomplete. No push or deployment occurred.
+
+
+## Native session processing status (2026-09-09)
+
+Signed-event investigations now check access and call the current
+`agents.sessions.setStatus` method with `processing` before work starts. A bracket
+attempts `active` on both completion and failure. The request includes the existing
+channel and root timestamp; the status enum and request record use derived JSON.
+This follows [Slack's session lifecycle](https://docs.slack.dev/ai/agent-sessions/).
+
+A failed startup acknowledgement prevents model work and leaves the receipt
+pending. A failed cleanup acknowledgement is logged without replaying a completed
+answer. This avoids turning a status-reset failure into duplicate user output;
+durable status reconciliation is still required.
+
+The shared HTTP fixture now permits selected response overrides while recording
+all requests. Tests verify `processing` then `active` on success, backfill errors,
+and access revocation. They check the exact channel/thread fields, reject startup
+when Slack returns an error, and confirm that replay after cleanup failure emits
+no requests and generates no second answer.
+
+Final validation:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`
+passed 26 examples, 0 failures. Fourmolu and `git diff --check` passed. Three passes
+of each requested skill are recorded in the review report. These are recorded-HTTP
+fixtures, not proof of acceptance by a live Slack app.
+
+Stop-event handling, concurrent-run coordination, durable status reconciliation,
+tool-message replay/checkpoints, installation capability upgrade, and the other
+remaining plan gates are unfinished. CI signoff must be refreshed before push.
+No push, app-manifest publication, or deployment occurred.

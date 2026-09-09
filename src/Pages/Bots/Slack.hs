@@ -65,7 +65,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (bracket_, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -815,7 +815,33 @@ processSlackEvent receiptId = do
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
-      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread
+      AI.requireAgentAccess access slackData.projectId
+      bracket_
+        (setSessionStatus slackData.botToken event.channel threadTs Processing)
+        ( whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active) \err ->
+            Log.logAttention "Slack session status cleanup failed" $ AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "error" AE..= show @Text err]
+        )
+        (runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+
+
+data SlackSessionStatus = Processing | Active
+  deriving stock (Generic, Show)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier DAE.CamelToSnake] SlackSessionStatus
+
+
+data SlackSessionUpdate = SlackSessionUpdate
+  { channel_id :: Text
+  , thread_ts :: Text
+  , status :: SlackSessionStatus
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Eff es ()
+setSessionStatus token channel thread status = do
+  result <- slackApi token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status
+  either (throwIO . ErrorCall . toString . ("Slack session status rejected: " <>)) pure result
 
 
 -- | Slack navigation context is untrusted input, not project authorization.

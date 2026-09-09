@@ -231,3 +231,15 @@ backfill behavior, derived response types, and worker regressions.
 | 1 | Derive the response envelope and cursor metadata. Reuse the access guard and the existing transactional history seeder. | Follow every returned cursor while retaining the event-time boundary. Reject `ok=false`, missing message arrays, repeated cursors, and incomplete pages without cursors. | No client behavior added. |
 | 2 | Extract the existing GET-body test interposer for reuse in linked-worker and multi-page fixtures. | Stop on failed backfill before any model call or user-message insertion. Do not swallow seeding failures. All page failures retain an empty history for retry. | Multi-page, revocation, and retry checks stay in the database/worker Hspec flow. |
 | 3 | Re-read the changed functions and unchanged seeding/receipt consumers. No manual instance or warning suppression. | Require explicit `AgentAccess` and project inputs to paging; revalidate before and after each request. Tests cover second-page API failure, repeated/missing cursors, mid-fetch revocation, and a successful replay of the same receipt followed by another turn. | No styling or behavior-tier changes. |
+
+
+## Native session processing status
+
+Three passes applied all three requested skills to signed-event investigation
+startup/cleanup, the status request types, and recorded-HTTP worker tests.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive the status enum and request record JSON; reuse `slackApi` and the existing access guard. | Use the current `agents.sessions.setStatus` API with explicit channel and thread. Require a successful startup acknowledgement before work. | Use Slack's native loading state; no custom client code. |
+| 2 | Generalize the existing HTTP response fixture instead of duplicating effect forwarding. Use `bracket_` for startup/cleanup. | Recheck project access before startup. Test cleanup on API-page failures and mid-fetch revocation, and reject failed startup before the model runs. | Keep lifecycle and failure checks in the worker integration flow. |
+| 3 | Re-read all modified functions and their unchanged receipt/history consumers. No manual instance or warning suppression. | Fix cleanup-error replay: log an unsuccessful reset without rerunning a completed answer. Verify the receipt's replay emits no requests and no second answer. Stop events, concurrent-run coordination, and durable status reconciliation remain explicit plan gates. | No styling or behavior-tier changes; native status is scoped to the existing thread. |
