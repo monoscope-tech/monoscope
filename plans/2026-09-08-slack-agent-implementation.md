@@ -1590,3 +1590,48 @@ Preceding rate-limit commit 05b4322ea passed
 Its final status still requires integration-tests, weeder, hlint and e2e.
 Log: /tmp/monoscope-slack-agent/slack-rate-limit-ci-signoff.log.
 CI for this increment is pending. No deployment or deployment-branch push.
+
+
+### Accept human steering during an active investigation
+
+At the next model boundary, the investigator reads pending signed human replies
+in its exact thread. Current project membership, account, project and installation
+access filter candidates before the twenty-message cap; access is checked again
+before acceptance. Replies carry author and timestamp into user-role model
+context. A reply arriving during a final response can trigger another decision
+before that response is delivered. Already completed evidence remains in the
+checkpoint. Steering consumes the existing iteration budget; it does not reset it.
+At budget exhaustion, further messages remain queued for their own turns.
+
+A derived FollowupsAccepted event records a nonempty batch. The checkpoint revision,
+journal entry, conversation messages and accepted receipt completion commit in one
+transaction. Immediate duplicate message events collapse to one hypothesis; late
+duplicates consult the journal and do not start another answer. The existing
+worker still serializes the thread and cancellation still bypasses its lock.
+Progress displays “Read new thread replies” without exposing the reply text.
+
+The concurrency regression now injects a deployment hypothesis during a blocked
+model call, interrupts the next call after acceptance, and resumes the original
+receipt. It verifies the hypothesis appears once in each resumed model context,
+one conversation row, no extra Slack calls for immediate and late duplicate
+events, and exclusion of twenty-one unlinked messages plus an independent thread.
+The previous busy-job deferral, processed replay and lock-loss checks remain.
+
+Native validation: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` passed 41 examples, zero failures,
+30.5423 seconds after the final source reload (209 modules).
+Evidence: /tmp/monoscope-slack-agent/slack-steering-workflows-complete.log.
+Three passes of each requested Haskell review are recorded. Fourmolu and whitespace
+checks pass. HLint exits 1 on unsupported MultilineStrings; Weeder exits 228 with
+repository findings. Logs: slack-steering-hlint.log and slack-steering-weeder.log
+in the same directory. The new progress doctest awaits CI execution.
+
+Previous commit 8572abca2 passed `make ci-signoff CHECKS="build doctests unit-tests"`;
+passing results were attested. Its final status requires integration-tests, weeder,
+hlint and e2e. Log: /tmp/monoscope-slack-agent/slack-busy-ci-signoff.log.
+CI for this steering increment is pending. No deployment or branch push.
+
+Steering takes effect between model decisions, after any outstanding tool batch;
+it does not interrupt a currently running HTTP/model call. Live Slack acceptance,
+complete answer delivery reconciliation, diagnosis evaluation, tested action drafts
+and proactive investigation policy remain unfinished.

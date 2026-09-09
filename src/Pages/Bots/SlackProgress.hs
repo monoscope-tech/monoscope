@@ -25,7 +25,7 @@ data Task = Task {task_id :: Text, title :: Text, status :: TaskStatus}
   deriving anyclass (AE.ToJSON)
 
 
-data TaskKind = Decision | HistoryRead | Evidence Text
+data TaskKind = Decision | HistoryRead | FollowupRead | Evidence Text
   deriving stock (Eq, Show)
 
 
@@ -43,6 +43,10 @@ data Snapshot = Snapshot {title :: Text, tasks :: [Task], observedAt :: UTCTime,
 -- Nothing
 -- >>> AE.encode (Task "check" "Read incident" InProgress)
 -- "{\"status\":\"in_progress\",\"task_id\":\"check\",\"title\":\"Read incident\"}"
+-- >>> let reply = Investigations.Followup (UUIDId $ UUID.fromWords 0 0 0 2) "U1" "1.1" "Private hypothesis"
+-- >>> let replies = Investigations.History [activity $ Investigations.FollowupsAccepted 0 (reply :| [])] False
+-- >>> fmap (map (\task -> (task.title, task.status)) . (.tasks)) $ snapshot "1.0" replies
+-- Just [("Read new thread replies",Complete)]
 snapshot :: Text -> Investigations.History -> Maybe Snapshot
 snapshot messageTs history = do
   entries <- nonEmpty $ filter ((== messageTs) . (.messageTs)) history.entries
@@ -73,6 +77,7 @@ snapshot messageTs history = do
             Investigations.ToolStarted iteration tool -> upsertTask (key iteration $ toolKind tool) (toolTitle tool) InProgress
             Investigations.ToolReturned iteration tool _ -> upsertTask (key iteration $ toolKind tool) (toolTitle tool) Complete
             Investigations.InvestigationHistoryRead iteration -> upsertTask (key iteration HistoryRead) "Read prior investigation activity" Complete
+            Investigations.FollowupsAccepted iteration _ -> upsertTask (key iteration FollowupRead) "Read new thread replies" Complete
             Investigations.InvestigationFinished -> tasks
             Investigations.InvestigationFailed -> stop
             Investigations.InvestigationInterrupted -> stop

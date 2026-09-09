@@ -781,23 +781,31 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
       Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
       pure $ Right answer
     Investigations.ModelPending step -> do
-      record $ Investigations.ModelStarted step.iteration
-      let finalRound = step.iteration >= config.maxIterations
-          request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
-      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
-      response <- ELLM.callAgenticChat step.history request apiKey
-      requireAgentAccess config.access config.projectId
-      case response of
-        Left err -> do
-          record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
-          Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
-          pure $ Left "LLM service temporarily unavailable"
-        Right message -> do
-          let next = case LLM.toolCalls $ LLM.messageData message of
-                Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
-                _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
-          updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
-          continue updated next
+      steered <- acceptFollowupsWith turn step
+      case steered of
+        Just (updated, next) -> continue updated next
+        Nothing -> do
+          record $ Investigations.ModelStarted step.iteration
+          let finalRound = step.iteration >= config.maxIterations
+              request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
+          Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
+          response <- ELLM.callAgenticChat step.history request apiKey
+          requireAgentAccess config.access config.projectId
+          case response of
+            Left err -> do
+              record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
+              Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
+              pure $ Left "LLM service temporarily unavailable"
+            Right message -> do
+              let next = case LLM.toolCalls $ LLM.messageData message of
+                    Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
+                    _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
+              updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
+              case next of
+                Investigations.AnswerReady{} -> do
+                  steeredAnswer <- acceptFollowupsWith updated step
+                  maybe (continue updated next) (uncurry continue) steeredAnswer
+                _ -> continue updated next
     Investigations.ToolsPending step message completed pending -> case pending of
       [] -> do
         let (calls, results) = unzip completed
@@ -816,6 +824,18 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
               else Investigations.ToolReturned step.iteration tool result
         continue updated next
   where
+    acceptFollowupsWith cursor step = case (cursor, journal) of
+      (Just _, Just scope) | step.iteration < config.maxIterations -> do
+        candidates <- Investigations.pendingFollowups scope
+        authorized <- filterM (\followup -> isJust <$> Integrations.resolveSlackPrincipal scope.teamId followup.slackUserId (Just scope.projectId)) candidates
+        forM (nonEmpty authorized) $ \followups -> do
+          requireAgentAccess config.access config.projectId
+          let followupMessages = map (\followup -> LLM.Message LLM.User ("Slack reply from <@" <> followup.slackUserId <> "> at " <> followup.messageTs <> ":\n" <> followup.text) LLM.defaultMessageData) $ toList followups
+          history <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer step.history followupMessages
+          let next = Investigations.ModelPending step{Investigations.history = history, Investigations.iteration = step.iteration + 1}
+          updated <- Investigations.commitProgress cursor journal next $ Just $ Investigations.FollowupsAccepted step.iteration followups
+          pure (updated, next)
+      _ -> pure Nothing
     record event = for_ journal (`Investigations.recordEvent` event)
     continue updated = runAgenticLoopRaw updated journal config apiKey
     advance next = Investigations.commitProgress turn journal next Nothing >>= (\updated -> continue updated next)

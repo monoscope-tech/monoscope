@@ -1321,17 +1321,21 @@ spec = around withTestResources do
         replayed `shouldBe` []
         length <$> readIORef observed >>= (`shouldBe` 3)
 
-      it "defers busy-thread questions without failure retries and preserves conversation context" \tr -> do
+      it "accepts authorized busy-thread steering durably and resumes it without duplicate answers" \tr -> do
         setupLinkedSlackData tr testPid "T_SERIAL"
         entered <- newEmptyMVar
         release <- newEmptyMVar
         histories <- newIORef []
         pause <- newIORef True
+        interruptSteering <- newIORef True
         let event ts = slackThreadedEvent "T_SERIAL" "C_SERIAL" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
             transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}"
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 modifyIORef' histories (<> [map Chat.content $ toList history])
+                when (any (T.isInfixOf "Check tonight's deployment" . Chat.content) history) do
+                  interrupt <- atomicModifyIORef' interruptSteering (\value -> (False, value))
+                  when interrupt $ liftIO $ throwIO $ ErrorCall "Interrupted after accepting the follow-up"
                 shouldPause <- atomicModifyIORef' pause (\value -> (False, value))
                 when shouldPause $ liftIO $ putMVar entered () >> takeMVar release
                 pure $ Right $ Chat.Message Chat.Assistant "Investigation evidence" Chat.defaultMessageData
@@ -1339,9 +1343,13 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
             work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
         firstReceipt <- receiveSlackEvent tr $ event "1735689601.000001"
-        secondReceipt <- receiveSlackEvent tr $ event "1735689602.000001"
-        withAsync (work firstReceipt) \worker -> do
+        (secondReceipt, duplicateReceipt) <- withAsync (work firstReceipt) \worker -> do
           timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          secondReceipt <- receiveSlackEvent tr $ event "1735689602.000001" & key "event" . key "text" . _String .~ "Check tonight's deployment"
+          duplicateReceipt <- receiveSlackEvent tr $ event "1735689602.000001" & key "event_id" . _String .~ "duplicate-mention" & key "event" . key "text" . _String .~ "Check tonight's deployment"
+          unlinked <- receiveSlackEvent tr $ event "1735689602.000002" & key "event" . key "user" . _String .~ "U_UNLINKED" & key "event" . key "text" . _String .~ "Unlinked hypothesis"
+          for_ ([10 .. 29] :: [Int]) $ \suffix ->
+            void $ receiveSlackEvent tr $ event ("1735689601.0000" <> show suffix) & key "event" . key "user" . _String .~ "U_UNLINKED" & key "event" . key "text" . _String .~ "Unlinked hypothesis"
           for_ [firstReceipt, secondReceipt] \receipt -> do
             replicateM_ 2 do
               (requests, outcome) <- work receipt
@@ -1362,12 +1370,24 @@ spec = around withTestResources do
           separateThread `shouldSatisfy` isRight
           putMVar release ()
           (_, completed) <- wait worker
-          completed `shouldSatisfy` isRight
-        (_, retried) <- work secondReceipt
-        retried `shouldSatisfy` isRight
+          completed `shouldSatisfy` isLeft
+          pendingUnlinked <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT processed_at IS NULL FROM apis.slack_events WHERE id = ?|] (PGS.Only unlinked)
+          pendingUnlinked `shouldBe` [PGS.Only True]
+          pure (secondReceipt, duplicateReceipt)
+        (_, resumed) <- work firstReceipt
+        resumed `shouldSatisfy` isRight
+        lateDuplicate <- receiveSlackEvent tr $ event "1735689602.000001" & key "event_id" . _String .~ "late-duplicate-mention" & key "event" . key "text" . _String .~ "Check tonight's deployment"
+        for_ [secondReceipt, duplicateReceipt, lateDuplicate] $ \receipt -> do
+          (followupRequests, retried) <- work receipt
+          followupRequests `shouldBe` []
+          retried `shouldSatisfy` isRight
         observed <- readIORef histories
-        length observed `shouldBe` 3
-        map (length . filter (== "Investigation evidence")) observed `shouldBe` [0, 0, 1]
+        length observed `shouldBe` 4
+        map (length . filter (== "Investigation evidence")) observed `shouldBe` [0, 0, 0, 0]
+        map (length . filter (T.isInfixOf "Check tonight's deployment")) observed `shouldBe` [0, 0, 1, 1]
+        observed `shouldSatisfy` all (all (not . T.isInfixOf "Unlinked hypothesis"))
+        savedFollowups <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.ai_chat_messages WHERE project_id = ? AND slack_message_ts = '1735689602.000001' AND role = 'user'|] (PGS.Only testPid)
+        savedFollowups `shouldBe` [PGS.Only (1 :: Int)]
         for_ [firstReceipt, secondReceipt] \receipt -> do
           (requests, replayed) <- work receipt
           replayed `shouldSatisfy` isRight

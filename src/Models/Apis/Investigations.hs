@@ -14,6 +14,9 @@ module Models.Apis.Investigations (
   loadAnswer,
   saveAnswer,
   Event (..),
+  Followup (..),
+  pendingFollowups,
+  isAcceptedFollowup,
   ModelOutcome (..),
   Entry (..),
   History (..),
@@ -74,6 +77,66 @@ data ModelOutcome = ModelAnswered LLM.Message | ModelRequestFailed
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | Signed human messages waiting in this investigation's thread.
+data Followup = Followup
+  { receiptId :: UUIDId "slack_event"
+  , slackUserId :: Text
+  , messageTs :: Text
+  , text :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
+pendingFollowups :: DB es => Scope -> Eff es [Followup]
+pendingFollowups scope =
+  Hasql.interp
+    [HI.sql|WITH candidates AS (
+    SELECT id, payload->'event'->>'user' AS slack_user_id, payload->'event'->>'ts' AS message_ts,
+      payload->'event'->>'text' AS text,
+      CASE WHEN payload->'event'->>'ts' ~ '^[0-9]+[.][0-9]+$' THEN (payload->'event'->>'ts')::numeric END AS message_order
+    FROM apis.slack_events
+    WHERE EXISTS (
+      SELECT 1 FROM apis.slack_identities identity
+      JOIN projects.project_members member ON member.project_id = #{scope.projectId} AND member.user_id = identity.user_id
+      JOIN users.users account ON account.id = identity.user_id
+      JOIN projects.projects project ON project.id = member.project_id
+      JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
+      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user'
+        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+        AND project.active AND project.deleted_at IS NULL
+    ) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
+      AND payload->'event'->>'channel' = #{scope.channelId}
+      AND payload->'event'->>'thread_ts' = #{scope.threadTs}
+      AND payload->'event'->>'type' IN ('message', 'app_mention')
+      AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM apis.investigation_journal journal
+        WHERE journal.project_id = #{scope.projectId} AND journal.team_id = #{scope.teamId}
+          AND journal.channel_id = #{scope.channelId} AND journal.thread_ts = #{scope.threadTs}
+          AND journal.event->>'tag' = 'FollowupsAccepted'
+          AND journal.event->'contents'->1 @> jsonb_build_array(jsonb_build_object('messageTs', payload->'event'->>'ts'))
+      )
+      AND CASE WHEN payload->'event'->>'ts' ~ '^[0-9]+[.][0-9]+$'
+        THEN (payload->'event'->>'ts')::numeric > #{scope.messageTs}::numeric ELSE FALSE END
+    ) SELECT DISTINCT ON (message_order) id, slack_user_id, message_ts, text
+      FROM candidates ORDER BY message_order, id LIMIT 20|]
+
+
+-- | A later Slack event for an already accepted message belongs to the original
+-- investigation. Its journal entry commits with the checkpoint and receipt.
+isAcceptedFollowup :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Bool
+isAcceptedFollowup pid team channel thread messageTs = do
+  accepted <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|SELECT TRUE FROM apis.investigation_journal
+    WHERE project_id = #{pid} AND team_id = #{team} AND channel_id = #{channel} AND thread_ts = #{thread}
+      AND event->>'tag' = 'FollowupsAccepted'
+      AND event->'contents'->1 @> jsonb_build_array(jsonb_build_object('messageTs', #{messageTs}::text))
+    LIMIT 1|]
+  pure $ isJust accepted
+
+
 data Event
   = InvestigationStarted Text Text
   | ModelStarted Int
@@ -83,6 +146,7 @@ data Event
   | -- | Do not recursively embed the journal inside itself. The preceding
     -- ToolStarted event retains the call ID and arguments.
     InvestigationHistoryRead Int
+  | FollowupsAccepted Int (NonEmpty Followup)
   | InvestigationFinished
   | InvestigationFailed
   | InvestigationInterrupted
@@ -251,7 +315,8 @@ startCheckpoint turn checkpoint = do
 
 
 -- | A stale worker cannot replace newer progress. Updating the checkpoint and
--- appending its activity event either both commit or both roll back.
+-- appending its activity event commit together. Accepted follow-ups also save
+-- their conversation messages and receipt completion in this transaction.
 commitProgress :: DB es => Maybe CheckpointCursor -> Maybe Scope -> Checkpoint -> Maybe Event -> Eff es (Maybe CheckpointCursor)
 commitProgress cursor scope checkpoint event
   | isNothing cursor && (isNothing scope || isNothing event) = pure Nothing
@@ -272,8 +337,29 @@ commitProgress cursor scope checkpoint event
             pure $ case versions of
               [version] -> Right $ Just (key{revision = version} :: CheckpointCursor)
               _ -> Left CheckpointConflict
-        for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity ->
+        for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity -> do
           void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ recordEventSql key activity
+          case (cursor, activity) of
+            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup -> do
+              void
+                $ Tx.statement ()
+                $ HI.interp @HI.RowsAffected
+                  True
+                  [HI.sql|WITH accepted AS (
+                  UPDATE apis.slack_events SET processed_at = clock_timestamp()
+                  WHERE team_id = #{key.teamId} AND processed_at IS NULL
+                    AND payload->'event'->>'channel' = #{key.channelId}
+                    AND payload->'event'->>'thread_ts' = #{key.threadTs}
+                    AND payload->'event'->>'ts' = #{followup.messageTs}
+                    AND payload->'event'->>'user' = #{followup.slackUserId}
+                    AND payload->'event'->>'type' IN ('message', 'app_mention')
+                    AND payload->'event'->>'subtype' IS NULL AND payload->'event'->>'bot_id' IS NULL
+                  RETURNING id
+                ) INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
+                  SELECT #{turnCursor.turn.projectId}, #{turnCursor.turn.conversationId}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
+                  WHERE EXISTS (SELECT 1 FROM accepted)
+                  ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
+            _ -> pure ()
         pure updated
       either throwIO pure result
 

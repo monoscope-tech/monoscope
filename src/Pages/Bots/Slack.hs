@@ -912,7 +912,7 @@ processSlackEvent receiptId =
             Just principal -> do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
-              void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
+              unlessM (Investigations.isAcceptedFollowup principal.projectId workspaceId event.channel threadTs event.ts) $ void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
                 if Integrations.slackAgentScopesGranted slackData
                   then processThreadedEvent principal envCfg slackData event workspaceId threadTs
                   else do
