@@ -190,3 +190,16 @@ queries, fixtures, and workflow/Slack regressions.
 | 1 | Reuse `resolveSlackPrincipal`, `requireAgentAccess`, and the existing permission enum. Remove workspace-fallback plumbing. | All command branches require a live personal binding. Investigations carry `SlackAccess` into background work; channel changes require admin. | No client behavior added; private responses use Slack's existing message format. |
 | 2 | Reuse the dashboard query helper with a typed project ID; remove newly unused imports. | Scope dashboard reads and channel updates to one project. Fix webhook/channel desynchronization when changing the default channel. Update every caller of the changed signatures. | Keep the multi-step database authorization flow in Hspec. |
 | 3 | Re-read the complete command branches and model consumers. No manual derivable instances, string packing, or warning suppressions. | Regression covers unlinked users, view/edit denial, revocation, dashboard isolation, and another project's channel/webhook preservation within the same workspace. Dashboard action authorization remains a separate open gate. | Tests use an explicit linked-user fixture; unlinked event fixtures remain unlinked. Fix the missing-dashboard test to fail if the handler unexpectedly succeeds. No frontend tier changes. |
+
+
+## Dashboard action authorization and metadata
+
+Three passes applied all three skills to the modal entry point, action decoder,
+widget selection and sharing, reused dashboard loaders, and the recorded-HTTP
+workflow regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive `SlackDashboardContext` codecs and reuse the principal resolver, access guard, and signed widget URL generator. | Remove the packed channel/project/template/URL tuple. Bind the modal to its requesting user and project; recheck access on every action and before output. | Slack's existing selection events handle interaction; no client script added. |
+| 2 | Move the existing template catalog and schema loader into `Models.Projects.DashboardTemplates` for reuse without a page-module cycle. Remove the unused option text field and duplicate obsolete picker. | Load dashboard IDs only inside the authorized project. Accept widget definitions only from the saved schema or known templates. Regenerate chart URLs at preview and submission. | Keep one widget selector after dashboard selection and a stable block/action ID for updates. |
+| 3 | Re-read all changed functions and their unchanged dashboard/URL consumers. JSON instances remain derived; no new suppression. | Widget options identify exact definitions, so changed widgets invalidate stale selections. Tests reject old packed metadata, a different owner, foreign dashboard IDs, and revoked users without HTTP output; valid preview/share paths emit recorded requests. | The multi-step database and handler flow stays in Hspec. No behavior-tier or styling indirection introduced. |

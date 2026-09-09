@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -28,7 +28,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
 import Lucid qualified as H
-import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 import Control.Exception (ErrorCall (..))
@@ -43,6 +43,7 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackDefaultChannel)
 import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -57,7 +58,6 @@ import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import PyF
 import Relude hiding (ask, asks)
-import Relude.Extra.Tuple (dup)
 import Servant.API (Header)
 import Servant.API qualified as Servant
 import Servant.API.ResponseHeaders (Headers, addHeader)
@@ -254,7 +254,7 @@ slackInteractionsH interaction = do
           dashboards <- V.fromList <$> getDashboardsForSlack principal.projectId
           when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
           AI.requireAgentAccess access principal.projectId
-          triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
+          triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView (SlackDashboardContext principal.projectId interaction.user_id interaction.channel_id Nothing) (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
           traceResp $ textResp "modal opened"
         _ -> do
           forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
@@ -301,11 +301,7 @@ newtype SlackUser = SlackUser {id :: Text}
   deriving anyclass (AE.FromJSON)
 
 
--- | @team@ is what ties an interaction to a project: everything else in the
--- payload is chosen by the sender's client, including the dashboard id in a
--- selected option, so it is the only field a scoped lookup can trust.
--- 'Maybe' because Slack omits it on some payload shapes; absent means we cannot
--- establish a tenant and must not answer.
+-- | A signed workspace identity still requires the clicking user's live project access.
 data SlackAction = SlackAction
   { type_ :: Text
   , view :: SlackView
@@ -331,10 +327,7 @@ data SlackView = SlackView
   deriving anyclass (AE.FromJSON)
 
 
-data SlackOption = SlackOption
-  { text :: AE.Value
-  , value :: Text
-  }
+newtype SlackOption = SlackOption {value :: Text}
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
@@ -347,93 +340,86 @@ data SAction = SAction
   deriving anyclass (AE.FromJSON)
 
 
+data SlackDashboardContext = SlackDashboardContext
+  { projectId :: Projects.ProjectId
+  , userId :: Text
+  , channelId :: Text
+  , dashboardId :: Maybe Dashboards.DashboardId
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 slackActionsH :: SlackActionForm -> ATBaseCtx AE.Value
 slackActionsH action = do
-  authCtx <- ask @AuthContext
-  case AE.eitherDecode @SlackAction (encodeUtf8 action.payload) of
-    Left err -> throwError err400{errBody = "Invalid action payload: " <> encodeUtf8 (toText err)}
-    Right slackAction -> case slackAction.type_ of
-      "block_actions" -> case slackAction.actions >>= viaNonEmpty head of
-        Just a | a.action_id == "dashboard-select" -> maybe (pure $ textResp "No dashboard selected") (handleDashboardSelect slackAction) a.selected_option
-        Just a | a.action_id == "widget-select" -> maybe noAction (updateWidgetModal authCtx slackAction . (.value)) a.selected_option
-        _ -> noAction
-      "view_submission" -> handleViewSubmission authCtx slackAction
-      _ -> noAction
-  where
-    noAction = pure $ AE.object []
-
-    -- Scoped to the workspace's own project. @opt.value@ is the dashboard id the
-    -- sender's client submitted, so looking it up unscoped renders another
-    -- tenant's dashboard into this workspace's modal.
-    handleDashboardSelect slackAction opt = case (slackAction.team, idFromText opt.value) of
-      (Just team, Just did) ->
-        getSlackDataByTeamId team.id
-          >>= maybe (pure Nothing) (\sd -> Dashboards.getDashboardByProjectId sd.projectId did)
-          >>= maybe noAction (\dashboardVM -> updateDashboardModal slackAction dashboardVM opt.text)
-      _ -> noAction
-
-    handleViewSubmission authCtx slackAction = do
-      let meta = slackAction.view.private_metadata
-          pid = metaField 1 meta
-          widgetTitle = fromMaybe "" $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
-          dashBoardId = fromMaybe "" $ slackAction.view.state >>= lookupSelectedValueByKey "dashboard-select"
-          heading = "<" <> authCtx.env.hostUrl <> "p/" <> pid <> "/dashboards/" <> dashBoardId <> "|" <> widgetTitle <> ">"
-          content =
-            AE.object
-              [ "channel" AE..= metaField 0 meta
-              , "blocks"
-                  AE..= AE.Array
-                    ( V.fromList
-                        [ textBlock "section" (mrkdwn heading)
-                        , textBlock "section" $ mrkdwn ("Shared by <@" <> slackAction.user.id <> "> using /dashboard")
-                        , imageBlock (metaField 3 meta) widgetTitle
-                        ]
-                    )
-              ]
-      case idFromText pid of
-        Nothing -> Log.logAttention ("Slack view_submission with unparseable pid" :: Text) $ AE.object ["private_metadata" AE..= meta]
-        Just projectId -> void $ withProjectSlackDataLogged "slackActionsH.view_submission" projectId \sd ->
-          sendSlackChatMessage sd.botToken content
-      noAction
-
-    updateDashboardModal slackAction dashboardVM dashboardText = do
-      let baseTemplate = fromMaybe "" dashboardVM.baseTemplate
-      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
-      case dashboardM of
-        Nothing -> Log.logAttention "Slack updateDashboardModal: readDashboardFile failed" $ AE.object ["base_template" AE..= baseTemplate, "project_id" AE..= dashboardVM.projectId]
-        Just dashboard -> do
-          let pMeta = T.intercalate "___" [metaField 0 slackAction.view.private_metadata, dashboardVM.projectId.toText, baseTemplate]
-          void $ withProjectSlackDataLogged "slackActionsH.updateDashboardModal" dashboardVM.projectId \sd ->
-            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (selectBlocks dashboard.widgets V.empty)]
-      pure $ textResp $ "Selected dashboard: " <> show dashboardText
-
-    updateWidgetModal authCtx slackAction widgetTitle = do
-      let meta = slackAction.view.private_metadata
-          pid = metaField 1 meta
-          baseTemplate = metaField 2 meta
-      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
-      case dashboardM of
-        Nothing -> Log.logAttention "Slack updateWidgetModal: readDashboardFile failed" $ AE.object ["base_template" AE..= baseTemplate, "project_id" AE..= pid]
-        Just dashboard ->
-          whenJust (find ((== widgetTitle) . fromMaybe "Untitled-" . (.title)) dashboard.widgets) \w -> whenJust (idFromText pid) \projectId -> do
-            chartUrl' <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
-            let privateMeta = T.intercalate "___" [metaField 0 meta, pid, baseTemplate, chartUrl']
-            void $ withProjectSlackDataLogged "slackActionsH.updateWidgetModal" projectId \sd ->
-              triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta (selectBlocks dashboard.widgets (V.singleton $ imageBlock chartUrl' widgetTitle))]
-      noAction
+  envCfg <- asks env
+  slackAction <- either (const $ throwError err400) pure $ AE.eitherDecode @SlackAction $ encodeUtf8 action.payload
+  context <- either (const $ throwError err400{errBody = "Reopen /dashboard to share a widget."}) pure $ AE.eitherDecode @SlackDashboardContext $ encodeUtf8 slackAction.view.private_metadata
+  team <- maybe (throwError err403) pure slackAction.team
+  unless (context.userId == slackAction.user.id && not (T.null context.channelId)) $ throwError err403
+  principal <- Integrations.resolveSlackPrincipal team.id slackAction.user.id (Just context.projectId) >>= maybe (throwError err403) pure
+  slackData <- getProjectSlackData context.projectId >>= maybe (throwError err403) pure
+  unless (slackData.teamId == team.id) $ throwError err403
+  let access = AI.SlackAccess team.id slackAction.user.id principal.userId
+      requireAccess = AI.requireAgentAccess access context.projectId
+      updateModal ctx blocks = do
+        requireAccess
+        triggerSlackModal slackData.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView ctx blocks]
+      loadDashboard did = do
+        requireAccess
+        vm <- Dashboards.getDashboardByProjectId context.projectId did >>= maybe (throwError err403) pure
+        templates <- DashboardTemplates.getDashboardTemplates envCfg.liveReloadDashboards
+        maybe (throwError err400{errBody = "This dashboard is unavailable. Reopen /dashboard."}) pure $ DashboardTemplates.loadDashboardFromVM templates vm
+      withWidget selected perform = do
+        did <- maybe (throwError err400) pure context.dashboardId
+        dashboard <- loadDashboard did
+        widget <- maybe (throwError err400{errBody = "This widget changed. Reopen /dashboard."}) pure $ find ((== selected) . widgetSelectionId) dashboard.widgets
+        let title = fromMaybe "Untitled" widget.title
+        requireAccess
+        chartUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl context.projectId widget Nothing Nothing Nothing
+        perform did dashboard title chartUrl
+  case slackAction.type_ of
+    "block_actions" -> case slackAction.actions >>= viaNonEmpty head of
+      Just a | a.action_id == "dashboard-select" -> do
+        did <- maybe (throwError err400) pure $ a.selected_option >>= idFromText . (.value)
+        dashboard <- loadDashboard did
+        updateModal context{dashboardId = Just did} $ selectBlocks dashboard.widgets V.empty
+      Just a | a.action_id == "widget-select" -> do
+        selected <- maybe (throwError err400) (pure . (.value)) a.selected_option
+        withWidget selected \_ dashboard title chartUrl ->
+          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ imageBlock chartUrl title
+      _ -> pure ()
+    "view_submission" -> do
+      selected <- maybe (throwError err400) pure $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
+      withWidget selected \did _ title chartUrl -> do
+        requireAccess
+        sendSlackChatMessage slackData.botToken
+          $ AE.object
+            [ "channel" AE..= context.channelId
+            , "blocks"
+                AE..= AE.Array
+                  ( V.fromList
+                      [ textBlock "section" $ mrkdwn $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
+                      , textBlock "section" $ mrkdwn $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
+                      , imageBlock chartUrl title
+                      ]
+                  )
+            ]
+    _ -> pure ()
+  pure $ AE.object []
 
 
--- | @private_metadata@ is a "___"-joined tuple: channelId, projectId, baseTemplate, chartUrl.
-metaField :: Int -> Text -> Text
-metaField i = fromMaybe "" . (!!? i) . T.splitOn "___"
+-- | Identify the exact widget definition, including templates without widget IDs.
+-- Reordering preserves selection; changing a widget invalidates its old option.
+widgetSelectionId :: Widget -> Text
+widgetSelectionId widget = show (hashlazy (AE.encode widget) :: Digest SHA256)
 
 
--- | The dashboard + widget pickers, plus any trailing blocks (e.g. a chart preview).
 selectBlocks :: [Widget] -> V.Vector AE.Value -> V.Vector AE.Value
 selectBlocks widgets extra =
-  V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" opts, dashboardSelectBlock "widget-select" "*Select widget*" opts] <> extra
+  V.singleton (dashboardSelectBlock "widget-select" "*Select widget*" opts) <> extra
   where
-    opts = V.fromList $ map (dup . fromMaybe "Untitled-" . (.title)) widgets
+    opts = V.fromList $ map (\widget -> (fromMaybe "Untitled" widget.title, widgetSelectionId widget)) widgets
 
 
 -- | Slash-command / modal reply that replaces the invoking message.
@@ -498,11 +484,11 @@ mergeSlackContent (AE.Object o1) (AE.Object o2) = AE.Object (o1 <> o2)
 mergeSlackContent v _ = v
 
 
-dashboardView :: Text -> V.Vector AE.Value -> AE.Value
+dashboardView :: SlackDashboardContext -> V.Vector AE.Value -> AE.Value
 dashboardView privateData blocks =
   AE.object
     [ "type" AE..= "modal"
-    , "callback_id" AE..= ""
+    , "callback_id" AE..= "monoscope-dashboard"
     , "title"
         AE..= AE.object
           [ "type" AE..= "plain_text"
@@ -510,7 +496,7 @@ dashboardView privateData blocks =
           ]
     , "blocks"
         AE..= AE.Array blocks
-    , "private_metadata" AE..= privateData
+    , "private_metadata" AE..= (decodeUtf8 (AE.encode privateData) :: Text)
     , "submit" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Send to channel"]
     ]
 

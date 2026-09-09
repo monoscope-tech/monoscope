@@ -4,9 +4,9 @@ module Pages.Bots.WorkflowsSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
 import Control.Exception (bracket_)
-import Control.Lens ((.~), (^?))
+import Control.Lens (ix, (.~), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _String)
+import Data.Aeson.Lens (key, _Array, _String)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.Hasql qualified as Hasql
@@ -258,6 +258,83 @@ spec = around withTestResources do
         revoked <- toBaseServantResponse tr $ slackInteractionsH command{SlackPage.channel_id = "C_DENIED"}
         extractResponseType revoked `shouldBe` Just "ephemeral"
         readChannel testPid >>= (`shouldBe` Just ("C0123ABCDEF", Nothing))
+
+      it "Slack dashboard actions validate metadata, membership, and current widget definitions" \tr -> do
+        setupLinkedSlackData tr testPid "T_ACTIONS"
+        otherPid <- createTestProject tr "Private dashboard project"
+        setupSlackData tr otherPid "T_ACTIONS"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            schema title = AE.object ["widgets" AE..= ([AE.object ["type" AE..= ("timeseries" :: Text), "title" AE..= (title :: Text), "query" AE..= ("summarize count()" :: Text)]] :: [AE.Value])]
+            insertDashboard pid = withResource tr.trPool \conn -> do
+              [PGS.Only did] <-
+                PGS.query
+                  conn
+                  [sql|INSERT INTO projects.dashboards (project_id, created_by, title, schema) VALUES (?, ?, 'Requests', ?) RETURNING id::text|]
+                  (pid, userId, Aeson $ schema "Requests")
+              pure (did :: Text)
+            body requests = maybe (fail "Missing Slack request") (maybe (fail "Invalid Slack request JSON") pure . AE.decode @AE.Value . snd) $ listToMaybe requests
+            metadata request = maybe (fail "Missing modal metadata") pure $ request ^? key "view" . key "private_metadata" . _String
+            payload context kind selected viewState =
+              SlackPage.SlackActionForm
+                $ decodeUtf8
+                $ AE.encode
+                $ AE.object
+                  [ "type" AE..= (kind :: Text)
+                  , "team" AE..= AE.object ["id" AE..= ("T_ACTIONS" :: Text)]
+                  , "user" AE..= AE.object ["id" AE..= ("U0123ABCDEF" :: Text)]
+                  , "view" AE..= AE.object ["id" AE..= ("V_ACTIONS" :: Text), "private_metadata" AE..= (context :: Text), "state" AE..= (viewState :: AE.Value)]
+                  , "actions" AE..= (selected :: [AE.Value])
+                  ]
+            select actionId value = [AE.object ["action_id" AE..= (actionId :: Text), "selected_option" AE..= AE.object ["text" AE..= ("Untrusted title" :: Text), "value" AE..= (value :: Text)]]]
+            run form =
+              runAsBaseRecordingHTTP tr
+                $ catchError @ServerError (SlackPage.slackActionsH form $> 200) (\_ err -> pure err.errHTTPCode)
+            denied code form = do
+              (requests, status) <- run form
+              status `shouldBe` code
+              requests `shouldBe` []
+        did <- insertDashboard testPid
+        foreignDid <- insertDashboard otherPid
+        (opened, _) <- runAsBaseRecordingHTTP tr $ slackInteractionsH $ slackInteraction "/dashboard" "" "T_ACTIONS"
+        initial <- body opened >>= metadata
+        denied 400 $ payload "C_OLD___project___template___url" "view_submission" [] AE.Null
+        denied 403 $ payload initial "block_actions" (select "dashboard-select" foreignDid) AE.Null
+        initialValue <- either fail pure $ AE.eitherDecode @AE.Value $ encodeUtf8 initial
+        let otherOwner = decodeUtf8 $ AE.encode $ initialValue & key "userId" . _String .~ "U_OTHER"
+        denied 403 $ payload otherOwner "block_actions" (select "dashboard-select" did) AE.Null
+        (chosen, status) <- run $ payload initial "block_actions" (select "dashboard-select" did) AE.Null
+        status `shouldBe` 200
+        chosenBody <- body chosen
+        context <- metadata chosenBody
+        option <-
+          maybe (fail "Missing widget option") pure
+            $ chosenBody
+            ^? key "view" . key "blocks" . _Array . ix 0 . key "accessory" . key "options" . _Array . ix 0 . key "value" . _String
+        let viewState = AE.object ["values" AE..= AE.object ["widget-select" AE..= AE.object ["widget-select" AE..= AE.object ["selected_option" AE..= AE.object ["value" AE..= option]]]]]
+            submit = payload context "view_submission" [] viewState
+        (preview, previewStatus) <- run $ payload context "block_actions" (select "widget-select" option) viewState
+        previewStatus `shouldBe` 200
+        map fst preview `shouldBe` ["https://slack.com/api/views.update"]
+        (shared, sharedStatus) <- run submit
+        sharedStatus `shouldBe` 200
+        map fst shared `shouldBe` ["https://slack.com/api/chat.postMessage"]
+        sharedBody <- body shared
+        (sharedBody ^? key "channel" . _String) `shouldBe` Just "C0123ABCDEF"
+        (sharedBody ^? key "blocks" . _Array . ix 2 . key "image_url" . _String) `shouldSatisfy` maybe False (T.isInfixOf $ "p/" <> testPid.toText <> "/widget.png?")
+        withResource tr.trPool \conn ->
+          void
+            $ PGS.execute
+              conn
+              [sql|UPDATE projects.dashboards SET schema = ? WHERE id::text = ?|]
+              (Aeson $ schema "Changed", did)
+        denied 400 submit
+        withResource tr.trPool \conn ->
+          void
+            $ PGS.execute
+              conn
+              [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ? AND user_id = ?|]
+              (testPid, userId)
+        denied 403 submit
 
       it "Slack: /here command workflow" \tr -> do
         setupLinkedSlackData tr testPid "T_HERE_WF"

@@ -84,6 +84,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -610,10 +611,6 @@ widgetOrderTriggerForm_ url isOob =
         <> [hxSwapOob_ "true" | isOob]
     )
     ""
-
-
-loadDashboardFromVM :: [Dashboards.Dashboard] -> Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
-loadDashboardFromVM templates dashVM = dashVM.schema <|> find (\d -> d.file == dashVM.baseTemplate) templates
 
 
 -- | Flatten a secured-query result set into plain text rows.
@@ -1892,18 +1889,6 @@ dashboardsPostH pid form = do
       syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
-
-
--- TH splice: reads all dashboard YAML files from static/public/dashboards at compile time
-dashboardTemplatesCompiled :: [Dashboards.Dashboard]
-dashboardTemplatesCompiled = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
-
-
--- When liveReload is True, reads from disk on every access (for dev iteration without restart).
-getDashboardTemplates :: IOE :> es => Bool -> Eff es [Dashboards.Dashboard]
-getDashboardTemplates liveReload
-  | liveReload = liftIO $ Dashboards.readDashboardsFromDisk "static/public/dashboards"
-  | otherwise = pure dashboardTemplatesCompiled
 
 
 -- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.

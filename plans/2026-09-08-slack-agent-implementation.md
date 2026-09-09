@@ -353,3 +353,41 @@ passed 31 examples, 0 failures. The attempted spaced `Slack Bot` filter was
 rejected by the runner before testing. The first Slack run caught the old
 missing-dashboard test's lazy exception assertion; the final test inspects the
 Servant error inside the effect stack and asserts HTTP 400 directly.
+
+
+## Dashboard action authorization and metadata (2026-09-09)
+
+Dashboard modals now carry a derived JSON context with project, requesting Slack
+user, channel, and optional selected dashboard ID. Every selection, preview, and
+submission resolves current personal project access. Old packed metadata is
+rejected with an instruction to reopen `/dashboard`.
+
+Actions look up dashboard IDs inside that project and resolve widgets from the
+saved schema or known template catalog. No metadata-provided path or chart URL
+is used. Preview and share generate a fresh signed chart URL after checking
+access. Widget options hash the full definition, so reordering preserves a
+selection and changing the definition invalidates it. The widget picker no longer
+renders an incorrect second dashboard picker using widget titles as dashboard IDs.
+
+The web page and Slack reuse the existing loader through
+`Models.Projects.DashboardTemplates`. Directly importing the page created a
+module cycle, so the loader moved into this small model module. Hpack regenerated
+the module lists and included the earlier migrations 0156–0160 in source packaging.
+All new JSON instances are derived. Three passes of each requested skill are
+recorded in the review report.
+
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Slack make live-test-dev`
+passed 32 examples, 0 failures. Recorded-HTTP tests cover valid preview/share,
+foreign dashboards, mismatched modal owners, changed widgets, revocation, and old
+metadata. Denied requests emit no HTTP calls. Fixtures record requests; these
+checks do not prove acceptance by a live Slack workspace. Fourmolu and
+`git diff --check` passed. The fixture's initial ambiguous list and shadowed name
+were fixed without warning suppression.
+
+CI signoff must be refreshed before push. Native session status/cancellation,
+complete conversation history, evidence tools, drafts, proactive evaluation, and
+controlled live acceptance remain open. No push or deployment occurred.
+
+The shared-loader regression command
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Dashboards make live-test-dev`
+also passed: 21 examples, 0 failures.

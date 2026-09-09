@@ -184,6 +184,11 @@ extra-source-files:
     static/migrations/0153_incident_delivery.sql
     static/migrations/0154_incident_observations.sql
     static/migrations/0155_slack_events.sql
+    static/migrations/0156_slack_assistant_threads.sql
+    static/migrations/0157_slack_install_requests.sql
+    static/migrations/0158_slack_identities.sql
+    static/migrations/0159_slack_investigation_threads.sql
+    static/migrations/0160_slack_incident_thread_lookup.sql
 
 source-repository head
   type: git
@@ -220,6 +225,7 @@ library
       Models.Apis.ShareEvents
       Models.Projects.CodeContext
       Models.Projects.Dashboards
+      Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
@@ -835,6 +841,7 @@ test-suite test-dev
       Models.Apis.ShareEvents
       Models.Projects.CodeContext
       Models.Projects.Dashboards
+      Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers

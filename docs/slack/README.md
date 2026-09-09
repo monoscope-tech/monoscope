@@ -21,9 +21,14 @@ Slash commands use the linked user's current default project. `/monoscope-here`
 requires project-admin permission and changes only that project's notification
 channel. Moving the channel clears the old channel-bound incoming webhook so
 notifications use the bot API. Unlinked or revoked users receive a private prompt
-to link or check their access. Dashboard buttons still require personal
-authorization and metadata validation before rollout, along with the remaining
-native Agent lifecycle gates.
+to link or check their access.
+
+Dashboard modals retain their project and requesting Slack user. Each selection,
+preview, and share rechecks current membership. Widget definitions come from the
+project's saved dashboard or its known template; modal metadata carries no file
+path or chart URL. A changed widget requires a new selection. Modals opened before
+this metadata upgrade must be reopened with `/dashboard`. Native Agent lifecycle
+and the remaining acceptance gates still apply before rollout.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
