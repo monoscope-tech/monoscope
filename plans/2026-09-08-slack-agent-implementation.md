@@ -1257,3 +1257,52 @@ No repository write, Slack publication, or deployment occurred. Representative
 investigation evaluation, progress detail, durable model/tool checkpoints and
 response delivery, tested action drafts, proactive policy, and live acceptance
 remain unfinished.
+
+
+## Durable investigation activity
+
+An append-only investigation journal records separate attempts, the initiating
+question and model name, model round starts/responses, tool starts/results, and
+terminal completion/failure/interruption. ToolResult moved to the journal model
+and gained derived JSON codecs; existing agent consumers keep the same fields.
+No handwritten instance or new dependency was added. Migration 0168 and the
+regenerated Cabal manifest include the new model and table.
+
+get_investigation_history reads only the authorized project/workspace/channel/
+thread, returning the latest fifty events in chronological order with a cap flag.
+Results stay in the tool role. A returned tool result can be a domain error; it
+is not evidence that a hypothesis was confirmed. Missing completion does not prove
+that a worker is alive. Reading history records a dedicated marker rather than
+recursively copying the journal into itself. Model transport failures use a typed
+marker; provider error details and API keys are not persisted by this journal.
+
+This preserves partial findings across an interrupted worker and makes them
+available to a later conversation turn. It does not yet replay a model/tool call
+from a checkpoint, deduplicate persisted user messages on retry, provide a durable
+response outbox, or publish the live checklist. Those remain required work.
+Slack's current agents.sessions.setStatus API accepts lifecycle states, not a
+custom checklist; assistant.threads.setStatus is documented as superseded.
+See https://docs.slack.dev/reference/methods/agents.sessions.setStatus/ and
+https://docs.slack.dev/reference/methods/assistant.threads.setStatus/.
+
+The new native workflow regression interrupts a model call after a completed tool,
+reads the retained result through the history tool on another attempt, checks all
+four scope dimensions, verifies typed model failure storage, exercises the fifty-
+event cap and ordering, and denies access after membership revocation. The final
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows
+make live-test-dev` run passed 36 examples, zero failures, in 27.4867 seconds.
+Log: `/tmp/monoscope-slack-agent/investigation-journal-workflows-complete.log`.
+All three requested reviews ran three passes; Fourmolu and whitespace checks pass.
+CI signoff for this increment remains pending. HLint remains blocked by
+MultilineStrings; Weeder exits 228 with repository findings. Logs use investigation-journal-hlint.log and
+investigation-journal-weeder.log under /tmp/monoscope-slack-agent/.
+No deployment or live Slack publication occurred.
+
+
+The preceding deployment-evidence commit 9441c0ec2 passed
+`make ci-signoff CHECKS="build doctests unit-tests"`: build, 1,543 doctests,
+and 308 unit examples. The command exited successfully and published passing
+attestations; frontend, CLI, and UI results were reused. Integration-tests,
+weeder, hlint, and e2e remain outstanding. TimeFusion did not start in the local
+CI environment. Log: /tmp/monoscope-slack-agent/deployment-context-ci-signoff.log.
+These results do not attest the subsequent journal increment.

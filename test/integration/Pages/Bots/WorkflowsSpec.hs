@@ -3,7 +3,7 @@
 module Pages.Bots.WorkflowsSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
-import Control.Exception (bracket_)
+import Control.Exception (ErrorCall (..), bracket_, throwIO)
 import Control.Lens (ix, (.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
@@ -26,6 +26,7 @@ import Effectful.Error.Static (catchError)
 import Langchain.LLM.Core qualified as Chat
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -595,6 +596,67 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "retains interrupted investigation evidence and exposes it only inside the authorized thread" \tr -> do
+        setupLinkedSlackData tr testPid "T_JOURNAL"
+        let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_JOURNAL" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_JOURNAL" "1735689600.000001" "1735689602.000001"
+            config = (AI.defaultAgenticConfig testPid){AI.access = access}
+            run = AI.runAgenticChatWithHistory config "Investigate the alert" "model" "not-a-real-key"
+            journal = runQueryEffect tr $ Investigations.recentEvents testPid "T_JOURNAL" "C_JOURNAL" "1735689600.000001"
+            interrupted = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ ->
+                if any ((== Chat.Tool) . Chat.role) history
+                  then liftIO $ throwIO $ ErrorCall "simulated worker interruption"
+                  else pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        runTestBg frozenTime tr (tryAny $ interrupted run) >>= (`shouldSatisfy` isLeft)
+        partial <- journal
+        length [() | entry <- partial.entries, Investigations.ToolReturned _ _ result <- [entry.event], not $ T.null result.formatted] `shouldBe` 1
+        length [() | entry <- partial.entries, Investigations.InvestigationInterrupted <- [entry.event]] `shouldBe` 1
+        partial.limitReached `shouldBe` False
+        recovered <- newIORef ""
+        let retry = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                fmap Right $ case results of
+                  [] -> pure $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "history" "function" (Chat.ToolFunction "get_investigation_history" mempty)]}
+                  body : _ -> do
+                    writeIORef recovered body
+                    pure $ Chat.Message Chat.Assistant "The earlier schema read is retained; the investigation was interrupted." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        runTestBg frozenTime tr (retry run) >>= (`shouldSatisfy` isRight)
+        readIORef recovered >>= (`shouldSatisfy` T.isInfixOf "InvestigationInterrupted")
+        resumed <- journal
+        length (ordNub $ map (.runId) resumed.entries) `shouldBe` 2
+        length [() | entry <- resumed.entries, Investigations.InvestigationFinished <- [entry.event]] `shouldBe` 1
+        length [() | entry <- resumed.entries, Investigations.InvestigationHistoryRead _ <- [entry.event]] `shouldBe` 1
+        length [() | entry <- resumed.entries, Investigations.ToolReturned _ _ _ <- [entry.event]] `shouldBe` 1
+        otherPid <- createTestProject tr "Other investigation project"
+        for_ ([(otherPid, "T_JOURNAL", "C_JOURNAL", "1735689600.000001"), (testPid, "T_OTHER", "C_JOURNAL", "1735689600.000001"), (testPid, "T_JOURNAL", "C_OTHER", "1735689600.000001"), (testPid, "T_JOURNAL", "C_JOURNAL", "1735689600.000002")] :: [(Projects.ProjectId, Text, Text, Text)]) \(pid, team, channel, thread) -> do
+          denied <- runQueryEffect tr $ Investigations.recentEvents pid team channel thread
+          null denied.entries `shouldBe` True
+        let failed = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> pure $ Left "private-provider-transport-detail"
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        runTestBg frozenTime tr (failed run) >>= (`shouldSatisfy` isLeft)
+        failures <- journal
+        length [() | entry <- failures.entries, Investigations.ModelReturned _ Investigations.ModelRequestFailed <- [entry.event]] `shouldBe` 1
+        T.isInfixOf "private-provider-transport-detail" (decodeUtf8 $ AE.encode failures) `shouldBe` False
+        case resumed.entries of
+          entry : _ -> do
+            let scope = Investigations.Scope entry.runId testPid (getResponse tr.trSessAndHeader).user.id "T_JOURNAL" "C_JOURNAL" "1735689600.000001" "1735689602.000001"
+            runQueryEffect tr $ traverse_ (Investigations.recordEvent scope . Investigations.ModelStarted) ([0 .. 50] :: [Int])
+          [] -> fail "Expected persisted investigation events"
+        capped <- journal
+        capped.limitReached `shouldBe` True
+        [roundNo | entry <- capped.entries, Investigations.ModelStarted roundNo <- [entry.event]] `shouldBe` [1 .. 50]
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+        runTestBg frozenTime tr (tryAny $ retry run) >>= (`shouldSatisfy` isLeft)
+        final <- journal
+        AE.toJSON final `shouldBe` AE.toJSON capped
+
       it "compares deployed revisions and a control environment across more than five evidence rounds" \tr -> do
         setupLinkedSlackData tr testPid "T_DEPLOYMENT"
         let cfg = tr.trATCtx.config
