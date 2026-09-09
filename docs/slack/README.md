@@ -117,3 +117,9 @@ A root timestamp cannot be replaced by a conflicting observation.
 
 These files describe configuration; they do not apply it to a live app.
 Controlled workspace acceptance and the remaining Slack-agent plan gates are required before rollout.
+
+Error patterns remain open when error observations stop. Quiet counters do not
+establish recovery or trigger automatic resolution. An operator can resolve an
+error explicitly. Monitor recovery still requires a measured value that passes
+its recovery condition; missing or failed evaluations show DATA UNAVAILABLE in
+existing incident threads and retain the last verified reading.

@@ -2609,8 +2609,8 @@ runSchemaFlusherFiber logger ctx tp
       SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
--- | 1-minute error-state decay tick. Owns `propagateMergedCountsBatch` +
--- `updateOccurrenceCounts` so errors auto-resolve once quiet long enough.
+-- | 1-minute error-count decay tick. Propagates merged counts and decays
+-- occurrence counters without treating inactivity as recovery.
 -- Runs every minute per active project.
 runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runErrorDecayFiber logger ctx tp = forever $ do

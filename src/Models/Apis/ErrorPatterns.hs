@@ -94,7 +94,7 @@ data ErrorPattern = ErrorPattern
   , occurrences_1h :: Int
   , occurrences_24h :: Int
   , quietMinutes :: Int
-  , resolutionThresholdMinutes :: Int
+  , resolutionThresholdMinutes :: Int -- Historical setting; silence no longer establishes resolution.
   , baselineState :: BaselineState
   , baselineSamples :: Int
   , baselineErrorRateMean :: Maybe Double
@@ -252,7 +252,7 @@ propagateMergedCountsBatch pids =
     WHERE c.id = m.canonical_id AND c.project_id = ANY(#{pids}) |]
 
 
--- | Batch version: decay occurrence counts for all given projects in a single query.
+-- | Decay occurrence counts without inferring recovery from missing errors.
 updateOccurrenceCountsBatch :: DB es => V.Vector Projects.ProjectId -> UTCTime -> Eff es Int64
 updateOccurrenceCountsBatch pids _ | V.null pids = pure 0
 updateOccurrenceCountsBatch pids now =
@@ -265,15 +265,9 @@ updateOccurrenceCountsBatch pids now =
         occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
         quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
         state = CASE
-          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
           WHEN state = 'regressed' AND regressed_at IS NOT NULL AND #{now}::timestamptz - regressed_at >= INTERVAL '7 days' THEN 'ongoing'
           ELSE state
-        END,
-        resolved_at = CASE
-          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN #{now}
-          ELSE resolved_at
-        END,
-        resolved_by = CASE WHEN state != 'resolved' THEN NULL ELSE resolved_by END
+        END
       WHERE project_id = ANY(#{pids})
         AND (state != 'resolved' OR occurrences_24h > 0)
         -- Skip rows where every SET clause would be a no-op: counters all zero
@@ -281,7 +275,6 @@ updateOccurrenceCountsBatch pids now =
         -- quiet patterns and stops the TOAST relation from outrunning autovacuum.
         AND (
           occurrences_1m > 0 OR occurrences_5m > 0 OR occurrences_1h > 0 OR occurrences_24h > 0
-          OR (state IN ('new','escalating','ongoing','regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes)
           OR (state = 'regressed' AND regressed_at IS NOT NULL AND #{now}::timestamptz - regressed_at >= INTERVAL '7 days')
         )
     |]

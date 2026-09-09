@@ -66,6 +66,17 @@ spec = around withTestResources do
       length [sd | sd <- updates, isJust sd.threadTs] `shouldBe` 2
       roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'error' AND e.source_id = ?|] (PGS.Only notified.id)
       (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
+      -- Quiet counters alone cannot close an error or establish recovery.
+      void $ withResource tr.trPool \conn ->
+        PGS.execute
+          conn
+          [sql|UPDATE apis.error_patterns SET quiet_minutes = resolution_threshold_minutes + 1,
+          occurrences_1m = 0, occurrences_5m = 0, occurrences_1h = 0, occurrences_24h = 0 WHERE id = ?|]
+          (PGS.Only notified.id)
+      now <- getTestTime tr.trTestClock
+      void $ runTestBgNoReset tr $ Errors.updateOccurrenceCountsBatch [testPid] now
+      Just quietPattern <- runTestBgNoReset tr $ Errors.getErrorPatternById notified.id
+      (quietPattern.state, isNothing quietPattern.resolvedAt, quietPattern.resolvedBy) `shouldBe` (notified.state, True, Nothing)
       -- A newer acknowledged issue must win over an older unnotified escalation.
       withResource tr.trPool \conn ->
         void

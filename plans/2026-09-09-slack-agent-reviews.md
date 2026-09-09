@@ -389,3 +389,14 @@ incident event, message builder, schema constraint, and lifecycle regression.
 Runtime-error auto-resolution from quiet counters remains a separate gap. This
 change handles monitor evaluation availability and does not claim that silence
 proves an error recovered.
+
+## Quiet errors do not establish recovery
+
+All three requested skills ran in three passes over the count-decay query,
+worker caller, error-pattern record, resolution consumers, and regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Delete the quiet-counter closure branch and its resolution-field assignments. Reuse the existing batch decay query. | Missing error observations are not measured recovery. The regression reproduced ESResolved with a resolution timestamp despite no measurement or operator action. | Keep the existing explicit resolution action. No new client behavior is needed. |
+| 2 | Preserve the no-op filter and existing nonterminal regression-to-ongoing transition; introduce no new framework or state. | Leave operator attribution and resolution timestamps untouched by count decay. Retain the historical threshold field and derived codecs for stored/wire compatibility; no user-facing control depends on it. | Extend the existing multi-step incident regression and update the old auto-resolution expectation to the required behavior. Database checks remain in Hspec. |
+| 3 | Recheck the final query and all threshold references. No handwritten instances, dependency, partial function, or suppression added. | Check an active error beyond the former threshold remains open, then still resolves through the existing operator action in its original threads. Monitor recovery remains driven by measured conditions. | No JS, hyperscript, style indirection, or fake recovery action. Existing historical auto-resolved activity labels remain readable. |

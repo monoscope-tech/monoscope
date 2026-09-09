@@ -520,7 +520,7 @@ spec = sequential $ aroundAll withTestResources do
           unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) unsubPat `shouldBe` Just False
 
-    it "7. Occurrence count decay and auto-resolution" \tr -> do
+    it "7. Occurrence count decay does not infer resolution from silence" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       -- Find or create a non-resolved pattern
       let activePatM = find (\p -> p.state /= ESResolved) patterns
@@ -548,7 +548,7 @@ spec = sequential $ aroundAll withTestResources do
           updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case updatedPat of
             Just p -> do
-              p.state `shouldBe` ESResolved
+              p.state `shouldBe` ESOngoing
               p.occurrences_1m `shouldBe` 0
             Nothing -> expectationFailure "Pattern not found after occurrence count update"
 

@@ -932,3 +932,30 @@ covers commit 182607f34, not this new migration and code. Current-tree CI, full
 TimeFusion integration, live Slack acceptance, and the rest of the five-release
 plan remain outstanding. Error auto-resolution based only on quiet counters is
 still a separate lifecycle gap. No push or deployment occurred.
+
+## Quiet errors remain open (September 9)
+
+The error-count decay tick no longer changes an error to resolved merely because
+its quiet counter reaches the legacy threshold. It does not write resolution
+timestamps or clear operator attribution. Counter decay and the nonterminal
+regressed-to-ongoing transition remain. The historical threshold field and derived
+record codecs are retained for compatibility; no user-facing control depends on
+that field. Historical automatic-resolution activity remains readable.
+
+The incident regression first reproduced `(ESResolved, False, Nothing)` where an
+active error with no resolution timestamp was required. After removing the quiet
+closure path, the native watcher passed 15 Incident examples and 30 ErrorPatterns
+examples with zero failures. The same lifecycle scenario proceeds through explicit
+operator resolution in the original threads. Commands used `make live-test-dev`
+with `DB_HOST=127.0.0.1`, `MINIO_ENDPOINT=http://127.0.0.1:19000`, and respectively
+`TEST_MATCH=Incident` / `TEST_MATCH=ErrorPatterns`. Logs are
+`/tmp/monoscope-slack-agent/quiet-error-incident-tests.log` and
+`quiet-error-pattern-tests.log`.
+
+All three requested review skills ran three times. Fourmolu and scoped whitespace
+checks passed. HLint 3.3.6 still rejects MultilineStrings. Weeder exited 228 with
+141 repository findings and no affected error-decay finding. No new instance,
+dependency, migration, warning suppression, or client script was introduced.
+Current-tree CI still needs a new signoff after these lifecycle changes. Charts,
+live Slack acceptance, earlier ingestion/spike transaction gaps, and the later
+releases remain unfinished. No push or deployment occurred.
