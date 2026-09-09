@@ -2004,3 +2004,69 @@ Evidence: /tmp/monoscope-slack-agent/slack-heartbeat-workflows-complete.log
 Final Fourmolu and whitespace checks pass. Final Weeder exits 228; HLint remains
 blocked by MultilineStrings. CI signoff for the combined lifecycle/heartbeat
 changes remains pending. No deployment or branch push occurred.
+
+## Related incident evidence
+
+Slack investigations now expose get_related_incidents. The tool resolves the
+incident from the already-authorized project/workspace/channel/thread and ignores
+model-supplied scope. It returns up to ten earlier episodes, ranking the same
+monitor/error/issue source first, then non-monitor incidents with the same known
+service, environment and issue type. Later onsets and other projects are excluded.
+
+Each match carries typed supporting evidence: the source identity, or the actual
+service, environment and issue type. JSON and database decoding derive. Results
+include onset/latest notification snapshots, timestamps and recorded episode
+phase, preserving measured recovery versus operator resolution. A limitReached
+flag means the listing may be incomplete, not that an eleventh match is known.
+The cap applies after snapshot joins. No new table, package or handwritten
+instance was introduced.
+
+The agent prompt and tool description explain that similarity is a comparison
+lead, not evidence of a common cause or a tested fix. Service/environment matches
+use current stored issue metadata, which may differ from onset. Prior notification
+content remains tool evidence, never new system instructions. Existing before/after
+authorization checks apply to the new tool.
+
+The new effectful workflow exercises source and service matches, cross-project,
+workspace, channel and thread isolation, later episodes, differing service,
+environment and issue type, unknown environment, recovery versus resolution,
+close times, snapshot ordering, actual model/tool execution and bounded results.
+Three requested skill passes are recorded. Native Workflows is running; final
+results are pending. Fourmolu passed before the final wording update, which was
+also formatted. HLint cannot parse MultilineStrings; Weeder exits 228 with
+repository findings. No deployment or branch push occurred. Investigation quality
+evaluation, runbooks, tested action drafts, proactive policies and live acceptance
+remain incomplete.
+
+The first completed related-incident run passed the new scenario, but finished
+47 examples with three failures in 222.8778 seconds. Existing missing-ack,
+multipart-retry and cached-answer fixtures selected chat.postMessage calls by
+ordinal, so asynchronous progress consumed reply faults or appeared in answer
+counts. Their shared fixture now inspects actual answer metadata, acknowledges
+progress independently and retains all request recording. Assertions count answer
+publications specifically. The HTTP delegate uses the existing phantom-effect
+coercion pattern from SlackRateLimit; compiler-reported effect-row ambiguities were
+fixed. The full workflow suite is rerunning. This intermediate run is not a pass.
+
+A further review made equal-timestamp snapshots deterministic: an alert is the
+initial snapshot and a recovery/resolution wins as the latest snapshot at the
+same timestamp. The related-incident regression now covers this boundary.
+The reply-fixture edit initially also changed a progress-publication assertion;
+the next interrupted run exposed that mistake (27 examples, two failures).
+That unrelated assertion is restored. Compiler checks also required lifting the
+fixture's unsupported-body failure into IO rather than adding a Fail effect.
+These intermediate results are retained and are not treated as passing checks.
+
+Final native Workflows passed 47 examples with zero failures in 306.9455 seconds.
+This includes the related-incident tool and equal-timestamp snapshots, the three
+corrected answer fixtures, progress recovery, cancellation and busy-thread
+steering. Command:
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev.
+Evidence: /tmp/monoscope-slack-agent/slack-related-incidents-workflows-complete.log
+(the last completed run; earlier runs are retained).
+Final Fourmolu and whitespace checks pass. HLint exits 1 on unsupported
+MultilineStrings; Weeder exits 228 with repository findings. No passing attestation
+is claimed for either. CI for the preceding lifecycle/heartbeat main commit
+75f83fd60 is still live in /tmp/monoscope-slack-agent/slack-lifecycle-heartbeat-ci-signoff.log.
+Related-incident CI signoff has not yet run. No deployment or branch push occurred.

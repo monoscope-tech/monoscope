@@ -5,6 +5,7 @@ module Pages.Bots.BotTestHelpers (
   setupSlackData,
   setupLinkedSlackData,
   withHTTPResponses,
+  withSlackReplyResponses,
   receiveSlackEvent,
   slackRootEvent,
   setupDiscordData,
@@ -64,7 +65,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _Array, _Number)
+import Data.Aeson.Lens (key, _Array, _Number, _String)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -82,7 +83,9 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client (RequestBody (..), defaultRequest, requestBody)
 import Network.Wreq qualified as Wreq
+import Network.Wreq.Types qualified as WreqTypes
 import Pages.Bots.BotFixtures (slackCallbackEnvelope)
 import Pages.Bots.Slack qualified as SlackEvents
 import Pkg.DeriveUtils (UUIDId)
@@ -150,6 +153,27 @@ withHTTPResponses fixture = interpose @HTTP.HTTP \_ -> \case
     respond opts url response = do
       body <- liftIO $ fixture opts url
       pure $ maybe response (\value -> response & Wreq.responseBody .~ value) body
+
+
+-- | Fault only answer posts, allowing asynchronous progress to publish normally.
+-- Retain the underlying recorder so assertions inspect actual request payloads.
+withSlackReplyResponses :: (HTTP.HTTP :> es, IOE :> es) => IO LByteString -> Eff es a -> Eff es a
+withSlackReplyResponses fixture =
+  withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689609.000001\"}")
+    . interpose @HTTP.HTTP
+      ( \_ -> \case
+          HTTP.PostWith opts "https://slack.com/api/chat.postMessage" value -> do
+            request <- liftIO $ WreqTypes.postPayload value defaultRequest
+            body <- case requestBody request of
+              RequestBodyLBS bytes -> pure bytes
+              RequestBodyBS bytes -> pure $ fromStrict bytes
+              _ -> liftIO $ fail "Expected a JSON Slack message body"
+            response <- send $ HTTP.PostWith opts "https://slack.com/api/chat.postMessage" value
+            if (AE.decode @AE.Value body >>= (^? key "metadata" . key "event_type" . _String)) == Just "monoscope_investigation_reply"
+              then liftIO fixture <&> \reply -> response & Wreq.responseBody .~ reply
+              else pure response
+          operation -> send @HTTP.HTTP $ coerce operation
+      )
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

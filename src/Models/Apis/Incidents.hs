@@ -19,6 +19,10 @@ module Models.Apis.Incidents (
   getEpisode,
   InvestigationContext (..),
   slackInvestigationContext,
+  RelatedIncidentMatch (..),
+  RelatedIncident (..),
+  RelatedIncidents (..),
+  slackRelatedIncidents,
   latestEpisodeTx,
   ErrorResolution (..),
   resolveErrorIncident,
@@ -254,6 +258,80 @@ slackInvestigationContext pid teamId channelId threadTs =
       AND monitor.id = episode.source_id AND monitor.project_id = episode.project_id
     WHERE episode.project_id = #{pid} AND root.team_id = #{teamId}
       AND root.channel_id = #{channelId} AND root.message_ts = #{threadTs}|]
+
+
+data RelatedIncidentMatch
+  = RelatedSameSource IncidentSource
+  | RelatedSameServiceEnvironmentAndType Text Text Issues.IssueType
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson RelatedIncidentMatch
+
+
+data RelatedIncident = RelatedIncident
+  { episodeId :: EpisodeId
+  , issueId :: Maybe Issues.IssueId
+  , match :: RelatedIncidentMatch
+  , phase :: EpisodePhase
+  , startedAt :: UTCTime
+  , lastEventAt :: UTCTime
+  , closedAt :: Maybe UTCTime
+  , initialNotification :: SlackPayload
+  , latestNotification :: SlackPayload
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+data RelatedIncidents = RelatedIncidents
+  { episodeId :: EpisodeId
+  , matches :: [RelatedIncident]
+  , limitReached :: Bool
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+-- | Earlier episodes selected by explicit source or service evidence. A match
+-- identifies a useful comparison, never a shared cause or a proven remediation.
+slackRelatedIncidents :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe RelatedIncidents)
+slackRelatedIncidents pid teamId channelId threadTs =
+  slackInvestigationContext pid teamId channelId threadTs >>= traverse \origin -> do
+    matches <-
+      Hasql.interp @[RelatedIncident]
+        [HI.sql|WITH candidates AS (
+          SELECT previous.*,
+            CASE WHEN previous.source_kind = current.source_kind AND previous.source_id = current.source_id
+              THEN jsonb_build_object('tag', 'RelatedSameSource', 'contents',
+                jsonb_build_object('tag', CASE current.source_kind WHEN 'monitor' THEN 'MonitorIncident'
+                  WHEN 'error' THEN 'ErrorIncident' WHEN 'issue' THEN 'IssueIncident' END, 'contents', current.source_id))
+              ELSE jsonb_build_object('tag', 'RelatedSameServiceEnvironmentAndType',
+                'contents', jsonb_build_array(current_issue.service, current_issue.environment, current_issue.issue_type)) END AS match
+          FROM apis.incident_episodes current
+          JOIN apis.incident_episodes previous ON previous.project_id = current.project_id
+            AND previous.started_at < current.started_at
+          LEFT JOIN apis.issues current_issue ON current_issue.id = current.issue_id AND current_issue.project_id = current.project_id
+          LEFT JOIN apis.issues previous_issue ON previous_issue.id = previous.issue_id AND previous_issue.project_id = previous.project_id
+          WHERE current.id = #{origin.episodeId} AND current.project_id = #{pid}
+            AND ((previous.source_kind = current.source_kind AND previous.source_id = current.source_id)
+              OR (current.source_kind <> 'monitor' AND previous.source_kind <> 'monitor'
+                AND NULLIF(btrim(current_issue.service), '') IS NOT NULL
+                AND NULLIF(btrim(current_issue.environment), '') IS NOT NULL
+                AND previous_issue.service = current_issue.service
+                AND previous_issue.environment = current_issue.environment
+                AND previous_issue.issue_type = current_issue.issue_type))
+        ) SELECT previous.id, previous.issue_id, previous.match, previous.phase,
+          previous.started_at, previous.last_event_at, previous.closed_at,
+          initial.root_payload, latest.root_payload
+        FROM candidates previous
+        JOIN LATERAL (SELECT root_payload FROM apis.incident_events WHERE episode_id = previous.id
+          ORDER BY observed_at, (event_kind = 'alert') DESC, id LIMIT 1) initial ON TRUE
+        JOIN LATERAL (SELECT event.root_payload FROM apis.incident_events event WHERE event.episode_id = previous.id
+          ORDER BY event.observed_at DESC, (event.event_kind IN ('recovered', 'resolved')) DESC,
+            (SELECT max(sequence) FROM apis.slack_incident_deliveries WHERE event_id = event.id) DESC NULLS LAST,
+            event.id DESC LIMIT 1) latest ON TRUE
+        ORDER BY (previous.match->>'tag' = 'RelatedSameSource') DESC, previous.started_at DESC, previous.id LIMIT 10|]
+    pure RelatedIncidents{episodeId = origin.episodeId, matches, limitReached = length matches == 10}
 
 
 latestEpisodeTx :: Projects.ProjectId -> IncidentSource -> Tx.Transaction (Maybe Episode)
@@ -557,7 +635,7 @@ claimSlackDeliveriesTx now = do
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
       JOIN apis.slack_incident_roots r ON r.id = d.root_id
       JOIN LATERAL (SELECT root_payload FROM apis.incident_events
-        WHERE episode_id = d.episode_id ORDER BY observed_at, id LIMIT 1) initial ON TRUE
+        WHERE episode_id = d.episode_id ORDER BY observed_at, (event_kind = 'alert') DESC, id LIMIT 1) initial ON TRUE
       ORDER BY d.sequence|]
 
 

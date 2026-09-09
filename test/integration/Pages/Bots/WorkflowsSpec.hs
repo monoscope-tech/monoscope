@@ -53,6 +53,7 @@ import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
+import System.Types (ATBackgroundCtx)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
@@ -951,11 +952,10 @@ spec = around withTestResources do
                   pure $ Right $ Chat.Message Chat.Assistant "Recorded investigation evidence." Chat.defaultMessageData
                 ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
                 ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-              transport = withHTTPResponses \_ endpoint -> do
-                when (endpoint == "https://slack.com/api/chat.postMessage") do
-                  modifyIORef' posts (+ 1)
-                  when failTransport $ throwIO $ ErrorCall "Reply response lost after submission"
-                pure $ Just "{\"ok\":true,\"messages\":[]}"
+              transport = withSlackReplyResponses do
+                modifyIORef' posts (+ 1)
+                when failTransport $ throwIO $ ErrorCall "Reply response lost after submission"
+                pure "{\"ok\":true,\"messages\":[]}"
               work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
               delivered = fmap (fmap (.deliveredCount)) $ runQueryEffect resources $ Investigations.loadReplyBatch turn
           receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_REPLY_ACK" "C_REPLY_ACK" "Investigate" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
@@ -966,7 +966,7 @@ spec = around withTestResources do
           publication <- case publications of
             [PGS.Only value] -> pure value
             _ -> fail "Expected a reply publication reservation"
-          [value | (url, body) <- firstRequests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body >>= (^? key "metadata" . key "event_payload" . key "publication_id")]] `shouldBe` [AE.toJSON publication]
+          [value | (url, body) <- firstRequests, url == "https://slack.com/api/chat.postMessage", Just message <- [AE.decode @AE.Value body], message ^? key "metadata" . key "event_type" . _String == Just "monoscope_investigation_reply", Just value <- [message ^? key "metadata" . key "event_payload" . key "publication_id"]] `shouldBe` [AE.toJSON publication]
           (_, retried) <- work receipt
           retried `shouldSatisfy` isRight
           readIORef posts >>= (`shouldBe` 1)
@@ -1097,12 +1097,9 @@ spec = around withTestResources do
                     Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-            transport = withHTTPResponses \_ endpoint ->
-              if endpoint == "https://slack.com/api/chat.postMessage"
-                then do
-                  attempt <- atomicModifyIORef' posts (\n -> (n + 1, n + 1))
-                  pure $ Just $ if attempt == 2 then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
-                else pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+            transport = withSlackReplyResponses do
+              attempt <- atomicModifyIORef' posts (\n -> (n + 1, n + 1))
+              pure $ if attempt == 2 then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
             work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
             turn = Investigations.Turn testPid (Issues.slackScopedConversationId testPid "T_PARTS" "C_PARTS" "1735689600.000001") (getResponse tr.trSessAndHeader).user.id "1735689602.000001"
         receipt <- receiveSlackEvent tr event
@@ -1119,7 +1116,7 @@ spec = around withTestResources do
             retained.replies `shouldBe` batch.replies
             (requests, delivered) <- work receipt
             delivered `shouldSatisfy` isRight
-            let sent = [value | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body]]
+            let sent = [value | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body], value ^? key "metadata" . key "event_type" . _String == Just "monoscope_investigation_reply"]
             length sent `shouldBe` 1
             mapMaybe (\value -> value ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String) sent `shouldBe` ["Inspect the checkout latency change."]
         readIORef modelCalls >>= (`shouldBe` 1)
@@ -1157,12 +1154,9 @@ spec = around withTestResources do
                         else Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-            transport = withHTTPResponses \_ endpoint ->
-              if endpoint == "https://slack.com/api/chat.postMessage"
-                then do
-                  reject <- atomicModifyIORef' rejectDelivery (\old -> (False, old))
-                  pure $ Just $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
-                else pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+            transport = withSlackReplyResponses do
+              reject <- atomicModifyIORef' rejectDelivery (\old -> (False, old))
+              pure $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
             work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
             convId = Issues.slackScopedConversationId testPid "T_REPLAY" "C_REPLAY" "1735689600.000001"
             turn = Investigations.Turn testPid convId (getResponse tr.trSessAndHeader).user.id "1735689602.000001"
@@ -1363,6 +1357,92 @@ spec = around withTestResources do
               T.isInfixOf "ghp_source_fixture" body `shouldBe` False
             [body] -> T.isInfixOf "poolSize = 5" body `shouldBe` False
             _ -> fail "Expected one source tool response"
+
+      it "finds earlier related episodes with explicit match evidence and recorded outcomes inside the authorized project" \tr -> do
+        setupLinkedSlackData tr testPid "T_RELATED"
+        otherPid <- createTestProject tr "Unrelated history"
+        let run :: ATBackgroundCtx a -> IO a
+            run = runTestBgNoReset tr
+            createIssue pid service environment issueType = withResource tr.trPool \conn -> do
+              [PGS.Only iid] <-
+                PGS.query
+                  conn
+                  [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment)
+                  VALUES (?, ?::apis.issue_type, gen_random_uuid()::text, ?, ?) RETURNING id|]
+                  (pid, issueType :: Text, service :: Text, environment :: Text)
+              pure iid
+            notification change = AE.object ["text" AE..= ("Observed checkout errors; cause unconfirmed: " <> show change :: Text)]
+            record pid iid at change destinations = do
+              Just payload <- pure $ Incidents.slackPayload $ notification change
+              run
+                $ Incidents.recordIncidentEvent
+                  Incidents.IncidentUpdate
+                    { projectId = pid
+                    , source = Incidents.IssueIncident iid
+                    , observedAt = at
+                    , change
+                    , delivery = Incidents.PublishIncident
+                    , issueId = Just iid
+                    , rootPayload = payload
+                    , replyPayload = payload
+                    , destinations
+                    }
+            past pid iid seconds duration change = do
+              let at = addUTCTime seconds frozenTime
+              Incidents.Recorded episode _ <- record pid iid at Incidents.IncidentAlert []
+              void $ record pid iid (addUTCTime duration at) change []
+              pure episode.id
+            related = toBaseServantResponse tr $ Incidents.slackRelatedIncidents testPid "T_RELATED" "C_RELATED" "1735689600.000001"
+        iid <- createIssue testPid "checkout" "production" "runtime_exception"
+        recovered <- past testPid iid (-600) 0 Incidents.IncidentRecovered
+        resolved <- past testPid iid (-300) 60 $ Incidents.IncidentResolved (getResponse tr.trSessAndHeader).user.id
+        similarIssue <- createIssue testPid "checkout" "production" "runtime_exception"
+        similar <- past testPid similarIssue (-200) 60 Incidents.IncidentRecovered
+        for_ ([(otherPid, "checkout", "production", "runtime_exception"), (testPid, "search", "production", "runtime_exception"), (testPid, "checkout", "staging", "runtime_exception"), (testPid, "checkout", "production", "query_alert")] :: [(Projects.ProjectId, Text, Text, Text)]) $ \(pid, service, environment, issueType) -> do
+          unrelated <- createIssue pid service environment issueType
+          void $ past pid unrelated (-100) 60 Incidents.IncidentRecovered
+        void $ past testPid similarIssue 100 60 Incidents.IncidentRecovered
+        Incidents.Recorded current _ <- record testPid iid frozenTime Incidents.IncidentAlert [Incidents.SlackDestination "T_RELATED" "C_RELATED"]
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_roots SET message_ts = '1735689600.000001' WHERE episode_id = ?|] (PGS.Only current.id)
+        for_ ([(otherPid, "T_RELATED", "C_RELATED", "1735689600.000001"), (testPid, "T_OTHER", "C_RELATED", "1735689600.000001"), (testPid, "T_RELATED", "C_OTHER", "1735689600.000001"), (testPid, "T_RELATED", "C_RELATED", "1735689600.000002")] :: [(Projects.ProjectId, Text, Text, Text)]) $ \(pid, team, channel, thread) ->
+          toBaseServantResponse tr (Incidents.slackRelatedIncidents pid team channel thread) >>= (`shouldSatisfy` isNothing)
+        Just found <- related
+        found.episodeId `shouldBe` current.id
+        found.limitReached `shouldBe` False
+        map (\entry -> (entry.episodeId, entry.match, entry.phase)) found.matches
+          `shouldBe` [(resolved, Incidents.RelatedSameSource (Incidents.IssueIncident iid), Incidents.EpisodeResolved), (recovered, Incidents.RelatedSameSource (Incidents.IssueIncident iid), Incidents.EpisodeRecovered), (similar, Incidents.RelatedSameServiceEnvironmentAndType "checkout" "production" Issues.RuntimeException, Incidents.EpisodeRecovered)]
+        map (.closedAt) found.matches `shouldBe` map (Just . (`addUTCTime` frozenTime)) [-240, -600, -140]
+        map (AE.toJSON . (.initialNotification)) found.matches `shouldBe` replicate 3 (notification Incidents.IncidentAlert)
+        map (AE.toJSON . (.latestNotification)) found.matches `shouldBe` map notification [Incidents.IncidentResolved (getResponse tr.trSessAndHeader).user.id, Incidents.IncidentRecovered, Incidents.IncidentRecovered]
+        observed <- newIORef []
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let toolMessages = filter ((== Chat.Tool) . Chat.role) $ toList history
+                writeIORef observed toolMessages
+                pure
+                  $ Right
+                  $ if null toolMessages
+                    then Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "related" "function" (Chat.ToolFunction "get_related_incidents" $ one ("project_id", AE.toJSON otherPid))]}
+                    else Chat.Message Chat.Assistant "Earlier episodes are comparison evidence, not proof of the same cause." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_RELATED" "C_RELATED" "Has this happened before?" "1735689602.000001" "1735689600.000001"
+        (_, outcome) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}") $ provider $ tryAny $ processSlackEvent receipt
+        outcome `shouldSatisfy` isRight
+        [toolMessage] <- readIORef observed
+        AE.decode @AE.Value (encodeUtf8 $ Chat.content toolMessage) `shouldBe` Just (AE.toJSON found)
+        blank <- createIssue testPid "checkout" "" "runtime_exception"
+        void $ past testPid blank (-100) 60 Incidents.IncidentRecovered
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.issues SET environment = '' WHERE id = ?|] (PGS.Only iid)
+        Just unknownEnvironment <- related
+        map (.episodeId) unknownEnvironment.matches `shouldBe` [resolved, recovered]
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.issues SET environment = 'production' WHERE id = ?|] (PGS.Only iid)
+        replicateM_ 8 do
+          extra <- createIssue testPid "checkout" "production" "runtime_exception"
+          void $ past testPid extra (-100) 60 Incidents.IncidentRecovered
+        Just capped <- related
+        length capped.matches `shouldBe` 10
+        capped.limitReached `shouldBe` True
 
       it "loads incident evidence through an authorized tool without promoting notification text to instructions" \tr -> do
         setupLinkedSlackData tr testPid "T_INCIDENT"

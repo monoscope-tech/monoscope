@@ -701,3 +701,26 @@ existing role-preserving, lost-connection and signed-stop workflow regressions.
 
 Fourmolu passes. HLint remains unable to parse MultilineStrings. Final native
 workflow results and Weeder status are recorded in the implementation log.
+
+## Related incident evidence
+
+Three passes of all requested skills covered the related-incident model query,
+agent tool registration/dispatch and its end-to-end workflow regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse slackInvestigationContext for the authorized incident binding. Derive row/JSON codecs and represent matching evidence with an ADT carrying the source or service/environment/type. | Replace bare match labels with actual typed supporting evidence. Keep typed episode/issue/source IDs and distinguish unbound context from a bound incident with no matches. | No new client behavior; return evidence through the existing Slack conversation. |
+| 2 | Reuse existing incident events for onset/latest snapshots and phase for outcomes; no new table or embedding dependency. | Scope both episodes and issue joins to the authorized project; ignore model-supplied scope. Exclude later onsets, rank exact sources first, and require known service/environment for broader matches. Move the result limit after snapshot joins so missing snapshots cannot hide the cap. | Use one effectful workflow with reusable fixture setup for same-source and service matches, exclusions, tool execution and the cap. |
+| 3 | Re-read final DTOs, SQL, registration, dispatch and callers. All instances derive; no new dependency. | Verify before/after tool authorization remains in executeToolCall. Test actual source IDs, service/environment/type evidence, recovery versus manual resolution, close times and snapshot ordering. Blank environments do not establish a service match. Explain mutable issue metadata and that similarity is not causal or remediation proof. | No isolated pure Hspec tests, template classes, JavaScript or hyperscript added. Assertions exercise persisted incidents and an actual model/tool loop. |
+
+Fourmolu passes. HLint cannot parse MultilineStrings; Weeder exits 228 with
+repository findings. Final native execution results are in the implementation log.
+
+The final native run exposed three existing reply fixtures that counted or
+rejected progress posts as answers. Three follow-up passes covered their fix:
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Share one answer-specific response fixture across lost acknowledgement, multipart retry and cached-answer retry. Reuse withHTTPResponses and Wreq's existing payload renderer. | Select answer posts by their actual metadata event type rather than request ordinal alone. Keep recording every request. | Keep faults and assertions in the existing effectful workflows; no production or browser behavior changes. |
+| 2 | Remove repeated endpoint/default-response branches from callers. | Reject unsupported body forms, preserve original request values and delegate other HTTP operations. Fix local effect-row inference using the existing send @HTTP.HTTP/coerce pattern from SlackRateLimit. | Answer-count assertions filter answer metadata; they continue to detect duplicate answers while permitting independent progress. |
+| 3 | Re-read the final helper and all three callers; no new instance, dependency or general HTTP framework. | Progress is acknowledged normally and cannot consume a reply fault. Missing answer metadata fails the expected delivery/retry assertions instead of silently passing them. Coercion changes only the HTTP effect's phantom local environment. | The helper performs HTTP effects; it is not an isolated pure helper needing a separate Hspec block. |
