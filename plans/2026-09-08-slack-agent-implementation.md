@@ -2122,7 +2122,18 @@ weakening the production types.
 
 Fourmolu passes on the three changed files. HLint remains unable to parse
 MultilineStrings and Weeder exits 228 with pre-existing repository findings; no
-attestation is claimed for either. CI signoff for this increment is recorded below.
+attestation is claimed for either.
+
+CI signoff could not run for this increment, and not for a reason in the change:
+`make ci-signoff` cannot run inside a linked worktree at all. `ci.sh local` executes
+the checks in a container that bind-mounts only the worktree, whose `.git` is a file
+pointing at the main repository's `.git/worktrees/...`; that path does not exist in
+the container, so `worktree_tree` fails with "fatal: not a git repository" and the
+run exits 128 before the first check. Two attempts produced the same failure, one of
+them with no sandbox. Every earlier green signoff in this log was run from the main
+repository. Signing off this work therefore requires its commits to be on master
+first, or the runner to be given the parent gitdir.
+
 No deployment or branch push occurred. The branch is 23 commits ahead of master and
 has never been pushed. Investigation quality evaluation, tested action drafts,
 proactive policies and live Slack acceptance remain unfinished.
