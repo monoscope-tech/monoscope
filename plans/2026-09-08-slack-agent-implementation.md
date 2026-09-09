@@ -1440,3 +1440,27 @@ Checkpoint commit 34a3cebb0 passed `make ci-signoff CHECKS="build doctests unit-
 and published passing attestations. Full integration-tests, weeder, hlint and e2e
 remain outstanding; full local integration needs unavailable tf-real. Log:
 /tmp/monoscope-slack-agent/slack-checkpoints-ci-signoff.log.
+
+
+### Visible progress cancellation verified
+
+The existing signed-stop workflow now waits for the scoped progress timestamp to
+be acknowledged and saved before stopping its blocked model call. It verifies an
+update to that exact message, the terminal Investigation interrupted title, and
+an error state for the active task. Existing checks still reject unlinked stops,
+respect the stop timestamp, resume newer questions and cancel during backfill.
+Only progress plan messages are excluded from the separate stop-reply assertion.
+
+The final native `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` run passed 39 examples, zero failures, in
+30.1216 seconds. Evidence: /tmp/monoscope-slack-agent/slack-progress-stop-workflows-complete.log.
+All three requested skills ran three passes. Fourmolu and whitespace checks pass;
+HLint is blocked by MultilineStrings and Weeder exits 228 with repository findings.
+Logs: slack-progress-stop-hlint.log and slack-progress-stop-weeder.log in the same
+folder. This closes the controlled transport stop regression noted above. Live
+Slack acceptance and ambiguous-send reconciliation remain unfinished.
+
+The progress implementation's main-checkout CI remains running at this point:
+`make ci-signoff CHECKS="build doctests unit-tests"`, log
+/tmp/monoscope-slack-agent/slack-progress-ci-signoff.log. The isolated worktree's
+new stop regression is not part of that run. No deployment or branch push.

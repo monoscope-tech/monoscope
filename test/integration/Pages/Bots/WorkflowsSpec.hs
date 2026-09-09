@@ -3,6 +3,7 @@
 module Pages.Bots.WorkflowsSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
+import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
 import Control.Lens (ix, (.~), (^.), (^?))
 import Data.Aeson qualified as AE
@@ -1216,14 +1217,14 @@ spec = around withTestResources do
         (_, recovered) <- work lostReceipt
         recovered `shouldSatisfy` isRight
 
-      it "signed stops interrupt running work and only cancel questions through their timestamp" \tr -> do
+      it "signed stops finish visible progress and only cancel questions through their timestamp" \tr -> do
         setupLinkedSlackData tr testPid "T_STOP"
         entered <- newEmptyMVar
         blocked <- newEmptyMVar
         interrupted <- newIORef False
         let event ts = slackThreadedEvent "T_STOP" "C_STOP" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
             stop user ts = event ts & key "event_id" . _String .~ ("stop-" <> user <> ts) & key "event" .~ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "channel" AE..= ("C_STOP" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text)]
-            transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}"
+            transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat{} -> liftIO $ bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked)
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
@@ -1232,6 +1233,20 @@ spec = around withTestResources do
         receipt <- receiveSlackEvent tr $ event "1735689601.000001"
         withAsync (runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt) \worker -> do
           timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          -- Wait for the acknowledged progress row, not merely the HTTP request.
+          timeout
+            10_000_000
+            ( fix $ \retry -> do
+                published <- withResource tr.trPool $ \conn ->
+                  PGS.query
+                    conn
+                    [sql|SELECT EXISTS (SELECT 1 FROM apis.slack_investigation_progress
+                WHERE project_id = ? AND team_id = 'T_STOP' AND channel_id = 'C_STOP'
+                  AND thread_ts = '1735689600.000001' AND message_ts = '1735689601.000001')|]
+                    (PGS.Only testPid)
+                unless (published == [PGS.Only True]) $ threadDelay 20_000 >> retry
+            )
+            >>= (`shouldBe` Just ())
           void $ receiveSlackEvent tr $ stop "U_UNLINKED" "1735689603.000001"
           stopped "1735689601.000001" >>= (`shouldBe` False)
           stopReceipt <- receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689602.000001"
@@ -1242,7 +1257,14 @@ spec = around withTestResources do
             Just (requests, outcome) -> do
               outcome `shouldSatisfy` isRight
               mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "status" . _String)) requests `shouldBe` ["processing", "active"]
-              mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "text" . _String)) requests `shouldBe` ["Investigation stopped. Send another message to continue."]
+              let messages = [value | (_, body) <- requests, Just value <- [AE.decode @AE.Value body]]
+                  progressUpdates = [value | (url, body) <- requests, url == "https://slack.com/api/chat.update", Just value <- [AE.decode @AE.Value body]]
+              mapMaybe (\value -> if value ^? key "blocks" . _Array . ix 0 . key "type" . _String == Just "plan" then Nothing else value ^? key "text" . _String) messages `shouldBe` ["Investigation stopped. Send another message to continue."]
+              progressUpdates `shouldSatisfy` (not . null)
+              for_ progressUpdates $ \value -> do
+                value ^? key "ts" . _String `shouldBe` Just "1735689610.000001"
+                value ^? key "blocks" . _Array . ix 0 . key "title" . _String `shouldBe` Just "Investigation interrupted"
+                value ^? key "blocks" . _Array . ix 0 . key "tasks" . _Array . ix 0 . key "status" . _String `shouldBe` Just "error"
           readIORef interrupted >>= (`shouldBe` True)
           void $ runTestBgRecordingHTTP frozenTime tr $ processSlackEvent stopReceipt
         void $ receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689600.000002"
