@@ -36,11 +36,12 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..))
+import Control.Monad.Extra (whileM)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (race_)
+import Effectful.Concurrent.Async (concurrently, race_)
 import Effectful.Error.Static (runErrorNoCallStack, throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
@@ -74,7 +75,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO (withRunInIO)
+import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (bracket_, catch, finally, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
@@ -999,19 +1000,25 @@ withInvestigationLock workspace channel thread = withEventLock $ "slack-investig
 
 -- | Keep the transaction-scoped lock on one checked-out connection and interrupt
 -- its action if the connection is lost. Stop ingress never waits for this lock.
+-- Finish an in-flight heartbeat before committing or rolling back the action;
+-- cancelling a libpq query can leave the connection busy for that final command.
 withEventLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
 withEventLock lockKey action = do
   connectionPool <- asks pool
   withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
     acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
     unless (acquired == [PGS.Only True]) $ throwIO SlackWorkerBusy
-    run
-      $ race_
-        ( forever $ liftIO do
-            void (PGS.query_ conn "SELECT 1" :: IO [PGS.Only Int])
-            threadDelay 500_000
-        )
-        action
+    stopped <- newEmptyMVar
+    (_, outcome) <-
+      run
+        $ concurrently
+          ( liftIO $ whileM do
+              running <- isNothing <$> timeout 500_000 (readMVar stopped)
+              when running $ void (PGS.query_ conn "SELECT 1" :: IO [PGS.Only Int])
+              pure running
+          )
+          (tryAny action `finally` putMVar stopped ())
+    either throwIO pure outcome
 
 
 -- | A final refresh failure must be queued before its original receipt completes.

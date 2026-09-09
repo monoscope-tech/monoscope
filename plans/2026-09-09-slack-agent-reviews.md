@@ -687,3 +687,17 @@ operation type, metadata contracts, migration, callers and effectful regressions
 Fourmolu passed. HLint 3.3.6 exits 1 because it cannot parse MultilineStrings.
 Weeder exits 228 with repository findings. Native execution results are recorded
 in the implementation log once the final run finishes.
+
+## Cooperative lock-heartbeat shutdown
+
+Three passes of all requested skills covered withEventLock, its callers and the
+existing role-preserving, lost-connection and signed-stop workflow regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Use concurrently, an MVar completion signal and extra's existing whileM rather than a new worker abstraction or handwritten recursion. extra is already a direct dependency; its installed source confirms the combinator signature. | Finish active heartbeat SQL before transaction completion. Preserve the action's exception instead of treating an action failure as successful completion. | No client-side behavior, styling or UI tier change. |
+| 2 | Reuse Relude's MVar operations; remove compiler-reported ambiguous duplicate imports. Runtime review caught an invalid IO-level unlift across threads: use Effectful.concurrently inside the existing run boundary. Keep coordination local to the checked-out connection. | Catch synchronous action failures, signal completion in finally, then rethrow only after the heartbeat finishes. UnliftIO's exception behavior preserves asynchronous cancellation; heartbeat failure still interrupts the action. | Keep the existing effectful conversation tests. Their DB, HTTP and concurrency assertions do not belong in pure doctests. |
+| 3 | Re-read final helper and onboarding, investigation, refresh and session-reset callers. No new instances, schema or dependencies. | Timeout only the MVar wait, never the libpq query. The original transaction-scoped lock and 500ms heartbeat cadence remain. Existing tests cover lost backend connection, stop handling, busy-thread exclusion and subsequent follow-ups. | Final diff contains no browser surface or standalone pure Hspec tests. No warning suppression introduced. |
+
+Fourmolu passes. HLint remains unable to parse MultilineStrings. Final native
+workflow results and Weeder status are recorded in the implementation log.

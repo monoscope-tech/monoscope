@@ -1962,3 +1962,45 @@ All three passing checks were attested; unit tests ran 308 examples with zero
 failures. The final status leaves integration-tests, weeder, hlint and e2e for
 GitHub. Evidence: /tmp/monoscope-slack-agent/slack-root-history-ci-signoff.log.
 These attestations cover the preceding commit, not lifecycle recovery.
+
+## Cooperative lock-heartbeat shutdown
+
+The lifecycle regression run exposed a libpq "another command is already in
+progress" failure when a Slack follow-up completed. The existing withEventLock
+used race_ to cancel its SQL heartbeat when the action finished, then attempted
+to commit on that same connection. Cancelling an in-flight query can leave it
+busy for the transaction's final command.
+
+The lock now runs the action and heartbeat concurrently with a completion signal.
+The heartbeat waits interruptibly on that signal between queries and finishes
+any in-flight query before returning. Synchronous action failures are retained
+and rethrown after the heartbeat exits, so rollback also follows query completion.
+A heartbeat failure still interrupts the action; external asynchronous
+cancellation is not converted into success. The transaction-scoped lock, dedicated
+connection and 500ms monitoring cadence remain. No new instance, migration or
+package was added. An initial ambiguous MVar import was corrected by reusing
+Relude's existing exports.
+
+Three passes of all requested skills are recorded in the review log. Fourmolu
+passes; HLint exits 1 because MultilineStrings is unsupported; Weeder exits 228
+with repository findings. Native Workflows is rerunning the role-preserving
+follow-up, lost-connection, cancellation and other existing integration scenarios.
+No deployment or branch push occurred.
+
+The first heartbeat rerun exposed an Effectful unlift-thread violation in the
+initial IO-level concurrently implementation. That run was interrupted after
+39 examples with 16 failures and is not counted as validation. The implementation
+now uses Effectful.concurrently inside the existing run boundary, preserving
+effect-environment cloning while keeping SQL heartbeat completion cooperative.
+
+Final native verification passed all 46 Workflows examples with zero failures in
+84.2251 seconds after the effect-boundary correction. This includes the original
+role-preserving follow-up failure, lost-backend interruption, signed stop handling,
+busy-thread steering and progress/reply recovery. Command:
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev.
+Evidence: /tmp/monoscope-slack-agent/slack-heartbeat-workflows-complete.log
+(the final completed run; earlier failed/interrupted runs are retained).
+Final Fourmolu and whitespace checks pass. Final Weeder exits 228; HLint remains
+blocked by MultilineStrings. CI signoff for the combined lifecycle/heartbeat
+changes remains pending. No deployment or branch push occurred.
