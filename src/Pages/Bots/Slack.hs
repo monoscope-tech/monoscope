@@ -25,6 +25,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
 import Lucid qualified as H
@@ -67,6 +68,7 @@ import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
+import UnliftIO (withRunInIO)
 import UnliftIO.Exception (bracket_, catch, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
@@ -766,22 +768,42 @@ processSlackEvent receiptId = do
   pending <-
     Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
       [HI.sql|SELECT payload FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
-  for_ pending \(HI.OneColumn (Aeson payload)) -> do
-    envCfg <- asks env
-    captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
-    case payload of
-      EventCallback{event}
-        | Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured ->
-            Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
-      _ -> pure ()
-    result <- runErrorNoCallStack @ServerError $ case payload of
-      UrlVerification _ -> throwError err400{errBody = "Stored Slack event is not a callback"}
-      EventCallback{team_id, event_id, event} -> handleEventCallback envCfg event team_id event_id
-    either (throwIO . ErrorCall . show) pure result
-    Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
+  for_ pending \(HI.OneColumn (Aeson payload)) -> case payload of
+    UrlVerification _ -> throwIO $ ErrorCall "Stored Slack event is not a callback"
+    EventCallback{team_id, event_id, event} -> do
+      kind <- either (throwIO . ErrorCall) pure $ AE.parseEither classifySlackEvent event
+      let process = do
+            stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
+            when (isJust stillPending) do
+              envCfg <- asks env
+              captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
+              when (Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured)
+                $ Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
+              result <- runErrorNoCallStack @ServerError $ handleEventCallback envCfg kind team_id event_id
+              either (throwIO . ErrorCall . show) pure result
+              Hasql.interpExecute_ [HI.sql|UPDATE apis.slack_events SET processed_at = now() WHERE id = #{receiptId}|]
+      case kind of
+        UserMessage message -> withThreadLock team_id message process
+        AppMention message -> withThreadLock team_id message process
+        _ -> process
   where
-    handleEventCallback envCfg event workspaceId eventId = do
-      kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
+    -- A transaction-scoped advisory lock stays on one checked-out connection.
+    -- Other DB operations use their usual pools; stop ingress never waits on it.
+    withThreadLock workspaceId message action = do
+      connectionPool <- asks pool
+      let lockKey = "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, message.channel, fromMaybe message.ts message.thread_ts] :: [Text]))
+      withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
+        acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
+        unless (acquired == [PGS.Only True]) $ throwIO SlackThreadBusy
+        run
+          $ race_
+            ( forever $ liftIO do
+                void (PGS.query_ conn "SELECT 1" :: IO [PGS.Only Int])
+                threadDelay 500_000
+            )
+            action
+
+    handleEventCallback envCfg kind workspaceId eventId =
       case kind of
         AgentSessionStopped _ -> Integrations.recordSlackStop workspaceId eventId
         UserMessage message -> handleMessage False envCfg message workspaceId
@@ -847,6 +869,11 @@ processSlackEvent receiptId = do
         `catch` \AI.AgentStopped -> do
           AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId
           sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
+
+
+data SlackThreadBusy = SlackThreadBusy
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
 
 
 data SlackSessionStatus = Processing | Active

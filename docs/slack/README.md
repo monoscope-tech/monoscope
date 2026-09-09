@@ -50,7 +50,10 @@ Running work checks that cutoff at access boundaries and every half second while
 waiting for model/tool work. Cancellation attempts to clear the processing status
 and posts a threaded confirmation. Later questions can start new work. Subscribe
 to [the stop event](https://docs.slack.dev/reference/events/agent_session_stopped/)
-before enabling this flow. Concurrent-run coordination and durable status
+before enabling this flow. Workers serialize human messages within each workspace,
+channel, and thread. A competing worker leaves its receipt pending for retry;
+other threads can proceed. The lock covers status cleanup and receipt completion,
+and a lost lock connection interrupts blocked work. Durable status and delivery
 reconciliation remain rollout gates.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.

@@ -527,3 +527,42 @@ not cover these changes. Concurrent-run status coordination, durable status and
 confirmation reconciliation, tool-message replay/checkpoints, installation
 capabilities, live Slack acceptance, and the wider plan remain unfinished.
 No push, app-manifest publication, or deployment occurred.
+
+
+## Concurrent investigation coordination (2026-09-09)
+
+Human-message and mention workers now acquire a transaction-scoped advisory lock
+for their workspace/channel/thread before processing. One PostgreSQL connection
+remains checked out through authorization, model work, status cleanup, stop
+confirmation, and receipt completion. Other database operations use their normal
+pools. This avoids acquiring and releasing a session lock on different pooled
+connections. PostgreSQL releases the lock when the transaction ends; see
+[advisory lock semantics](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS).
+
+A busy worker throws a derived `SlackThreadBusy` exception and retains its pending
+receipt for the job system to retry. After lock acquisition, it checks the receipt
+again to avoid processing a receipt completed since the initial read. Stop events
+bypass this lock. A half-second connection check races the worker and cancels it
+if the lock connection fails. No application lease table or lock-expiry guessing
+is involved.
+
+The concurrency regression failed before the implementation: a duplicate worker
+returned success while the first model call was blocked. It now checks duplicate
+and different-event contention, independent-channel progress, preserved prior
+assistant context, and completed-receipt replay without HTTP. It also terminates
+the advisory-lock backend in its isolated test database, verifies interruption
+without an answer, and retries the pending receipt successfully. Existing stop,
+startup-failure, and backfill-retry workflows exercise lock release as well.
+
+Validation uses the existing native watcher:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+Final result: 28 examples, 0 failures. Fourmolu check and scoped
+`git diff --check` passed. The unrelated `BackgroundJobs.hs` unused-import warning
+remains. Three passes of each requested Haskell skill are in the review report.
+
+Remaining limits: scheduling does not impose timestamp order on delayed events.
+Connection failure has a detection window, and already accepted external sends
+cannot be undone. Durable delivery/status reconciliation and model/tool
+checkpoints are still required, as are installation upgrades, live Slack
+acceptance, current-tree CI signoff before push, and the remaining release work.
+No push, deployment, or live app configuration change occurred.

@@ -581,6 +581,62 @@ spec = around withTestResources do
         replayed `shouldBe` []
         length <$> readIORef observed >>= (`shouldBe` 3)
 
+      it "serializes concurrent questions and duplicate workers within one Slack thread" \tr -> do
+        setupLinkedSlackData tr testPid "T_SERIAL"
+        entered <- newEmptyMVar
+        release <- newEmptyMVar
+        histories <- newIORef []
+        pause <- newIORef True
+        let event ts = slackThreadedEvent "T_SERIAL" "C_SERIAL" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
+            transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                modifyIORef' histories (<> [map Chat.content $ toList history])
+                shouldPause <- atomicModifyIORef' pause (\value -> (False, value))
+                when shouldPause $ liftIO $ putMVar entered () >> takeMVar release
+                pure $ Right $ Chat.Message Chat.Assistant "Investigation evidence" Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
+        firstReceipt <- receiveSlackEvent tr $ event "1735689601.000001"
+        secondReceipt <- receiveSlackEvent tr $ event "1735689602.000001"
+        withAsync (work firstReceipt) \worker -> do
+          timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          for_ [firstReceipt, secondReceipt] \receipt -> do
+            (requests, outcome) <- work receipt
+            outcome `shouldSatisfy` isLeft
+            requests `shouldBe` []
+          independent <- receiveSlackEvent tr $ event "1735689603.000001" & key "event" . key "channel" . _String .~ "C_INDEPENDENT"
+          (_, separateThread) <- work independent
+          separateThread `shouldSatisfy` isRight
+          putMVar release ()
+          (_, completed) <- wait worker
+          completed `shouldSatisfy` isRight
+        (_, retried) <- work secondReceipt
+        retried `shouldSatisfy` isRight
+        observed <- readIORef histories
+        length observed `shouldBe` 3
+        map (length . filter (== "Investigation evidence")) observed `shouldBe` [0, 0, 1]
+        for_ [firstReceipt, secondReceipt] \receipt -> do
+          (requests, replayed) <- work receipt
+          replayed `shouldSatisfy` isRight
+          requests `shouldBe` []
+
+        lostReceipt <- receiveSlackEvent tr $ event "1735689604.000001"
+        writeIORef pause True
+        withAsync (work lostReceipt) \worker -> do
+          timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
+          terminated <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())|]
+          terminated `shouldBe` [PGS.Only True]
+          lost <- timeout 10_000_000 $ wait worker
+          case lost of
+            Just (requests, outcome) -> do
+              outcome `shouldSatisfy` isLeft
+              mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "text" . _String)) requests `shouldBe` []
+            Nothing -> fail "Lost lock connection did not interrupt the investigation"
+        (_, recovered) <- work lostReceipt
+        recovered `shouldSatisfy` isRight
+
       it "signed stops interrupt running work and only cancel questions through their timestamp" \tr -> do
         setupLinkedSlackData tr testPid "T_STOP"
         entered <- newEmptyMVar

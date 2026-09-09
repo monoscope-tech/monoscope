@@ -259,3 +259,19 @@ receipt ingress/worker, access types, backfill exception handling, and tests.
 Remaining plan limitations: concurrent questions can still race native status
 updates; cleanup and confirmation delivery lack durable reconciliation. This
 change does not establish live Slack acceptance or authorize deployment.
+
+
+## Concurrent Slack investigations
+
+Three passes applied all three skills to worker dispatch, the thread lock, and
+concurrent workflow regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse PostgreSQL advisory locks, `withResource`, `withTransaction`, and `race_`; derive the busy exception. | Do not reuse the scheduler's separately pooled session-lock calls. Pin the lock transaction to one checked-out connection for the worker's lifetime. The regression first failed because a duplicate worker completed concurrently. | No browser behavior or custom Slack interaction added; use the existing worker and native status flow. |
+| 2 | Decode event kind once and pass it into dispatch. Keep the lock helper local to the worker. | Cover startup, cleanup, confirmation, and receipt completion under the same lock. Recheck pending state after acquisition. Busy workers fail for retry; stop events bypass the investigation lock. | Keep the multi-step concurrency and retry flow in Hspec, using the existing recorded-HTTP fixture. |
+| 3 | Re-read final dispatch and unchanged authorization, cancellation, and history consumers. No manual instance, warning suppression, or redundant state table. | Check lock connection liveness and interrupt work on loss. Tests terminate only the lock backend in their isolated fixture database, verify no model answer is sent, then retry successfully. A separate channel proceeds while the first worker is blocked. | No JS/CSS/Lucid changes, styling indirection, or misplaced simple pure assertions. |
+
+This coordinates live workers. Ordered scheduling of delayed events, durable
+model/tool checkpoints, and reconciliation across ambiguous external deliveries
+remain separate plan work.
