@@ -59,6 +59,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
+import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.Projects qualified as Projects
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.DeriveUtils (UUIDId)
@@ -104,7 +105,7 @@ data Followup = Followup
 pendingFollowups :: DB es => Scope -> Eff es [Followup]
 pendingFollowups scope =
   Hasql.interp
-    [HI.sql|WITH candidates AS (
+    $ [HI.sql|WITH candidates AS (
     SELECT id, payload->'event'->>'user' AS slack_user_id, payload->'event'->>'ts' AS message_ts,
       payload->'event'->>'text' AS text,
       CASE WHEN payload->'event'->>'ts' ~ '^[0-9]+[.][0-9]+$' THEN (payload->'event'->>'ts')::numeric END AS message_order
@@ -115,10 +116,9 @@ pendingFollowups scope =
       JOIN users.users account ON account.id = identity.user_id
       JOIN projects.projects project ON project.id = member.project_id
       JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
-      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user'
-        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
-        AND project.active AND project.deleted_at IS NULL
-    ) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
+      WHERE identity.team_id = #{scope.teamId} AND identity.slack_user_id = payload->'event'->>'user'|]
+    <> Integrations.activeMembership
+    <> [HI.sql|) AND processed_at IS NULL AND team_id = #{scope.teamId} AND payload->>'team_id' = #{scope.teamId}
       AND payload->'event'->>'channel' = #{scope.channelId}
       AND payload->'event'->>'thread_ts' = #{scope.threadTs}
       AND payload->'event'->>'type' IN ('message', 'app_mention')
@@ -243,9 +243,8 @@ data Turn = Turn
 
 loadAnswer :: DB es => Turn -> Eff es (Maybe AgenticChatResult)
 loadAnswer turn =
-  fmap (\(HI.OneColumn (Aeson answer)) -> answer)
-    <$> Hasql.interpOne
-      [HI.sql|SELECT answer FROM apis.slack_turn_answers
+  Hasql.interpOneJson
+    [HI.sql|SELECT answer FROM apis.slack_turn_answers
     WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
       AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
 
@@ -253,10 +252,10 @@ loadAnswer turn =
 -- | Save the complete result and its conversation message together. A competing
 -- writer receives the already committed answer rather than replacing it.
 saveAnswer :: DB es => Turn -> AgenticChatResult -> Eff es AgenticChatResult
-saveAnswer turn answer = do
-  saved <-
-    Hasql.interpOne
-      [HI.sql|WITH saved AS (
+saveAnswer turn answer =
+  Hasql.interpOneJsonOrThrow
+    "Saving a Slack answer"
+    [HI.sql|WITH saved AS (
       INSERT INTO apis.slack_turn_answers (project_id, conversation_id, user_id, message_ts, answer)
       VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson answer})
       ON CONFLICT (project_id, conversation_id, user_id, message_ts)
@@ -269,7 +268,6 @@ saveAnswer turn answer = do
       DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId}
         AND conversation_id = #{turn.conversationId} AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
     ) SELECT answer FROM saved|]
-  maybe (throwIO $ ErrorCall "Saving a Slack answer returned no row") (pure . (\(HI.OneColumn (Aeson result)) -> result)) saved
 
 
 -- | Freeze every rendered part before the first send. A confirmed part is never
@@ -281,24 +279,22 @@ data ReplyBatch = ReplyBatch {replies :: NonEmpty AE.Value, deliveredCount :: In
 
 loadReplyBatch :: DB es => Turn -> Eff es (Maybe ReplyBatch)
 loadReplyBatch turn =
-  fmap (\(HI.OneColumn (Aeson batch)) -> batch)
-    <$> Hasql.interpOne
-      [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch
+  Hasql.interpOneJson
+    [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch
       WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
         AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
 
 
 saveReplyBatch :: DB es => Turn -> NonEmpty AE.Value -> Eff es ReplyBatch
-saveReplyBatch turn replies = do
-  saved <-
-    Hasql.interpOne
-      [HI.sql|WITH saved AS (
+saveReplyBatch turn replies =
+  Hasql.interpOneJsonOrThrow
+    "Saving a Slack reply batch"
+    [HI.sql|WITH saved AS (
       INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, replies)
       VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson replies})
       ON CONFLICT (project_id, conversation_id, user_id, message_ts)
       DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
     ) SELECT to_jsonb(saved) FROM saved|]
-  maybe (throwIO $ ErrorCall "Saving Slack reply batch returned no row") (pure . (\(HI.OneColumn (Aeson batch)) -> batch)) saved
 
 
 -- | Reserve before HTTP. An existing unacknowledged reservation must not repost.
@@ -435,14 +431,13 @@ loadCheckpoint turn =
 
 
 startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
-startCheckpoint turn checkpoint = do
-  saved <-
-    Hasql.interpOne
-      [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
-      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson checkpoint})
-      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
-      DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
-  maybe (throwIO $ ErrorCall "Starting a Slack checkpoint returned no row") pure saved
+startCheckpoint turn checkpoint =
+  Hasql.interpOneOrThrow
+    "Starting a Slack checkpoint"
+    [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
+    VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson checkpoint})
+    ON CONFLICT (project_id, conversation_id, user_id, message_ts)
+    DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
 
 
 -- | A stale worker cannot replace newer progress. Updating the checkpoint and
@@ -457,10 +452,8 @@ commitProgress cursor scope checkpoint event
           Nothing -> pure $ Right Nothing
           Just key -> do
             versions <-
-              Tx.statement ()
-                $ HI.interp @[Int64]
-                  True
-                  [HI.sql|UPDATE apis.slack_turn_checkpoints SET checkpoint = #{Aeson checkpoint},
+              Hasql.queryTx @[Int64]
+                [HI.sql|UPDATE apis.slack_turn_checkpoints SET checkpoint = #{Aeson checkpoint},
                 revision = revision + 1, updated_at = clock_timestamp()
                 WHERE project_id = #{key.turn.projectId} AND conversation_id = #{key.turn.conversationId}
                   AND user_id = #{key.turn.userId} AND message_ts = #{key.turn.messageTs}
@@ -469,14 +462,11 @@ commitProgress cursor scope checkpoint event
               [version] -> Right $ Just (key{revision = version} :: CheckpointCursor)
               _ -> Left CheckpointConflict
         for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity -> do
-          void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ recordEventSql key activity
+          Hasql.executeTx $ recordEventSql key activity
           case (cursor, activity) of
-            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup -> do
-              void
-                $ Tx.statement ()
-                $ HI.interp @HI.RowsAffected
-                  True
-                  [HI.sql|WITH accepted AS (
+            (Just turnCursor, FollowupsAccepted _ followups) -> for_ followups $ \followup ->
+              Hasql.executeTx
+                [HI.sql|WITH accepted AS (
                   UPDATE apis.slack_events SET processed_at = clock_timestamp()
                   WHERE team_id = #{key.teamId} AND processed_at IS NULL
                     AND payload->'event'->>'channel' = #{key.channelId}

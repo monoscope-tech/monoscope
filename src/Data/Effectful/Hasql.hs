@@ -22,18 +22,25 @@ module Data.Effectful.Hasql (
   labeledTransaction,
   interp,
   interpOne,
+  interpOneJson,
+  interpOneOrThrow,
+  interpOneJsonOrThrow,
   interpExecute,
   interpExecute_,
+  queryTx,
+  oneTx,
+  executeTx,
   withHasqlTimefusion,
   withLabeled,
 ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (throwIO)
+import Control.Exception (ErrorCall (..), throwIO)
 import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -211,6 +218,42 @@ interp s = statement () (HI.interp True s)
 -- | Run a query expecting at most one row.
 interpOne :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
 interpOne s = listToMaybe <$> interp s
+
+
+-- | Decode a single JSON column, dropping both wrappers the call sites repeat.
+-- The decoder comes from @Pkg.DeriveUtils@'s @Aeson@ instance, so the constraint
+-- is stated rather than imported — this module stays free of that dependency.
+interpOneJson :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
+interpOneJson s = fmap (\(HI.OneColumn (Aeson value)) -> value) <$> interpOne s
+
+
+-- | Demand a row the caller cannot proceed without. @what@ names the read or
+-- write, so the failure says which statement returned nothing.
+orThrow :: IOE :> es => Text -> Eff es (Maybe a) -> Eff es a
+orThrow what = (>>= maybe (liftIO $ throwIO $ ErrorCall $ toString what <> " returned no row") pure)
+
+
+interpOneOrThrow :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneOrThrow what = orThrow what . interpOne
+
+
+interpOneJsonOrThrow :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneJsonOrThrow what = orThrow what . interpOneJson
+
+
+-- | Run a query inside a transaction. The 'interp' family, for 'Tx.Transaction'.
+queryTx :: HI.DecodeResult a => HI.Sql -> Tx.Transaction a
+queryTx = Tx.statement () . HI.interp True
+
+
+-- | Run a transactional query expecting exactly one row.
+oneTx :: HI.DecodeRow a => HI.Sql -> Tx.Transaction a
+oneTx = fmap HI.getOneRow . queryTx
+
+
+-- | Run a transactional INSERT/UPDATE/DELETE, discarding the row count.
+executeTx :: HI.Sql -> Tx.Transaction ()
+executeTx s = void (queryTx s :: Tx.Transaction HI.RowsAffected)
 
 
 -- | Run an INSERT/UPDATE/DELETE and return the number of rows affected.

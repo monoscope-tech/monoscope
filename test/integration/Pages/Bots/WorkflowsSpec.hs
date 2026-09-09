@@ -66,7 +66,7 @@ spec = around withTestResources do
     describe "Slack personal linking" do
       it "onboards Messages-tab visits once per live link and never starts an investigation" \tr -> do
         setupSlackData tr testPid "T_HOME"
-        let visit tab eventId = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_HOME" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= AE.object ["type" AE..= ("app_home_opened" :: Text), "user" AE..= ("U_HOME" :: Text), "channel" AE..= ("D_HOME" :: Text), "tab" AE..= (tab :: Text), "event_ts" AE..= ("1515449522000016" :: Text)]]
+        let visit tab eventId = slackCallbackEnvelope "T_HOME" eventId $ AE.object ["type" AE..= ("app_home_opened" :: Text), "user" AE..= ("U_HOME" :: Text), "channel" AE..= ("D_HOME" :: Text), "tab" AE..= (tab :: Text), "event_ts" AE..= ("1515449522000016" :: Text)]
             process event = do
               receipt <- receiveSlackEvent tr event
               runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ processSlackEvent receipt
@@ -453,7 +453,7 @@ spec = around withTestResources do
             resources = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
         for_ ([("app_context_changed", "NaN", "T_NATIVE"), ("agent_session_title_changed", "NaN", "T_NATIVE"), ("agent_session_title_changed", "1735689601.000001", "T_OTHER")] :: [(Text, Text, Text)]) \(eventType, ts, team) -> do
           let event = AE.object ["type" AE..= eventType, "event_ts" AE..= ts, "team_id" AE..= team, "channel" AE..= ("C_NATIVE" :: Text), "user" AE..= ("U_NATIVE" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "title" AE..= ("Title" :: Text), "context" AE..= AE.object []]
-              body = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_NATIVE" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= eventType, "event" AE..= event]
+              body = toStrict $ AE.encode $ slackCallbackEnvelope "T_NATIVE" eventType event
           status <- toBaseServantResponse resources $ catchError @ServerError (slackEventsPostH body (Just "1735689600") (Just $ signSlackBody "1735689600" body) $> 200) (\_ err -> pure err.errHTTPCode)
           status `shouldBe` 400
 
@@ -461,7 +461,7 @@ spec = around withTestResources do
         setupLinkedSlackData tr testPid "T_NATIVE"
         principal <- toBaseServantResponse tr (Slack.resolveSlackPrincipal "T_NATIVE" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
         toBaseServantResponse tr (Slack.bindSlackInvestigation principal "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` True)
-        let callback team eventId event = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= (team :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= event]
+        let callback = slackCallbackEnvelope
             process team eventId event = do
               receipt <- receiveSlackEvent tr $ callback team eventId event
               replicateM_ 2 do
@@ -491,7 +491,7 @@ spec = around withTestResources do
         toBaseServantResponse tr (Slack.slackThreadProject "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` Just testPid)
 
       it "preserves non-message events and orders assistant context independently of receipt order" \tr -> do
-        let callback eventId event = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_SESSION" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= event]
+        let callback = slackCallbackEnvelope "T_SESSION"
             session eventType eventTs contextChannel userId =
               AE.object
                 [ "type" AE..= (eventType :: Text)
@@ -541,7 +541,7 @@ spec = around withTestResources do
           status signedTr bytes timestamp sig >>= (`shouldBe` 401)
         status signedTr "not-json" (Just "1735689600") (Just $ signSlackBody "1735689600" "not-json") >>= (`shouldBe` 400)
         for_ (["bad", "-1.1", "NaN"] :: [Text]) \ts -> do
-          let invalidStop = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_STOP" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= ("EvInvalidStop" :: Text), "event" AE..= AE.object ["type" AE..= ("agent_session_stopped" :: Text), "event_ts" AE..= ts, "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U_STOP" :: Text), "channel" AE..= ("C_STOP" :: Text)]]
+          let invalidStop = toStrict $ AE.encode $ slackCallbackEnvelope "T_STOP" "EvInvalidStop" $ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "event_ts" AE..= ts, "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U_STOP" :: Text), "channel" AE..= ("C_STOP" :: Text)]
           status signedTr invalidStop (Just "1735689600") (Just $ signSlackBody "1735689600" invalidStop) >>= (`shouldBe` 400)
         let unconfigured = tr{trATCtx = tr.trATCtx{Config.env = cfg{Config.slackSigningSecret = ""}}}
         status unconfigured body (Just "1735689600") signature >>= (`shouldBe` 503)

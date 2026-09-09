@@ -1,4 +1,5 @@
 module Models.Apis.Integrations (
+  activeMembership,
   SlackData (..),
   slackAgentScopesGranted,
   DiscordData (..),
@@ -105,16 +106,26 @@ getSlackLink linkId =
     WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL|]
 
 
+-- | The guard every Slack authorization query applies. Splice it rather than
+-- retyping it: a copy that misses a clause silently authorizes a revoked member.
+-- Requires the query to alias @projects.project_members@ as @member@,
+-- @users.users@ as @account@ and @projects.projects@ as @project@.
+activeMembership :: HI.Sql
+activeMembership =
+  [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+    AND project.active AND project.deleted_at IS NULL |]
+
+
 slackLinkProjects :: DB es => Text -> Projects.UserId -> Eff es [SlackLinkProject]
 slackLinkProjects teamId userId =
   Hasql.interp
-    [HI.sql|SELECT project.id, project.title FROM projects.projects project
+    $ [HI.sql|SELECT project.id, project.title FROM projects.projects project
     JOIN projects.project_members member ON member.project_id = project.id
     JOIN users.users account ON account.id = member.user_id
     JOIN apis.slack installation ON installation.project_id = project.id
-    WHERE installation.team_id = #{teamId} AND member.user_id = #{userId}
-      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
-    ORDER BY project.title, project.id|]
+    WHERE installation.team_id = #{teamId} AND member.user_id = #{userId}|]
+    <> activeMembership
+    <> [HI.sql|ORDER BY project.title, project.id|]
 
 
 -- | Lock the request so concurrent form submissions cannot bind it twice.
@@ -123,16 +134,16 @@ completeSlackLink :: DB es => UUIDId "slack_link" -> Projects.UserId -> Projects
 completeSlackLink linkId userId projectId = do
   affected <-
     Hasql.interpExecute
-      [HI.sql|WITH request AS (
+      $ [HI.sql|WITH request AS (
       SELECT request.id, event.team_id, event.payload #>> '{event,user}' AS slack_user_id
       FROM apis.slack_identity_requests request JOIN apis.slack_events event ON event.id = request.receipt_id
       JOIN apis.slack installation ON installation.team_id = event.team_id AND installation.project_id = #{projectId}
       JOIN projects.project_members member ON member.project_id = installation.project_id AND member.user_id = #{userId}
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
-      WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL
-        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
-      FOR UPDATE OF request
+      WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL|]
+      <> activeMembership
+      <> [HI.sql|FOR UPDATE OF request
     ), identity AS (
       INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
       SELECT team_id, slack_user_id, #{userId}, #{projectId} FROM request
@@ -148,13 +159,13 @@ completeSlackLink linkId userId projectId = do
 resolveSlackPrincipal :: DB es => Text -> Text -> Maybe Projects.ProjectId -> Eff es (Maybe SlackPrincipal)
 resolveSlackPrincipal teamId slackUserId threadProject =
   Hasql.interpOne
-    [HI.sql|SELECT identity.user_id, member.project_id FROM apis.slack_identities identity
+    $ [HI.sql|SELECT identity.user_id, member.project_id FROM apis.slack_identities identity
     JOIN projects.project_members member ON member.project_id = COALESCE(#{threadProject}, identity.project_id) AND member.user_id = identity.user_id
     JOIN users.users account ON account.id = identity.user_id
     JOIN projects.projects project ON project.id = member.project_id
     JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
-    WHERE identity.team_id = #{teamId} AND identity.slack_user_id = #{slackUserId}
-      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL|]
+    WHERE identity.team_id = #{teamId} AND identity.slack_user_id = #{slackUserId}|]
+    <> activeMembership
 
 
 slackThreadProject :: DB es => Text -> Text -> Text -> Eff es (Maybe Projects.ProjectId)
@@ -175,14 +186,14 @@ bindSlackInvestigation :: DB es => SlackPrincipal -> Text -> Text -> Text -> Eff
 bindSlackInvestigation principal teamId channelId threadTs = do
   result <-
     Hasql.interpOne @(HI.OneColumn Bool)
-      [HI.sql|INSERT INTO apis.slack_investigation_threads (team_id, channel_id, thread_ts, project_id)
+      $ [HI.sql|INSERT INTO apis.slack_investigation_threads (team_id, channel_id, thread_ts, project_id)
       SELECT #{teamId}, #{channelId}, #{threadTs}, member.project_id FROM projects.project_members member
       JOIN projects.projects project ON project.id = member.project_id
       JOIN users.users account ON account.id = member.user_id
       JOIN apis.slack installation ON installation.project_id = project.id AND installation.team_id = #{teamId}
-      WHERE member.project_id = #{principal.projectId} AND member.user_id = #{principal.userId}
-        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
-      ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE SET thread_ts = EXCLUDED.thread_ts
+      WHERE member.project_id = #{principal.projectId} AND member.user_id = #{principal.userId}|]
+      <> activeMembership
+      <> [HI.sql|ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE SET thread_ts = EXCLUDED.thread_ts
       WHERE slack_investigation_threads.project_id = EXCLUDED.project_id RETURNING TRUE|]
   pure $ isJust result
 
@@ -192,7 +203,7 @@ bindSlackInvestigation principal teamId channelId threadTs = do
 recordSlackSessionEvent :: DB es => Text -> Text -> Eff es ()
 recordSlackSessionEvent teamId eventId =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.slack_investigation_threads thread
+    $ [HI.sql|UPDATE apis.slack_investigation_threads thread
     SET stopped_through = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_stopped'
           THEN GREATEST(thread.stopped_through, (receipt.payload->'event'->>'event_ts')::numeric) ELSE thread.stopped_through END,
         title = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_title_changed'
@@ -211,9 +222,8 @@ recordSlackSessionEvent teamId eventId =
       AND (receipt.payload->'event'->>'type' <> 'agent_session_title_changed' OR receipt.payload->'event'->>'team_id' = receipt.team_id)
       AND thread.team_id = receipt.team_id AND thread.project_id = member.project_id
       AND thread.channel_id = receipt.payload->'event'->>'channel'
-      AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'
-      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
-      AND project.active AND project.deleted_at IS NULL|]
+      AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'|]
+    <> activeMembership
 
 
 slackInvestigationStopped :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Bool

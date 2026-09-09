@@ -1,6 +1,7 @@
 module Pages.Bots.BotFixtures (
   -- * Slack Fixtures
   slackInteraction,
+  slackCallbackEnvelope,
   slackEventCallback,
   slackThreadedEvent,
 
@@ -43,6 +44,19 @@ slackInteraction cmd query teamId =
     "C0123ABCDEF"  -- channel_id (realistic Slack channel ID)
     "general"  -- channel_name
     "U0123ABCDEF"  -- user_id (realistic Slack user ID)
+
+
+-- | The signed-callback envelope every Slack event arrives in. Only the inner
+-- event varies between tests; the wrapper never does.
+slackCallbackEnvelope :: Text -> Text -> AE.Value -> AE.Value
+slackCallbackEnvelope teamId eventId event =
+  AE.object
+    [ "type" AE..= ("event_callback" :: Text)
+    , "team_id" AE..= teamId
+    , "api_app_id" AE..= ("A_TEST" :: Text)
+    , "event_id" AE..= eventId
+    , "event" AE..= event
+    ]
 
 
 slackEventCallback :: Text -> Text -> Text -> Text -> Maybe Text -> AE.Value

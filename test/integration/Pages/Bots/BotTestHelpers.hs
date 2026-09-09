@@ -83,6 +83,7 @@ import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
+import Pages.Bots.BotFixtures (slackCallbackEnvelope)
 import Pages.Bots.Slack qualified as SlackEvents
 import Pkg.DeriveUtils (UUIDId)
 import Pkg.TestUtils
@@ -381,20 +382,14 @@ receiveSlackEvent tr payload = do
 
 slackRootEvent :: Text -> Text -> Text -> Incidents.SlackRootId -> Text -> Text -> AE.Value
 slackRootEvent eventId workspace channel rootId timestamp authorApp =
-  AE.object
-    [ "type" AE..= ("event_callback" :: Text)
-    , "team_id" AE..= workspace
-    , "event_id" AE..= eventId
-    , "api_app_id" AE..= ("A_TEST" :: Text)
-    , "event"
-        AE..= AE.object
-          [ "type" AE..= ("message" :: Text)
-          , "subtype" AE..= ("bot_message" :: Text)
-          , "bot_id" AE..= ("B_TEST" :: Text)
-          , "app_id" AE..= authorApp
-          , "text" AE..= ("Monitor alert" :: Text)
-          , "channel" AE..= channel
-          , "ts" AE..= timestamp
-          , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_incident_root" :: Text), "event_payload" AE..= AE.object ["root_id" AE..= rootId]]
-          ]
-    ]
+  slackCallbackEnvelope workspace eventId
+    $ AE.object
+      [ "type" AE..= ("message" :: Text)
+      , "subtype" AE..= ("bot_message" :: Text)
+      , "bot_id" AE..= ("B_TEST" :: Text)
+      , "app_id" AE..= authorApp
+      , "text" AE..= ("Monitor alert" :: Text)
+      , "channel" AE..= channel
+      , "ts" AE..= timestamp
+      , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_incident_root" :: Text), "event_payload" AE..= AE.object ["root_id" AE..= rootId]]
+      ]

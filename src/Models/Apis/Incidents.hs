@@ -13,6 +13,7 @@ module Models.Apis.Incidents (
   slackPayload,
   IncidentUpdate (..),
   RecordResult (..),
+  incidentConflict,
   recordIncidentEvent,
   recordIncidentEventTx,
   getEpisode,
@@ -43,6 +44,7 @@ module Models.Apis.Incidents (
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Char (isDigit)
+import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -53,6 +55,7 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
@@ -147,6 +150,21 @@ data RecordResult
   deriving stock (Eq, Show)
 
 
+-- | A result the caller cannot commit around: the event was rejected, so any
+-- state written beside it in the same transaction must roll back. Callers decide
+-- separately what a *recorded* result means; 'NoOpenEpisode' is not a conflict
+-- here because a lifecycle event arriving with no open episode is expected.
+incidentConflict :: RecordResult -> Bool
+incidentConflict = \case
+  Recorded{} -> False
+  AlreadyRecorded{} -> False
+  NoOpenEpisode -> False
+  OlderThanCurrentEpisode -> True
+  UnknownIncidentSource -> True
+  InactiveIncidentSource -> True
+  IncidentIssueMismatch -> True
+
+
 sourceFields :: IncidentSource -> (Text, UUID.UUID)
 sourceFields (MonitorIncident mid) = ("monitor", mid.unQueryMonitorId)
 sourceFields (IssueIncident iid) = ("issue", iid.unUUIDId)
@@ -162,20 +180,32 @@ changeFields IncidentRecovered = ("recovered", EpisodeRecovered, Nothing)
 changeFields (IncidentResolved actor) = ("resolved", EpisodeResolved, Just actor)
 
 
-queryTx :: HI.DecodeResult a => HI.Sql -> Tx.Transaction a
-queryTx = Tx.statement () . HI.interp True
-
-
-executeTx :: HI.Sql -> Tx.Transaction ()
-executeTx sql = void (queryTx sql :: Tx.Transaction HI.RowsAffected)
-
-
-oneTx :: HI.DecodeRow a => HI.Sql -> Tx.Transaction a
-oneTx sql = HI.getOneRow <$> queryTx sql
+episodeColumns :: HI.Sql
+episodeColumns = [HI.sql|id, project_id, issue_id, phase, started_at, last_event_at, closed_at|]
 
 
 episodeSelect :: HI.Sql
-episodeSelect = [HI.sql|SELECT id, project_id, issue_id, phase, started_at, last_event_at, closed_at FROM apis.incident_episodes |]
+episodeSelect = [HI.sql|SELECT |] <> episodeColumns <> [HI.sql| FROM apis.incident_episodes |]
+
+
+-- | Rebuild 'DeliveryOperation' from the stored operation and its root timestamp.
+deliveryOperation :: HI.Sql
+deliveryOperation =
+  [HI.sql|CASE d.operation
+    WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
+    WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
+    WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
+  END|]
+
+
+-- | A root's deliveries are strictly ordered: nothing behind an unsettled one is
+-- eligible. The send and history claims must apply the same gate, or a
+-- reconciler picks up work the sender would have skipped.
+noEarlierUnsettledDelivery :: HI.Sql
+noEarlierUnsettledDelivery =
+  [HI.sql|NOT EXISTS (SELECT 1 FROM apis.slack_incident_deliveries earlier
+    WHERE earlier.root_id = d.root_id AND earlier.sequence < d.sequence
+      AND earlier.state NOT IN ('delivered', 'failed')) |]
 
 
 getEpisode :: DB es => Projects.ProjectId -> EpisodeId -> Eff es (Maybe Episode)
@@ -247,14 +277,13 @@ resolveErrorIncident :: DB es => Projects.ProjectId -> ErrorPatterns.ErrorPatter
 resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadCommitted TxS.Write do
   matched <-
     queryTx @[(Text, ErrorPatterns.ErrorState)]
-      [HI.sql|SELECT pattern.hash, pattern.state FROM apis.error_patterns pattern
+      $ [HI.sql|SELECT pattern.hash, pattern.state FROM apis.error_patterns pattern
       JOIN projects.project_members member ON member.project_id = pattern.project_id AND member.user_id = #{actor}
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
-      WHERE pattern.id = #{errorId} AND pattern.project_id = #{pid}
-        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
-        AND project.active AND project.deleted_at IS NULL
-        AND (member.permission IN ('edit', 'admin') OR pattern.assignee_id = #{actor})
+      WHERE pattern.id = #{errorId} AND pattern.project_id = #{pid}|]
+      <> Integrations.activeMembership
+      <> [HI.sql|AND (member.permission IN ('edit', 'admin') OR pattern.assignee_id = #{actor})
       FOR UPDATE OF pattern, member|]
   case listToMaybe matched of
     Nothing -> pure ErrorResolutionDenied
@@ -290,7 +319,7 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
             , replyPayload = message iid
             , destinations = []
             }
-      case find (\case Recorded{} -> False; AlreadyRecorded{} -> False; NoOpenEpisode -> False; OlderThanCurrentEpisode -> True; UnknownIncidentSource -> True; InactiveIncidentSource -> True; IncidentIssueMismatch -> True) results of
+      case find incidentConflict results of
         Nothing -> pure ErrorResolved
         Just conflict -> Tx.condemn $> ErrorResolutionConflict conflict
 
@@ -363,18 +392,20 @@ recordIncidentEventTx update = do
                     Just existing | existing.phase == EpisodeActive -> pure existing
                     _ ->
                       oneTx @Episode
-                        [HI.sql|INSERT INTO apis.incident_episodes
+                        $ [HI.sql|INSERT INTO apis.incident_episodes
                 (project_id, source_kind, source_id, issue_id, phase, started_at, last_event_at)
                 VALUES (#{pid}, #{sourceKind}, #{sourceId}, #{issueId}, 'active', #{at}, #{at})
-                RETURNING id, project_id, issue_id, phase, started_at, last_event_at, closed_at|]
+                RETURNING |]
+                        <> episodeColumns
                   let eid = episode.id
                       closedAt = if nextPhase == EpisodeActive then Nothing else Just at
                   current <-
                     oneTx @Episode
-                      [HI.sql|UPDATE apis.incident_episodes
+                      $ [HI.sql|UPDATE apis.incident_episodes
               SET phase = #{nextPhase}, last_event_at = #{at}, closed_at = #{closedAt},
                   issue_id = COALESCE(issue_id, #{issueId}) WHERE id = #{eid}
-              RETURNING id, project_id, issue_id, phase, started_at, last_event_at, closed_at|]
+              RETURNING |]
+                      <> episodeColumns
                   eventId <-
                     oneTx @IncidentEventId
                       [HI.sql|INSERT INTO apis.incident_events
@@ -476,9 +507,7 @@ data DeliveryOutcome
 -- Its owner can still confirm it, or a Slack event can reconcile its root.
 -- Only the first unsettled delivery for a root is eligible, across all workers.
 claimSlackDeliveries :: DB es => UTCTime -> Eff es [SlackDelivery]
-claimSlackDeliveries now = do
-  result <- Hasql.transaction TxS.ReadCommitted TxS.Write $ claimSlackDeliveriesTx now
-  maybe (throwIO InvalidStoredSlackTimestamp) pure result
+claimSlackDeliveries = decodeClaimed . claimSlackDeliveriesTx
 
 
 data IncidentDecodeError = InvalidStoredSlackTimestamp
@@ -486,38 +515,43 @@ data IncidentDecodeError = InvalidStoredSlackTimestamp
   deriving anyclass (Exception)
 
 
-claimSlackDeliveriesTx :: UTCTime -> Tx.Transaction (Maybe [SlackDelivery])
+-- | A stored timestamp that no longer parses aborts the claim rather than
+-- leasing a delivery whose thread coordinates cannot be trusted.
+decodeClaimed :: (DB es, Traversable f, Traversable t) => Tx.Transaction (t (f Text)) -> Eff es (t (f SlackTimestamp))
+decodeClaimed claim = do
+  decoded <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    stored <- claim
+    let parsed = traverse (traverse slackTimestamp) stored
+    when (isNothing parsed) Tx.condemn
+    pure parsed
+  maybe (throwIO InvalidStoredSlackTimestamp) pure decoded
+
+
+claimSlackDeliveriesTx :: UTCTime -> Tx.Transaction [SlackDeliveryF Text]
 claimSlackDeliveriesTx now = do
   executeTx
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
   let leaseUntil = addUTCTime 120 now
-  stored <-
-    queryTx @[SlackDeliveryF Text]
-      [HI.sql|WITH candidates AS (
+  queryTx
+    $ [HI.sql|WITH candidates AS (
       SELECT d.id FROM apis.slack_incident_deliveries d
       JOIN apis.slack_incident_roots r ON r.id = d.root_id
       JOIN apis.incident_episodes episode ON episode.id = d.episode_id
       WHERE d.state = 'pending' AND d.available_at <= #{now}
         AND NOT EXISTS (SELECT 1 FROM monitors.query_monitors monitor
           WHERE episode.source_kind = 'monitor' AND monitor.id = episode.source_id AND monitor.muted_until > #{now})
-        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL)
-        AND NOT EXISTS (SELECT 1 FROM apis.slack_incident_deliveries earlier
-          WHERE earlier.root_id = d.root_id AND earlier.sequence < d.sequence
-            AND earlier.state NOT IN ('delivered', 'failed'))
-      ORDER BY d.sequence LIMIT 50 FOR UPDATE OF d SKIP LOCKED
+        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
+    <> noEarlierUnsettledDelivery
+    <> [HI.sql|ORDER BY d.sequence LIMIT 50 FOR UPDATE OF d SKIP LOCKED
     ), claimed AS (
       UPDATE apis.slack_incident_deliveries d
       SET state = 'sending', lease_token = gen_random_uuid(), lease_until = #{leaseUntil}, attempts = attempts + 1
       FROM candidates c WHERE d.id = c.id RETURNING d.*
-    ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id,
-        CASE d.operation
-          WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-          WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
-          WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
-        END,
-        CASE WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
+    ) SELECT d.id, d.root_id, d.episode_id, e.project_id, r.team_id, r.channel_id, |]
+    <> deliveryOperation
+    <> [HI.sql|, CASE WHEN d.operation = 'post_reply' THEN e.reply_payload ELSE e.root_payload END,
         initial.root_payload,
         d.lease_token, d.attempts
       FROM claimed d JOIN apis.incident_events e ON e.id = d.event_id
@@ -525,9 +559,6 @@ claimSlackDeliveriesTx now = do
       JOIN LATERAL (SELECT root_payload FROM apis.incident_events
         WHERE episode_id = d.episode_id ORDER BY observed_at, id LIMIT 1) initial ON TRUE
       ORDER BY d.sequence|]
-  let deliveries = traverse (traverse slackTimestamp) stored
-  when (isNothing deliveries) Tx.condemn
-  pure deliveries
 
 
 -- | A completion only belongs to the worker's exact lease. Late results from a
@@ -633,11 +664,10 @@ data IncidentSearchF timestamp = IncidentSearch
 
 
 claimIncidentSearches :: DB es => UTCTime -> Eff es [IncidentSearch]
-claimIncidentSearches now = do
-  result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
-    stored <-
-      queryTx @[IncidentSearchF Text]
-        [HI.sql|WITH candidates AS (
+claimIncidentSearches now =
+  decodeClaimed
+    $ queryTx @[IncidentSearchF Text]
+    $ [HI.sql|WITH candidates AS (
           SELECT d.id FROM apis.slack_incident_deliveries d
           JOIN apis.slack_incident_roots r ON r.id = d.root_id
           JOIN apis.incident_episodes e ON e.id = r.episode_id
@@ -645,25 +675,17 @@ claimIncidentSearches now = do
           JOIN apis.slack s ON s.project_id = e.project_id AND s.team_id = r.team_id
           WHERE d.attempts > 0 AND d.history_retry_at <= #{now} AND p.active AND p.deleted_at IS NULL
             AND (d.state IN ('uncertain', 'waiting_root') OR (d.state = 'sending' AND d.lease_until < #{now}))
-            AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL)
-            AND NOT EXISTS (SELECT 1 FROM apis.slack_incident_deliveries earlier
-              WHERE earlier.root_id = d.root_id AND earlier.sequence < d.sequence AND earlier.state NOT IN ('delivered', 'failed'))
-          ORDER BY d.history_retry_at, d.sequence LIMIT 20 FOR UPDATE OF d SKIP LOCKED
+            AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
+    <> noEarlierUnsettledDelivery
+    <> [HI.sql|ORDER BY d.history_retry_at, d.sequence LIMIT 20 FOR UPDATE OF d SKIP LOCKED
         ), claimed AS (
           UPDATE apis.slack_incident_deliveries d SET history_retry_at = #{addUTCTime 120 now}, history_lease_token = gen_random_uuid()
           FROM candidates c WHERE d.id = c.id RETURNING d.*
-        ) SELECT d.id, r.id, e.project_id, r.team_id, r.channel_id,
-            CASE d.operation
-              WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-              WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
-              WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
-            END, d.history_cursor, d.history_lease_token
+        ) SELECT d.id, r.id, e.project_id, r.team_id, r.channel_id, |]
+    <> deliveryOperation
+    <> [HI.sql|, d.history_cursor, d.history_lease_token
           FROM claimed d JOIN apis.slack_incident_roots r ON r.id = d.root_id
           JOIN apis.incident_episodes e ON e.id = r.episode_id|]
-    let searches = traverse (traverse slackTimestamp) stored
-    when (isNothing searches) Tx.condemn
-    pure searches
-  maybe (throwIO InvalidStoredSlackTimestamp) pure result
 
 
 saveIncidentSearchCursor :: DB es => IncidentSearch -> Maybe Text -> UTCTime -> Eff es ()

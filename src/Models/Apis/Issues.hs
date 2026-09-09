@@ -1040,19 +1040,15 @@ slackScopedConversationId pid teamId channelId threadTs =
 seedChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> [(ChatRole, Text)] -> Eff es ()
 seedChatHistory pid convId messages = Hasql.transaction TxS.ReadCommitted TxS.Write do
   locked <-
-    Tx.statement ()
-      $ HI.interp @[UUIDId "conversation"]
-        True
-        [HI.sql|SELECT conversation_id FROM apis.ai_conversations
+    Hasql.queryTx @[UUIDId "conversation"]
+      [HI.sql|SELECT conversation_id FROM apis.ai_conversations
       WHERE project_id = #{pid} AND conversation_id = #{convId} FOR UPDATE|]
   existing <-
-    Tx.statement ()
-      $ HI.interp @[Bool]
-        True
-        [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_chat_messages
+    Hasql.queryTx @[Bool]
+      [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_chat_messages
       WHERE project_id = #{pid} AND conversation_id = #{convId})|]
   when (not (null locked) && not (or existing)) $ for_ messages \(role, content) ->
-    void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ insertChatMessageSql pid convId role content Nothing Nothing
+    Hasql.executeTx $ insertChatMessageSql pid convId role content Nothing Nothing
 
 
 -- | Create an issue for a log pattern rate change

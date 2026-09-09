@@ -1848,7 +1848,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors) do
       Just team | ProjectMembers.teamHasAnyEnabledChannel team -> do
         installation <- Integrations.getProjectSlackData pid
         users <- Projects.usersByProjectId pid
-        let destinations = [Incidents.SlackDestination sd.teamId channel | sd <- maybeToList installation, ProjectMembers.isChannelEnabled ProjectMembers.Slack team, channel <- toList team.slack_channels]
+        let destinations = slackDestinations installation [team]
         forConcurrently_ dueErrors \sub -> do
           let alertType = case sub.errorState of
                 AESEscalating -> EscalatingErrors
@@ -1909,16 +1909,19 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors) do
                           , replyPayload
                           , destinations
                           }
+                    let conflict = Tx.condemn $> Left result
                     case result of
                       Incidents.Recorded{} -> do
                         void $ execute [HI.sql|UPDATE apis.issues SET last_notified_at = #{now} WHERE id = #{sub.issueId}|]
                         pure $ Right NotificationQueued
                       Incidents.AlreadyRecorded{} -> Tx.condemn $> Right NotificationSkipped
-                      Incidents.OlderThanCurrentEpisode -> Tx.condemn $> Left result
-                      Incidents.NoOpenEpisode -> Tx.condemn $> Left result
-                      Incidents.UnknownIncidentSource -> Tx.condemn $> Left result
-                      Incidents.InactiveIncidentSource -> Tx.condemn $> Left result
-                      Incidents.IncidentIssueMismatch -> Tx.condemn $> Left result
+                      -- An alert is always the start of an episode, so arriving
+                      -- without one open means this claim raced another worker.
+                      Incidents.NoOpenEpisode -> conflict
+                      Incidents.OlderThanCurrentEpisode -> conflict
+                      Incidents.UnknownIncidentSource -> conflict
+                      Incidents.InactiveIncidentSource -> conflict
+                      Incidents.IncidentIssueMismatch -> conflict
           decision <- either (throwIO . IncidentCommitError) pure committed
           case decision of
             NotificationSkipped -> pass
@@ -3033,7 +3036,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           monitorUrl = baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview"
           chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
           chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
-          destinations = [Incidents.SlackDestination sd.teamId channel | sd <- maybeToList installation, team <- targetTeams, ProjectMembers.isChannelEnabled ProjectMembers.Slack team, channel <- toList team.slack_channels]
+          destinations = slackDestinations installation targetTeams
       chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor chartFrom observedAt value
       issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
       committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
@@ -3057,11 +3060,18 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
                   | otherwise = Incidents.IncidentObservation
                 update = Incidents.IncidentUpdate{projectId = monitor.projectId, source, observedAt, change, delivery, issueId, rootPayload, replyPayload, destinations}
             result <- Incidents.recordIncidentEventTx update
+            let conflict = Tx.condemn $> Left result
             case result of
-              Incidents.Recorded _ _ -> pure $ Right $ Just alertUrl
-              Incidents.AlreadyRecorded _ _ -> pure $ Right $ Just alertUrl
+              Incidents.Recorded{} -> pure $ Right $ Just alertUrl
+              Incidents.AlreadyRecorded{} -> pure $ Right $ Just alertUrl
+              -- A recovery with no open episode has nothing left to close; any
+              -- other change arriving without one is out of order.
               Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
-              _ -> Tx.condemn $> Left result
+              Incidents.NoOpenEpisode -> conflict
+              Incidents.OlderThanCurrentEpisode -> conflict
+              Incidents.UnknownIncidentSource -> conflict
+              Incidents.InactiveIncidentSource -> conflict
+              Incidents.IncidentIssueMismatch -> conflict
       case committed of
         Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
@@ -3076,6 +3086,18 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
 data IncidentCommitError = IncidentCommitError Incidents.RecordResult
   deriving stock (Show)
   deriving anyclass (CE.Exception)
+
+
+-- | Slack destinations for the teams an alert fans out to; no installation or no
+-- enabled Slack channel means no destination, not a skipped notification.
+slackDestinations :: Maybe Integrations.SlackData -> [ProjectMembers.Team] -> [Incidents.SlackDestination]
+slackDestinations installation teams =
+  [ Incidents.SlackDestination sd.teamId channel
+  | sd <- maybeToList installation
+  , team <- teams
+  , ProjectMembers.isChannelEnabled ProjectMembers.Slack team
+  , channel <- toList team.slack_channels
+  ]
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> Text -> Text -> ATBackgroundCtx ()
@@ -4828,10 +4850,8 @@ recordMonitorDataGap monitor at reason = do
       suppressed = ctx.config.pauseNotifications || maybe False (> at) monitor.mutedUntil || maybe False (monitor.notificationCount >=) monitor.stopAfterCount
   committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     HI.RowsAffected changed <-
-      Tx.statement ()
-        $ HI.interp
-          True
-          [HI.sql|UPDATE monitors.query_monitors m SET last_evaluated = #{at}
+      Hasql.queryTx
+        [HI.sql|UPDATE monitors.query_monitors m SET last_evaluated = #{at}
         WHERE m.id = #{monitor.id} AND m.project_id = #{monitor.projectId}
           AND m.last_evaluated IS NOT DISTINCT FROM #{monitor.lastEvaluated}
           AND (m.last_evaluated IS NULL OR m.last_evaluated < #{at})
@@ -4844,19 +4864,12 @@ recordMonitorDataGap monitor at reason = do
     case mfilter ((== Incidents.EpisodeActive) . (.phase)) previous of
       Nothing -> pure $ Right ()
       Just episode -> do
-        readings :: [(UTCTime, Double)] <-
-          Tx.statement ()
-            $ HI.interp
-              True
-              [HI.sql|SELECT evaluated_at, value FROM monitors.evaluations WHERE monitor_id = #{monitor.id} AND evaluated_at <= #{at} ORDER BY evaluated_at DESC LIMIT 1|]
+        readings <-
+          Hasql.queryTx @[(UTCTime, Double)]
+            [HI.sql|SELECT evaluated_at, value FROM monitors.evaluations WHERE monitor_id = #{monitor.id} AND evaluated_at <= #{at} ORDER BY evaluated_at DESC LIMIT 1|]
         firstGap <-
-          HI.getOneRow @Bool
-            <$> Tx.statement
-              ()
-              ( HI.interp
-                  True
-                  [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
-              )
+          Hasql.oneTx @Bool
+            [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
         let publish = firstGap && not suppressed
             incidentUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) episode.issueId
             payload = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
@@ -4873,21 +4886,20 @@ recordMonitorDataGap monitor at reason = do
               , replyPayload = payload
               , destinations = []
               }
+        let conflict = Tx.condemn $> Left result
         case result of
           Incidents.Recorded{} -> do
             when publish
-              $ void
-              $ Tx.statement ()
-              $ HI.interp @HI.RowsAffected
-                True
-                [HI.sql|UPDATE monitors.query_monitors SET notification_count = notification_count + 1 WHERE id = #{monitor.id}|]
+              $ Hasql.executeTx [HI.sql|UPDATE monitors.query_monitors SET notification_count = notification_count + 1 WHERE id = #{monitor.id}|]
             pure $ Right ()
           Incidents.AlreadyRecorded{} -> pure $ Right ()
-          Incidents.OlderThanCurrentEpisode -> Tx.condemn $> Left result
+          -- The episode can close between reading it and recording the gap;
+          -- a gap with nothing left open is simply nothing to report.
           Incidents.NoOpenEpisode -> pure $ Right ()
-          Incidents.UnknownIncidentSource -> Tx.condemn $> Left result
-          Incidents.InactiveIncidentSource -> Tx.condemn $> Left result
-          Incidents.IncidentIssueMismatch -> Tx.condemn $> Left result
+          Incidents.OlderThanCurrentEpisode -> conflict
+          Incidents.UnknownIncidentSource -> conflict
+          Incidents.InactiveIncidentSource -> conflict
+          Incidents.IncidentIssueMismatch -> conflict
   either (throwIO . IncidentCommitError) pure committed
 
 
@@ -4989,10 +5001,8 @@ evaluateWithResults monitor startWall title total durationNs = do
   let monId = monitor.id
       commitStatus = do
         HI.RowsAffected changed <-
-          Tx.statement ()
-            $ HI.interp
-              True
-              [HI.sql| UPDATE monitors.query_monitors
+          Hasql.queryTx
+            [HI.sql| UPDATE monitors.query_monitors
             SET current_status = #{status}, current_value = #{total}, last_evaluated = #{startWall},
                 warning_last_triggered = #{finalWarningAt}, alert_last_triggered = #{finalAlertAt},
                 notification_count = #{newNotifCount}

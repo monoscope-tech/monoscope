@@ -303,7 +303,7 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
 -- The root retains onset evidence; thread replies contain only the new observation.
 monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
-  (message (current : snapshot <> [actions]), message [current, slackContext ["<" <> issueUrl <> "|Open incident>"]])
+  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open incident>"]])
   where
     label = case status of Monitors.MSNormal -> "RECOVERED"; Monitors.MSWarning -> "WARNING"; Monitors.MSAlerting -> "ALERTING"
     threshold = case status of
@@ -313,48 +313,40 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
         | monitor.currentStatus == Monitors.MSWarning -> fromMaybe monitor.alertThreshold (monitor.warningRecoveryThreshold <|> monitor.warningThreshold)
         | otherwise -> fromMaybe monitor.alertThreshold monitor.alertRecoveryThreshold
     reading number = show number <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit
-    title = slackEscape $ T.take 160 monitor.alertConfig.title
-    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+    title = incidentHeadline monitor.alertConfig.title
     started = maybe observedAt (.startedAt) episode
-    detail = "Value: " <> reading value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> reading threshold <> " · Observed " <> at observedAt
+    detail = "Value: " <> reading value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> reading threshold <> " · Observed " <> atUtc observedAt
     seconds = max 0 $ floor (diffUTCTime observedAt started) :: Int
     recovery = ["Recovery condition passed · Duration: " <> (if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min") | status == Monitors.MSNormal]
     text = label <> " · " <> title <> "\n" <> detail <> foldMap ("\n" <>) recovery
     current = slackSection text
     snapshot =
-      [ tagged "incident_onset" $ slackContext ["Started " <> at started <> " · Initial value: " <> reading value]
+      [ tagged "incident_onset" $ slackContext ["Started " <> atUtc started <> " · Initial value: " <> reading value]
       , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
       ]
-    actions = tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") issueUrl, slackButton "Open monitor" Nothing monitorUrl]
-    message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+    actions = incidentActions issueUrl monitorUrl
 
 
 -- | A missing evaluation preserves the last verified reading, never a synthetic zero.
 monitorDataUnavailableMessage :: Monitors.QueryMonitor -> Monitors.MeasurementFailure -> UTCTime -> Maybe (UTCTime, Double) -> Text -> Text -> Incidents.SlackPayload
 monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl =
-  Incidents.SlackPayload
-    $ KEM.fromList
-      [ "text" AE..= text
-      , "blocks" AE..= ([slackSection text, tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]] :: [AE.Value])
-      ]
+  incidentMessage text [slackSection text, incidentActions incidentUrl monitorUrl]
   where
-    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
     explanation = case reason of
       Monitors.NoMeasurements -> "No measurements in the evaluation window."
       Monitors.NonFiniteMeasurements -> "The evaluation returned a non-finite measurement."
       Monitors.EvaluationFailed -> "The evaluation failed."
-    previous = maybe "No retained reading is available." (\(time, value) -> "Last verified value: " <> show value <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit <> " · Observed " <> at time) reading
-    text = "DATA UNAVAILABLE · " <> slackEscape (T.take 160 monitor.alertConfig.title) <> "\n" <> explanation <> " Recovery is unconfirmed.\n" <> previous <> "\nChecked " <> at now
+    previous = maybe "No retained reading is available." (\(time, value) -> "Last verified value: " <> show value <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit <> " · Observed " <> atUtc time) reading
+    text = "DATA UNAVAILABLE · " <> incidentHeadline monitor.alertConfig.title <> "\n" <> explanation <> " Recovery is unconfirmed.\n" <> previous <> "\nChecked " <> atUtc now
 
 
 -- | Error episodes retain the onset/chart while reminders carry current evidence.
 errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence =
-  (message [current, onset, chartBlock, actions], message [current, actions])
+  (incidentMessage text [current, onset, chartBlock, actions], incidentMessage text [current, actions])
   where
     label = case alertType of NewRuntimeError -> "ALERTING"; RegressedErrors -> "REGRESSED"; EscalatingErrors -> "ESCALATING"; ErrorSpike -> "ESCALATING"
-    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
-    title = slackEscape $ T.take 160 err.errorType
+    title = incidentHeadline err.errorType
     text =
       label
         <> " · "
@@ -362,12 +354,12 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         <> "\n"
         <> slackEscape (T.take 300 err.message)
         <> "\nObserved "
-        <> at now
+        <> atUtc now
         <> foldMap (" · " <>) occurrence
         <> foldMap (" · " <>) (slackEscape <$> err.serviceName)
         <> foldMap (" · " <>) (slackEscape <$> err.environment)
     current = slackSection text
-    onset = tagged "incident_onset" $ slackContext ["Started " <> at (maybe now (.startedAt) episode)]
+    onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
     chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open incident>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
     actions =
       tagged "incident_actions"
@@ -376,8 +368,6 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
               : maybeToList
                 ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
           )
-    message :: [AE.Value] -> Incidents.SlackPayload
-    message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
 
 
 tagged :: Text -> AE.Value -> AE.Value
@@ -385,23 +375,44 @@ tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.Stri
 tagged _ block = block
 
 
+-- | Every incident message is one text fallback plus its Block Kit list.
+incidentMessage :: Text -> [AE.Value] -> Incidents.SlackPayload
+incidentMessage text blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+atUtc :: UTCTime -> Text
+atUtc = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+
+
+-- | Titles reach Slack escaped and bounded, whatever the source produced.
+incidentHeadline :: Text -> Text
+incidentHeadline = slackEscape . T.take 160
+
+
+incidentActions :: Text -> Text -> AE.Value
+incidentActions incidentUrl monitorUrl =
+  tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]
+
+
+-- | Blocks a root update carries forward from the message that opened the
+-- incident. 'tagged' stamps these ids; 'retainSlackSnapshot' looks for them.
+incidentSnapshotBlocks :: [Text]
+incidentSnapshotBlocks = ["incident_onset", "incident_chart"]
+
+
 resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Maybe Text -> Incidents.SlackPayload
 resolvedErrorMessage err actor now projectUrl issueUrl =
-  Incidents.SlackPayload
-    $ KEM.fromList
-      [ "text" AE..= text
-      , "blocks" AE..= ([slackSection text, slackContext ["<" <> url <> "|" <> label <> ">"]] :: [AE.Value])
-      ]
+  incidentMessage text [slackSection text, slackContext ["<" <> url <> "|" <> label <> ">"]]
   where
     (url, label) = maybe (projectUrl <> "/issues", "Open project issues") (,"Open incident") issueUrl
     name = T.strip $ actor.firstName <> " " <> actor.lastName
     text =
       "RESOLVED · "
-        <> slackEscape (T.take 160 err.errorType)
+        <> incidentHeadline err.errorType
         <> "\nResolved by "
         <> slackEscape (if T.null name then actor.id.toText else name)
         <> " · "
-        <> toText (formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now)
+        <> atUtc now
         <> "\nMeasured recovery has not been verified."
 
 
@@ -415,7 +426,7 @@ retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload cur
   Incidents.SlackPayload $ KEM.insert "blocks" (AE.toJSON (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))) current
   where
     blocks obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
-    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) ["incident_onset", "incident_chart"]
+    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) incidentSnapshotBlocks
     snapshot _ = False
 
 
