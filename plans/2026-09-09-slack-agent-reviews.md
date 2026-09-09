@@ -287,3 +287,15 @@ OAuth decoding, the investigation capability check, integration copy, and fixtur
 | 1 | Extend the existing derived `TokenResponse` and `SlackData` records and token upsert. Reuse the admin reconnect route and private Slack response method. | Add the missing Agent scope to OAuth, but persist returned grants rather than infer them from the requested list. Keep unknown historical grants nullable. | Use the existing reconnect link and inline paragraph styling; no new browser behavior. |
 | 2 | Centralize the required-scope predicate for the worker and integrations page. Normalize comma-separated OAuth scopes at the boundary. | Prevent native work when required grants are missing or unknown. Preserve webhook/channel credentials and require current project access before the private upgrade prompt. | Keep capability information beside the existing connection status and reconnect action. |
 | 3 | Re-read scope storage, positional row decoding, notification consumers, and installation call sites. All JSON/row instances remain derived; no warning suppression. | Regression first reproduced the old-install model call. Then verify no model/status call, unchanged webhook, and OAuth round-trips for partial/full grants. The manifest is a template, not proof of live Agent availability; current app-home/context/title support remains incomplete. | The OAuth/database/worker flow stays in Hspec. Static native prompts add no client glue or styling indirection. |
+
+
+## Native context and title events
+
+All three requested skills ran in three passes over classification, signed ingress,
+context persistence, authorized session updates, and workflow regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive both wire records and reuse timestamp validation and stored signed receipts. | Add explicit context/title constructors rather than leave subscribed events in the unknown branch. Preserve opaque navigation objects without interpreting them as project authority. | Use native Slack events; no custom browser behavior. |
+| 2 | Extend the existing authorized session-update query for titles instead of duplicating its membership joins. Decode event kind once with the envelope workspace. | Give titles explicit columns and timestamp ordering; isolate navigation by workspace/channel/user, including newer empty context. Require title/envelope workspace agreement before queueing. | Keep concurrent/replayed DB and handler flows in Hspec; no simple pure tests displaced from their functions. |
+| 3 | Re-read new types and existing stop, authorization, and conversation consumers. No handwritten instance or suppression. | Fix misleading negative-test envelopes, including the earlier malformed-stop fixture. Test malformed timestamps, workspace mismatch, stale and revoked title changes, context clearing/isolation, unchanged stop state, and zero conversation/HTTP output. | No JS/CSS/Lucid changes, client-tier escalation, or styling indirection. |

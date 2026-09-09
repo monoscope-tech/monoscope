@@ -667,10 +667,23 @@ data SlackStopEvent = SlackStopEvent {channel :: Text, thread_ts :: Text, user :
   deriving anyclass (AE.FromJSON)
 
 
+-- | Opaque Slack navigation hints, retained without granting access to their targets.
+data SlackAppContextEvent = SlackAppContextEvent {channel :: Text, user :: Text, context :: AE.Object, event_ts :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+data SlackTitleEvent = SlackTitleEvent {channel :: Text, thread_ts :: Text, user :: Text, title :: Text, team_id :: Text, event_ts :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
 data SlackEventKind
   = UserMessage SlackMessage
   | AppMention SlackMessage
   | AgentSessionStopped SlackStopEvent
+  | AgentSessionTitleChanged SlackTitleEvent
+  | AppContextChanged SlackAppContextEvent
   | BotMessage
   | MessageEdit
   | AssistantStarted SlackAssistantEvent
@@ -681,8 +694,8 @@ data SlackEventKind
 
 -- | Keep the wire object intact for receipt verification and future event types.
 -- Only ordinary human messages are decoded as investigation input.
-classifySlackEvent :: SlackEvent -> AE.Parser SlackEventKind
-classifySlackEvent wire = do
+classifySlackEvent :: Text -> SlackEvent -> AE.Parser SlackEventKind
+classifySlackEvent workspaceId wire = do
   header <- AE.parseJSON @SlackEventHeader $ AE.toJSON wire
   let decode :: AE.FromJSON a => AE.Parser a
       decode = AE.parseJSON $ AE.toJSON wire
@@ -707,6 +720,17 @@ classifySlackEvent wire = do
       unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.thread_ts]) $ fail "Invalid Slack stop timestamp"
       when (any T.null [value.user, value.channel]) $ fail "Missing Slack stop identity"
       pure $ AgentSessionStopped value
+    ("app_context_changed", _) -> do
+      value <- decode
+      unless (isJust $ Incidents.slackTimestamp value.event_ts) $ fail "Invalid Slack context timestamp"
+      when (any T.null [value.user, value.channel]) $ fail "Missing Slack context identity"
+      pure $ AppContextChanged value
+    ("agent_session_title_changed", _) -> do
+      value <- decode
+      unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.thread_ts]) $ fail "Invalid Slack title timestamp"
+      when (any T.null [value.user, value.channel, value.team_id]) $ fail "Missing Slack title identity"
+      unless (value.team_id == workspaceId) $ fail "Slack title workspace mismatch"
+      pure $ AgentSessionTitleChanged value
     ("assistant_thread_started", _) -> assistant AssistantStarted
     ("assistant_thread_context_changed", _) -> assistant AssistantContextChanged
     _ -> pure $ UnknownEvent header
@@ -748,7 +772,7 @@ slackEventsPostH body timestamp signature = do
   case payload of
     UrlVerification challenge -> pure $ AE.object ["challenge" AE..= challenge]
     EventCallback{team_id, event_id, event} -> do
-      kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
+      kind <- either (const $ throwError err400) pure $ AE.parseEither (classifySlackEvent team_id) event
       receiptId <- UUIDId <$> UUID.genUUID
       let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
       Hasql.interpExecute_
@@ -759,7 +783,7 @@ slackEventsPostH body timestamp signature = do
         ) INSERT INTO background_jobs (run_at, status, payload)
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
-        AgentSessionStopped _ -> Integrations.recordSlackStop team_id event_id
+        AgentSessionStopped _ -> Integrations.recordSlackSessionEvent team_id event_id
         _ -> pure ()
       pure $ AE.object []
 
@@ -772,7 +796,7 @@ processSlackEvent receiptId = do
   for_ pending \(HI.OneColumn (Aeson payload)) -> case payload of
     UrlVerification _ -> throwIO $ ErrorCall "Stored Slack event is not a callback"
     EventCallback{team_id, event_id, event} -> do
-      kind <- either (throwIO . ErrorCall) pure $ AE.parseEither classifySlackEvent event
+      kind <- either (throwIO . ErrorCall) pure $ AE.parseEither (classifySlackEvent team_id) event
       let process = do
             stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
             when (isJust stillPending) do
@@ -806,7 +830,9 @@ processSlackEvent receiptId = do
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
-        AgentSessionStopped _ -> Integrations.recordSlackStop workspaceId eventId
+        AgentSessionStopped _ -> Integrations.recordSlackSessionEvent workspaceId eventId
+        AgentSessionTitleChanged _ -> Integrations.recordSlackSessionEvent workspaceId eventId
+        AppContextChanged change -> saveAppContext workspaceId change
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
         AssistantStarted session -> saveAssistantContext workspaceId session
@@ -906,6 +932,16 @@ setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSess
 setSessionStatus token channel thread status = do
   result <- slackApi token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status
   either (throwIO . ErrorCall . toString . ("Slack session status rejected: " <>)) pure result
+
+
+saveAppContext :: DB es => Text -> SlackAppContextEvent -> Eff es ()
+saveAppContext workspaceId event =
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO apis.slack_app_contexts (team_id, channel_id, user_id, context, context_event_ts)
+    VALUES (#{workspaceId}, #{event.channel}, #{event.user}, #{Aeson event.context}, #{event.event_ts}::text::numeric)
+    ON CONFLICT (team_id, channel_id, user_id) DO UPDATE
+    SET context = EXCLUDED.context, context_event_ts = EXCLUDED.context_event_ts
+    WHERE slack_app_contexts.context_event_ts < EXCLUDED.context_event_ts|]
 
 
 -- | Slack navigation context is untrusted input, not project authorization.

@@ -611,3 +611,45 @@ manifest validation, controlled workspace acceptance, durable delivery/status
 reconciliation, full conversation checkpoints, and the wider plan remain open.
 Current-tree CI signoff must run before push; prior attestations do not cover this
 change. No push, deployment, or live Slack configuration change occurred.
+
+
+## Native navigation context and title events (2026-09-09)
+
+The decoder now distinguishes `app_context_changed` and
+`agent_session_title_changed`, using derived wire records. Timestamp validation
+runs before queueing. Title-event workspace identity must match the signed outer
+envelope. Payload fields were checked against Slack's
+[SDK event definitions](https://github.com/slackapi/node-slack-sdk/blob/main/packages/types/src/events/app.ts)
+and [title-event documentation](https://docs.slack.dev/reference/events/agent_session_title_changed/).
+
+Migration 0163 stores navigation context per workspace/app conversation/user,
+with numeric event ordering. Newer empty context clears earlier hints; duplicate
+and delayed events cannot overwrite newer state. These opaque navigation objects
+are retained as Slack-supplied data. They neither establish project authorization
+nor start investigations or trigger outbound requests.
+
+The existing signed-receipt session-update query now handles both stops and title
+changes, retaining its current-member/account/project/installation checks. Title
+and title timestamp have explicit columns and a paired-null constraint. A title
+change can update only an existing bound thread, and does not change stop state.
+Unknown or revoked users cannot rename it. Delayed titles cannot replace newer
+ones. No project-wide or user-wide authority is inferred from navigation context.
+
+Review found that an incomplete outer envelope made the first negative fixture
+pass before exercising event validation. Correcting the envelope reproduced the
+missing native validation. The prior malformed-stop fixture had the same issue
+and is corrected too. Final tests cover numeric rejection, workspace mismatch,
+context ordering/clearing/isolation, title ordering and authorization, preserved
+thread binding and stop state, zero new conversations, and zero outbound requests.
+
+Validation:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`
+passed 31 examples, 0 failures. Fourmolu and scoped `git diff --check` passed. Hpack
+includes migration 0163. Three passes of each requested skill are recorded in the
+review report. Existing stop/concurrency/installation regressions also pass.
+
+App-home onboarding, use of per-message navigation hints as authorized evidence,
+live native-session acceptance, durable delivery/status reconciliation and
+checkpoints, and the rest of the plan remain incomplete. Current-tree CI signoff
+is required before push. No push, deployment, or live app configuration change
+occurred.

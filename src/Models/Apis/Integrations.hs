@@ -26,7 +26,7 @@ module Models.Apis.Integrations (
   resolveSlackPrincipal,
   slackThreadProject,
   bindSlackInvestigation,
-  recordSlackStop,
+  recordSlackSessionEvent,
   slackInvestigationStopped,
 ) where
 
@@ -166,13 +166,19 @@ bindSlackInvestigation principal teamId channelId threadTs = do
   pure $ isJust result
 
 
--- | Only an authenticated, linked project member can stop an existing thread.
+-- | Only an authenticated, linked project member can change an existing thread.
 -- Source identity and coordinates come from the stored signed receipt.
-recordSlackStop :: DB es => Text -> Text -> Eff es ()
-recordSlackStop teamId eventId =
+recordSlackSessionEvent :: DB es => Text -> Text -> Eff es ()
+recordSlackSessionEvent teamId eventId =
   Hasql.interpExecute_
     [HI.sql|UPDATE apis.slack_investigation_threads thread
-    SET stopped_through = GREATEST(thread.stopped_through, (receipt.payload->'event'->>'event_ts')::numeric)
+    SET stopped_through = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_stopped'
+          THEN GREATEST(thread.stopped_through, (receipt.payload->'event'->>'event_ts')::numeric) ELSE thread.stopped_through END,
+        title = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_title_changed'
+          AND (thread.title_event_ts IS NULL OR thread.title_event_ts < (receipt.payload->'event'->>'event_ts')::numeric)
+          THEN receipt.payload->'event'->>'title' ELSE thread.title END,
+        title_event_ts = CASE WHEN receipt.payload->'event'->>'type' = 'agent_session_title_changed'
+          THEN GREATEST(thread.title_event_ts, (receipt.payload->'event'->>'event_ts')::numeric) ELSE thread.title_event_ts END
     FROM apis.slack_events receipt
     JOIN apis.slack_identities identity ON identity.team_id = receipt.team_id AND identity.slack_user_id = receipt.payload->'event'->>'user'
     JOIN projects.project_members member ON member.user_id = identity.user_id
@@ -180,7 +186,8 @@ recordSlackStop teamId eventId =
     JOIN projects.projects project ON project.id = member.project_id
     JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = receipt.team_id
     WHERE receipt.team_id = #{teamId} AND receipt.event_id = #{eventId}
-      AND receipt.payload->'event'->>'type' = 'agent_session_stopped'
+      AND receipt.payload->'event'->>'type' IN ('agent_session_stopped', 'agent_session_title_changed')
+      AND (receipt.payload->'event'->>'type' <> 'agent_session_title_changed' OR receipt.payload->'event'->>'team_id' = receipt.team_id)
       AND thread.team_id = receipt.team_id AND thread.project_id = member.project_id
       AND thread.channel_id = receipt.payload->'event'->>'channel'
       AND thread.thread_ts = receipt.payload->'event'->>'thread_ts'

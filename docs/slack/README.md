@@ -25,8 +25,7 @@ when merging the template. The Agent declaration is required in addition to OAut
 grants; see [Slack's Agent guide](https://docs.slack.dev/ai/developing-agents/).
 
 Slack documents migration from `assistant_view` to `agent_view` as irreversible.
-This repository change does not apply that migration. App-home/context/title
-handling, live manifest validation, plan availability, and workspace acceptance
+This repository change does not apply that migration. App-home onboarding, live manifest validation, plan availability, and workspace acceptance
 remain rollout gates. See [the manifest reference](https://docs.slack.dev/reference/app-manifest/).
 
 To link a personal account, mention Monoscope or message it directly in Slack.
@@ -51,6 +50,17 @@ project's saved dashboard or its known template; modal metadata carries no file
 path or chart URL. A changed widget requires a new selection. Modals opened before
 this metadata upgrade must be reopened with `/dashboard`. Native Agent lifecycle
 and the remaining acceptance gates still apply before rollout.
+
+Native `app_context_changed` events retain navigation hints separately for each
+workspace, app conversation, and Slack user. Newer empty context clears old hints;
+delayed events cannot restore them. Context does not grant access, bind a project,
+or start an investigation. Using these hints as scoped investigation evidence
+remains future work.
+
+`agent_session_title_changed` updates the stored title of an existing project
+thread only for a linked current member. Its workspace must match the signed
+envelope. Delayed title events cannot replace newer titles, and title updates do
+not alter cancellation state. See [Slack's title event](https://docs.slack.dev/reference/events/agent_session_title_changed/).
 
 Threaded follow-ups retain user/assistant roles and complete model answers.
 Previous conversation text is not added to the system prompt. The model receives

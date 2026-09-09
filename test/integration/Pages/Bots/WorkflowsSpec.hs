@@ -403,6 +403,48 @@ spec = around withTestResources do
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Slack signed events" do
+      it "rejects malformed native context and title events before queueing" \tr -> do
+        let cfg = tr.trATCtx.env{Config.slackSigningSecret = "test-slack-signing-secret"}
+            resources = tr{trATCtx = tr.trATCtx{Config.env = cfg}}
+        for_ ([("app_context_changed", "NaN", "T_NATIVE"), ("agent_session_title_changed", "NaN", "T_NATIVE"), ("agent_session_title_changed", "1735689601.000001", "T_OTHER")] :: [(Text, Text, Text)]) \(eventType, ts, team) -> do
+          let event = AE.object ["type" AE..= eventType, "event_ts" AE..= ts, "team_id" AE..= team, "channel" AE..= ("C_NATIVE" :: Text), "user" AE..= ("U_NATIVE" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "title" AE..= ("Title" :: Text), "context" AE..= AE.object []]
+              body = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_NATIVE" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= eventType, "event" AE..= event]
+          status <- toBaseServantResponse resources $ catchError @ServerError (slackEventsPostH body (Just "1735689600") (Just $ signSlackBody "1735689600" body) $> 200) (\_ err -> pure err.errHTTPCode)
+          status `shouldBe` 400
+
+      it "orders native navigation and authorized titles without starting investigations" \tr -> do
+        setupLinkedSlackData tr testPid "T_NATIVE"
+        principal <- toBaseServantResponse tr (Slack.resolveSlackPrincipal "T_NATIVE" "U0123ABCDEF" $ Just testPid) >>= maybe (fail "Missing linked principal") pure
+        toBaseServantResponse tr (Slack.bindSlackInvestigation principal "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` True)
+        let callback team eventId event = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= (team :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= event]
+            process team eventId event = do
+              receipt <- receiveSlackEvent tr $ callback team eventId event
+              replicateM_ 2 do
+                (requests, _) <- runTestBgRecordingHTTP frozenTime tr $ processSlackEvent receipt
+                requests `shouldBe` []
+            context user ts value = AE.object ["type" AE..= ("app_context_changed" :: Text), "channel" AE..= ("D_NATIVE" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text), "context" AE..= value]
+            title user ts value = AE.object ["type" AE..= ("agent_session_title_changed" :: Text), "team_id" AE..= ("T_NATIVE" :: Text), "channel" AE..= ("C_NATIVE" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text), "title" AE..= (value :: Text)]
+            hints = AE.object ["entities" AE..= ([AE.object ["type" AE..= ("slack#/types/channel_id" :: Text), "value" AE..= ("C_OTHER_PROJECT" :: Text), "team_id" AE..= ("T_OTHER" :: Text)]] :: [AE.Value])]
+        process "T_NATIVE" "ContextNew" $ context "U0123ABCDEF" "1735689603.000001" hints
+        process "T_NATIVE" "ContextOld" $ context "U0123ABCDEF" "1735689601.000001" (AE.object [])
+        process "T_NATIVE" "ContextOtherUser" $ context "U_OTHER" "1735689604.000001" hints
+        process "T_OTHER" "ContextOtherTeam" $ context "U0123ABCDEF" "1735689605.000001" hints
+        process "T_NATIVE" "ContextClear" $ context "U0123ABCDEF" "1735689604.000001" (AE.object [])
+        process "T_NATIVE" "ContextDelayed" $ context "U0123ABCDEF" "1735689602.000001" hints
+        contexts :: [(Text, Text, Aeson AE.Value)] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT team_id, user_id, context FROM apis.slack_app_contexts ORDER BY team_id, user_id|]
+        contexts `shouldBe` [("T_NATIVE", "U0123ABCDEF", Aeson $ AE.object []), ("T_NATIVE", "U_OTHER", Aeson hints), ("T_OTHER", "U0123ABCDEF", Aeson hints)]
+        process "T_NATIVE" "TitleNew" $ title "U0123ABCDEF" "1735689603.000001" "Checkout errors"
+        process "T_NATIVE" "TitleOld" $ title "U0123ABCDEF" "1735689601.000001" "Old title"
+        process "T_NATIVE" "TitleUnlinked" $ title "U_OTHER" "1735689604.000001" "Unauthorized title"
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+        process "T_NATIVE" "TitleRevoked" $ title "U0123ABCDEF" "1735689605.000001" "Revoked title"
+        titles <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT title FROM apis.slack_investigation_threads WHERE team_id = 'T_NATIVE'|]
+        titles `shouldBe` [PGS.Only ("Checkout errors" :: Text)]
+        toBaseServantResponse tr (Slack.slackInvestigationStopped testPid "T_NATIVE" "C_NATIVE" "1735689600.000001" "1735689601.000001") >>= (`shouldBe` False)
+        conversations <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
+        conversations `shouldBe` [PGS.Only (0 :: Int64)]
+        toBaseServantResponse tr (Slack.slackThreadProject "T_NATIVE" "C_NATIVE" "1735689600.000001") >>= (`shouldBe` Just testPid)
+
       it "preserves non-message events and orders assistant context independently of receipt order" \tr -> do
         let callback eventId event = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_SESSION" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= event]
             session eventType eventTs contextChannel userId =
@@ -454,7 +496,7 @@ spec = around withTestResources do
           status signedTr bytes timestamp sig >>= (`shouldBe` 401)
         status signedTr "not-json" (Just "1735689600") (Just $ signSlackBody "1735689600" "not-json") >>= (`shouldBe` 400)
         for_ (["bad", "-1.1", "NaN"] :: [Text]) \ts -> do
-          let invalidStop = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_STOP" :: Text), "event_id" AE..= ("EvInvalidStop" :: Text), "event" AE..= AE.object ["type" AE..= ("agent_session_stopped" :: Text), "event_ts" AE..= ts, "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U_STOP" :: Text), "channel" AE..= ("C_STOP" :: Text)]]
+          let invalidStop = toStrict $ AE.encode $ AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_STOP" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= ("EvInvalidStop" :: Text), "event" AE..= AE.object ["type" AE..= ("agent_session_stopped" :: Text), "event_ts" AE..= ts, "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= ("U_STOP" :: Text), "channel" AE..= ("C_STOP" :: Text)]]
           status signedTr invalidStop (Just "1735689600") (Just $ signSlackBody "1735689600" invalidStop) >>= (`shouldBe` 400)
         let unconfigured = tr{trATCtx = tr.trATCtx{Config.env = cfg{Config.slackSigningSecret = ""}}}
         status unconfigured body (Just "1735689600") signature >>= (`shouldBe` 503)
