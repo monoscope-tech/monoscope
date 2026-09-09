@@ -35,6 +35,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (status429)
 import Network.Wreq qualified as Wreq
+import OddJobs.Job qualified as OddJobs
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
@@ -649,10 +650,11 @@ spec = around withTestResources do
           PGS.query
             conn
             [sql|SELECT count(*) FROM background_jobs j, apis.slack_api_cooldowns c
-            WHERE j.payload = ? AND j.status = 'pending' AND j.run_at >= c.retry_at
+            WHERE j.payload = ? AND j.status = 'queued' AND j.run_at >= c.retry_at
               AND c.team_id = 'T_RATE_LIMIT' AND c.method = 'chat.postMessage'|]
             (PGS.Only $ Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt)
         scheduled `shouldBe` [PGS.Only (1 :: Int)]
+        withResource tr.trPool $ \conn -> assertDeferredJobRunnable conn $ AE.toJSON $ Jobs.ProcessSlackEvent receipt
         (_, otherWorkspace) <- runTestBgRecordingHTTP frozenTime tr $ responses $ throttle $ RateLimit.withRateLimits "T_OTHER" $ tryAny $ void $ HTTP.postWith Wreq.defaults "https://slack.com/api/chat.postMessage" (AE.object [])
         otherWorkspace `shouldSatisfy` isRight
         readIORef posts >>= (`shouldBe` 2)
@@ -1364,7 +1366,7 @@ spec = around withTestResources do
             $ processSlackEvent receipt
         result `shouldSatisfy` isRight
         let replies = [value | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body]]
-        length replies `shouldBe` 1
+        length [reply | reply <- replies, reply ^? key "metadata" . key "event_type" . _String == Just "monoscope_investigation_reply"] `shouldBe` 1
         for_ replies \reply -> do
           reply ^? key "channel" . _String `shouldBe` Just "C_INCIDENT"
           reply ^? key "thread_ts" . _String `shouldBe` Just "1735689600.000001"
@@ -1558,7 +1560,7 @@ spec = around withTestResources do
                 conn
                 [sql|SELECT processed_at IS NULL,
                 (SELECT count(*) FROM background_jobs
-                 WHERE payload = ? AND status = 'pending' AND run_at > clock_timestamp())
+                 WHERE payload = ? AND status = 'queued' AND run_at > clock_timestamp())
                 FROM apis.slack_events WHERE id = ?|]
                 (Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt, receipt)
             queued `shouldBe` [(True, 1 :: Int)]
@@ -1611,9 +1613,12 @@ spec = around withTestResources do
         entered <- newEmptyMVar
         blocked <- newEmptyMVar
         interrupted <- newIORef False
+        rejectRefresh <- newIORef True
         let event ts = slackThreadedEvent "T_STOP" "C_STOP" "Investigate" ts "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention" & key "event_id" . _String .~ ts
             stop user ts = event ts & key "event_id" . _String .~ ("stop-" <> user <> ts) & key "event" .~ AE.object ["type" AE..= ("agent_session_stopped" :: Text), "channel" AE..= ("C_STOP" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "user" AE..= (user :: Text), "event_ts" AE..= (ts :: Text)]
-            transport = withHTTPResponses \_ _ -> pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+            transport = withHTTPResponses \_ endpoint -> do
+              reject <- if endpoint == "https://slack.com/api/chat.update" then readIORef rejectRefresh else pure False
+              pure $ Just $ if reject then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat{} -> liftIO $ bracket_ (putMVar entered ()) (writeIORef interrupted True) (takeMVar blocked)
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
@@ -1656,6 +1661,30 @@ spec = around withTestResources do
                 value ^? key "blocks" . _Array . ix 0 . key "tasks" . _Array . ix 0 . key "status" . _String `shouldBe` Just "error"
           readIORef interrupted >>= (`shouldBe` True)
           void $ runTestBgRecordingHTTP frozenTime tr $ processSlackEvent stopReceipt
+        let target = Investigations.ProgressTarget testPid "T_STOP" "C_STOP" "1735689600.000001" "1735689601.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+        publication <- runQueryEffect tr (Investigations.loadProgress target) >>= maybe (fail "Expected stopped progress publication") pure
+        let refresh = runTestBgRecordingHTTP frozenTime tr $ transport $ tryAny $ SlackPage.refreshSlackProgress publication.publicationId
+            queued = withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued' AND run_at > clock_timestamp()|] (PGS.Only $ Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication.publicationId)
+        retained <- withResource tr.trPool $ \conn ->
+          PGS.query
+            conn
+            [sql|SELECT processed_at IS NOT NULL,
+            (SELECT count(*) FROM background_jobs WHERE payload = ? AND status = 'queued')
+            FROM apis.slack_events WHERE id = ?|]
+            (Aeson $ AE.toJSON $ Jobs.RefreshSlackProgress publication.publicationId, receipt)
+        retained `shouldBe` [(True, 1 :: Int)]
+        withResource tr.trPool $ \conn -> assertDeferredJobRunnable conn $ AE.toJSON $ Jobs.RefreshSlackProgress publication.publicationId
+        (_, deferredRefresh) <- refresh
+        deferredRefresh `shouldSatisfy` isRight
+        queued >>= (`shouldBe` [PGS.Only (1 :: Int)])
+        writeIORef rejectRefresh False
+        (refreshed, refreshOutcome) <- refresh
+        refreshOutcome `shouldSatisfy` isRight
+        map fst refreshed `shouldBe` ["https://slack.com/api/chat.update"]
+        for_ refreshed $ \(_, body) -> do
+          let value = AE.decode @AE.Value body
+          (value >>= (^? key "ts" . _String)) `shouldBe` Just "1735689610.000001"
+          (value >>= (^? key "blocks" . _Array . ix 0 . key "title" . _String)) `shouldBe` Just "Investigation interrupted"
         void $ receiveSlackEvent tr $ stop "U0123ABCDEF" "1735689600.000002"
         stopped "1735689601.000001" >>= (`shouldBe` True)
         stopped "1735689603.000001" >>= (`shouldBe` False)
@@ -1796,3 +1825,17 @@ spec = around withTestResources do
 
 signSlackBody :: Text -> ByteString -> Text
 signSlackBody timestamp body = "v0=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac ("test-slack-signing-secret" :: ByteString) ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
+
+
+-- Exercise OddJobs selection on the real scheduled rows without consuming other tests' jobs.
+assertDeferredJobRunnable :: PGS.Connection -> AE.Value -> IO ()
+assertDeferredJobRunnable conn payload = PGS.withTransaction conn do
+  void $ PGS.execute_ conn [sql|CREATE TEMP TABLE slack_deferred_poll (LIKE background_jobs INCLUDING ALL) ON COMMIT DROP|]
+  copied <- PGS.execute conn [sql|INSERT INTO slack_deferred_poll SELECT * FROM background_jobs WHERE payload = ? ORDER BY run_at DESC LIMIT 1|] (PGS.Only $ Aeson payload)
+  copied `shouldBe` 1
+  void $ PGS.execute_ conn [sql|UPDATE slack_deferred_poll SET run_at = clock_timestamp() + interval '1 hour'|]
+  OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60 >>= (`shouldBe` [])
+  void $ PGS.execute_ conn [sql|UPDATE slack_deferred_poll SET run_at = clock_timestamp() - interval '1 second'|]
+  selected <- OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60
+  length selected `shouldBe` 1
+  OddJobs.jobPollingIO conn "slack-regression" "slack_deferred_poll" 60 >>= (`shouldBe` [])

@@ -275,6 +275,7 @@ processBackgroundJob authCtx bgJob =
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
     SlackNotification pid message -> sendSlackMessage pid message
     ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
+    RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     GitSyncFromRepo pid -> gitSyncFromRepo pid

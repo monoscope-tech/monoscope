@@ -1772,3 +1772,35 @@ CI for this history increment is pending. No deployment or branch push.
 This recovery applies to answer parts. Progress and incident-root history recovery,
 live Slack acceptance, unresolved sends with no observable evidence, diagnosis
 quality evaluation, tested action drafts and proactive policies remain unfinished.
+
+### Durable final progress refresh and runnable deferrals
+
+The new RefreshSlackProgress job reloads the current scoped journal and updates
+an acknowledged checklist under the existing thread lock and current requester
+access. Final update failures queue work before the original event completes.
+Unknown progress timestamps remain pending; progress history recovery is still
+unfinished. Scheduling preserves Slack deadlines and coalesces future jobs under
+a publication row lock in a read-committed transaction.
+
+Review found a real defect in the earlier event deferral implementation: it wrote
+pending, but OddJobs.jobPollingIO selects Queued/Retry (or expired Locked jobs).
+Event and progress deferrals now write queued. Migration 0177 repairs only pending
+ProcessSlackEvent/RefreshSlackProgress rows. A local PostgreSQL transaction check
+passed for both affected tags, an unrelated pending tag, an existing locked row,
+and preservation of run_at. The workflow regression calls the installed poller on
+an isolated copy of the latest scheduled row to test future, due and locked states.
+
+The previous worktree run completed 45 examples with one failure: a timing-sensitive
+incident-context assertion counted a legitimate progress post as a second answer.
+It now counts reply-publication metadata while still validating all post destinations.
+The updated native Workflows run passed: 45 examples, zero failures, 166.0568 seconds.
+Command: DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev. The log confirms WorkflowsSpec was
+recompiled with the new polling assertions. Fourmolu and git diff --check pass.
+Log: /tmp/monoscope-slack-agent/slack-progress-refresh-workflows.log.
+Three review passes are recorded. HLint is blocked by unsupported MultilineStrings;
+Weeder exits 228 with repository findings. No deployment or branch push.
+
+Main 275de8687 completed make ci-signoff CHECKS="build doctests unit-tests".
+All three passed and were attested (1,554 doctest examples; 308 unit examples).
+Integration-tests, weeder, hlint and e2e remain outstanding in the final CI status.

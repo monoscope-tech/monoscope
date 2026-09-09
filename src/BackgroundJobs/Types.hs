@@ -35,6 +35,7 @@ data BgJobs
   | CleanupDemoProject
   | SlackNotification Projects.ProjectId Text
   | ProcessSlackEvent (UUIDId "slack_event")
+  | RefreshSlackProgress (UUIDId "slack_progress")
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | GitSyncFromRepo Projects.ProjectId

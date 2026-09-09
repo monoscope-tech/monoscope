@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -807,9 +807,7 @@ processSlackEvent receiptId =
   )
     `catch` \SlackReplyPending -> retryAfter 60
   where
-    retryAfter seconds = do
-      HI.OneColumn retryAt <- Hasql.interpOne @(HI.OneColumn UTCTime) [HI.sql|SELECT clock_timestamp() + #{seconds} * interval '1 second'|] >>= maybe (throwIO $ ErrorCall "Slack retry clock returned no row") pure
-      defer retryAt
+    retryAfter seconds = slackRetryTime seconds >>= defer
     defer retryAt = do
       let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
       Hasql.transaction TxS.ReadCommitted TxS.Write do
@@ -825,10 +823,10 @@ processSlackEvent receiptId =
             True
             [HI.sql|WITH delayed AS (
             UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
-            WHERE payload = #{job} AND status = 'pending' AND run_at > clock_timestamp()
+            WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
             RETURNING id
           ) INSERT INTO background_jobs (run_at, status, payload)
-            SELECT #{retryAt}, 'pending', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+            SELECT #{retryAt}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
     runReceipt = do
       pending <-
         Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
@@ -856,23 +854,7 @@ processSlackEvent receiptId =
             AppMention message -> withThreadLock team_id message process
             AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (toStrict $ AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
             _ -> process
-    -- A transaction-scoped advisory lock stays on one checked-out connection.
-    -- Other DB operations use their usual pools; stop ingress never waits on it.
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
-    withInvestigationLock workspaceId channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, channel, thread] :: [Text]))
-
-    withEventLock lockKey action = do
-      connectionPool <- asks pool
-      withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
-        acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
-        unless (acquired == [PGS.Only True]) $ throwIO SlackWorkerBusy
-        run
-          $ race_
-            ( forever $ liftIO do
-                void (PGS.query_ conn "SELECT 1" :: IO [PGS.Only Int])
-                threadDelay 500_000
-            )
-            action
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
@@ -1018,6 +1000,78 @@ processSlackEvent receiptId =
           sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
 
 
+withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspace, channel, thread] :: [Text]))
+
+
+-- | Keep the transaction-scoped lock on one checked-out connection and interrupt
+-- its action if the connection is lost. Stop ingress never waits for this lock.
+withEventLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+withEventLock lockKey action = do
+  connectionPool <- asks pool
+  withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
+    acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
+    unless (acquired == [PGS.Only True]) $ throwIO SlackWorkerBusy
+    run
+      $ race_
+        ( forever $ liftIO do
+            void (PGS.query_ conn "SELECT 1" :: IO [PGS.Only Int])
+            threadDelay 500_000
+        )
+        action
+
+
+-- | A final refresh failure must be queued before its original receipt completes.
+scheduleProgressRefresh :: DB es => UUIDId "slack_progress" -> UTCTime -> Eff es ()
+scheduleProgressRefresh publicationId retryAt = do
+  let job = Aeson $ AE.toJSON $ BgJobs.RefreshSlackProgress publicationId
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    target <-
+      Tx.statement ()
+        $ HI.interp @[UUIDId "slack_progress"]
+          True
+          [HI.sql|SELECT publication_id FROM apis.slack_investigation_progress WHERE publication_id = #{publicationId} FOR UPDATE|]
+    unless (null target)
+      $ void
+      $ Tx.statement ()
+      $ HI.interp @HI.RowsAffected
+        True
+        [HI.sql|WITH delayed AS (
+          UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
+          WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
+          RETURNING id
+        ) INSERT INTO background_jobs (run_at, status, payload)
+          SELECT #{retryAt}, 'queued', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+
+
+slackRetryTime :: DB es => Int -> Eff es UTCTime
+slackRetryTime seconds = do
+  HI.OneColumn retryAt <- Hasql.interpOne @(HI.OneColumn UTCTime) [HI.sql|SELECT clock_timestamp() + #{seconds} * interval '1 second'|] >>= maybe (throwIO $ ErrorCall "Slack retry clock returned no row") pure
+  pure retryAt
+
+
+refreshSlackProgress :: UUIDId "slack_progress" -> ATBackgroundCtx ()
+refreshSlackProgress publicationId = do
+  let retryAfter seconds = slackRetryTime seconds >>= scheduleProgressRefresh publicationId
+  outcome <-
+    tryAny $ Investigations.loadProgressRefresh publicationId >>= traverse_ \(target, timestamp) -> case timestamp of
+      Nothing -> AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId >> retryAfter 60
+      Just ts ->
+        withInvestigationLock target.teamId target.channelId target.threadTs
+          $ RateLimit.withRateLimits target.teamId
+          $ refreshObservedProgress target ts
+  for_ (leftToMaybe outcome) $ \err ->
+    case fromException @RateLimit.SlackRateLimited err of
+      Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
+      Nothing | isJust (fromException @SlackWorkerBusy err) -> retryAfter 1
+      Nothing
+        | isJust (fromException @AI.AgentAccessDenied err) ->
+            Log.logAttention "Slack progress refresh stopped because requester access was revoked" $ AE.object ["publication_id" AE..= publicationId]
+      Nothing -> do
+        Log.logAttention "Slack progress refresh failed and remains queued" $ AE.object ["publication_id" AE..= publicationId]
+        retryAfter 60
+
+
 -- | Search one page per retry so a rate limit does not discard pagination progress.
 -- No match is never treated as proof that Slack rejected the original send.
 reconcileReplyHistory :: (DB es, HTTP :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
@@ -1096,10 +1150,12 @@ withInvestigationProgress slackData access action = case access of
               existing <- Investigations.loadProgress target
               AI.requireAgentAccess progressAccess slackData.projectId
               case existing of
-                Just publication -> for_ publication.timestamp $ \ts -> do
-                  result <- slackApi slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
-                  either (throwIO . ErrorCall . toString) pure result
-                  remembered
+                Just publication -> case publication.timestamp of
+                  Nothing -> unless allowCreate $ slackRetryTime 1 >>= scheduleProgressRefresh publication.publicationId
+                  Just ts -> do
+                    result <- slackApi slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
+                    either (throwIO . ErrorCall . toString) pure result
+                    remembered
                 Nothing ->
                   when allowCreate
                     $ Investigations.claimProgress target
@@ -1139,7 +1195,12 @@ withInvestigationProgress slackData access action = case access of
                       )
         publishSafely allowCreate = whenLeftM_ (tryAny $ publish allowCreate) $ \_ -> do
           Log.logAttention "Slack investigation progress update failed" $ AE.object ["channel_id" AE..= run.channelId, "thread_ts" AE..= run.threadTs]
-          when allowCreate $ liftIO $ threadDelay 28_000_000
+          if allowCreate
+            then liftIO $ threadDelay 28_000_000
+            else do
+              let target = Investigations.ProgressTarget slackData.projectId run.teamId run.channelId run.threadTs run.messageTs run.userId run.slackUserId
+              publication <- Investigations.loadProgress target
+              for_ publication $ \pending -> slackRetryTime 1 >>= scheduleProgressRefresh pending.publicationId
         updates = forever $ liftIO (threadDelay 2_000_000) >> publishSafely True
     race_ updates action `finally` publishSafely False
   _ -> action

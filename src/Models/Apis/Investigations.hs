@@ -36,6 +36,7 @@ module Models.Apis.Investigations (
   ProgressTarget (..),
   ProgressMessage (..),
   loadProgress,
+  loadProgressRefresh,
   claimProgress,
   confirmProgress,
   rejectProgress,
@@ -521,6 +522,14 @@ loadProgress target =
     [HI.sql|SELECT publication_id, progress_ts FROM apis.slack_investigation_progress
     WHERE project_id = #{target.projectId} AND team_id = #{target.teamId}
       AND channel_id = #{target.channelId} AND thread_ts = #{target.threadTs} AND message_ts = #{target.messageTs}|]
+
+
+loadProgressRefresh :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (ProgressTarget, Maybe Text))
+loadProgressRefresh publicationId =
+  fmap (\(Aeson target, timestamp) -> (target, timestamp))
+    <$> Hasql.interpOne
+      [HI.sql|SELECT to_jsonb(p), progress_ts FROM apis.slack_investigation_progress p
+      WHERE publication_id = #{publicationId} AND user_id IS NOT NULL AND slack_user_id IS NOT NULL|]
 
 
 claimProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
