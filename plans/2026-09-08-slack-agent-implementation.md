@@ -428,3 +428,35 @@ Slack backfill pagination, durable tool-message replay and run checkpoints,
 native session progress/cancellation, and the remaining evidence/draft/proactive
 plan gates remain incomplete. CI signoff must be refreshed before push. No push
 or deployment occurred.
+
+
+## Complete Slack backfill pagination (2026-09-09)
+
+Slack history now follows cursor pages to completion while keeping the triggering
+message's timestamp as the exclusive upper bound. Paging takes an explicit access
+identity and project and revalidates them before and after every HTTP request.
+Response and cursor metadata codecs are derived.
+
+API rejection, missing message arrays, repeated cursors, and an incomplete page
+without a cursor abort the backfill. The shared thread resolver now returns a
+retriable error before the model runs when backfill fails, instead of allowing a
+new answer to make the partial conversation look initialized. Seeding runs only
+after all pages succeed; seeding errors propagate. Failed workers retain their
+pending receipt for retry.
+
+The recorded-HTTP regression exercises two-page success, second-page API failure,
+repeated cursors, missing cursors, and revocation during the second fetch. Each
+failure makes two requests, persists no history, and makes no model call. A later
+replay of the same receipt succeeds, and its follow-up retains the expected roles
+and answers. The shared GET fixture replaces duplicated effect forwarding.
+
+Final validation:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`
+passed 26 examples, 0 failures after the final access-input change. Fourmolu and
+`git diff --check` passed. Three passes of each requested skill are recorded in
+the review report. The background-worker test uses its actual exception boundary;
+the base-handler test separately verifies the retriable HTTP 503 result.
+
+CI signoff must be refreshed before push. Durable tool-message replay, native
+Agent sessions/progress/cancellation, evidence tools, drafts, proactive policy,
+and controlled live acceptance remain incomplete. No push or deployment occurred.

@@ -802,7 +802,8 @@ processSlackEvent receiptId = do
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
-      let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+      let access = AI.SlackAccess workspaceId event.user principal.userId
+          addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           historyMessage message =
             (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
           resolveThread =
@@ -813,8 +814,8 @@ processSlackEvent receiptId = do
                 (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs)
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
-                (fmap (map historyMessage . filter ((/= event.ts) . (.ts)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs event.ts)
-      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId event.text resolveThread
+                (fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
+      runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread
 
 
 -- | Slack navigation context is untrusted input, not project authorization.
@@ -890,15 +891,39 @@ getSlackChannels token team_id = do
     Left err -> Nothing <$ Log.logAttention "Error decoding Slack channels response" (AE.object ["error" AE..= err, "body" AE..= decodeUtf8 @Text (toStrict resBody)])
 
 
-newtype SlackThreadedMessageResponse = SlackThreadedMessageResponse {messages :: [SlackThreadedMessage]}
+data SlackThreadedMessageResponse = SlackThreadedMessageResponse
+  { ok :: Bool
+  , messages :: Maybe [SlackThreadedMessage]
+  , has_more :: Maybe Bool
+  , response_metadata :: Maybe SlackResponseMetadata
+  }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Text -> Eff es (Maybe SlackThreadedMessageResponse)
-getChannelMessages token channelId ts latest = do
-  response <- getWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token & Wreq.params .~ [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false")]) "https://slack.com/api/conversations.replies"
-  let responseBdy = response ^. responseBody
-  case AE.eitherDecode responseBdy of
-    Right res -> pure $ Just res
-    Left err -> Nothing <$ Log.logAttention "Slack conversations.replies decode failed" (AE.object ["error" AE..= err, "channel" AE..= channelId, "ts" AE..= ts, "body" AE..= decodeUtf8 @Text (toStrict responseBdy)])
+newtype SlackResponseMetadata = SlackResponseMetadata {next_cursor :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+getChannelMessages :: (DB es, HTTP :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
+getChannelMessages access pid token channelId ts latest = page [] Nothing
+  where
+    requireAccess = AI.requireAgentAccess access pid
+    page seen cursor = do
+      requireAccess
+      let params = [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false"), ("limit", "200")] <> maybe [] (\value -> [("cursor", value)]) cursor
+      response <- getWith (defaults & authHeader "Bearer" token & Wreq.params .~ params) "https://slack.com/api/conversations.replies"
+      requireAccess
+      case AE.eitherDecode @SlackThreadedMessageResponse (response ^. responseBody) of
+        Right res
+          | res.ok
+          , Just messages <- res.messages ->
+              case res.response_metadata >>= (.next_cursor) >>= guarded (not . T.null . T.strip) of
+                Just next | next `notElem` seen -> fmap (messages <>) <$> page (next : seen) (Just next)
+                Just _ -> failed "Repeated history cursor"
+                Nothing | res.has_more == Just True -> failed "Incomplete history page without a cursor"
+                Nothing -> pure $ Just messages
+        Right _ -> failed "Slack rejected the history request"
+        Left err -> failed $ toText err
+    failed reason = Nothing <$ Log.logAttention "Slack thread backfill failed" (AE.object ["error" AE..= reason, "channel" AE..= channelId, "ts" AE..= ts])

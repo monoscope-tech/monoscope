@@ -219,3 +219,15 @@ Slack backfill decoding, and workflow regressions.
 This preserves user/assistant conversation context. Durable tool-message replay,
 run checkpoints, and pagination beyond Slack's first backfill page remain plan
 work; the bounded model window does not delete stored database messages.
+
+
+## Complete Slack backfill pagination
+
+Three passes applied all three requested skills to the paging loop, shared thread
+backfill behavior, derived response types, and worker regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive the response envelope and cursor metadata. Reuse the access guard and the existing transactional history seeder. | Follow every returned cursor while retaining the event-time boundary. Reject `ok=false`, missing message arrays, repeated cursors, and incomplete pages without cursors. | No client behavior added. |
+| 2 | Extract the existing GET-body test interposer for reuse in linked-worker and multi-page fixtures. | Stop on failed backfill before any model call or user-message insertion. Do not swallow seeding failures. All page failures retain an empty history for retry. | Multi-page, revocation, and retry checks stay in the database/worker Hspec flow. |
+| 3 | Re-read the changed functions and unchanged seeding/receipt consumers. No manual instance or warning suppression. | Require explicit `AgentAccess` and project inputs to paging; revalidate before and after each request. Tests cover second-page API failure, repeated/missing cursors, mid-fetch revocation, and a successful replay of the same receipt followed by another turn. | No styling or behavior-tier changes. |

@@ -16,7 +16,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
-import Effectful.Error.Static (Error)
+import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
@@ -37,7 +37,7 @@ import Pkg.Parser (parseQueryToAST)
 import Relude
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError)
+import Servant.Server (ServerError, err503)
 import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing)
@@ -564,8 +564,12 @@ withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta
   existingHistory <- Issues.selectChatHistory pid convId
   when (null existingHistory) do
-    result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (Issues.seedChatHistory pid convId)
-    whenLeft_ result \err -> Log.logAttention "Bot thread backfill failed" $ AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId, "error" AE..= show @Text err]
+    result <- tryAny backfill
+    case result of
+      Right (Just messages) -> Issues.seedChatHistory pid convId messages
+      _ -> do
+        Log.logAttention "Bot thread backfill failed" ctx
+        throwError err503
   pure convId
   where
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]

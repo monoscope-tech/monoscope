@@ -34,8 +34,10 @@ Threaded follow-ups retain user/assistant roles and complete model answers.
 Previous conversation text is not added to the system prompt. The model receives
 the latest 200 stored messages in chronological order. Slack backfill ends before
 the triggering event, using the documented [reply timestamp boundary](https://docs.slack.dev/reference/methods/conversations.replies/).
-Only messages attributed to this app become assistant history. Backfill pagination
-and durable tool-message replay remain incomplete.
+Only messages attributed to this app become assistant history. Backfill follows
+all returned cursors and rechecks access before and after each page. A failed or
+incomplete fetch stops the investigation before any model call and leaves the
+receipt pending for retry. Durable tool-message replay remains incomplete.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
