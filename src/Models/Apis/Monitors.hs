@@ -14,10 +14,10 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
+  MeasurementFailure (..),
   getAlertsByTeam,
   monitorRemoveTeam,
   getActiveQueryMonitors,
-  updateLastEvaluatedAt,
   queryMonitorByWidgetId,
   deleteMonitorsByWidgetIds,
   WidgetAlertStatus (..),
@@ -66,6 +66,10 @@ newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
 
 instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
 instance ToParamSchema QueryMonitorId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+
+
+data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFailed
+  deriving stock (Eq, Show)
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
@@ -302,10 +306,6 @@ getActiveQueryMonitors =
             )
         |]
     )
-
-
-updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
-updateLastEvaluatedAt qmId time = Hasql.interpExecute [HI.sql|UPDATE monitors.query_monitors SET last_evaluated=#{time} where id=#{qmId}|]
 
 
 queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)

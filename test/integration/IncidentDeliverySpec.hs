@@ -1,6 +1,6 @@
 module IncidentDeliverySpec (spec) where
 
-import BackgroundJobs (evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
+import BackgroundJobs (checkTriggeredQueryMonitors, evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
@@ -265,6 +265,56 @@ spec = around withTestResources do
       deliveryCount `shouldReturn` beforeLegacy
       Just legacyResolved <- runTestBgNoReset tr $ Errors.getErrorPatternById legacyErr.id
       (legacyResolved.state, legacyResolved.resolvedBy) `shouldBe` (Errors.ESResolved, Just actor.id)
+
+    it "marks missing monitor data in existing threads and waits for a measured recovery" \tr -> do
+      update <- setup tr
+      I.MonitorIncident mid <- pure update.source
+      setupSlackData tr testPid "T1"
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+        void $ PGS.execute conn [sql|UPDATE monitors.query_monitors SET alert_threshold = 60, log_query = 'name == "missing-monitor-reading" | summarize max(duration)', check_interval_mins = 1 WHERE id = ?|] (PGS.Only mid)
+      let messages ns = [sd | Notify.SlackNotification sd <- ns]
+          check = fst <$> captureNotifs tr (checkTriggeredQueryMonitors >> replicateM_ 2 runSlackIncidentDeliveries)
+      runTestBgNoReset tr (I.recordIncidentEvent update{I.change = I.IncidentDataUnavailable}) `shouldReturn` I.NoOpenEpisode
+      initial <- messages <$> evaluateMonitor tr mid 84
+      length initial `shouldBe` 2
+      advanceMinutes tr 2
+      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_data_gap CHECK (false) NOT VALID|]
+      check `shouldReturn` []
+      Just uncommitted <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
+      uncommitted.lastEvaluated `shouldBe` Just frozenTime
+      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_data_gap|]
+      missing <- messages <$> check
+      length missing `shouldBe` 4
+      length [sd | sd <- missing, isJust sd.threadTs] `shouldBe` 2
+      for_ missing \sd -> do
+        let payload = decodeUtf8 $ toStrict $ AE.encode sd.payload
+        payload `shouldSatisfy` T.isInfixOf "DATA UNAVAILABLE"
+        payload `shouldSatisfy` T.isInfixOf "Recovery is unconfirmed"
+      Just current <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
+      (current.currentStatus, current.currentValue, current.notificationCount) `shouldBe` (Monitors.MSAlerting, 84, 2)
+      advanceMinutes tr 1
+      repeated <- messages <$> check
+      length [sd | sd <- repeated, isJust sd.threadTs] `shouldBe` 0
+      advanceMinutes tr 1
+      void $ evaluateMonitor tr mid 84
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE monitors.query_monitors SET log_query = 'SELECT * FROM missing_monitor_table' WHERE id = ?|] (PGS.Only mid)
+      advanceMinutes tr 1
+      failed <- messages <$> check
+      length failed `shouldBe` 4
+      for_ failed \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "The evaluation failed" . decodeUtf8 . toStrict)
+      advanceMinutes tr 1
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE monitors.query_monitors SET stop_after_count = 3 WHERE id = ?|] (PGS.Only mid)
+      void $ evaluateMonitor tr mid 84
+      advanceMinutes tr 1
+      limited <- messages <$> check
+      length [sd | sd <- limited, isJust sd.threadTs] `shouldBe` 0
+      advanceMinutes tr 1
+      recovered <- messages <$> evaluateMonitor tr mid 18
+      length recovered `shouldBe` 4
+      for_ recovered \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RECOVERED" . decodeUtf8 . toStrict)
+      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'monitor' AND e.source_id = ?|] (PGS.Only mid)
+      (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
 
     it "keeps warning, escalation, and recovery in two monitor threads and preserves the onset snapshot" \tr -> do
       update <- setup tr

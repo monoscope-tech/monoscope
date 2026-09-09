@@ -1,4 +1,4 @@
-module Pkg.Mail (errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -326,6 +326,24 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
       ]
     actions = tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") issueUrl, slackButton "Open monitor" Nothing monitorUrl]
     message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+-- | A missing evaluation preserves the last verified reading, never a synthetic zero.
+monitorDataUnavailableMessage :: Monitors.QueryMonitor -> Monitors.MeasurementFailure -> UTCTime -> Maybe (UTCTime, Double) -> Text -> Text -> Incidents.SlackPayload
+monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl =
+  Incidents.SlackPayload
+    $ KEM.fromList
+      [ "text" AE..= text
+      , "blocks" AE..= ([slackSection text, tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]] :: [AE.Value])
+      ]
+  where
+    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+    explanation = case reason of
+      Monitors.NoMeasurements -> "No measurements in the evaluation window."
+      Monitors.NonFiniteMeasurements -> "The evaluation returned a non-finite measurement."
+      Monitors.EvaluationFailed -> "The evaluation failed."
+    previous = maybe "No retained reading is available." (\(time, value) -> "Last verified value: " <> show value <> " · Observed " <> at time) reading
+    text = "DATA UNAVAILABLE · " <> slackEscape (T.take 160 monitor.alertConfig.title) <> "\n" <> explanation <> " Recovery is unconfirmed.\n" <> previous <> "\nChecked " <> at now
 
 
 -- | Error episodes retain the onset/chart while reminders carry current evidence.

@@ -374,3 +374,18 @@ notification selection/claiming, channel fan-out, Slack blocks, and the regressi
 The review covers the runtime-error producer increment, not completion of all
 five releases. Chart rendering/acceptance, automatic lifecycle transitions,
 investigation tools, and live Slack validation remain outstanding.
+
+## Missing monitor measurements in Slack incidents
+
+Three passes applied all three requested skills to the evaluation failure path,
+incident event, message builder, schema constraint, and lifecycle regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse the episode recorder, delivery worker, retained snapshot, and Slack block builders. Keep measurement failure as a small sum with stock instances. | Represent missing/non-finite/failed evaluations separately from monitor severity; never write zero or recovery. Commit the evaluation-attempt timestamp with delivery intent. | Native Slack blocks and real incident/monitor links need no client behavior. The integration scenario belongs in Hspec. |
+| 2 | Reuse stored monitor readings for the last verified sample instead of a second history store. | Require an active episode for a data-unavailable event, including races with closure. Deduplicate explanations while allowing root refresh; respect mute/stop-after controls. Preserve current value, severity, and original episode. An outbox failure rolls back the attempt timestamp. | Keep the original onset/chart on the root; the thread explanation describes missing evidence and unconfirmed recovery. No fake investigation button, new JS, or hoisted styling. |
+| 3 | Remove the now-unused standalone last-evaluated updater and its obsolete caller comment. Re-read every new binding and call site; no manual instances or dependency added. | Isolate failure-recording errors so other monitors still run. Check stale-attempt CAS, current project activity, repeat gaps, resumed readings, evaluation failure, and measured recovery. Count each new gap explanation against the stop-after budget in the same transaction; the regression first reproduced the missing count increment. The schema explicitly admits data_unavailable without a resolution actor. | No pure one-expression Spec tests added. The multi-step test asserts two destinations, rollback, no episode creation from missing evidence, repeated-gap suppression, and recovery in the original threads. |
+
+Runtime-error auto-resolution from quiet counters remains a separate gap. This
+change handles monitor evaluation availability and does not claim that silence
+proves an error recovered.

@@ -4764,13 +4764,13 @@ checkTriggeredQueryMonitors = do
     let due = maybe True (\t -> startWall `diffUTCTime` t >= fromIntegral monitor.checkIntervalMins * 60) monitor.lastEvaluated
     when due $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
-      -- Catch ANY synchronous exception: updateLastEvaluatedAt MUST run on failure
-      -- to prevent an infinite re-evaluation loop hammering a failing backend.
+      -- Record failed attempts with their incident update so retry cadence does
+      -- not consume a notification whose outbox write failed.
       tryAny (evaluateQueryMonitor monitor startWall) >>= \case
         Right _ -> pass
         Left err -> do
           Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
-          void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+          tryStep "monitor-data-unavailable" $ recordMonitorDataGap monitor startWall Monitors.EvaluationFailed
   tryStep "slack-incident-delivery" runSlackIncidentDeliveries
 
 
@@ -4814,6 +4814,79 @@ runSlackIncidentDeliveries = do
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
 
 
+-- | An unavailable evaluation changes evidence availability, not the alert state.
+recordMonitorDataGap :: Monitors.QueryMonitor -> UTCTime -> Monitors.MeasurementFailure -> ATBackgroundCtx ()
+recordMonitorDataGap monitor at reason = do
+  ctx <- ask @Config.AuthContext
+  let source = Incidents.MonitorIncident monitor.id
+      baseUrl = projectUrl ctx monitor.projectId
+      monitorUrl = baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview"
+      suppressed = ctx.config.pauseNotifications || maybe False (> at) monitor.mutedUntil || maybe False (monitor.notificationCount >=) monitor.stopAfterCount
+  committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    HI.RowsAffected changed <-
+      Tx.statement ()
+        $ HI.interp
+          True
+          [HI.sql|UPDATE monitors.query_monitors m SET last_evaluated = #{at}
+        WHERE m.id = #{monitor.id} AND m.project_id = #{monitor.projectId}
+          AND m.last_evaluated IS NOT DISTINCT FROM #{monitor.lastEvaluated}
+          AND (m.last_evaluated IS NULL OR m.last_evaluated < #{at})
+          AND m.current_status = #{monitor.currentStatus}::text
+          AND m.muted_until IS NOT DISTINCT FROM #{monitor.mutedUntil}
+          AND m.notification_count = #{monitor.notificationCount}
+          AND m.deleted_at IS NULL AND m.deactivated_at IS NULL
+          AND EXISTS (SELECT 1 FROM projects.projects p WHERE p.id = m.project_id AND p.active AND p.deleted_at IS NULL)|]
+    previous <- if changed == 1 then Incidents.latestEpisodeTx monitor.projectId source else pure Nothing
+    case mfilter ((== Incidents.EpisodeActive) . (.phase)) previous of
+      Nothing -> pure $ Right ()
+      Just episode -> do
+        readings :: [(UTCTime, Double)] <-
+          Tx.statement ()
+            $ HI.interp
+              True
+              [HI.sql|SELECT evaluated_at, value FROM monitors.evaluations WHERE monitor_id = #{monitor.id} AND evaluated_at <= #{at} ORDER BY evaluated_at DESC LIMIT 1|]
+        firstGap <-
+          HI.getOneRow @Bool
+            <$> Tx.statement
+              ()
+              ( HI.interp
+                  True
+                  [HI.sql|SELECT NOT EXISTS (SELECT 1 FROM apis.incident_events WHERE episode_id = #{episode.id} AND observed_at = #{episode.lastEventAt} AND event_kind = 'data_unavailable')|]
+              )
+        let publish = firstGap && not suppressed
+            incidentUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) episode.issueId
+            payload = Mail.monitorDataUnavailableMessage monitor reason at (listToMaybe readings) incidentUrl monitorUrl
+        result <-
+          Incidents.recordIncidentEventTx
+            Incidents.IncidentUpdate
+              { projectId = monitor.projectId
+              , source
+              , observedAt = at
+              , change = Incidents.IncidentDataUnavailable
+              , delivery = if publish then Incidents.PublishIncident else Incidents.RefreshIncident
+              , issueId = episode.issueId
+              , rootPayload = payload
+              , replyPayload = payload
+              , destinations = []
+              }
+        case result of
+          Incidents.Recorded{} -> do
+            when publish
+              $ void
+              $ Tx.statement ()
+              $ HI.interp @HI.RowsAffected
+                True
+                [HI.sql|UPDATE monitors.query_monitors SET notification_count = notification_count + 1 WHERE id = #{monitor.id}|]
+            pure $ Right ()
+          Incidents.AlreadyRecorded{} -> pure $ Right ()
+          Incidents.OlderThanCurrentEpisode -> Tx.condemn $> Left result
+          Incidents.NoOpenEpisode -> pure $ Right ()
+          Incidents.UnknownIncidentSource -> Tx.condemn $> Left result
+          Incidents.InactiveIncidentSource -> Tx.condemn $> Left result
+          Incidents.IncidentIssueMismatch -> Tx.condemn $> Left result
+  either (throwIO . IncidentCommitError) pure committed
+
+
 evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
 evaluateQueryMonitor monitor startWall = do
   ctx <- ask @Config.AuthContext
@@ -4839,11 +4912,11 @@ evaluateQueryMonitor monitor startWall = do
   case catMaybes (results :: [Maybe Double]) of
     [] -> do
       Log.logInfo "Monitor query returned no rows in lookback window; skipping evaluation" (monitor.id, title, lookbackMins)
-      void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+      recordMonitorDataGap monitor startWall Monitors.NoMeasurements
     values@(v : vs)
       | any (\value -> isNaN value || isInfinite value) values -> do
           Log.logWarn "Monitor query returned a non-finite measurement; skipping evaluation" (monitor.id, title)
-          void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+          recordMonitorDataGap monitor startWall Monitors.NonFiniteMeasurements
       | otherwise -> evaluateWithResults monitor startWall title (foldr max v vs) durationNs
 
 

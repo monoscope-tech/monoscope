@@ -66,7 +66,7 @@ data IncidentSource = MonitorIncident Monitors.QueryMonitorId | IssueIncident Is
   deriving (HI.DecodeValue) via Aeson IncidentSource
 
 
-data IncidentChange = IncidentAlert | IncidentObservation | IncidentReminder | IncidentRecovered | IncidentResolved Projects.UserId
+data IncidentChange = IncidentAlert | IncidentObservation | IncidentReminder | IncidentDataUnavailable | IncidentRecovered | IncidentResolved Projects.UserId
   deriving stock (Eq, Show)
 
 
@@ -149,6 +149,7 @@ changeFields :: IncidentChange -> (Text, EpisodePhase, Maybe Projects.UserId)
 changeFields IncidentAlert = ("alert", EpisodeActive, Nothing)
 changeFields IncidentObservation = ("observation", EpisodeActive, Nothing)
 changeFields IncidentReminder = ("reminder", EpisodeActive, Nothing)
+changeFields IncidentDataUnavailable = ("data_unavailable", EpisodeActive, Nothing)
 changeFields IncidentRecovered = ("recovered", EpisodeRecovered, Nothing)
 changeFields (IncidentResolved actor) = ("resolved", EpisodeResolved, Just actor)
 
@@ -304,7 +305,7 @@ recordIncidentEventTx update = do
               latest <- latestEpisodeTx pid update.source
               case latest of
                 Just episode | at < episode.lastEventAt -> pure OlderThanCurrentEpisode
-                _ | nextPhase /= EpisodeActive && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
+                _ | (nextPhase /= EpisodeActive || update.change == IncidentDataUnavailable) && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
                 _ -> do
                   episode <- case latest of
                     Just existing | existing.phase == EpisodeActive -> pure existing

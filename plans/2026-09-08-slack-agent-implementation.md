@@ -895,3 +895,40 @@ validation, evidence tools, action drafts, and proactive policies remain incompl
 
 The final CI status reused the existing CLI attestation. It still requires
 frontend, integration-tests, weeder, hlint, ui-tests, and e2e on GitHub.
+
+## Monitor evaluation availability (September 9)
+
+Missing, non-finite, and failed monitor evaluations now record an explicit
+`data_unavailable` incident event. Existing Slack roots show DATA UNAVAILABLE,
+the last retained verified reading and its observation time, and unconfirmed
+recovery. Their original onset/chart remains intact. This event cannot open an
+episode, overwrite the monitor value/severity, or establish recovery. A real
+reading resumes the normal state machine in the same threads.
+
+The evaluation-attempt timestamp and Slack delivery intent commit together.
+Forced outbox failure leaves the timestamp available for retry. Repeated missing
+checks refresh roots without repeated explanations. Mute and stop-after controls
+apply; failure recording is isolated so one monitor does not stop its siblings.
+The old standalone timestamp updater was deleted. Migration 0167 and Hpack's
+extra-source-files entry admit the new event kind. New types use stock instances;
+no manual codecs or warning suppression were added.
+
+The regression first failed against the old producer because last_evaluated
+advanced despite the forced outbox failure. An initial implementation passed
+15 Incident examples and 26 Monitoring examples, including scheduling, hysteresis,
+reminders, mute/stop-after, query failures, and real-user-monitoring fixtures.
+A final regression also checks that gap explanations consume the notification
+budget and that recovery still publishes after the limit. It first failed with a
+count of 1 instead of 2; after the transactional increment, the final Incident
+run passed all 15 examples with zero failures.
+Logs are `/tmp/monoscope-slack-agent/data-gap-incident-tests.log`,
+`data-gap-monitor-tests.log`, and `data-gap-final-incident-tests.log`.
+
+Scoped Fourmolu, Hpack, and whitespace checks passed. HLint remains unavailable
+because installed 3.3.6 rejects MultilineStrings. Weeder exited 228 with 141
+repository findings and no new availability-path finding. All three requested
+skills ran three times; the review log records fixes. The preceding CI signoff
+covers commit 182607f34, not this new migration and code. Current-tree CI, full
+TimeFusion integration, live Slack acceptance, and the rest of the five-release
+plan remain outstanding. Error auto-resolution based only on quiet counters is
+still a separate lifecycle gap. No push or deployment occurred.
