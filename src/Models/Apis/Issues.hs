@@ -988,18 +988,19 @@ insertChatMessage pid convId chatRole chatContent widgetsM metadataM =
 
 insertChatMessageSql :: Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
 insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
-  [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
-            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}) |]
+  [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata, created_at)
+            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}, clock_timestamp()) |]
 
 
--- | Select chat history for a conversation (oldest first)
+-- | Select the latest 200 messages, returned oldest first for the model.
 selectChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es [AIChatMessage]
 selectChatHistory pid convId =
-  Hasql.interp
-    [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+  reverse
+    <$> Hasql.interp
+      [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
             FROM apis.ai_chat_messages
             WHERE project_id = #{pid} AND conversation_id = #{convId}
-            ORDER BY created_at ASC
+            ORDER BY created_at DESC, id DESC
             LIMIT 200 |]
 
 

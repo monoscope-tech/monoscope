@@ -30,6 +30,13 @@ path or chart URL. A changed widget requires a new selection. Modals opened befo
 this metadata upgrade must be reopened with `/dashboard`. Native Agent lifecycle
 and the remaining acceptance gates still apply before rollout.
 
+Threaded follow-ups retain user/assistant roles and complete model answers.
+Previous conversation text is not added to the system prompt. The model receives
+the latest 200 stored messages in chronological order. Slack backfill ends before
+the triggering event, using the documented [reply timestamp boundary](https://docs.slack.dev/reference/methods/conversations.replies/).
+Only messages attributed to this app become assistant history. Backfill pagination
+and durable tool-message replay remain incomplete.
+
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
 Events, slash commands, actions, and external-option requests verify the original body

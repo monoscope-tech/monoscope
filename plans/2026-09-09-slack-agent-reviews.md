@@ -203,3 +203,19 @@ workflow regression.
 | 1 | Derive `SlackDashboardContext` codecs and reuse the principal resolver, access guard, and signed widget URL generator. | Remove the packed channel/project/template/URL tuple. Bind the modal to its requesting user and project; recheck access on every action and before output. | Slack's existing selection events handle interaction; no client script added. |
 | 2 | Move the existing template catalog and schema loader into `Models.Projects.DashboardTemplates` for reuse without a page-module cycle. Remove the unused option text field and duplicate obsolete picker. | Load dashboard IDs only inside the authorized project. Accept widget definitions only from the saved schema or known templates. Regenerate chart URLs at preview and submission. | Keep one widget selector after dashboard selection and a stable block/action ID for updates. |
 | 3 | Re-read all changed functions and their unchanged dashboard/URL consumers. JSON instances remain derived; no new suppression. | Widget options identify exact definitions, so changed widgets invalidate stale selections. Tests reject old packed metadata, a different owner, foreign dashboard IDs, and revoked users without HTTP output; valid preview/share paths emit recorded requests. | The multi-step database and handler flow stays in Hspec. No behavior-tier or styling indirection introduced. |
+
+
+## Role-preserving conversation history
+
+Three passes applied all three skills to bot query dispatch, persisted history,
+Slack backfill decoding, and workflow regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse `runAgenticChatWithHistory`; replace the redundant `BotThread` wrapper with the existing typed conversation ID. Remove the string-formatting helper and duplicate user insertion. | Send historical messages with their original roles, never appended to the system prompt. Save the complete raw assistant answer, including explanation-only replies. | No client-side behavior added; the worker/model/database flow belongs in Hspec. |
+| 2 | Keep Slack wire decoding derived. Reuse `ChatRole` and existing app identity configuration. | Only this Slack app's messages become assistant history. Bound backfill before the triggering message and filter its exact timestamp. Select the latest 200 DB messages, then restore chronological order; timestamp individual inserts rather than assigning an entire seed transaction one timestamp. | Keep the multi-turn and long-history assertions in their existing workflow suite. |
+| 3 | Re-read changed functions and the unchanged history-aware AI loop and other bot callers. No manual instance or warning suppression. | Record two worker turns and inspect exact model roles/content, full saved answers, one current question, and absence of historical injection text from the system prompt. Verify retention of the newest 200 messages and project isolation. | No styling or behavior-tier changes. |
+
+This preserves user/assistant conversation context. Durable tool-message replay,
+run checkpoints, and pagination beyond Slack's first backfill page remain plan
+work; the bounded model window does not delete stored database messages.

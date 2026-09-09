@@ -391,3 +391,40 @@ controlled live acceptance remain open. No push or deployment occurred.
 The shared-loader regression command
 `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Dashboards make live-test-dev`
 also passed: 21 examples, 0 failures.
+
+
+## Role-preserving conversation history (2026-09-09)
+
+Bot conversations now reuse the existing history-aware AI entry point. Historical
+user/assistant messages stay in their original roles instead of being appended
+to the system prompt. The redundant `BotThread` text wrapper and duplicate user
+insertion were removed. Complete model answers are stored, including answers that
+have an explanation but no query.
+
+Slack backfill requests only messages before the current event and filters that
+event's exact timestamp. Messages from the configured Slack app receive the
+assistant role; other messages remain user evidence. Timestamp and app identity
+fields use derived wire decoding. The timestamp boundary follows
+[Slack's reply API](https://docs.slack.dev/reference/methods/conversations.replies/).
+
+The database history window now selects the latest 200 messages and returns them
+in chronological order. New inserts use `clock_timestamp()` so a backfill batch
+does not assign every message the transaction's start timestamp. Stored messages
+outside the model window are retained.
+
+Three passes of each requested skill are recorded in the review report.
+Fourmolu and `git diff --check` passed. Final native checks passed:
+
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`: 26 examples, 0 failures.
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Agentic make live-test-dev`: 12 examples, 0 failures.
+
+The regression records two signed-event worker turns, inspects the model's exact
+message roles/content, checks complete persisted answers, and verifies that the
+current question appears once. It also checks that historical injection text does
+not enter the system message, retains the newest 200 rows, and isolates projects.
+The HTTP and model providers are fixtures, not live acceptance evidence.
+
+Slack backfill pagination, durable tool-message replay and run checkpoints,
+native session progress/cancellation, and the remaining evidence/draft/proactive
+plan gates remain incomplete. CI signoff must be refreshed before push. No push
+or deployment occurred.

@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, BotThread (..), runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, elemsBlock, linkButton, imageBlock, slackResponse, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -20,7 +20,6 @@ import Effectful.Error.Static (Error)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
-import Langchain.LLM.Core qualified as LLM
 import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
@@ -292,27 +291,20 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery useTf access pid userQuery threadCtx model apiKey = do
+processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery useTf access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx, AI.useTimefusion = useTf, AI.access = access}
-  result <- AI.runAgenticQuery config userQuery model apiKey
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.conversationId = conversationId, AI.useTimefusion = useTf, AI.access = access}
+  rawResult <- AI.runAgenticChatWithHistory config userQuery model apiKey
+  whenRight_ rawResult \answer -> whenJust conversationId \convId -> do
+    AI.requireAgentAccess access pid
+    Issues.insertChatMessage pid convId Issues.ChatAssistant answer.response Nothing Nothing
+  let result = rawResult >>= AI.parseLLMResponse . (.response)
   whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
   pure result
-
-
-formatHistoryAsContext :: Text -> [LLM.Message] -> Text
-formatHistoryAsContext platform msgs =
-  unlines
-    [ "\n\nTHREADS:"
-    , "- this query is part of a " <> platform <> " conversation thread. Use previous messages for additional context if needed."
-    , "- the user query is the main one to answer, but earlier messages may contain important clarifications or parameters."
-    , "\nPrevious thread messages:\n"
-    , T.intercalate "\n" ["[" <> show (LLM.role m) <> "] " <> LLM.content m | m <- msgs]
-    ]
 
 
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()
@@ -485,14 +477,6 @@ botReplyPayload = \case
   ReplyChart v -> v
 
 
--- | A bot conversation thread: where replies are persisted, plus the formatted
--- history handed to the model.
-data BotThread = BotThread
-  { convId :: UUIDId "conversation"
-  , context :: Text
-  }
-
-
 -- | The shared bot ask pipeline: intent detection → report or agentic query →
 -- per-platform rendering → outbound send. The only platform-specific inputs are
 -- the 'BotType' (which selects every renderer) and @send@ (the transport, which
@@ -506,7 +490,7 @@ runBotQuery
   -> AI.AgentAccess
   -> Projects.ProjectId
   -> Text
-  -> Eff es (Maybe BotThread)
+  -> Eff es (Maybe (UUIDId "conversation"))
   -- ^ resolves the conversation thread; run only for agentic queries, so a
   -- report request never pays for a thread backfill
   -> Eff es ()
@@ -519,11 +503,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
         . either (formatTextResponse target) (\(report, eventsUrl, errorsUrl) -> formatReport target report pid envCfg eventsUrl errorsUrl)
     GeneralQueryIntent -> do
       threadM <- resolveThread
-      result <- processAIQuery envCfg.enableTimefusionReads access pid userQuery ((.context) <$> threadM) envCfg.openaiModel envCfg.openaiApiKey
-      AI.requireAgentAccess access pid
-      whenJust threadM \t -> do
-        Issues.insertChatMessage pid t.convId Issues.ChatUser userQuery Nothing Nothing
-        whenRight_ result \resp -> whenJust resp.query \q -> Issues.insertChatMessage pid t.convId Issues.ChatAssistant q Nothing Nothing
+      result <- processAIQuery envCfg.enableTimefusionReads access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
       case result of
         Left _ -> send $ ReplyText $ formatBotError target ServiceError
         Right resp -> dispatchAIResponse resp
@@ -568,7 +548,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
 
 
 -- | Resolve a bot thread's conversation, backfilling it from the platform's own
--- thread API on first contact, and return the history formatted for the model.
+-- thread API on first contact, and return its ID for role-preserving model history.
 -- @backfill@ is the only platform-specific part: it fetches the platform's
 -- messages and classifies their roles (@Nothing@ = fetch failed).
 withBotThread
@@ -579,14 +559,14 @@ withBotThread
   -> Issues.ConversationType
   -> AE.Value
   -> Eff es (Maybe [(Issues.ChatRole, Text)])
-  -> Eff es BotThread
+  -> Eff es (UUIDId "conversation")
 withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta
   existingHistory <- Issues.selectChatHistory pid convId
   when (null existingHistory) do
     result <- tryAny $ backfill >>= maybe (Log.logAttention "Bot thread backfill fetch failed" ctx) (Issues.seedChatHistory pid convId)
     whenLeft_ result \err -> Log.logAttention "Bot thread backfill failed" $ AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId, "error" AE..= show @Text err]
-  BotThread convId . formatHistoryAsContext (show target) . map AI.dbMessageToLLMMessage <$> Issues.selectChatHistory pid convId
+  pure convId
   where
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]
 

@@ -803,6 +803,8 @@ processSlackEvent receiptId = do
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
       let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+          historyMessage message =
+            (if not (T.null envCfg.slackAppId) && message.app_id == Just envCfg.slackAppId then Issues.ChatAssistant else Issues.ChatUser, message.text)
           resolveThread =
             Just
               <$> withBotThread
@@ -811,7 +813,7 @@ processSlackEvent receiptId = do
                 (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs)
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
-                (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)
+                (fmap (map historyMessage . filter ((/= event.ts) . (.ts)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs event.ts)
       runBotQuery Slack (sendSlackChatMessage slackData.botToken . addThread . botReplyPayload) envCfg (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId event.text resolveThread
 
 
@@ -833,7 +835,11 @@ saveAssistantContext workspaceId event = do
   when (isNothing accepted) $ throwIO $ ErrorCall "Slack assistant thread owner changed"
 
 
-newtype SlackThreadedMessage = SlackThreadedMessage {text :: Text}
+data SlackThreadedMessage = SlackThreadedMessage
+  { text :: Text
+  , ts :: Text
+  , app_id :: Maybe Text
+  }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
@@ -889,9 +895,9 @@ newtype SlackThreadedMessageResponse = SlackThreadedMessageResponse {messages ::
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Eff es (Maybe SlackThreadedMessageResponse)
-getChannelMessages token channelId ts = do
-  response <- getWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token & Wreq.params .~ [("channel", channelId), ("ts", ts)]) "https://slack.com/api/conversations.replies"
+getChannelMessages :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Text -> Eff es (Maybe SlackThreadedMessageResponse)
+getChannelMessages token channelId ts latest = do
+  response <- getWith (defaults & contentTypeHeader "application/json" & authHeader "Bearer" token & Wreq.params .~ [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false")]) "https://slack.com/api/conversations.replies"
   let responseBdy = response ^. responseBody
   case AE.eitherDecode responseBdy of
     Right res -> pure $ Just res
