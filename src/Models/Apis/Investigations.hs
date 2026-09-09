@@ -20,6 +20,9 @@ module Models.Apis.Investigations (
   confirmReplyPublication,
   rejectReplyPublication,
   captureReplyPublication,
+  ReplySearch (..),
+  loadReplySearch,
+  saveReplySearchCursor,
   Event (..),
   Followup (..),
   pendingFollowups,
@@ -354,6 +357,33 @@ captureReplyPublication appId receiptId = do
       AND se.payload #>> '{event,metadata,event_type}' = 'monoscope_investigation_reply'
       AND (se.payload #>> '{event,ts}') ~ '^[0-9]+\.[0-9]+$'|]
   for_ observed $ \(publication, timestamp) -> void $ confirmReplyPublication publication timestamp
+
+
+data ReplySearch = ReplySearch
+  { publicationId :: UUIDId "slack_reply"
+  , teamId :: Text
+  , channelId :: Text
+  , threadTs :: Text
+  , cursor :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+loadReplySearch :: DB es => Turn -> Int -> Eff es (Maybe ReplySearch)
+loadReplySearch turn part =
+  Hasql.interpOne
+    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, history_cursor
+    FROM apis.slack_reply_publications WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND part = #{part} AND slack_ts IS NULL|]
+
+
+saveReplySearchCursor :: DB es => ReplySearch -> Maybe Text -> Eff es ()
+saveReplySearchCursor search next =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.slack_reply_publications SET history_cursor = #{next}
+    WHERE publication_id = #{search.publicationId} AND slack_ts IS NULL
+      AND history_cursor IS NOT DISTINCT FROM #{search.cursor}|]
 
 
 -- | Exact model context and progress for one round. The API key is supplied by

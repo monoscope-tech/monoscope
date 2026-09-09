@@ -1726,3 +1726,49 @@ Absent observations remain unresolved; elapsed time is not proof a message was
 rejected. History-based reconciliation and live Slack metadata delivery still need
 implementation/acceptance. This does not claim complete delivery liveness or
 exactly-once Slack delivery. The rest of the five-release objective remains active.
+
+
+### Recover reply publications from thread history
+
+When an existing reply reservation remains unacknowledged, the native worker now
+queries conversations.replies with include_all_metadata=true. It uses the stored
+channel/thread and the original question timestamp as the oldest bound. One page
+of up to fifteen messages is read per attempt; migration 0176 persists the cursor
+so rate limits and worker retries do not restart every search at the first page.
+An explicit invalid_cursor response resets the search without releasing the send.
+Contract: https://docs.slack.dev/reference/methods/conversations.replies/.
+
+Matching requires the configured app (including bot-profile fallback), a nonempty
+bot ID, the correct thread, exact reply-publication metadata and a valid Slack
+timestamp. The worker validates current access before and after the request and
+checks the saved workspace/canonical conversation. Matching evidence uses the
+existing atomic publication confirmation and delivery-position advancement.
+Incomplete pages, malformed responses, repeated cursors and conflicting matches
+remain pending. A completed search with no match restarts on a later attempt;
+absence never authorizes a new post. Cursor writes cannot overwrite a concurrent
+confirmation. The existing thread envelope now has a derived message-type parameter.
+
+The regression loses an acknowledgement, then recovers solely through history.
+It checks request scope/metadata parameters, an incomplete page, persisted and
+expired cursors, wrong app/thread messages, and a membership revocation while the
+matching page is in flight. Confirmation waits until access is restored. Delivery
+finishes with one post and one model call; processed replay makes no requests.
+
+Native command: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev`. The own watcher was restarted for the
+registered migration. Final result: 45 examples, zero failures, 56.1265 seconds,
+209 modules. Evidence: /tmp/monoscope-slack-agent/slack-reply-history-workflows-complete.log.
+Three passes of each requested skill are recorded. Fourmolu and whitespace checks
+pass. HLint exits 1 on unsupported MultilineStrings; Weeder exits 228 with
+repository findings. Logs: slack-reply-history-hlint.log and
+slack-reply-history-weeder.log under /tmp/monoscope-slack-agent/.
+
+Previous commit 2c9725209 passed `make ci-signoff CHECKS="build doctests unit-tests"`,
+including 1,554 doctest examples and 308 unit examples. Passing results were
+attested; integration-tests, weeder, hlint and e2e remain outstanding.
+Log: /tmp/monoscope-slack-agent/slack-reply-publication-ci-signoff.log.
+CI for this history increment is pending. No deployment or branch push.
+
+This recovery applies to answer parts. Progress and incident-root history recovery,
+live Slack acceptance, unresolved sends with no observable evidence, diagnosis
+quality evaluation, tested action drafts and proactive policies remain unfinished.

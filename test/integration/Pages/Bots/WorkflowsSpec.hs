@@ -967,6 +967,74 @@ spec = around withTestResources do
           (replayed, _) <- work receipt
           replayed `shouldBe` []
 
+      it "recovers a reply from paginated thread metadata without a message event" \tr -> do
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_HISTORY_REPLY"}}}
+            turn = Investigations.Turn testPid (Issues.slackScopedConversationId testPid "T_HISTORY_REPLY" "C_HISTORY_REPLY" "1735689600.000001") (getResponse tr.trSessAndHeader).user.id "1735689602.000001"
+        setupLinkedSlackData resources testPid "T_HISTORY_REPLY"
+        pages <- newIORef ([] :: [(Maybe Text, AE.Value)])
+        revokeOnNext <- newIORef True
+        modelCalls <- newIORef (0 :: Int)
+        posts <- newIORef (0 :: Int)
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                modifyIORef' modelCalls (+ 1)
+                pure $ Right $ Chat.Message Chat.Assistant "Recorded evidence." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            transport = withHTTPResponses \opts endpoint ->
+              if endpoint == "https://slack.com/api/conversations.replies" && opts ^. Wreq.param "include_all_metadata" == ["true"]
+                then do
+                  opts ^. Wreq.param "channel" `shouldBe` ["C_HISTORY_REPLY"]
+                  opts ^. Wreq.param "ts" `shouldBe` ["1735689600.000001"]
+                  opts ^. Wreq.param "oldest" `shouldBe` ["1735689602.000001"]
+                  next <- atomicModifyIORef' pages $ \case
+                    [] -> ([], Nothing)
+                    page : rest -> (rest, Just page)
+                  (cursor, body) <- maybe (fail "Unexpected history page request") pure next
+                  opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
+                  when (cursor == Just "next") do
+                    revoke <- atomicModifyIORef' revokeOnNext (\value -> (False, value))
+                    when revoke $ withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+                  pure $ Just $ AE.encode body
+                else do
+                  when (endpoint == "https://slack.com/api/chat.postMessage") $ modifyIORef' posts (+ 1)
+                  pure $ Just "{\"ok\":true,\"messages\":[]}"
+            work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
+        receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_HISTORY_REPLY" "C_HISTORY_REPLY" "Investigate" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        (requests, deferred) <- work receipt
+        deferred `shouldSatisfy` isRight
+        metadata <- case [value | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body >>= (^? key "metadata")]] of
+          [value] -> pure value
+          _ -> fail "Expected reply publication metadata"
+        let published = AE.object ["ts" AE..= ("1735689610.000001" :: Text), "thread_ts" AE..= ("1735689600.000001" :: Text), "app_id" AE..= ("A_HISTORY_REPLY" :: Text), "bot_id" AE..= ("B_REPLY" :: Text), "metadata" AE..= metadata]
+            incomplete = AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value]), "has_more" AE..= True]
+            firstPage = AE.object ["ok" AE..= True, "messages" AE..= AE.Array [published & key "app_id" . _String .~ "A_OTHER", published & key "thread_ts" . _String .~ "1735689600.000002"], "response_metadata" AE..= AE.object ["next_cursor" AE..= ("next" :: Text)]]
+            lastPage = AE.object ["ok" AE..= True, "messages" AE..= AE.Array [published]]
+        let expiredPage = AE.object ["ok" AE..= True, "messages" AE..= ([] :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= ("expired" :: Text)]]
+            invalidCursor = AE.object ["ok" AE..= False, "error" AE..= ("invalid_cursor" :: Text)]
+        writeIORef pages [(Nothing, incomplete), (Nothing, expiredPage), (Just "expired", invalidCursor), (Nothing, firstPage), (Just "next", lastPage), (Just "next", lastPage)]
+        for_ ([Nothing, Just "expired", Nothing, Just "next"] :: [Maybe Text]) $ \expected -> do
+          (_, pending) <- work receipt
+          pending `shouldSatisfy` isRight
+          search <- runQueryEffect resources $ Investigations.loadReplySearch turn 0
+          fmap (.cursor) search `shouldBe` Just expected
+          batch <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+          fmap (.deliveredCount) batch `shouldBe` Just 0
+        (_, revoked) <- work receipt
+        revoked `shouldSatisfy` isLeft
+        stillPending <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+        fmap (.deliveredCount) stillPending `shouldBe` Just 0
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = TRUE WHERE project_id = ?|] (PGS.Only testPid)
+        (_, recovered) <- work receipt
+        recovered `shouldSatisfy` isRight
+        batch <- runQueryEffect resources $ Investigations.loadReplyBatch turn
+        fmap (.deliveredCount) batch `shouldBe` Just 1
+        readIORef pages >>= (`shouldBe` [])
+        readIORef posts >>= (`shouldBe` 1)
+        readIORef modelCalls >>= (`shouldBe` 1)
+        (replayed, _) <- work receipt
+        replayed `shouldBe` []
+
       it "resumes a rendered Slack reply batch after its second part is rejected" \tr -> do
         setupLinkedSlackData tr testPid "T_PARTS"
         modelCalls <- newIORef (0 :: Int)
