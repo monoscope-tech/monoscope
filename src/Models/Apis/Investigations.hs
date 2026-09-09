@@ -1,6 +1,14 @@
 module Models.Apis.Investigations (
   Scope (..),
   Turn (..),
+  Step (..),
+  Checkpoint (..),
+  loadCheckpoint,
+  SavedCheckpoint (..),
+  CheckpointCursor (..),
+  CheckpointConflict (..),
+  startCheckpoint,
+  commitProgress,
   AgenticChatResult (..),
   ToolCallInfo (..),
   loadAnswer,
@@ -24,8 +32,11 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Projects.Projects qualified as Projects
+import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
@@ -83,9 +94,12 @@ data Entry = Entry
 
 
 recordEvent :: DB es => Scope -> Event -> Eff es ()
-recordEvent scope event =
-  Hasql.interpExecute_
-    [HI.sql|INSERT INTO apis.investigation_journal
+recordEvent scope event = Hasql.interpExecute_ $ recordEventSql scope event
+
+
+recordEventSql :: Scope -> Event -> HI.Sql
+recordEventSql scope event =
+  [HI.sql|INSERT INTO apis.investigation_journal
     (run_id, project_id, user_id, team_id, channel_id, thread_ts, message_ts, event)
     VALUES (#{scope.runId}, #{scope.projectId}, #{scope.userId}, #{scope.teamId},
       #{scope.channelId}, #{scope.threadTs}, #{scope.messageTs}, #{Aeson event})|]
@@ -134,6 +148,7 @@ data Turn = Turn
   , userId :: Projects.UserId
   , messageTs :: Text
   }
+  deriving stock (Show)
 
 
 loadAnswer :: DB es => Turn -> Eff es (Maybe AgenticChatResult)
@@ -160,5 +175,91 @@ saveAnswer turn answer = do
       INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, slack_message_ts, created_at)
       SELECT #{turn.projectId}, #{turn.conversationId}, 'assistant', answer->>'response', #{turn.messageTs}, clock_timestamp() FROM saved
       ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING
+    ), cleared AS (
+      DELETE FROM apis.slack_turn_checkpoints WHERE project_id = #{turn.projectId}
+        AND conversation_id = #{turn.conversationId} AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
     ) SELECT answer FROM saved|]
   maybe (throwIO $ ErrorCall "Saving a Slack answer returned no row") (pure . (\(HI.OneColumn (Aeson result)) -> result)) saved
+
+
+-- | Exact model context and progress for one round. The API key is supplied by
+-- the worker at execution time and is never part of the stored request.
+data Step = Step
+  { history :: LLM.ChatHistory
+  , request :: OpenAIV1.CreateChatCompletion
+  , iteration :: Int
+  , timeRange :: (Maybe UTCTime, Maybe UTCTime)
+  , toolCalls :: [ToolCallInfo]
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Checkpoint
+  = ModelPending Step
+  | ToolsPending Step LLM.Message [(LLM.ToolCall, ToolResult)] [LLM.ToolCall]
+  | AnswerReady AgenticChatResult
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson Checkpoint
+
+
+data SavedCheckpoint = SavedCheckpoint {revision :: Int64, checkpoint :: Checkpoint}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+data CheckpointCursor = CheckpointCursor {turn :: Turn, revision :: Int64}
+  deriving stock (Show)
+
+
+data CheckpointConflict = CheckpointConflict
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
+
+
+loadCheckpoint :: DB es => Turn -> Eff es (Maybe SavedCheckpoint)
+loadCheckpoint turn =
+  Hasql.interpOne
+    [HI.sql|SELECT revision, checkpoint FROM apis.slack_turn_checkpoints
+    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+
+
+startCheckpoint :: DB es => Turn -> Checkpoint -> Eff es SavedCheckpoint
+startCheckpoint turn checkpoint = do
+  saved <-
+    Hasql.interpOne
+      [HI.sql|INSERT INTO apis.slack_turn_checkpoints (project_id, conversation_id, user_id, message_ts, checkpoint)
+      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson checkpoint})
+      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
+      DO UPDATE SET checkpoint = slack_turn_checkpoints.checkpoint RETURNING revision, checkpoint|]
+  maybe (throwIO $ ErrorCall "Starting a Slack checkpoint returned no row") pure saved
+
+
+-- | A stale worker cannot replace newer progress. Updating the checkpoint and
+-- appending its activity event either both commit or both roll back.
+commitProgress :: DB es => Maybe CheckpointCursor -> Maybe Scope -> Checkpoint -> Maybe Event -> Eff es (Maybe CheckpointCursor)
+commitProgress cursor scope checkpoint event
+  | isNothing cursor && (isNothing scope || isNothing event) = pure Nothing
+  | otherwise = do
+      result <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+        updated <- case cursor of
+          Nothing -> pure $ Right Nothing
+          Just key -> do
+            versions <-
+              Tx.statement ()
+                $ HI.interp @[Int64]
+                  True
+                  [HI.sql|UPDATE apis.slack_turn_checkpoints SET checkpoint = #{Aeson checkpoint},
+                revision = revision + 1, updated_at = clock_timestamp()
+                WHERE project_id = #{key.turn.projectId} AND conversation_id = #{key.turn.conversationId}
+                  AND user_id = #{key.turn.userId} AND message_ts = #{key.turn.messageTs}
+                  AND revision = #{key.revision} RETURNING revision|]
+            pure $ case versions of
+              [version] -> Right $ Just (key{revision = version} :: CheckpointCursor)
+              _ -> Left CheckpointConflict
+        for_ (rightToMaybe updated) $ \_ -> for_ scope $ \key -> for_ event $ \activity ->
+          void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ recordEventSql key activity
+        pure updated
+      either throwIO pure result

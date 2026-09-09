@@ -1357,3 +1357,38 @@ because integration-tests require tf-real, which the local environment lacks.
 No integration result was attested. Frontend/CLI/UI results were reused; full
 integration-tests, weeder, hlint and e2e remain outstanding. Log:
 /tmp/monoscope-slack-agent/investigation-journal-ci-signoff.log.
+
+
+### Interrupted-turn recovery
+
+Persisted Slack turns now resume from model/tool checkpoints. Each checkpoint
+retains the original model request, conversation, explicit time bounds, iteration,
+and completed tool outputs. An interrupted pending read can run again; completed
+reads and model decisions are reused. Current authorization and cancellation are
+still checked around execution. API keys are supplied by the worker, not saved.
+Relative telemetry queries are not a database snapshot.
+
+Revision compare-and-swap prevents a stale worker from replacing newer progress.
+Checkpoint updates and activity events commit together. Saving the completed
+answer removes its checkpoint in the same statement. This does not make external
+reads or Slack publication exactly once.
+
+The native command `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` passed 38 examples, zero failures, in
+18.4861 seconds. The new regression interrupts between two source reads, checks
+that only the unfinished read repeats, retains the original model/context and
+iteration budget, verifies rollback and stale-worker rejection, and checks
+completed-answer replay. Evidence: /tmp/monoscope-slack-agent/slack-checkpoints-workflows-complete.log.
+Three passes of every requested review skill are recorded in the review log.
+Fourmolu and git diff --check pass. HLint exits 1 because version 3.3.6 cannot
+parse MultilineStrings; Weeder exits 228 with repository findings. Their logs are
+slack-checkpoints-hlint.log and slack-checkpoints-weeder.log in the same directory.
+CI signoff for this increment remains pending. No deployment or branch push.
+
+The preceding completed-answer commit afd6f7dde passed
+`make ci-signoff CHECKS="build doctests unit-tests"`, including published passing
+attestations. Log: /tmp/monoscope-slack-agent/slack-answer-replay-ci-signoff.log.
+Full integration-tests, weeder, hlint and e2e remain outstanding. Local full
+integration requires the unavailable tf-real capability. Live progress, response
+outbox/reconciliation, active human steering, investigation quality evaluation,
+tested action drafts, proactive policy and live Slack acceptance remain unfinished.

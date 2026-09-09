@@ -596,6 +596,92 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "resumes between tool reads with the original model context and remaining iteration budget" \tr -> do
+        setupLinkedSlackData tr testPid "T_CHECKPOINT"
+        let cfg = tr.trATCtx.config
+            convId = Issues.slackScopedConversationId testPid "T_CHECKPOINT" "C_CHECKPOINT" "1735689600.000001"
+            userId = (getResponse tr.trSessAndHeader).user.id
+            access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_CHECKPOINT" "U0123ABCDEF" userId "C_CHECKPOINT" "1735689600.000001" "1735689602.000001"
+            config = (AI.defaultAgenticConfig testPid){AI.access = access, AI.sourceConfig = Just cfg, AI.conversationId = Just convId, AI.maxIterations = 1}
+            turn = Investigations.Turn testPid convId userId "1735689602.000001"
+            oldRevision = T.replicate 40 "a"
+            newRevision = T.replicate 40 "b"
+            sourceCall callId revision = Chat.ToolCall callId "function" $ Chat.ToolFunction "get_code_context" $ fromList [("path", AE.String "/srv/app/checkout.py"), ("revision", AE.String revision), ("service", AE.String "checkout")]
+            base = "https://api.github.com/repos/acme/checkout-service/contents/checkout.py?ref="
+            source body = AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (body :: ByteString))]
+        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid convId Issues.CTSlackThread (AE.object [])
+        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_checkpoint_fixture")
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
+        requests <- newIORef ([] :: [Text])
+        modelContexts <- newIORef ([] :: [(Text, AE.Value)])
+        interruptRead <- newIORef True
+        let transport = withHTTPResponses \_ endpoint -> do
+              modifyIORef' requests (<> [toText endpoint])
+              if toText endpoint == base <> oldRevision
+                then pure $ Just $ source "poolSize = 50\n"
+                else
+                  if toText endpoint == base <> newRevision
+                    then do
+                      interrupt <- atomicModifyIORef' interruptRead (\old -> (False, old))
+                      when interrupt $ throwIO $ ErrorCall "simulated worker interruption between reads"
+                      pure $ Just $ source "poolSize = 5\n"
+                    else fail "Unexpected repository request"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history params _ -> do
+                let systemMessage :| _ = history
+                    evidence = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                modifyIORef' modelContexts (<> [(systemMessage.content, AE.toJSON params)])
+                case evidence of
+                  [] -> pure $ Right $ Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [sourceCall "old" oldRevision, sourceCall "new" newRevision]}
+                  [before, after] -> do
+                    liftIO $ T.isInfixOf "poolSize = 50" before `shouldBe` True
+                    liftIO $ T.isInfixOf "poolSize = 5" after `shouldBe` True
+                    liftIO $ isNothing (AE.toJSON params ^? key "tools" . _Array) `shouldBe` True
+                    pure $ Right $ Chat.Message Chat.Assistant "The source setting changed; incident impact remains unconfirmed." Chat.defaultMessageData
+                  _ -> liftIO $ fail "Unexpected tool history"
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            run model = snd <$> (runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ AI.runAgenticChatWithHistory config "Compare the source revisions" model "api-key-never-store")
+        run "checkpoint-original" >>= (`shouldSatisfy` isLeft)
+        pending <- runQueryEffect tr $ Investigations.loadCheckpoint turn
+        case pending of
+          Just Investigations.SavedCheckpoint{checkpoint = Investigations.ToolsPending step _ completed remaining} -> do
+            step.iteration `shouldBe` 0
+            length completed `shouldBe` 1
+            map Chat.toolCallId remaining `shouldBe` ["new"]
+            T.isInfixOf "api-key-never-store" (decodeUtf8 $ AE.encode pending) `shouldBe` False
+          _ -> fail "Expected a checkpoint after the first source read"
+        case pending of
+          Just saved -> do
+            let cursor = Just $ Investigations.CheckpointCursor turn saved.revision
+                invalidScope = Investigations.Scope (UUIDId $ UUID.fromWords 0 0 40 1) testPid userId "" "C_CHECKPOINT" "1735689600.000001" turn.messageTs
+                replacement = Investigations.AnswerReady $ Investigations.AgenticChatResult "A stale answer must not replace progress" []
+            -- A failed journal insert must also roll back the checkpoint update.
+            runQueryEffect tr (tryAny $ Investigations.commitProgress cursor (Just invalidScope) replacement (Just Investigations.InvestigationFinished)) >>= (`shouldSatisfy` isLeft)
+            afterFailure <- runQueryEffect tr $ Investigations.loadCheckpoint turn
+            AE.toJSON afterFailure `shouldBe` AE.toJSON pending
+            -- Another worker has advanced this turn. The original cursor is stale.
+            advanced <- runQueryEffect tr $ Investigations.commitProgress cursor Nothing saved.checkpoint Nothing
+            fmap (.revision) advanced `shouldBe` Just (saved.revision + 1)
+            runQueryEffect tr (tryAny $ Investigations.commitProgress cursor Nothing replacement Nothing) >>= (`shouldSatisfy` isLeft)
+            afterConflict <- runQueryEffect tr $ Investigations.loadCheckpoint turn
+            fmap (AE.toJSON . (.checkpoint)) afterConflict `shouldBe` Just (AE.toJSON saved.checkpoint)
+          Nothing -> fail "Expected persisted progress for conflict checks"
+        resumed <- run "checkpoint-changed"
+        case resumed of
+          Right (Right answer) -> length answer.toolCalls `shouldBe` 2
+          _ -> fail "Expected the interrupted investigation to resume"
+        readIORef requests >>= (`shouldBe` [base <> oldRevision, base <> newRevision, base <> newRevision])
+        contexts <- readIORef modelContexts
+        case contexts of
+          [(firstContext, firstParams), (lastContext, lastParams)] -> do
+            lastContext `shouldBe` firstContext
+            map (\params -> params ^? key "model" . _String) [firstParams, lastParams] `shouldBe` [Just "checkpoint-original", Just "checkpoint-original"]
+          _ -> fail "Expected one initial decision and one final model response"
+        runQueryEffect tr (Investigations.loadCheckpoint turn) >>= (`shouldSatisfy` isNothing)
+        run "checkpoint-changed" >>= (`shouldSatisfy` isRight)
+        length <$> readIORef modelContexts >>= (`shouldBe` 2)
+
       it "retries a failed Slack delivery without repeating the model or duplicating conversation turns" \tr -> do
         setupLinkedSlackData tr testPid "T_REPLAY"
         calls <- newIORef (0 :: Int)

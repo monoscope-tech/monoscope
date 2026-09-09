@@ -198,6 +198,7 @@ extra-source-files:
     static/migrations/0167_incident_data_unavailable.sql
     static/migrations/0168_investigation_journal.sql
     static/migrations/0169_slack_turn_answers.sql
+    static/migrations/0170_slack_turn_checkpoints.sql
 
 source-repository head
   type: git

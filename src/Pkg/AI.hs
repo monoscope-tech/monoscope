@@ -671,7 +671,7 @@ runAgenticQuery config userQuery model apiKey = do
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   -- Text only: these consumers (MCP, bots, log explorer) never read toolCalls; the
   -- tool-data-reuse path is runAgenticChatWithHistory -> AgenticChatResult.
-  (>>= parseLLMResponse . (.response)) <$> withInvestigationJournal config userQuery model (\journal -> runAgenticLoopRaw journal config apiKey (systemMsg :| [userMsg]) params 0 [])
+  (>>= parseLLMResponse . (.response)) <$> withInvestigationJournal config userQuery model (\journal -> runAgenticLoopRaw Nothing journal config apiKey $ Investigations.ModelPending $ Investigations.Step (systemMsg :| [userMsg]) params 0 config.timeRange [])
 
 
 -- | System + user messages and chat params shared by both agentic entry points
@@ -728,7 +728,8 @@ runAgenticChatWithHistory
 runAgenticChatWithHistory config userQuery model apiKey = do
   requireAgentAccess config.access config.projectId
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
-  let run history = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw journal config apiKey (systemMsg :| (map dbMessageToLLMMessage history <> [userMsg])) params 0 []
+  let initial history = Investigations.ModelPending $ Investigations.Step (systemMsg :| (map dbMessageToLLMMessage history <> [userMsg])) params 0 config.timeRange []
+      run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
   case (config.access, config.conversationId) of
     (SlackInvestigationAccess investigation, Just convId) -> do
       unless (convId == Issues.slackScopedConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs) $ throwIO AgentAccessDenied
@@ -736,19 +737,26 @@ runAgenticChatWithHistory config userQuery model apiKey = do
       Investigations.loadAnswer turn >>= \case
         Just answer -> requireAgentAccess config.access config.projectId $> Right answer
         Nothing -> do
-          history <- Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
-          result <- run history
+          checkpoint <-
+            Investigations.loadCheckpoint turn
+              >>= maybe
+                ( do
+                    start <- initial <$> Issues.prepareSlackTurn config.projectId convId investigation.messageTs userQuery
+                    Investigations.startCheckpoint turn start
+                )
+                pure
+          result <- run (Just $ Investigations.CheckpointCursor turn checkpoint.revision) checkpoint.checkpoint
           requireAgentAccess config.access config.projectId
           traverse (Investigations.saveAnswer turn) result
     _ -> do
       history <-
         config.conversationId & maybe (pure []) \convId ->
           Issues.selectChatHistory config.projectId convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
-      run history
+      run Nothing $ initial history
 
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
--- This records checkpoints but does not yet resume a previously started attempt.
+-- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
 withInvestigationJournal :: DB es => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
 withInvestigationJournal config userQuery model action = do
   requireAgentAccess config.access config.projectId
@@ -763,50 +771,54 @@ withInvestigationJournal config userQuery model action = do
     _ -> action Nothing
 
 
--- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => Maybe Investigations.Scope -> AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
-runAgenticLoopRaw journal config apiKey chatHistory params iteration accumulated
-  | iteration >= config.maxIterations = do
+-- | Save each completed decision/read before advancing. Pending read tools may
+-- run again after an interrupted call; completed tools and model responses replay.
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw turn journal config apiKey checkpoint = do
+  requireAgentAccess config.access config.projectId
+  case checkpoint of
+    Investigations.AnswerReady answer -> do
+      Log.logTrace "AI final response" (AE.object ["responseLength" AE..= T.length answer.response, "toolCount" AE..= length answer.toolCalls])
+      pure $ Right answer
+    Investigations.ModelPending step -> do
+      record $ Investigations.ModelStarted step.iteration
+      let finalRound = step.iteration >= config.maxIterations
+          request = if finalRound then step.request{OpenAIV1.tools = Nothing} else step.request
+      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= step.iteration, "historySize" AE..= length step.history, "finalRound" AE..= finalRound])
+      response <- ELLM.callAgenticChat step.history request apiKey
       requireAgentAccess config.access config.projectId
-      Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      callModel params{OpenAIV1.tools = Nothing} >>= either handleError (finalResponse "AI final response")
-  | otherwise = do
-      requireAgentAccess config.access config.projectId
-      let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
-      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
-      callModel params >>= either handleError \responseMsg ->
-        maybe (finalResponse "AI final response (no tool calls)" responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
+      case response of
+        Left err -> do
+          record $ Investigations.ModelReturned step.iteration Investigations.ModelRequestFailed
+          Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err])
+          pure $ Left "LLM service temporarily unavailable"
+        Right message -> do
+          let next = case LLM.toolCalls $ LLM.messageData message of
+                Just tools | not finalRound -> Investigations.ToolsPending step message [] tools
+                _ -> Investigations.AnswerReady $ AgenticChatResult message.content step.toolCalls
+          updated <- Investigations.commitProgress turn journal next $ Just $ Investigations.ModelReturned step.iteration $ Investigations.ModelAnswered message
+          continue updated next
+    Investigations.ToolsPending step message completed pending -> case pending of
+      [] -> do
+        let (calls, results) = unzip completed
+        history <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer step.history (message : zipWith mkToolResultMsg calls results)
+        advance $ Investigations.ModelPending step{Investigations.history = history, Investigations.iteration = step.iteration + 1, Investigations.toolCalls = step.toolCalls <> zipWith mkToolCallInfo calls results}
+      tool : remaining -> do
+        Log.logTrace "AI requesting tool" (AE.object ["iteration" AE..= step.iteration, "tool" AE..= LLM.toolFunctionName (LLM.toolCallFunction tool)])
+        record $ Investigations.ToolStarted step.iteration tool
+        result <- executeToolCall config{timeRange = step.timeRange} tool
+        let next = Investigations.ToolsPending step message (completed <> [(tool, result)]) remaining
+        updated <-
+          Investigations.commitProgress turn journal next
+            $ Just
+            $ if LLM.toolFunctionName (LLM.toolCallFunction tool) == "get_investigation_history"
+              then Investigations.InvestigationHistoryRead step.iteration
+              else Investigations.ToolReturned step.iteration tool result
+        continue updated next
   where
     record event = for_ journal (`Investigations.recordEvent` event)
-    callModel request = do
-      record $ Investigations.ModelStarted iteration
-      response <- ELLM.callAgenticChat chatHistory request apiKey
-      requireAgentAccess config.access config.projectId
-      record $ Investigations.ModelReturned iteration $ either (const Investigations.ModelRequestFailed) Investigations.ModelAnswered response
-      pure response
-
-    handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
-
-    finalResponse label responseMsg = do
-      requireAgentAccess config.access config.projectId
-      Log.logTrace label (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
-        $> Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
-
-    processToolCalls responseMsg toolCallList = do
-      Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList])
-      toolResults <- forM toolCallList \tool -> do
-        requireAgentAccess config.access config.projectId
-        record $ Investigations.ToolStarted iteration tool
-        result <- executeToolCall config tool
-        record
-          $ if LLM.toolFunctionName (LLM.toolCallFunction tool) == "get_investigation_history"
-            then Investigations.InvestigationHistoryRead iteration
-            else Investigations.ToolReturned iteration tool result
-        pure result
-      let newToolInfos = zipWith mkToolCallInfo toolCallList toolResults
-      Log.logTrace "AI tool calls completed" (AE.object ["iteration" AE..= iteration, "toolCount" AE..= length toolResults, "resultsPreview" AE..= map (\r -> T.take 200 r.formatted) toolResults])
-      newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (responseMsg : zipWith mkToolResultMsg toolCallList toolResults)
-      runAgenticLoopRaw journal config apiKey newMessages params (iteration + 1) (accumulated <> newToolInfos)
+    continue updated = runAgenticLoopRaw updated journal config apiKey
+    advance next = Investigations.commitProgress turn journal next Nothing >>= (\updated -> continue updated next)
 
 
 -- | Create ToolCallInfo from a tool call and its result
