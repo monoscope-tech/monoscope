@@ -39,7 +39,6 @@ import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
-import System.Types (atAuthToBase)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
@@ -51,6 +50,38 @@ spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
     describe "Slack personal linking" do
+      it "onboards Messages-tab visits once per live link and never starts an investigation" \tr -> do
+        setupSlackData tr testPid "T_HOME"
+        let visit tab eventId = AE.object ["type" AE..= ("event_callback" :: Text), "team_id" AE..= ("T_HOME" :: Text), "api_app_id" AE..= ("A_TEST" :: Text), "event_id" AE..= (eventId :: Text), "event" AE..= AE.object ["type" AE..= ("app_home_opened" :: Text), "user" AE..= ("U_HOME" :: Text), "channel" AE..= ("D_HOME" :: Text), "tab" AE..= (tab :: Text), "event_ts" AE..= ("1515449522000016" :: Text)]]
+            process event = do
+              receipt <- receiveSlackEvent tr event
+              runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}") $ processSlackEvent receipt
+        (homeRequests, _) <- process $ visit "home" "HomeTab"
+        homeRequests `shouldBe` []
+        firstReceipt <- receiveSlackEvent tr $ visit "messages" "FirstOpen"
+        (_, failed) <- runTestBgRecordingHTTP frozenTime tr $ tryAny $ processSlackEvent firstReceipt
+        failed `shouldSatisfy` isLeft
+        toBaseServantResponse tr (Slack.hasDeliveredSlackLink "T_HOME" "D_HOME" "U_HOME") >>= (`shouldBe` False)
+        (initial, _) <- process $ visit "messages" "FirstOpen"
+        map fst initial `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        (replayed, _) <- process $ visit "messages" "FirstOpen"
+        replayed `shouldBe` []
+        (reopened, _) <- process $ visit "messages" "SecondOpen"
+        reopened `shouldBe` []
+        (otherUser, _) <- process $ visit "messages" "OtherUserOpen" & key "event" . key "user" . _String .~ "U_OTHER"
+        map fst otherUser `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        withResource tr.trPool \conn -> void $ PGS.execute_ conn [sql|UPDATE apis.slack_identity_requests SET expires_at = now() - interval '1 second'|]
+        (expired, _) <- process $ visit "messages" "ExpiredOpen"
+        map fst expired `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        active :: [PGS.Only (UUIDId "slack_link")] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT id FROM apis.slack_identity_requests WHERE expires_at > now() AND consumed_at IS NULL|]
+        case active of
+          [PGS.Only linkId] -> toBaseServantResponse tr (Slack.completeSlackLink linkId (getResponse tr.trSessAndHeader).user.id testPid) >>= (`shouldBe` True)
+          _ -> fail "Expected one active onboarding link"
+        (linked, _) <- process $ visit "messages" "LinkedOpen"
+        linked `shouldBe` []
+        conversations <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
+        conversations `shouldBe` [PGS.Only (0 :: Int64)]
+
       it "sends only a private link, binds through the authenticated form, and rechecks access" \tr -> do
         setupSlackData tr testPid "T_IDENTITY"
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (PGS.Only testPid)

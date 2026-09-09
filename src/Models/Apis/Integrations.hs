@@ -20,6 +20,8 @@ module Models.Apis.Integrations (
   SlackLinkProject (..),
   SlackPrincipal (..),
   createSlackLink,
+  hasDeliveredSlackLink,
+  markSlackLinkDelivered,
   getSlackLink,
   slackLinkProjects,
   completeSlackLink,
@@ -65,7 +67,8 @@ createSlackLink linkId receiptId =
     [HI.sql|WITH request AS (
     INSERT INTO apis.slack_identity_requests (id, receipt_id)
     SELECT #{linkId}, id FROM apis.slack_events
-    WHERE id = #{receiptId} AND payload #>> '{event,type}' IN ('message', 'app_mention')
+    WHERE id = #{receiptId} AND (payload #>> '{event,type}' IN ('message', 'app_mention')
+      OR (payload #>> '{event,type}' = 'app_home_opened' AND payload #>> '{event,tab}' = 'messages'))
       AND COALESCE(payload #>> '{event,user}', '') <> ''
       AND COALESCE(payload #>> '{event,channel}', '') <> ''
       AND payload #>> '{event,bot_id}' IS NULL AND payload #>> '{event,subtype}' IS NULL
@@ -74,6 +77,24 @@ createSlackLink linkId receiptId =
   ) SELECT request.id, event.team_id, event.payload #>> '{event,user}', event.payload #>> '{event,channel}'
     FROM request JOIN apis.slack_events event ON event.id = request.receipt_id
     WHERE request.expires_at > now() AND request.consumed_at IS NULL|]
+
+
+markSlackLinkDelivered :: DB es => UUIDId "slack_link" -> Eff es ()
+markSlackLinkDelivered linkId =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.slack_identity_requests SET delivered_at = COALESCE(delivered_at, now()) WHERE id = #{linkId}|]
+
+
+hasDeliveredSlackLink :: DB es => Text -> Text -> Text -> Eff es Bool
+hasDeliveredSlackLink teamId channelId slackUserId = do
+  request <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|SELECT TRUE FROM apis.slack_identity_requests request
+      JOIN apis.slack_events receipt ON receipt.id = request.receipt_id
+      WHERE receipt.team_id = #{teamId} AND receipt.payload #>> '{event,channel}' = #{channelId}
+        AND receipt.payload #>> '{event,user}' = #{slackUserId} AND request.delivered_at IS NOT NULL
+        AND request.expires_at > now() AND request.consumed_at IS NULL LIMIT 1|]
+  pure $ isJust request
 
 
 getSlackLink :: DB es => UUIDId "slack_link" -> Eff es (Maybe SlackLink)

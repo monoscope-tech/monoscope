@@ -82,10 +82,6 @@ withSlackData logMsg logFields lookupSlackData k =
     Just sd -> Just <$> k sd
 
 
-withSlackDataByTeam :: (DB es, Log.Log :> es) => Text -> Text -> (SlackData -> Eff es a) -> Eff es (Maybe a)
-withSlackDataByTeam ctx teamId = withSlackData "Missing SlackData for team_id" (AE.object ["context" AE..= ctx, "team_id" AE..= teamId]) (getSlackDataByTeamId teamId)
-
-
 withProjectSlackDataLogged :: (DB es, Log.Log :> es) => Text -> Projects.ProjectId -> (SlackData -> Eff es a) -> Eff es (Maybe a)
 withProjectSlackDataLogged ctx pid = withSlackData "Missing SlackData for project" (AE.object ["context" AE..= ctx, "project_id" AE..= pid]) (getProjectSlackData pid)
 
@@ -678,12 +674,18 @@ data SlackTitleEvent = SlackTitleEvent {channel :: Text, thread_ts :: Text, user
   deriving anyclass (AE.FromJSON)
 
 
+data SlackHomeEvent = SlackHomeEvent {channel :: Text, user :: Text, tab :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
 data SlackEventKind
   = UserMessage SlackMessage
   | AppMention SlackMessage
   | AgentSessionStopped SlackStopEvent
   | AgentSessionTitleChanged SlackTitleEvent
   | AppContextChanged SlackAppContextEvent
+  | AppHomeOpened SlackHomeEvent
   | BotMessage
   | MessageEdit
   | AssistantStarted SlackAssistantEvent
@@ -720,6 +722,10 @@ classifySlackEvent workspaceId wire = do
       unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.thread_ts]) $ fail "Invalid Slack stop timestamp"
       when (any T.null [value.user, value.channel]) $ fail "Missing Slack stop identity"
       pure $ AgentSessionStopped value
+    ("app_home_opened", _) -> do
+      value <- decode
+      when (any T.null [value.user, value.channel]) $ fail "Missing Slack App Home identity"
+      pure $ AppHomeOpened value
     ("app_context_changed", _) -> do
       value <- decode
       unless (isJust $ Incidents.slackTimestamp value.event_ts) $ fail "Invalid Slack context timestamp"
@@ -810,16 +816,18 @@ processSlackEvent receiptId = do
       case kind of
         UserMessage message -> withThreadLock team_id message process
         AppMention message -> withThreadLock team_id message process
+        AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (toStrict $ AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
         _ -> process
   where
     -- A transaction-scoped advisory lock stays on one checked-out connection.
     -- Other DB operations use their usual pools; stop ingress never waits on it.
-    withThreadLock workspaceId message action = do
+    withThreadLock workspaceId message = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, message.channel, fromMaybe message.ts message.thread_ts] :: [Text]))
+
+    withEventLock lockKey action = do
       connectionPool <- asks pool
-      let lockKey = "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, message.channel, fromMaybe message.ts message.thread_ts] :: [Text]))
       withRunInIO \run -> withResource connectionPool \conn -> PGS.withTransaction conn do
         acquired <- PGS.query conn "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))" (PGS.Only lockKey)
-        unless (acquired == [PGS.Only True]) $ throwIO SlackThreadBusy
+        unless (acquired == [PGS.Only True]) $ throwIO SlackWorkerBusy
         run
           $ race_
             ( forever $ liftIO do
@@ -833,6 +841,11 @@ processSlackEvent receiptId = do
         AgentSessionStopped _ -> Integrations.recordSlackSessionEvent workspaceId eventId
         AgentSessionTitleChanged _ -> Integrations.recordSlackSessionEvent workspaceId eventId
         AppContextChanged change -> saveAppContext workspaceId change
+        AppHomeOpened home
+          | home.tab == Just "messages" -> do
+              principal <- Integrations.resolveSlackPrincipal workspaceId home.user Nothing
+              when (isNothing principal) $ unlessM (Integrations.hasDeliveredSlackLink workspaceId home.channel home.user) $ sendIdentityLink envCfg workspaceId
+          | otherwise -> Log.logTrace "Slack App Home visit outside Messages retained" (AE.object [])
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
         AssistantStarted session -> saveAssistantContext workspaceId session
@@ -841,24 +854,27 @@ processSlackEvent receiptId = do
         MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
         UnknownEvent header -> Log.logTrace "Unsupported Slack event retained" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= header.eventType, "subtype" AE..= header.subtype])
 
+    sendIdentityLink envCfg workspaceId = do
+      slackData <- getSlackDataByTeamId workspaceId >>= maybe (throwError err403) pure
+      linkId <- UUIDId <$> UUID.genUUID
+      request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
+      result <-
+        slackApi slackData.botToken "chat.postEphemeral"
+          $ AE.object
+            [ "channel" AE..= request.channelId
+            , "user" AE..= request.slackUserId
+            , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> envCfg.hostUrl <> "slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
+            ]
+      either (throwIO . ErrorCall . toString) pure result
+      Integrations.markSlackLinkDelivered request.id
+
     handleMessage mentioned envCfg event workspaceId = do
       let threadTs = fromMaybe event.ts event.thread_ts
       threadProject <- Integrations.slackThreadProject workspaceId event.channel threadTs
       if mentioned || event.channel_type == Just "im" || isJust threadProject
         then
           Integrations.resolveSlackPrincipal workspaceId event.user threadProject >>= \case
-            Nothing -> do
-              linkId <- UUIDId <$> UUID.genUUID
-              request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
-              void $ withSlackDataByTeam "Slack identity link" workspaceId \slackData -> do
-                let content =
-                      AE.object
-                        [ "channel" AE..= request.channelId
-                        , "user" AE..= request.slackUserId
-                        , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> envCfg.hostUrl <> "slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
-                        ]
-                result <- slackApi slackData.botToken "chat.postEphemeral" content
-                either (throwIO . ErrorCall . toString) pure result
+            Nothing -> sendIdentityLink envCfg workspaceId
             Just principal -> do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
@@ -909,7 +925,7 @@ processSlackEvent receiptId = do
           sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
 
 
-data SlackThreadBusy = SlackThreadBusy
+data SlackWorkerBusy = SlackWorkerBusy
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 

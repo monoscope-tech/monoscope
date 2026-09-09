@@ -653,3 +653,47 @@ live native-session acceptance, durable delivery/status reconciliation and
 checkpoints, and the rest of the plan remain incomplete. Current-tree CI signoff
 is required before push. No push, deployment, or live app configuration change
 occurred.
+
+
+## App Home personal onboarding (2026-09-09)
+
+`app_home_opened` now has a derived record for the identity and tab fields the
+worker consumes. A Messages-tab visit by an unlinked user invokes the existing
+signed-receipt personal-link flow. Other tabs and currently linked users produce
+no onboarding message, and no App Home visit starts an investigation. The full
+wire event, including context and event timestamp, remains in its receipt.
+
+Repeated opens are serialized by workspace/app conversation/user using the
+existing pinned-connection lock implementation. Investigation lock keys remain
+unchanged. A live, unconsumed link suppresses another open-generated prompt only
+when delivery was acknowledged. Migration 0164 records that acknowledgement
+explicitly; receipt completion is not used as a delivery substitute. A later
+visit after expiry can create a fresh link. Explicit questions retain the existing
+personal-link behavior.
+
+The shared sender now requires a workspace installation before sending and records
+delivery only after Slack's successful API response. Missing installations and
+rejected sends leave the receipt pending. The link-creation SQL independently
+restricts App Home requests to the Messages tab and obtains identity/channel from
+the signed receipt. Link consumption keeps the existing authenticated-user and
+project membership checks.
+
+The regression initially failed because Messages-tab visits produced no prompt.
+Final tests exercise a failed acknowledgement and replay, successful delivery,
+replayed and repeated opens, another user's independent prompt, expiry renewal,
+consumption through the personal-link model, and absence of AI conversations.
+The earlier concurrency, cancellation, capability, and native-event tests pass.
+
+Validation:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`
+passed 32 examples, 0 failures. Fourmolu and scoped whitespace checks passed;
+Hpack packages migration 0164. Three passes of all requested skills are recorded
+in the review report. Removed the obsolete workspace lookup wrapper and redundant
+test import; the unrelated background-job warning remains.
+
+An accepted send followed by a lost acknowledgement/database failure remains an
+ambiguous-delivery window; this is not an exactly-once outbox. Live App Home and
+Agent acceptance, per-message navigation evidence, durable delivery/status
+reconciliation and checkpoints, and the remaining releases still need work.
+Current-tree CI signoff is outstanding before push. No push, deployment, or live
+Slack app configuration change occurred.

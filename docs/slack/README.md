@@ -25,8 +25,15 @@ when merging the template. The Agent declaration is required in addition to OAut
 grants; see [Slack's Agent guide](https://docs.slack.dev/ai/developing-agents/).
 
 Slack documents migration from `assistant_view` to `agent_view` as irreversible.
-This repository change does not apply that migration. App-home onboarding, live manifest validation, plan availability, and workspace acceptance
+This repository change does not apply that migration. Live manifest validation, plan availability, and workspace acceptance
 remain rollout gates. See [the manifest reference](https://docs.slack.dev/reference/app-manifest/).
+
+Opening the Agent's Messages tab also starts personal linking for an unlinked
+user. Repeat opens suppress another prompt while a successfully delivered,
+unconsumed link remains valid in that conversation. After expiry, a new visit
+can issue a new link. Already-linked users and visits to other tabs receive no
+onboarding prompt. App Home visits do not start investigations. A rejected prompt
+leaves the receipt pending; delivery is recorded only after Slack acknowledges it.
 
 To link a personal account, mention Monoscope or message it directly in Slack.
 An unlinked user receives an ephemeral link addressed to that Slack user. Sign in

@@ -299,3 +299,15 @@ context persistence, authorized session updates, and workflow regressions.
 | 1 | Derive both wire records and reuse timestamp validation and stored signed receipts. | Add explicit context/title constructors rather than leave subscribed events in the unknown branch. Preserve opaque navigation objects without interpreting them as project authority. | Use native Slack events; no custom browser behavior. |
 | 2 | Extend the existing authorized session-update query for titles instead of duplicating its membership joins. Decode event kind once with the envelope workspace. | Give titles explicit columns and timestamp ordering; isolate navigation by workspace/channel/user, including newer empty context. Require title/envelope workspace agreement before queueing. | Keep concurrent/replayed DB and handler flows in Hspec; no simple pure tests displaced from their functions. |
 | 3 | Re-read new types and existing stop, authorization, and conversation consumers. No handwritten instance or suppression. | Fix misleading negative-test envelopes, including the earlier malformed-stop fixture. Test malformed timestamps, workspace mismatch, stale and revoked title changes, context clearing/isolation, unchanged stop state, and zero conversation/HTTP output. | No JS/CSS/Lucid changes, client-tier escalation, or styling indirection. |
+
+
+## Messages-tab onboarding
+
+All three requested skills were applied in three passes to App Home decoding,
+worker locking/dispatch, link creation/delivery, and personal-link regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Derive the App Home record; reuse signed-receipt link creation and the existing link text/transport. | Handle Messages-tab visits explicitly without converting them into investigation messages. SQL only permits App Home link requests for the Messages tab. | Use the native tab event and existing private link flow; no custom browser behavior. |
+| 2 | Generalize the existing pinned-connection lock for onboarding while preserving investigation lock keys. | Serialize opens by workspace/conversation/user. Add explicit delivery time instead of treating receipt completion as proof of delivery; only an acknowledged send can suppress a repeat prompt. | Keep the full opening/retry/expiry/link-consumption flow in Hspec. |
+| 3 | Remove the now-unused workspace lookup wrapper and redundant test import. All new codecs remain derived, with no suppression. | Verify rejection retry, replay, repeat-open suppression, another user's independent prompt, expiry renewal, successful personal linking, and zero AI conversations. A missing installation fails instead of marking an undelivered prompt complete. | No JS/CSS/Lucid changes or styling indirection; other tabs deliberately retain their event without onboarding. |
