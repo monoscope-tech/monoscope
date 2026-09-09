@@ -1050,3 +1050,33 @@ metadata change. Earlier attestations cover their recorded fingerprints only.
 Empty-state labels, coverage labels, units, complete production request/result/
 options evidence, live Slack acceptance, and later releases remain unfinished.
 No deployment or deployment-branch push occurred.
+
+
+## Empty and missing-measurement chart labels
+
+Slack exports now label empty/all-null results as “No observations returned for
+this window” and hide the meaningless numeric axis. Gauge lines label explicit
+null gaps and the absence of earlier returned measurements. They retain their
+requested time bounds, exact observations, and isolated points. Sparse count
+buckets do not acquire inferred coverage or zeros.
+
+Four renderer cases failed before implementation. A second regression found that
+using the first row to identify late measurements was wrong for unordered input;
+the label now checks every timestamp. The final focused Vitest run passed 19 cases
+covering empty, all-null, gap, late, unordered, single-point, and recorded-zero
+inputs, along with earlier layout/threshold regressions. The TypeScript `tsc
+--noEmit` check passed. Commands used Node 25.2.1 with
+`web-components/node_modules/vitest/vitest.mjs run --root web-components test/chart-png-options.test.ts`
+and `node_modules/typescript/bin/tsc --noEmit` from web-components respectively.
+Logs: `/tmp/monoscope-slack-agent/chart-label-tests.log` and
+`/tmp/monoscope-slack-agent/chart-label-typecheck.log`.
+
+After `make build-chart-cli`, the native PNG watcher reran and passed 2 examples
+against the rebuilt renderer. Its actual empty image was captured and inspected;
+light/dark monitor-gap fixtures were regenerated with complete options and inspected.
+The updated artifacts retain their existing fixture locations. All three requested
+review skills ran three times. Scoped whitespace checks passed. No Haskell source
+or instance changed in this increment. Full CI remains pending for these changes
+and the preceding query-failure increment. Count-coverage provenance, units, full
+production evidence, live Slack acceptance, and later releases remain incomplete.
+No deployment or deployment-branch push occurred.

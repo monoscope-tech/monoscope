@@ -10,7 +10,8 @@ The signed widget uses the Slack profile. The failing KQL is `name ==`; the empt
 comparison uses `name == "no-such-png-fixture-operation"`. `failure-dark.png` adds
 `appearance=dark`; the other requests use light appearance. Failed requests return
 `Cache-Control: no-store`. The valid empty result retains the successful bounded
-query cache policy. Its bare axes document an outstanding empty-state defect.
+query cache policy. The empty result now labels the absence of returned observations and hides its
+meaningless numeric axis. The requested time bounds remain visible.
 
 Reproduce with Node/Bun dependencies installed and the local test services running:
 

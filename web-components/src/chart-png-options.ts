@@ -58,6 +58,32 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
         axis.splitLine = { ...axis.splitLine, lineStyle: { ...axis.splitLine?.lineStyle, opacity: 0.35 } };
       }
     }
+    // Widget datasets have a header row and explicit numeric column encoding.
+    // Sparse count buckets alone do not establish missing telemetry or zero events.
+    const source = finalOptions.dataset?.source;
+    const axis = xAxes.length === 1 ? xAxes[0] : undefined;
+    if (axis?.type === 'time' && Array.isArray(source)) {
+      const rows = source.slice(1);
+      const column = series.length === 1 ? series[0].encode?.y : undefined;
+      const values = typeof column === 'number' ? rows.map((row: any) => row[column]) : undefined;
+      const noObservations = rows.length === 0 || values?.every((value: unknown) => value === null);
+      const isGauge = series.length === 1 && series[0].type === 'line';
+      const text = noObservations ? 'No observations returned for this window'
+        : isGauge && values?.some((value: unknown) => value === null) ? 'Missing measurements · gaps are not interpolated'
+        : isGauge && series[0].encode?.x === 0 && typeof axis.min === 'number' && rows.every((row: any) => typeof row[0] === 'number' && row[0] > axis.min) ? 'No earlier measurements in this window'
+        : undefined;
+      if (text) {
+        const existing = finalOptions.graphic;
+        finalOptions.graphic = [...(Array.isArray(existing) ? existing : existing ? [existing] : []), {
+          type: 'text', left: 'center', top: noObservations ? 'middle' : 8,
+          style: { text, fontSize: 14, fill: darkMode ? '#cbd5e1' : '#334155', textAlign: 'center' },
+        }];
+        if (noObservations) {
+          const yAxes = Array.isArray(finalOptions.yAxis) ? finalOptions.yAxis : [finalOptions.yAxis];
+          for (const yAxis of yAxes) if (yAxis) yAxis.show = false;
+        } else finalOptions.grid.top = Math.max(finalOptions.grid.top, 40);
+      }
+    }
     for (const item of series) {
       if (item.markLine) item.markLine.label = { ...item.markLine.label, fontSize: 14 };
       if (series.length === 1 && item.type === "bar") {

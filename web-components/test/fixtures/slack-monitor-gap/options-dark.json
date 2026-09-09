@@ -25,7 +25,7 @@
     "containLabel": true,
     "left": 24,
     "show": false,
-    "top": 16,
+    "top": 40,
     "right": 24
   },
   "legend": {
@@ -190,5 +190,18 @@
   "textStyle": {
     "fontFamily": "sans-serif",
     "fontSize": 14
-  }
+  },
+  "graphic": [
+    {
+      "type": "text",
+      "left": "center",
+      "top": 8,
+      "style": {
+        "text": "Missing measurements \u00b7 gaps are not interpolated",
+        "fontSize": 14,
+        "fill": "#cbd5e1",
+        "textAlign": "center"
+      }
+    }
+  ]
 }

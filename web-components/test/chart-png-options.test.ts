@@ -125,3 +125,32 @@ it.each([[84, 100, 60], [-12, -10, -5], [18, 20, 60]])('keeps captured gauge rea
     expect(options.dataset.source).toEqual(source);
   } finally { chart.dispose(); }
 });
+
+it.each([
+  { name: 'empty', rows: [], text: 'No observations returned for this window' },
+  { name: 'all missing', rows: [[0, null], [900000, null]], text: 'No observations returned for this window' },
+  { name: 'gap', rows: [[0, 84], [60000, null], [900000, 18]], text: 'Missing measurements · gaps are not interpolated' },
+  { name: 'late start', rows: [[840000, 84], [900000, 18]], text: 'No earlier measurements in this window' },
+  { name: 'unordered complete start', rows: [[900000, 18], [0, 84]], text: undefined },
+  { name: 'single point', rows: [[900000, 18]], text: 'No earlier measurements in this window' },
+  { name: 'recorded zero', rows: [[0, 0], [900000, 0]], text: undefined },
+])('labels $name without changing observations or claiming count coverage', ({ rows, text }) => {
+  for (const type of ['line', 'bar']) {
+    const options: any = {
+      dataset: { source: [['timestamp', 'Measurement'], ...rows] },
+      xAxis: { type: 'time', min: 0, max: 900000 }, yAxis: { type: 'value' },
+      series: [{ type, encode: { x: 0, y: 1 } }],
+    };
+    preparePngOptions(options, 960, 320, false, 'slack');
+    const chart = echarts.init(null, undefined, { renderer: 'svg', ssr: true, width: 960, height: 320 });
+    try {
+      chart.setOption(options);
+      const expected = type === 'bar' && rows.some(row => row[1] !== null) ? undefined : text;
+      const svg = chart.renderToSVGString();
+      if (expected) expect(svg).toContain(expected);
+      else expect(options.graphic).toBeUndefined();
+      expect(options.dataset.source.slice(1)).toEqual(rows);
+      expect(options.xAxis).toMatchObject({ min: 0, max: 900000 });
+    } finally { chart.dispose(); }
+  }
+});
