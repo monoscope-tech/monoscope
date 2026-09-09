@@ -225,3 +225,44 @@ are recorded in the review report. No push or deployment was performed.
 
 Personal Slack identity linking and per-investigation project authorization remain
 required. The new installation request is not an investigation access grant.
+
+## Personal linking and investigation entry (2026-09-09)
+
+Unlinked mentions, direct messages, and replies in known investigations now
+receive a private account-link prompt. Its identity comes from the saved signed
+receipt. The authenticated form lists current project memberships in that Slack
+workspace and consumes a 15-minute link once. Existing Slack identities cannot be
+reassigned to another Monoscope account through the form.
+
+Incoming questions resolve the linked user against current account, project,
+membership, and installation state. Thread creation checks those conditions
+again. A thread keeps its original project after a user changes their default.
+Conversation IDs include the project and Slack coordinates, so histories do not
+collide across projects. Unrelated channel messages do not start investigations.
+Mentions and DMs can use their own message timestamp as a new thread root.
+
+Migrations 0158–0160 store identity requests, bindings, and investigation threads,
+and index the incident-thread lookup. All new wire, form, and database codecs use
+derivation. The review report records three passes of each requested skill.
+
+The workflow suite passed 22 examples after the final migration, using
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+The new HTTP-recording regression checks the exact ephemeral method, recipient,
+channel, and link without sending a live message. Database and handler checks
+cover expiry, replay, concurrent consumption, workspace mismatch, identity
+reassignment, revocation, and thread ownership after project selection changes.
+
+Still required: per-tool authorization during long investigations, signed and
+personally authorized slash/actions endpoints, complete conversation roles,
+native Agent progress/cancellation, evidence tools and drafts, controlled live
+acceptance, and the remaining plan gates. No push or deployment has occurred.
+
+Final local signoff: `make ci-signoff CHECKS="build doctests unit-tests"` passed
+for the tree including migration 0160. It published build, 1,536-doctest, and
+308-unit-test attestations. The earlier run also passed, but was refreshed after
+the index was added. Fourmolu and `git diff --check` passed.
+
+The final status reuses those three checks and an existing CLI-test attestation.
+Frontend, integration-tests, weeder, hlint, ui-tests, and e2e still need checks.
+Real TimeFusion remains unavailable in the local CI runner (`linux/amd64` on
+arm64); the native workflow tests do not replace the full integration gate.

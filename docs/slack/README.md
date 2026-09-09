@@ -7,6 +7,19 @@ Installation requests expire after 15 minutes and can be used once. If the
 exchange fails or the request expires, start again from Monoscope.
 Do not construct an OAuth URL with a project ID as `state`; the callback rejects it.
 
+To link a personal account, mention Monoscope or message it directly in Slack.
+An unlinked user receives an ephemeral link addressed to that Slack user. Sign in
+to Monoscope, choose a project, and submit the form. The project list only includes
+current memberships connected to the requesting Slack workspace. The link expires
+after 15 minutes and works once. This follows [Slack's account-binding flow](https://docs.slack.dev/authentication/binding-accounts-across-services/).
+
+A Slack identity cannot be reassigned to a different Monoscope account through
+this flow. A new link can change the same user's default project. Existing
+investigation threads retain their original project, and new incoming questions
+recheck membership and installation access. Per-tool checks during long-running
+investigations and the remaining native Agent lifecycle gates are still required
+before rollout.
+
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.
 An empty signing secret makes the events endpoint return 503. An empty app ID prevents root capture.

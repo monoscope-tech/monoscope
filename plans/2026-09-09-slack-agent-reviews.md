@@ -127,3 +127,22 @@ routes, settings/onboarding links, and workflow regression.
 
 This secures installation authorization. It does not yet establish personal Slack
 identity bindings or authorize the legacy workspace-selected investigation path.
+
+## Personal linking and investigation entry follow-up
+
+Each requested skill ran in three passes over `Integrations.hs`, `Issues.hs`,
+`Pages/Bots/Slack.hs`, routes, migrations 0158–0160, and the workflow tests.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse signed receipts, `slackApi`, derived database/form codecs, and UUID v5. No hand-written instances. | Personal identity comes from the stored signed event; the browser only selects an authorized project. Private links are sent with `chat.postEphemeral`. | Account linking uses native forms, labels, and a select. No JavaScript is required. |
+| 2 | Keep Slack coordinates as a JSON tuple when generating a project-scoped conversation ID. Reuse the existing HTTP recorder and LLM fixture. | Recheck live account, project, installation, and membership state. Fix thread creation to recheck access after principal resolution. Preserve the thread project when the user's default changes. | Styling remains inline at each element. The multi-step DB/handler tests stay in Hspec. |
+| 3 | Re-read changed functions and their unchanged AI/history consumers. No further consolidation required. | Validate incoming human timestamps and identities before queuing. Test expiry, replay, concurrent consumption, foreign workspaces, identity reassignment, and revocation. Legacy slash/actions authorization, per-tool rechecks, and conversation-role handling remain open plan gates. | The linking UI remains at the HTML tier; no behavior was moved into a higher tier. |
+
+The HTTP recorder returns `{}`, so the private-prompt regression deliberately
+checks that the worker treats it as a failed Slack acknowledgement and keeps the
+receipt pending. It verifies the exact method, recipient, channel, and stored
+single-use link without sending a live Slack message. The authenticated form then
+binds the identity, and the authorized replay creates an investigation conversation.
+The final database pass added an index for the incident-thread lookup performed
+on incoming messages. CI must cover that final migration as well.

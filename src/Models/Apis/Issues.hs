@@ -96,6 +96,7 @@ module Models.Apis.Issues (
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
+  slackScopedConversationId,
   textToConversationId,
 
   -- * Activity Log
@@ -1009,6 +1010,11 @@ textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpa
 
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
+
+
+slackScopedConversationId :: Projects.ProjectId -> Text -> Text -> Text -> UUIDId "conversation"
+slackScopedConversationId pid teamId channelId threadTs =
+  UUIDId $ UUID5.generateNamed pid.unUUIDId $ BS.unpack $ toStrict $ AE.encode (teamId, channelId, threadTs)
 
 
 -- | Serialize first-contact history insertion on one connection. Failed fetches

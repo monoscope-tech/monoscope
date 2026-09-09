@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -27,6 +27,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Hasql.Interpolate qualified as HI
+import Lucid qualified as H
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -49,7 +50,7 @@ import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -62,7 +63,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err403, err503)
 import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
 
@@ -154,6 +155,42 @@ startInstallGetH pid onboarding = do
         ]
       url = "https://slack.com/oauth/v2/authorize" <> decodeUtf8 (renderSimpleQuery True $ map (bimap encodeUtf8 encodeUtf8) params)
   pure $ addHeader url Servant.NoContent
+
+
+newtype SlackLinkForm = SlackLinkForm {projectId :: Projects.ProjectId}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+linkIdentityGetH :: UUIDId "slack_link" -> ATAuthCtx (RespHeaders (H.Html ()))
+linkIdentityGetH linkId = do
+  sess <- Projects.getSession
+  request <- Integrations.getSlackLink linkId >>= maybe (throwError err403{errBody = "This Slack link has expired or was already used. Ask Monoscope in Slack for a new link."}) pure
+  projects <- Integrations.slackLinkProjects request.teamId sess.user.id
+  addRespHeaders
+    $ bodyWrapper def{sessM = Just sess, pageTitle = "Link Slack account"}
+    $ H.main_ [H.class_ "mx-auto max-w-lg p-6 space-y-4"] do
+      H.h1_ [H.class_ "text-xl font-semibold text-textStrong"] "Link your Slack account"
+      H.p_ [H.class_ "text-sm text-textWeak"] $ H.toHtml $ "Connect Slack user " <> request.slackUserId <> " in workspace " <> request.teamId <> " to your Monoscope account."
+      if null projects
+        then H.p_ [H.class_ "text-sm text-textWeak"] "You need access to a project connected to this Slack workspace. Ask a project admin to invite you, then request a new link in Slack."
+        else H.form_ [H.method_ "post", H.action_ ("/slack/link/" <> linkId.toText), H.class_ "space-y-4"] do
+          H.label_ [H.for_ "slack-project", H.class_ "block text-sm font-medium"] "Project to investigate"
+          H.select_ [H.id_ "slack-project", H.name_ "projectId", H.required_ "", H.class_ "select select-bordered w-full"]
+            $ for_ projects \project -> H.option_ [H.value_ project.projectId.toText] $ H.toHtml project.title
+          H.button_ [H.type_ "submit", H.class_ "btn btn-primary"] "Link Slack account"
+
+
+linkIdentityPostH :: UUIDId "slack_link" -> SlackLinkForm -> ATAuthCtx (RespHeaders (H.Html ()))
+linkIdentityPostH linkId form = do
+  sess <- Projects.getSession
+  linked <- Integrations.completeSlackLink linkId sess.user.id form.projectId
+  unless linked $ throwError err403{errBody = "This link cannot be used with this account or project. Request a new link in Slack and check your project access."}
+  addRespHeaders
+    $ bodyWrapper def{sessM = Just sess, pageTitle = "Slack account linked"}
+    $ H.main_ [H.class_ "mx-auto max-w-lg p-6 space-y-4"] do
+      H.h1_ [H.class_ "text-xl font-semibold text-textStrong"] "Slack account linked"
+      H.p_ [H.class_ "text-sm text-textWeak"] "Return to Slack and send your question again. Monoscope will check your project access before investigating."
 
 
 linkProjectGetH :: Maybe Text -> Maybe Text -> ATAuthCtx (Headers '[Header "Location" Text] BotResponse)
@@ -613,6 +650,7 @@ data SlackMessage = SlackMessage
   , thread_ts :: Maybe Text
   , user :: Text
   , ts :: Text
+  , channel_type :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -651,6 +689,11 @@ classifySlackEvent wire = do
   header <- AE.parseJSON @SlackEventHeader $ AE.toJSON wire
   let decode :: AE.FromJSON a => AE.Parser a
       decode = AE.parseJSON $ AE.toJSON wire
+      human constructor = do
+        value <- decode
+        unless (all (isJust . Incidents.slackTimestamp) $ value.ts : maybeToList value.thread_ts) $ fail "Invalid Slack message timestamp"
+        when (any T.null [value.user, value.channel]) $ fail "Missing Slack message identity"
+        pure $ constructor value
       assistant constructor = do
         value <- decode
         unless (all (isJust . Incidents.slackTimestamp) [value.event_ts, value.assistant_thread.thread_ts]) $ fail "Invalid Slack assistant timestamp"
@@ -660,8 +703,8 @@ classifySlackEvent wire = do
     ("message", Just "message_changed") -> pure MessageEdit
     ("message", Just "bot_message") -> pure BotMessage
     ("message", Nothing) | isJust header.bot_id -> pure BotMessage
-    ("message", Nothing) -> UserMessage <$> decode
-    ("app_mention", Nothing) | isNothing header.bot_id -> AppMention <$> decode
+    ("message", Nothing) -> human UserMessage
+    ("app_mention", Nothing) | isNothing header.bot_id -> human AppMention
     ("assistant_thread_started", _) -> assistant AssistantStarted
     ("assistant_thread_context_changed", _) -> assistant AssistantContextChanged
     _ -> pure $ UnknownEvent header
@@ -727,20 +770,38 @@ processSlackEvent receiptId = do
     handleEventCallback envCfg event workspaceId = do
       kind <- either (const $ throwError err400) pure $ AE.parseEither classifySlackEvent event
       case kind of
-        UserMessage message -> handleMessage envCfg message workspaceId
-        AppMention message -> handleMessage envCfg message workspaceId
+        UserMessage message -> handleMessage False envCfg message workspaceId
+        AppMention message -> handleMessage True envCfg message workspaceId
         AssistantStarted session -> saveAssistantContext workspaceId session
         AssistantContextChanged session -> saveAssistantContext workspaceId session
         BotMessage -> Log.logTrace "Slack bot message retained without starting an investigation" (AE.object [])
         MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
         UnknownEvent header -> Log.logTrace "Unsupported Slack event retained" (AE.object ["team_id" AE..= workspaceId, "event_type" AE..= header.eventType, "subtype" AE..= header.subtype])
 
-    handleMessage envCfg event workspaceId =
-      void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
-        Nothing -> do
-          Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
-          sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-        Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs
+    handleMessage mentioned envCfg event workspaceId = do
+      let threadTs = fromMaybe event.ts event.thread_ts
+      threadProject <- Integrations.slackThreadProject workspaceId event.channel threadTs
+      if mentioned || event.channel_type == Just "im" || isJust threadProject
+        then
+          Integrations.resolveSlackPrincipal workspaceId event.user threadProject >>= \case
+            Nothing -> do
+              linkId <- UUIDId <$> UUID.genUUID
+              request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
+              void $ withSlackDataByTeam "Slack identity link" workspaceId \slackData -> do
+                let content =
+                      AE.object
+                        [ "channel" AE..= request.channelId
+                        , "user" AE..= request.slackUserId
+                        , "text" AE..= ("Link your Monoscope account and choose a project before investigating: <" <> envCfg.hostUrl <> "slack/link/" <> request.id.toText <> "|Link account>. This private link expires in 15 minutes.")
+                        ]
+                result <- slackApi slackData.botToken "chat.postEphemeral" content
+                either (throwIO . ErrorCall . toString) pure result
+            Just principal -> do
+              bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
+              unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
+              void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
+                processThreadedEvent envCfg slackData event workspaceId threadTs
+        else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
     processThreadedEvent envCfg slackData event workspaceId threadTs = do
       let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
@@ -749,7 +810,7 @@ processSlackEvent receiptId = do
               <$> withBotThread
                 Slack
                 slackData.projectId
-                (Issues.slackThreadToConversationId event.channel threadTs)
+                (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs)
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map ((Issues.ChatUser,) . (.text)) . (.messages)) <$> getChannelMessages slackData.botToken event.channel threadTs)

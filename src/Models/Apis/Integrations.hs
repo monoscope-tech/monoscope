@@ -15,6 +15,16 @@ module Models.Apis.Integrations (
   SlackInstall (..),
   createSlackInstall,
   consumeSlackInstall,
+  SlackLink (..),
+  SlackLinkProject (..),
+  SlackPrincipal (..),
+  createSlackLink,
+  getSlackLink,
+  slackLinkProjects,
+  completeSlackLink,
+  resolveSlackPrincipal,
+  slackThreadProject,
+  bindSlackInvestigation,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -26,6 +36,130 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
+
+
+data SlackLink = SlackLink {id :: UUIDId "slack_link", teamId :: Text, slackUserId :: Text, channelId :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data SlackLinkProject = SlackLinkProject {projectId :: Projects.ProjectId, title :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data SlackPrincipal = SlackPrincipal {userId :: Projects.UserId, projectId :: Projects.ProjectId}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | The identity comes from the signed receipt, never from a link URL or form.
+-- A retry reuses the same private link instead of minting another credential.
+createSlackLink :: DB es => UUIDId "slack_link" -> UUIDId "slack_event" -> Eff es (Maybe SlackLink)
+createSlackLink linkId receiptId =
+  Hasql.interpOne
+    [HI.sql|WITH request AS (
+    INSERT INTO apis.slack_identity_requests (id, receipt_id)
+    SELECT #{linkId}, id FROM apis.slack_events
+    WHERE id = #{receiptId} AND payload #>> '{event,type}' IN ('message', 'app_mention')
+      AND COALESCE(payload #>> '{event,user}', '') <> ''
+      AND COALESCE(payload #>> '{event,channel}', '') <> ''
+      AND payload #>> '{event,bot_id}' IS NULL AND payload #>> '{event,subtype}' IS NULL
+    ON CONFLICT (receipt_id) DO UPDATE SET receipt_id = EXCLUDED.receipt_id
+    RETURNING id, receipt_id, expires_at, consumed_at
+  ) SELECT request.id, event.team_id, event.payload #>> '{event,user}', event.payload #>> '{event,channel}'
+    FROM request JOIN apis.slack_events event ON event.id = request.receipt_id
+    WHERE request.expires_at > now() AND request.consumed_at IS NULL|]
+
+
+getSlackLink :: DB es => UUIDId "slack_link" -> Eff es (Maybe SlackLink)
+getSlackLink linkId =
+  Hasql.interpOne
+    [HI.sql|SELECT request.id, event.team_id, event.payload #>> '{event,user}', event.payload #>> '{event,channel}'
+    FROM apis.slack_identity_requests request JOIN apis.slack_events event ON event.id = request.receipt_id
+    WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL|]
+
+
+slackLinkProjects :: DB es => Text -> Projects.UserId -> Eff es [SlackLinkProject]
+slackLinkProjects teamId userId =
+  Hasql.interp
+    [HI.sql|SELECT project.id, project.title FROM projects.projects project
+    JOIN projects.project_members member ON member.project_id = project.id
+    JOIN users.users account ON account.id = member.user_id
+    JOIN apis.slack installation ON installation.project_id = project.id
+    WHERE installation.team_id = #{teamId} AND member.user_id = #{userId}
+      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
+    ORDER BY project.title, project.id|]
+
+
+-- | Lock the request so concurrent form submissions cannot bind it twice.
+-- Existing identities cannot be reassigned to a different Monoscope account.
+completeSlackLink :: DB es => UUIDId "slack_link" -> Projects.UserId -> Projects.ProjectId -> Eff es Bool
+completeSlackLink linkId userId projectId = do
+  affected <-
+    Hasql.interpExecute
+      [HI.sql|WITH request AS (
+      SELECT request.id, event.team_id, event.payload #>> '{event,user}' AS slack_user_id
+      FROM apis.slack_identity_requests request JOIN apis.slack_events event ON event.id = request.receipt_id
+      JOIN apis.slack installation ON installation.team_id = event.team_id AND installation.project_id = #{projectId}
+      JOIN projects.project_members member ON member.project_id = installation.project_id AND member.user_id = #{userId}
+      JOIN users.users account ON account.id = member.user_id
+      JOIN projects.projects project ON project.id = member.project_id
+      WHERE request.id = #{linkId} AND request.expires_at > now() AND request.consumed_at IS NULL
+        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
+      FOR UPDATE OF request
+    ), identity AS (
+      INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
+      SELECT team_id, slack_user_id, #{userId}, #{projectId} FROM request
+      ON CONFLICT (team_id, slack_user_id) DO UPDATE SET project_id = EXCLUDED.project_id
+      WHERE slack_identities.user_id = EXCLUDED.user_id
+      RETURNING team_id, slack_user_id
+    ) UPDATE apis.slack_identity_requests target SET consumed_at = now()
+      FROM request JOIN identity USING (team_id, slack_user_id) WHERE target.id = request.id|]
+  pure $ affected == 1
+
+
+-- | Revalidate membership and the installation on every incoming investigation.
+resolveSlackPrincipal :: DB es => Text -> Text -> Maybe Projects.ProjectId -> Eff es (Maybe SlackPrincipal)
+resolveSlackPrincipal teamId slackUserId threadProject =
+  Hasql.interpOne
+    [HI.sql|SELECT identity.user_id, member.project_id FROM apis.slack_identities identity
+    JOIN projects.project_members member ON member.project_id = COALESCE(#{threadProject}, identity.project_id) AND member.user_id = identity.user_id
+    JOIN users.users account ON account.id = identity.user_id
+    JOIN projects.projects project ON project.id = member.project_id
+    JOIN apis.slack installation ON installation.project_id = member.project_id AND installation.team_id = identity.team_id
+    WHERE identity.team_id = #{teamId} AND identity.slack_user_id = #{slackUserId}
+      AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL|]
+
+
+slackThreadProject :: DB es => Text -> Text -> Text -> Eff es (Maybe Projects.ProjectId)
+slackThreadProject teamId channelId threadTs =
+  fmap HI.getOneColumn
+    <$> Hasql.interpOne
+      [HI.sql|SELECT project_id FROM (
+    SELECT episode.project_id, 0 AS priority FROM apis.slack_incident_roots root
+    JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+    WHERE root.team_id = #{teamId} AND root.channel_id = #{channelId} AND root.message_ts = #{threadTs}
+    UNION ALL
+    SELECT project_id, 1 AS priority FROM apis.slack_investigation_threads
+    WHERE team_id = #{teamId} AND channel_id = #{channelId} AND thread_ts = #{threadTs}
+  ) binding ORDER BY priority LIMIT 1|]
+
+
+bindSlackInvestigation :: DB es => SlackPrincipal -> Text -> Text -> Text -> Eff es Bool
+bindSlackInvestigation principal teamId channelId threadTs = do
+  result <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|INSERT INTO apis.slack_investigation_threads (team_id, channel_id, thread_ts, project_id)
+      SELECT #{teamId}, #{channelId}, #{threadTs}, member.project_id FROM projects.project_members member
+      JOIN projects.projects project ON project.id = member.project_id
+      JOIN users.users account ON account.id = member.user_id
+      JOIN apis.slack installation ON installation.project_id = project.id AND installation.team_id = #{teamId}
+      WHERE member.project_id = #{principal.projectId} AND member.user_id = #{principal.userId}
+        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL AND project.active AND project.deleted_at IS NULL
+      ON CONFLICT (team_id, channel_id, thread_ts) DO UPDATE SET thread_ts = EXCLUDED.thread_ts
+      WHERE slack_investigation_threads.project_id = EXCLUDED.project_id RETURNING TRUE|]
+  pure $ isJust result
 
 
 data SlackInstall = SlackInstall {projectId :: Projects.ProjectId, onboarding :: Bool}

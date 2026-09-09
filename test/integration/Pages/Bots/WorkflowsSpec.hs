@@ -4,7 +4,9 @@ module Pages.Bots.WorkflowsSpec (spec) where
 
 import BackgroundJobs qualified as Jobs
 import Control.Exception (bracket_)
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _String)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Pool (withResource)
@@ -21,6 +23,7 @@ import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
 import Pages.Bots.Slack (processSlackEvent, slackEventsPostH, slackInteractionsH)
+import Pages.Bots.Slack qualified as SlackPage
 import Pages.Bots.Utils qualified as Bot
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -31,6 +34,7 @@ import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_)
+import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -38,6 +42,82 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
+    describe "Slack personal linking" do
+      it "sends only a private link, binds through the authenticated form, and rechecks access" \tr -> do
+        setupSlackData tr testPid "T_IDENTITY"
+        let payload =
+              slackThreadedEvent "T_IDENTITY" "C_IDENTITY" "follow up question" "1735689602.000001" "1735689601.000001"
+                & key "event"
+                . key "type"
+                . _String
+                .~ "app_mention"
+            userId = (getResponse tr.trSessAndHeader).user.id
+            resolve = toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_IDENTITY" "U0123ABCDEF" Nothing
+        receiptId <- receiveSlackEvent tr payload
+        (requests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ tryAny $ processSlackEvent receiptId
+        outcome `shouldSatisfy` isLeft -- The recorder returns {}, not Slack's required ok=true acknowledgement.
+        map fst requests `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        [PGS.Only linkId] <- withResource tr.trPool \conn ->
+          PGS.query conn [sql|SELECT id FROM apis.slack_identity_requests WHERE receipt_id = ?|] (PGS.Only receiptId)
+        let sent = snd <$> listToMaybe requests >>= AE.decode @AE.Value
+        (sent >>= (^? key "user" . _String)) `shouldBe` Just "U0123ABCDEF"
+        (sent >>= (^? key "channel" . _String)) `shouldBe` Just "C_IDENTITY"
+        (sent >>= (^? key "text" . _String)) `shouldSatisfy` maybe False (T.isInfixOf linkId.toText)
+        resolve >>= (`shouldSatisfy` isNothing)
+        void $ toServantResponse tr $ SlackPage.linkIdentityGetH linkId
+        void $ toServantResponse tr $ SlackPage.linkIdentityPostH linkId $ SlackPage.SlackLinkForm testPid
+        principal <- resolve
+        fmap (\p -> (p.userId, p.projectId)) principal `shouldBe` Just (userId, testPid)
+        toBaseServantResponse tr (Slack.completeSlackLink linkId userId testPid) >>= (`shouldBe` False)
+        runTestBg frozenTime tr $ processSlackEvent receiptId
+        [PGS.Only conversations] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
+        (conversations :: Int64) `shouldBe` 1
+        toBaseServantResponse tr (Slack.slackThreadProject "T_IDENTITY" "C_IDENTITY" "1735689601.000001") >>= (`shouldBe` Just testPid)
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE user_id = ?|] (PGS.Only userId)
+        resolve >>= (`shouldSatisfy` isNothing)
+
+      it "rejects cross-workspace linking and keeps a thread on its original project after selection changes" \tr -> do
+        setupSlackData tr testPid "T_IDENTITY"
+        otherPid <- createTestProject tr "Another project"
+        setupSlackData tr otherPid "T_OTHER"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            linkId n = UUIDId $ UUID.fromWords 0 0 2 n
+            payload eventId =
+              slackThreadedEvent "T_IDENTITY" "C_IDENTITY" "investigate" "1735689602.000001" "1735689601.000001"
+                & key "event_id"
+                . _String
+                .~ eventId
+            complete n pid = toBaseServantResponse tr $ Slack.completeSlackLink (linkId n) userId pid
+            request n = do
+              receipt <- receiveSlackEvent tr $ payload $ "EvLink" <> show n
+              toBaseServantResponse tr (Slack.createSlackLink (linkId n) receipt) >>= (`shouldSatisfy` isJust)
+        request 1
+        complete 1 otherPid >>= (`shouldBe` False)
+        complete 1 testPid >>= (`shouldBe` True)
+        Just principal <- toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_IDENTITY" "U0123ABCDEF" Nothing
+        toBaseServantResponse tr (Slack.bindSlackInvestigation principal "T_IDENTITY" "C_IDENTITY" "1735689601.000001") >>= (`shouldBe` True)
+        setupSlackData tr otherPid "T_IDENTITY"
+        request 2
+        (leftResult, rightResult) <- concurrently (complete 2 otherPid) (complete 2 otherPid)
+        sort [leftResult, rightResult] `shouldBe` [False, True]
+        selected <- toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_IDENTITY" "U0123ABCDEF" Nothing
+        fmap (.projectId) selected `shouldBe` Just otherPid
+        bound <- toBaseServantResponse tr $ Slack.slackThreadProject "T_IDENTITY" "C_IDENTITY" "1735689601.000001"
+        bound `shouldBe` Just testPid
+        authorized <- toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_IDENTITY" "U0123ABCDEF" bound
+        fmap (.projectId) authorized `shouldBe` Just testPid
+        let otherUser = UUIDId (UUID.fromWords 0 0 3 1) :: Projects.UserId
+        withResource tr.trPool \conn -> do
+          void $ PGS.execute conn [sql|INSERT INTO users.users (id, email) VALUES (?, 'slack-other@example.com')|] (PGS.Only otherUser)
+          void $ PGS.execute conn [sql|INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, ?, 'admin')|] (testPid, otherUser)
+        request 3
+        toBaseServantResponse tr (Slack.completeSlackLink (linkId 3) otherUser testPid) >>= (`shouldBe` False)
+        complete 3 testPid >>= (`shouldBe` True)
+        request 4
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_identity_requests SET expires_at = now() - interval '1 second' WHERE id = ?|] (PGS.Only $ linkId 4)
+        complete 4 testPid >>= (`shouldBe` False)
+        toBaseServantResponse tr (Slack.getSlackLink $ linkId 4) >>= (`shouldSatisfy` isNothing)
+
     describe "Slack installation authorization" do
       it "requires a current admin and consumes expiring state once for its initiating user" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id
@@ -238,7 +318,7 @@ spec = around withTestResources do
         saved <- toBaseServantResponse tr $ Issues.selectChatHistory convId
         map (\message -> (message.role, message.content)) saved `shouldBe` history
 
-      it "Slack: handles threaded messages" \tr -> do
+      it "Slack: deduplicates unrelated threaded events without starting a conversation" \tr -> do
         setupSlackData tr testPid "T_THREAD_WF"
         void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel "T_THREAD_WF" "C_THREAD_CHANNEL" Nothing
 
@@ -259,6 +339,8 @@ spec = around withTestResources do
         let process = runTestBg frozenTime signedTr $ Jobs.processBackgroundJob signedTr.trATCtx job
             historySize = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_chat_messages|]
         process
+        [PGS.Only conversations] <- withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.ai_conversations|]
+        (conversations :: Int64) `shouldBe` 0
         beforeReplay <- historySize
         process
         afterReplay <- historySize
