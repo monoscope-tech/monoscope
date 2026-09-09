@@ -16,6 +16,8 @@ module Models.Apis.Incidents (
   recordIncidentEvent,
   recordIncidentEventTx,
   getEpisode,
+  InvestigationContext (..),
+  slackInvestigationContext,
   latestEpisodeTx,
   ErrorResolution (..),
   resolveErrorIncident,
@@ -76,7 +78,7 @@ data IncidentDelivery = PublishIncident | RefreshIncident
 
 data EpisodePhase = EpisodeActive | EpisodeRecovered | EpisodeResolved
   deriving stock (Eq, Generic, Read, Show)
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
+  deriving (AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
 
 
 data Episode = Episode
@@ -172,6 +174,50 @@ episodeSelect = [HI.sql|SELECT id, project_id, issue_id, phase, started_at, last
 
 getEpisode :: DB es => Projects.ProjectId -> EpisodeId -> Eff es (Maybe Episode)
 getEpisode pid eid = Hasql.interpOne (episodeSelect <> [HI.sql|WHERE project_id = #{pid} AND id = #{eid}|])
+
+
+-- | Stored incident evidence for an authorized Slack thread. Monitor settings
+-- are current configuration, not a reconstruction of the configuration at onset.
+data InvestigationContext = InvestigationContext
+  { episodeId :: EpisodeId
+  , issueId :: Maybe Issues.IssueId
+  , source :: IncidentSource
+  , phase :: EpisodePhase
+  , startedAt :: UTCTime
+  , lastEventAt :: UTCTime
+  , closedAt :: Maybe UTCTime
+  , initialNotification :: SlackPayload
+  , latestNotification :: SlackPayload
+  , currentMonitorQuery :: Maybe Text
+  , currentMonitorWindowMinutes :: Maybe Int
+  , currentMonitorUnit :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+slackInvestigationContext :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe InvestigationContext)
+slackInvestigationContext pid teamId channelId threadTs =
+  Hasql.interpOne
+    [HI.sql|SELECT episode.id, episode.issue_id,
+      jsonb_build_object('tag', CASE episode.source_kind
+        WHEN 'monitor' THEN 'MonitorIncident' WHEN 'issue' THEN 'IssueIncident' WHEN 'error' THEN 'ErrorIncident' END,
+        'contents', episode.source_id),
+      episode.phase, episode.started_at, episode.last_event_at, episode.closed_at,
+      initial.root_payload, latest.root_payload,
+      monitor.log_query, monitor.time_window_mins, monitor.alert_config->>'unit'
+    FROM apis.slack_incident_roots root
+    JOIN apis.incident_episodes episode ON episode.id = root.episode_id
+    JOIN apis.incident_events initial ON initial.id = root.first_event_id AND initial.episode_id = episode.id
+    JOIN LATERAL (SELECT event.root_payload FROM apis.incident_events event WHERE event.episode_id = episode.id
+      ORDER BY event.observed_at DESC,
+        (SELECT max(delivery.sequence) FROM apis.slack_incident_deliveries delivery
+          WHERE delivery.event_id = event.id AND delivery.root_id = root.id) DESC NULLS LAST
+      LIMIT 1) latest ON TRUE
+    LEFT JOIN monitors.query_monitors monitor ON episode.source_kind = 'monitor'
+      AND monitor.id = episode.source_id AND monitor.project_id = episode.project_id
+    WHERE episode.project_id = #{pid} AND root.team_id = #{teamId}
+      AND root.channel_id = #{channelId} AND root.message_ts = #{threadTs}|]
 
 
 latestEpisodeTx :: Projects.ProjectId -> IncidentSource -> Tx.Transaction (Maybe Episode)

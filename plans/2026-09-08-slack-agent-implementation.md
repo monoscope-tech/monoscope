@@ -1112,3 +1112,37 @@ Full CI signoff is pending for units and the preceding failure/label changes.
 The next implementation slice is evidence-led incident conversation; live Slack
 acceptance, code/deployment context, drafts, and proactive policy remain incomplete.
 No deployment or deployment-branch push occurred.
+
+
+## Incident context in Slack investigations
+
+Unit propagation is committed on master as e09d27e9a. Combined local CI is running
+with `make ci-signoff CHECKS="build doctests unit-tests frontend ui-tests"`; its
+log is `/tmp/monoscope-slack-agent/units-ci-signoff.log`. No result is claimed yet.
+
+The isolated branch `slack-incident-context` at
+`/tmp/monoscope-slack-incident-context` adds a derived incident context record, a
+project/workspace/channel/thread-scoped database lookup, and a Slack-only
+get_incident_context tool. Its model instructions use the shared telemetry schema
+and response contract while asking the agent to test hypotheses and state missing
+evidence. Stored notification text enters as tool evidence, not system text.
+Current monitor configuration is labeled separately from stored notifications.
+
+A workflow regression submits an ordinary reply to a persisted incident root,
+requests the real context tool through a controlled model response, and checks the
+reply destination, evidence role, and project/workspace/channel isolation. This is
+a deterministic transport/tool test, not an investigation-quality evaluation.
+Native `TEST_MATCH=Workflows make live-test-dev` passed 33 examples with zero
+failures in 60.4999 seconds in the isolated worktree with DB_HOST=127.0.0.1 and
+MINIO_ENDPOINT=http://127.0.0.1:19000. The final test also ignores a supplied
+project_id tool argument, denies a different root timestamp, and reloads recovery
+evidence after two transitions share a timestamp. Delivery sequence determines
+the latest event; the root first_event_id identifies its initial notification.
+Log: `/tmp/monoscope-slack-agent/incident-context-tests.log`. The worktree has an
+independent copy-on-write native build cache; master CI inputs stay untouched.
+Formatting and whitespace checks pass. All three requested review skills ran
+three times. HLint remains blocked by its unsupported MultilineStrings extension.
+Weeder reports repository findings; it is not a passing check. Its log is
+`/tmp/monoscope-slack-agent/incident-context-weeder.log`. Full CI for this increment,
+representative diagnosis-quality evaluation, deployment/code tools, action drafts,
+and live Slack acceptance remain outstanding. No deployment.
