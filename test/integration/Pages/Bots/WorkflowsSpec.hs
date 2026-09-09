@@ -666,98 +666,142 @@ spec = around withTestResources do
         (replayed, _) <- work receipt
         replayed `shouldBe` []
 
-      it "reconciles a lost progress acknowledgement only from the matching signed app observation" \tr -> do
-        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_PROGRESS"}}}
-            target = Investigations.ProgressTarget testPid "T_RECONCILE" "C_RECONCILE" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
-        setupLinkedSlackData resources testPid "T_RECONCILE"
-        lostAck <- newEmptyMVar
-        posts <- newIORef (0 :: Int)
-        modelCalls <- newIORef (0 :: Int)
-        let transport = withHTTPResponses \_ endpoint ->
-              if endpoint == "https://slack.com/api/chat.postMessage"
-                then do
-                  number <- atomicModifyIORef' posts (\n -> (n + 1, n))
+      for_ [False, True] $ \fromHistory ->
+        it ("reconciles a lost progress acknowledgement from " <> if fromHistory then "thread history" else "a signed app observation") \tr -> do
+          let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_PROGRESS"}}}
+              target = Investigations.ProgressTarget testPid "T_RECONCILE" "C_RECONCILE" "1735689600.000001" "1735689602.000001" (getResponse tr.trSessAndHeader).user.id "U0123ABCDEF"
+          setupLinkedSlackData resources testPid "T_RECONCILE"
+          lostAck <- newEmptyMVar
+          posts <- newIORef (0 :: Int)
+          modelCalls <- newIORef (0 :: Int)
+          pages <- newIORef ([] :: [(Maybe Text, AE.Value)])
+          revokeDuringHistory <- newIORef False
+          let transport = withHTTPResponses \opts endpoint ->
+                if endpoint == "https://slack.com/api/conversations.replies" && opts ^. Wreq.param "include_all_metadata" == ["true"]
+                  then do
+                    opts ^. Wreq.param "channel" `shouldBe` [target.channelId]
+                    opts ^. Wreq.param "ts" `shouldBe` [target.threadTs]
+                    opts ^. Wreq.param "oldest" `shouldBe` [target.messageTs]
+                    next <- atomicModifyIORef' pages $ \case
+                      [] -> ([], Nothing)
+                      page : rest -> (rest, Just page)
+                    (cursor, body) <- maybe (fail "Unexpected progress history request") pure next
+                    opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
+                    revoke <- readIORef revokeDuringHistory
+                    when revoke $ withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ?|] (PGS.Only testPid)
+                    pure $ Just $ AE.encode body
+                  else
+                    if endpoint == "https://slack.com/api/chat.postMessage"
+                      then do
+                        number <- atomicModifyIORef' posts (\n -> (n + 1, n))
+                        if number == 0
+                          then void (tryPutMVar lostAck ()) $> Just "{\"ok\":true}"
+                          else pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
+                      else pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
+              provider = interpose @ELLM.LLM \_ -> \case
+                ELLM.CallAgenticChat{} -> do
+                  number <- atomicModifyIORef' modelCalls (\n -> (n + 1, n))
                   if number == 0
-                    then void (tryPutMVar lostAck ()) $> Just "{\"ok\":true}"
-                    else pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
-                else pure $ Just "{\"ok\":true,\"messages\":[],\"ts\":\"1735689610.000001\"}"
-            provider = interpose @ELLM.LLM \_ -> \case
-              ELLM.CallAgenticChat{} -> do
-                number <- atomicModifyIORef' modelCalls (\n -> (n + 1, n))
-                if number == 0
-                  then liftIO do
-                    timeout 10_000_000 (takeMVar lostAck) >>= (`shouldBe` Just ())
-                    throwIO $ ErrorCall "Interrupted after Slack accepted progress"
-                  else pure $ Right $ Chat.Message Chat.Assistant "The investigation resumed." Chat.defaultMessageData
-              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
-              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-            work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
-        receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_RECONCILE" "C_RECONCILE" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
-        (firstRequests, interrupted) <- work receipt
-        interrupted `shouldSatisfy` isLeft
-        Just publication <- runQueryEffect resources $ Investigations.loadProgress target
-        publication.timestamp `shouldBe` Nothing
-        let postedIds = [value | (url, body) <- firstRequests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body >>= (^? key "metadata" . key "event_payload" . key "publication_id")]]
-        postedIds `shouldBe` [AE.toJSON publication.publicationId]
-        runQueryEffect resources (Investigations.claimProgress target) >>= (`shouldSatisfy` isNothing)
-        let observation =
-              slackThreadedEvent "T_RECONCILE" "C_RECONCILE" "Recorded progress" "1735689610.000001" "1735689600.000001"
-                & key "api_app_id"
-                . _String
-                .~ "A_PROGRESS"
-                  & key "event"
-                .~ AE.object
-                  [ "type" AE..= ("message" :: Text)
-                  , "subtype" AE..= ("bot_message" :: Text)
-                  , "app_id" AE..= ("A_PROGRESS" :: Text)
-                  , "bot_id" AE..= ("B_PROGRESS" :: Text)
-                  , "channel" AE..= ("C_RECONCILE" :: Text)
-                  , "thread_ts" AE..= ("1735689600.000001" :: Text)
-                  , "ts" AE..= ("1735689610.000001" :: Text)
-                  , "text" AE..= ("Recorded progress" :: Text)
-                  , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_investigation_progress" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= publication.publicationId]]
-                  ]
-            observe event = receiveSlackEvent resources event >>= work
-        for_
-          ( zip
-              [1 :: Int ..]
-              [ observation & key "event" . key "app_id" . _String .~ "A_OTHER"
-              , observation & key "api_app_id" . _String .~ "A_OTHER"
-              , observation & key "team_id" . _String .~ "T_OTHER"
-              , observation & key "event" . key "channel" . _String .~ "C_OTHER"
-              , observation & key "event" . key "thread_ts" . _String .~ "1735689600.000002"
-              ]
-          )
-          $ \(number, spoofed) -> do
-            (_, result) <- observe $ spoofed & key "event_id" . _String .~ ("spoofed-progress-" <> show number)
-            result `shouldSatisfy` isRight
-            pending <- runQueryEffect resources $ Investigations.loadProgress target
-            fmap (.timestamp) pending `shouldBe` Just Nothing
-        (_, resumed) <- work receipt
-        resumed `shouldSatisfy` isRight
-        readIORef posts >>= (`shouldBe` 2)
-        readIORef modelCalls >>= (`shouldBe` 2)
-        (requests, observed) <- observe $ observation & key "event_id" . _String .~ "observed-progress"
-        observed `shouldSatisfy` isRight
-        confirmed <- runQueryEffect resources $ Investigations.loadProgress target
-        fmap (.timestamp) confirmed `shouldBe` Just (Just "1735689610.000001")
-        runQueryEffect resources (Investigations.confirmProgress publication.publicationId "1735689620.000001") >>= (`shouldBe` False)
-        runQueryEffect resources $ Investigations.rejectProgress publication.publicationId
-        void $ observe $ observation & key "event_id" . _String .~ "conflicting-progress" & key "event" . key "ts" . _String .~ "1735689620.000001"
-        unchanged <- runQueryEffect resources $ Investigations.loadProgress target
-        fmap (.timestamp) unchanged `shouldBe` Just (Just "1735689610.000001")
-        let updates = [body | (url, body) <- requests, url == "https://slack.com/api/chat.update"]
-        updates `shouldSatisfy` (not . null)
-        for_ updates $ \body -> do
-          (AE.decode @AE.Value body >>= (^? key "ts" . _String)) `shouldBe` Just "1735689610.000001"
-          (AE.decode @AE.Value body >>= (^? key "blocks" . _Array . ix 0 . key "title" . _String)) `shouldBe` Just "Investigation response ready"
-        (replayed, _) <- work receipt
-        replayed `shouldBe` []
-        let rejectedTarget = (target{Investigations.messageTs = "1735689630.000001"} :: Investigations.ProgressTarget)
-        Just rejected <- runQueryEffect resources $ Investigations.claimProgress rejectedTarget
-        runQueryEffect resources $ Investigations.rejectProgress rejected.publicationId
-        runQueryEffect resources (Investigations.loadProgress rejectedTarget) >>= (`shouldSatisfy` isNothing)
-        runQueryEffect resources (Investigations.claimProgress rejectedTarget) >>= (`shouldSatisfy` isJust)
+                    then liftIO do
+                      timeout 10_000_000 (takeMVar lostAck) >>= (`shouldBe` Just ())
+                      throwIO $ ErrorCall "Interrupted after Slack accepted progress"
+                    else pure $ Right $ Chat.Message Chat.Assistant "The investigation resumed." Chat.defaultMessageData
+                ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+                ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+              work receipt = runTestBgRecordingHTTP frozenTime resources $ transport $ provider $ tryAny $ processSlackEvent receipt
+          receipt <- receiveSlackEvent resources $ slackThreadedEvent "T_RECONCILE" "C_RECONCILE" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+          (firstRequests, interrupted) <- work receipt
+          interrupted `shouldSatisfy` isLeft
+          Just publication <- runQueryEffect resources $ Investigations.loadProgress target
+          publication.timestamp `shouldBe` Nothing
+          let postedIds = [value | (url, body) <- firstRequests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body >>= (^? key "metadata" . key "event_payload" . key "publication_id")]]
+          postedIds `shouldBe` [AE.toJSON publication.publicationId]
+          runQueryEffect resources (Investigations.claimProgress target) >>= (`shouldSatisfy` isNothing)
+          let observation =
+                slackThreadedEvent "T_RECONCILE" "C_RECONCILE" "Recorded progress" "1735689610.000001" "1735689600.000001"
+                  & key "api_app_id"
+                  . _String
+                  .~ "A_PROGRESS"
+                    & key "event"
+                  .~ AE.object
+                    [ "type" AE..= ("message" :: Text)
+                    , "subtype" AE..= ("bot_message" :: Text)
+                    , "app_id" AE..= ("A_PROGRESS" :: Text)
+                    , "bot_id" AE..= ("B_PROGRESS" :: Text)
+                    , "channel" AE..= ("C_RECONCILE" :: Text)
+                    , "thread_ts" AE..= ("1735689600.000001" :: Text)
+                    , "ts" AE..= ("1735689610.000001" :: Text)
+                    , "text" AE..= ("Recorded progress" :: Text)
+                    , "metadata" AE..= AE.object ["event_type" AE..= ("monoscope_investigation_progress" :: Text), "event_payload" AE..= AE.object ["publication_id" AE..= publication.publicationId]]
+                    ]
+              observe event = receiveSlackEvent resources event >>= work
+          for_
+            ( zip
+                [1 :: Int ..]
+                [ observation & key "event" . key "app_id" . _String .~ "A_OTHER"
+                , observation & key "api_app_id" . _String .~ "A_OTHER"
+                , observation & key "team_id" . _String .~ "T_OTHER"
+                , observation & key "event" . key "channel" . _String .~ "C_OTHER"
+                , observation & key "event" . key "thread_ts" . _String .~ "1735689600.000002"
+                ]
+            )
+            $ \(number, spoofed) -> do
+              (_, result) <- observe $ spoofed & key "event_id" . _String .~ ("spoofed-progress-" <> show number)
+              result `shouldSatisfy` isRight
+              pending <- runQueryEffect resources $ Investigations.loadProgress target
+              fmap (.timestamp) pending `shouldBe` Just Nothing
+          (_, resumed) <- work receipt
+          resumed `shouldSatisfy` isRight
+          readIORef posts >>= (`shouldBe` 2)
+          readIORef modelCalls >>= (`shouldBe` 2)
+          (requests, observed) <-
+            if fromHistory
+              then do
+                let message = fromMaybe AE.Null $ observation ^? key "event"
+                    page messages next = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= (next :: Text)]]
+                    wrong = page [message & key "app_id" . _String .~ "A_OTHER", message & key "thread_ts" . _String .~ "1735689600.000002", message & key "metadata" . key "event_type" . _String .~ "monoscope_investigation_reply"] "next"
+                    conflicting = page [message, message & key "ts" . _String .~ "1735689620.000001"] ""
+                    matching = page [message] ""
+                    refresh = runTestBgRecordingHTTP frozenTime resources $ transport $ tryAny $ SlackPage.refreshSlackProgress publication.publicationId
+                    pending = runQueryEffect resources (Investigations.loadProgress target) >>= (\saved -> fmap (.timestamp) saved `shouldBe` Just Nothing)
+                writeIORef pages [(Nothing, wrong), (Just "next", conflicting), (Just "next", matching), (Just "next", matching)]
+                replicateM_ 2 do
+                  (_, result) <- refresh
+                  result `shouldSatisfy` isRight
+                  pending
+                  search <- runQueryEffect resources $ Investigations.loadProgressSearch publication.publicationId
+                  fmap (.cursor) search `shouldBe` Just (Just "next")
+                writeIORef revokeDuringHistory True
+                (revokedRequests, result) <- refresh
+                result `shouldSatisfy` isRight
+                map fst revokedRequests `shouldBe` ["https://slack.com/api/conversations.replies"]
+                pending
+                writeIORef revokeDuringHistory False
+                withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = TRUE WHERE project_id = ?|] (PGS.Only testPid)
+                refresh
+              else observe $ observation & key "event_id" . _String .~ "observed-progress"
+          observed `shouldSatisfy` isRight
+          readIORef posts >>= (`shouldBe` 2)
+          readIORef modelCalls >>= (`shouldBe` 2)
+          confirmed <- runQueryEffect resources $ Investigations.loadProgress target
+          fmap (.timestamp) confirmed `shouldBe` Just (Just "1735689610.000001")
+          runQueryEffect resources (Investigations.confirmProgress publication.publicationId "1735689620.000001") >>= (`shouldBe` False)
+          runQueryEffect resources $ Investigations.rejectProgress publication.publicationId
+          void $ observe $ observation & key "event_id" . _String .~ "conflicting-progress" & key "event" . key "ts" . _String .~ "1735689620.000001"
+          unchanged <- runQueryEffect resources $ Investigations.loadProgress target
+          fmap (.timestamp) unchanged `shouldBe` Just (Just "1735689610.000001")
+          let updates = [body | (url, body) <- requests, url == "https://slack.com/api/chat.update"]
+          updates `shouldSatisfy` (not . null)
+          for_ updates $ \body -> do
+            (AE.decode @AE.Value body >>= (^? key "ts" . _String)) `shouldBe` Just "1735689610.000001"
+            (AE.decode @AE.Value body >>= (^? key "blocks" . _Array . ix 0 . key "title" . _String)) `shouldBe` Just "Investigation response ready"
+          (replayed, _) <- work receipt
+          replayed `shouldBe` []
+          let rejectedTarget = (target{Investigations.messageTs = "1735689630.000001"} :: Investigations.ProgressTarget)
+          Just rejected <- runQueryEffect resources $ Investigations.claimProgress rejectedTarget
+          runQueryEffect resources $ Investigations.rejectProgress rejected.publicationId
+          runQueryEffect resources (Investigations.loadProgress rejectedTarget) >>= (`shouldSatisfy` isNothing)
+          runQueryEffect resources (Investigations.claimProgress rejectedTarget) >>= (`shouldSatisfy` isJust)
 
       it "updates one progress checklist while investigating and reuses it after a rejected answer delivery" \tr -> do
         setupLinkedSlackData tr testPid "T_PROGRESS"

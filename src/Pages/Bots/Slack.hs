@@ -805,7 +805,7 @@ processSlackEvent receiptId =
   ( (runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> defer retryAt)
       `catch` \SlackWorkerBusy -> retryAfter (1 :: Int)
   )
-    `catch` \SlackReplyPending -> retryAfter 60
+    `catch` \SlackPublicationPending -> retryAfter 60
   where
     retryAfter seconds = slackRetryTime seconds >>= defer
     defer retryAt = do
@@ -947,7 +947,7 @@ processSlackEvent receiptId =
                 Nothing -> do
                   reconcileReplyHistory envCfg.slackAppId access slackData turn part
                   current <- Investigations.loadReplyBatch turn
-                  unless (maybe False ((> part) . (.deliveredCount)) current) $ throwIO SlackReplyPending
+                  unless (maybe False ((> part) . (.deliveredCount)) current) $ throwIO SlackPublicationPending
                 Just reserved -> do
                   response <-
                     tryAny
@@ -966,7 +966,7 @@ processSlackEvent receiptId =
                       Just limited -> Investigations.rejectReplyPublication reserved >> throwIO limited
                       Nothing -> do
                         Log.logAttention "Slack reply transport failed; publication awaits reconciliation" $ AE.object ["publication_id" AE..= reserved]
-                        throwIO SlackReplyPending
+                        throwIO SlackPublicationPending
                     Right received -> case AE.decode @SlackMessageAck (received ^. responseBody) of
                       Just ack
                         | statusIsSuccessful (received ^. Wreq.responseStatus)
@@ -982,7 +982,7 @@ processSlackEvent receiptId =
                             throwIO $ ErrorCall $ "Slack reply rejected: " <> toString reason
                       _ -> do
                         Log.logAttention "Slack reply acknowledgement is ambiguous; publication awaits reconciliation" $ AE.object ["publication_id" AE..= reserved]
-                        throwIO SlackReplyPending
+                        throwIO SlackPublicationPending
       ( do
           AI.requireAgentAccess access slackData.projectId
           bracket_
@@ -1054,12 +1054,11 @@ refreshSlackProgress :: UUIDId "slack_progress" -> ATBackgroundCtx ()
 refreshSlackProgress publicationId = do
   let retryAfter seconds = slackRetryTime seconds >>= scheduleProgressRefresh publicationId
   outcome <-
-    tryAny $ Investigations.loadProgressRefresh publicationId >>= traverse_ \(target, timestamp) -> case timestamp of
-      Nothing -> AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId >> retryAfter 60
-      Just ts ->
-        withInvestigationLock target.teamId target.channelId target.threadTs
-          $ RateLimit.withRateLimits target.teamId
-          $ refreshObservedProgress target ts
+    tryAny $ Investigations.loadProgressRefresh publicationId >>= traverse_ \(target, timestamp) ->
+      withInvestigationLock target.teamId target.channelId target.threadTs
+        $ RateLimit.withRateLimits target.teamId do
+          recovered <- maybe (reconcileProgressHistory target publicationId) (pure . Just) timestamp
+          maybe (retryAfter 60) (refreshObservedProgress target) recovered
   for_ (leftToMaybe outcome) $ \err ->
     case fromException @RateLimit.SlackRateLimited err of
       Just (RateLimit.SlackRateLimited retryAt) -> scheduleProgressRefresh publicationId retryAt
@@ -1079,38 +1078,69 @@ reconcileReplyHistory appId access slackData turn part =
   unless (T.null appId) $ Investigations.loadReplySearch turn part >>= traverse_ \search -> do
     AI.requireAgentAccess access turn.projectId
     unless (search.teamId == slackData.teamId && turn.conversationId == Issues.slackScopedConversationId turn.projectId search.teamId search.channelId search.threadTs) $ throwIO AI.AgentAccessDenied
-    let params = [("channel", search.channelId), ("ts", search.threadTs), ("oldest", turn.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
-        pending reason = do
-          Log.logAttention "Slack reply history reconciliation remains pending" $ AE.object ["publication_id" AE..= search.publicationId, "reason" AE..= (reason :: Text)]
-          throwIO SlackReplyPending
-        matching message = do
-          guard $ (message.app_id <|> (message.bot_profile >>= (.app_id))) == Just appId
-          guard $ maybe False (not . T.null) message.bot_id && message.thread_ts == Just search.threadTs
-          metadata <- message.metadata
-          guard $ metadata ^? key "event_type" . _String == Just "monoscope_investigation_reply"
-          guard $ metadata ^? key "event_payload" . key "publication_id" == Just (AE.toJSON search.publicationId)
-          Incidents.slackTimestampText <$> Incidents.slackTimestamp message.ts
-    response <- tryAny $ getWith (defaults & authHeader "Bearer" slackData.botToken & Wreq.params .~ params) "https://slack.com/api/conversations.replies"
+    outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
     AI.requireAgentAccess access turn.projectId
-    case response of
-      Left err -> maybe (pending "History transport failed") throwIO (fromException @RateLimit.SlackRateLimited err)
-      Right received -> case AE.decode @(SlackThreadedMessageResponse SlackPublishedMessage) (received ^. responseBody) of
-        Just page
-          | statusIsSuccessful (received ^. Wreq.responseStatus)
-          , page.ok
-          , Just messages <- page.messages ->
-              case ordNub $ mapMaybe matching messages of
-                [timestamp] -> do
-                  confirmed <- Investigations.confirmReplyPublication search.publicationId timestamp
-                  unless confirmed $ pending "Conflicting publication timestamp"
-                [] -> case page.response_metadata >>= (.next_cursor) >>= guarded (not . T.null . T.strip) of
-                  Just next | Just next /= search.cursor -> Investigations.saveReplySearchCursor search (Just next)
-                  Just _ -> pending "Repeated history cursor"
-                  Nothing | page.has_more == Just True -> pending "Incomplete history page without a cursor"
-                  Nothing -> Investigations.saveReplySearchCursor search Nothing
-                _ -> pending "Multiple messages match one publication"
-        Just page | statusIsSuccessful (received ^. Wreq.responseStatus), not page.ok, page.error == Just "invalid_cursor" -> Investigations.saveReplySearchCursor search Nothing
-        _ -> pending "History response rejected or malformed"
+    case outcome of
+      PublicationFound timestamp -> do
+        confirmed <- Investigations.confirmReplyPublication search.publicationId timestamp
+        unless confirmed $ throwIO SlackPublicationPending
+      PublicationCursor next -> Investigations.saveReplySearchCursor search next
+
+
+reconcileProgressHistory :: Investigations.ProgressTarget -> UUIDId "slack_progress" -> ATBackgroundCtx (Maybe Text)
+reconcileProgressHistory target publicationId = do
+  let access = AI.SlackAccess target.teamId target.slackUserId target.userId
+  AI.requireAgentAccess access target.projectId
+  appId <- (.slackAppId) <$> asks env
+  unless (T.null appId) $ Investigations.loadProgressSearch publicationId >>= traverse_ \search -> do
+    slackData <- getProjectSlackData target.projectId >>= maybe (throwIO AI.AgentAccessDenied) pure
+    unless (search.teamId == slackData.teamId && search.teamId == target.teamId && search.channelId == target.channelId && search.threadTs == target.threadTs && search.messageTs == target.messageTs) $ throwIO AI.AgentAccessDenied
+    outcome <- searchPublicationHistory appId slackData "monoscope_investigation_progress" search
+    AI.requireAgentAccess access target.projectId
+    case outcome of
+      PublicationFound timestamp -> do
+        confirmed <- Investigations.confirmProgress publicationId timestamp
+        unless confirmed $ throwIO SlackPublicationPending
+      PublicationCursor next -> Investigations.saveProgressSearchCursor search next
+  join . fmap (.timestamp) <$> Investigations.loadProgress target
+
+
+data PublicationHistory = PublicationFound Text | PublicationCursor (Maybe Text)
+  deriving stock (Show)
+
+
+-- | Reuse identical author, publication and pagination checks for replies and progress.
+searchPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Investigations.PublicationSearch kind -> Eff es PublicationHistory
+searchPublicationHistory appId slackData eventType search = do
+  let params = [("channel", search.channelId), ("ts", search.threadTs), ("oldest", search.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
+      pending reason = do
+        Log.logAttention "Slack publication history reconciliation remains pending" $ AE.object ["publication_id" AE..= search.publicationId, "reason" AE..= (reason :: Text)]
+        throwIO SlackPublicationPending
+      matching message = do
+        guard $ (message.app_id <|> (message.bot_profile >>= (.app_id))) == Just appId
+        guard $ maybe False (not . T.null) message.bot_id && message.thread_ts == Just search.threadTs
+        metadata <- message.metadata
+        guard $ metadata ^? key "event_type" . _String == Just eventType
+        guard $ metadata ^? key "event_payload" . key "publication_id" == Just (AE.toJSON search.publicationId)
+        Incidents.slackTimestampText <$> Incidents.slackTimestamp message.ts
+  response <- tryAny $ getWith (defaults & authHeader "Bearer" slackData.botToken & Wreq.params .~ params) "https://slack.com/api/conversations.replies"
+  case response of
+    Left err -> maybe (pending "History transport failed") throwIO (fromException @RateLimit.SlackRateLimited err)
+    Right received -> case AE.decode @(SlackThreadedMessageResponse SlackPublishedMessage) (received ^. responseBody) of
+      Just page
+        | statusIsSuccessful (received ^. Wreq.responseStatus)
+        , page.ok
+        , Just messages <- page.messages ->
+            case ordNub $ mapMaybe matching messages of
+              [timestamp] -> pure $ PublicationFound timestamp
+              [] -> case page.response_metadata >>= (.next_cursor) >>= guarded (not . T.null . T.strip) of
+                Just next | Just next /= search.cursor -> pure $ PublicationCursor $ Just next
+                Just _ -> pending "Repeated history cursor"
+                Nothing | page.has_more == Just True -> pending "Incomplete history page without a cursor"
+                Nothing -> pure $ PublicationCursor Nothing
+              _ -> pending "Multiple messages match one publication"
+      Just page | statusIsSuccessful (received ^. Wreq.responseStatus), not page.ok, page.error == Just "invalid_cursor" -> pure $ PublicationCursor Nothing
+      _ -> pending "History response rejected or malformed"
 
 
 newtype SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}
@@ -1229,7 +1259,7 @@ data SlackMessageAck = SlackMessageAck {ok :: Bool, ts :: Maybe Text, error :: M
   deriving anyclass (AE.FromJSON)
 
 
-data SlackReplyPending = SlackReplyPending
+data SlackPublicationPending = SlackPublicationPending
   deriving stock (Generic, Show)
   deriving anyclass (Exception)
 

@@ -1804,3 +1804,31 @@ Weeder exits 228 with repository findings. No deployment or branch push.
 Main 275de8687 completed make ci-signoff CHECKS="build doctests unit-tests".
 All three passed and were attested (1,554 doctest examples; 308 unit examples).
 Integration-tests, weeder, hlint and e2e remain outstanding in the final CI status.
+
+### Progress publication history recovery
+
+RefreshSlackProgress now searches the recorded thread when its progress timestamp
+is unknown. Migration 0178 persists the progress history cursor. The existing reply
+search row now carries a typed publication kind and the original message timestamp;
+reply and progress recovery share author/metadata matching and one-page pagination.
+A found publication is confirmed before refreshing the latest journal projection.
+Missing, incomplete or conflicting evidence never authorizes a replacement post.
+
+The requester must still have project access after the history response, before
+saving a timestamp or cursor. Search runs under the existing thread lock and Slack
+rate limits. Cursor writes compare the previous cursor and cannot change an already
+confirmed progress row. No new scope, installation change or live Slack message.
+
+The lost-ack workflow now covers signed observations and history recovery with the
+same setup. History includes mismatched app/thread/event type, conflicting matches,
+persisted pagination and access revoked during the matching request. It checks the
+original checklist timestamp and final response-ready projection, with no extra
+post or model call. Fresh native verification passed: 46 examples, zero failures, 71.2162 seconds.
+Command: DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev. Evidence:
+/tmp/monoscope-slack-agent/slack-progress-history-workflows-complete.log.
+Fourmolu and whitespace checks pass.
+Three skill passes are recorded; HLint cannot parse MultilineStrings and Weeder
+exits 228. Previous commit b21c93ef9 passed make ci-signoff CHECKS="build doctests unit-tests";
+all three results were attested. Integration-tests, weeder, hlint and e2e remain
+outstanding. CI for this history increment is pending. No deployment.

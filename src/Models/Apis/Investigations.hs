@@ -20,7 +20,7 @@ module Models.Apis.Investigations (
   confirmReplyPublication,
   rejectReplyPublication,
   captureReplyPublication,
-  ReplySearch (..),
+  PublicationSearch (..),
   loadReplySearch,
   saveReplySearchCursor,
   Event (..),
@@ -37,6 +37,8 @@ module Models.Apis.Investigations (
   ProgressMessage (..),
   loadProgress,
   loadProgressRefresh,
+  loadProgressSearch,
+  saveProgressSearchCursor,
   claimProgress,
   confirmProgress,
   rejectProgress,
@@ -360,26 +362,27 @@ captureReplyPublication appId receiptId = do
   for_ observed $ \(publication, timestamp) -> void $ confirmReplyPublication publication timestamp
 
 
-data ReplySearch = ReplySearch
-  { publicationId :: UUIDId "slack_reply"
+data PublicationSearch kind = PublicationSearch
+  { publicationId :: UUIDId kind
   , teamId :: Text
   , channelId :: Text
   , threadTs :: Text
+  , messageTs :: Text
   , cursor :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
 
-loadReplySearch :: DB es => Turn -> Int -> Eff es (Maybe ReplySearch)
+loadReplySearch :: DB es => Turn -> Int -> Eff es (Maybe (PublicationSearch "slack_reply"))
 loadReplySearch turn part =
   Hasql.interpOne
-    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, history_cursor
+    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, message_ts, history_cursor
     FROM apis.slack_reply_publications WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
       AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs} AND part = #{part} AND slack_ts IS NULL|]
 
 
-saveReplySearchCursor :: DB es => ReplySearch -> Maybe Text -> Eff es ()
+saveReplySearchCursor :: DB es => PublicationSearch "slack_reply" -> Maybe Text -> Eff es ()
 saveReplySearchCursor search next =
   Hasql.interpExecute_
     [HI.sql|UPDATE apis.slack_reply_publications SET history_cursor = #{next}
@@ -530,6 +533,21 @@ loadProgressRefresh publicationId =
     <$> Hasql.interpOne
       [HI.sql|SELECT to_jsonb(p), progress_ts FROM apis.slack_investigation_progress p
       WHERE publication_id = #{publicationId} AND user_id IS NOT NULL AND slack_user_id IS NOT NULL|]
+
+
+loadProgressSearch :: DB es => UUIDId "slack_progress" -> Eff es (Maybe (PublicationSearch "slack_progress"))
+loadProgressSearch publicationId =
+  Hasql.interpOne
+    [HI.sql|SELECT publication_id, team_id, channel_id, thread_ts, message_ts, history_cursor
+    FROM apis.slack_investigation_progress WHERE publication_id = #{publicationId} AND progress_ts IS NULL|]
+
+
+saveProgressSearchCursor :: DB es => PublicationSearch "slack_progress" -> Maybe Text -> Eff es ()
+saveProgressSearchCursor search next =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.slack_investigation_progress SET history_cursor = #{next}
+    WHERE publication_id = #{search.publicationId} AND progress_ts IS NULL
+      AND history_cursor IS NOT DISTINCT FROM #{search.cursor}|]
 
 
 claimProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
