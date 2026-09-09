@@ -359,3 +359,18 @@ manual resolution, snapshot retention, and the lifecycle regression.
 No further LoC reduction is proposed. The legacy notification claim/dispatch
 paths still need an atomic outbox integration. This prerequisite does not claim
 that normal ingestion already creates error-source episodes.
+
+## Runtime-error notification producer
+
+All three requested skills ran in three passes over ingestion, spike dispatch,
+notification selection/claiming, channel fan-out, Slack blocks, and the regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Route initial ingestion and spike alerts through the existing subscription dispatcher; delete the duplicate initial-error closure and spike-send wrapper. Replace unused handwritten ThreadRefs algebra with derived Default. | The failing outbox regression proves the old producer never wrote a durable intent. Commit the error claim, issue stamp, rate-limit token, event, and Slack outbox together. Select the newest issue before eligibility so an older escalation cannot bypass acknowledgement. | Native Slack blocks and real incident/trace links require no client script. Keep the multi-step ingestion/failure/concurrency test in Hspec. |
+| 2 | Remove the obsolete shared Slack timestamp from the candidate row; retain Discord references. Simplify original-issue URL selection and reuse the existing enum deriving wrapper. | Introduce ActiveErrorState with derived DB codecs, removing the dummy resolved-to-new-alert branch. Handle every incident result explicitly. Verify token rollback and newer-issue acknowledgement in the integration scenario. | Keep trace-link and Slack payload-schema assertions in the existing threading test; compare per-channel roots and replies instead of the obsolete shared field. Advance the test clock rather than resetting durable events. |
+| 3 | Re-read the resulting producer, selector, fan-out, message builder, and callers. Delete the old claim-reversion helper now reported unused by Weeder. New instances remain derived; no dependency or suppression added. | Recheck compare-and-swap, same-tick deduplication, row-lock order, project/issue gates, original episode identity, queued Slack versus inline non-Slack delivery, and outbox exception propagation. Non-Slack transport is still not durable. Earlier error upsert/issue creation and spike state/issue creation are separate transactions and remain follow-up work. | No JS, hyperscript, CSS state, or hoisted Tailwind classes added. Compact reminders omit the onset/chart blocks; the root retains its original snapshot. No link pretends to invoke an investigation. |
+
+The review covers the runtime-error producer increment, not completion of all
+five releases. Chart rendering/acceptance, automatic lifecycle transitions,
+investigation tools, and live Slack validation remain outstanding.

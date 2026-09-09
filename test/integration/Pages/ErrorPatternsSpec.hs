@@ -26,7 +26,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -499,7 +499,8 @@ spec = sequential $ aroundAll withTestResources do
           assignedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.assigneeId) assignedPat `shouldBe` Just (Just sess.user.id)
 
-          -- Test resolve
+          -- Resolve after the prior spike evaluations, not before their incident events.
+          advanceMinutes tr 241
           void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
@@ -603,14 +604,20 @@ spec = sequential $ aroundAll withTestResources do
           void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
           -- Ensure matching issue exists
           void $ runAllBackgroundJobs frozenTime tr.trATCtx
-          -- Reset last_notified_at so this pattern is eligible (prior tests may have already notified it)
-          withResource tr.trPool \conn ->
-            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
-
-          -- First notification: should create thread IDs and produce Slack + Discord notifications
-          (notifs1, _) <-
-            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+          let notifyAt time =
+                runTestBackgroundWithNotifications time tr.trLogger tr.trATCtx do
+                  BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+                  replicateM_ 2 BackgroundJobs.runSlackIncidentDeliveries
+              roots = withResource tr.trPool \conn ->
+                PGS.query
+                  conn
+                  [sql|SELECT r.channel_id, r.message_ts FROM apis.slack_incident_roots r
+                  JOIN apis.incident_episodes e ON e.id = r.episode_id
+                  WHERE e.source_kind = 'error' AND e.source_id = ? ORDER BY r.channel_id|]
+                  (PGS.Only pat.id)
+                  :: IO [(Text, Maybe Text)]
+          -- Ingestion created the root; reminders must preserve it.
+          (notifs1, _) <- notifyAt (addUTCTime 3600 frozenTime)
           -- Verify notification types and content
           let slackNotifs1 = [sd | SlackNotification sd <- notifs1]
               discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
@@ -629,27 +636,17 @@ spec = sequential $ aroundAll withTestResources do
             slackPayloadViolations sd.payload `shouldBe` []
 
           pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
-          let slackTs1 = pat1 >>= (.slackThreadTs)
-              discordId1 = pat1 >>= (.discordMessageId)
-          isJust slackTs1 `shouldBe` True
+          roots1 <- roots
+          map fst roots1 `shouldBe` ["C_TEST"]
+          map snd roots1 `shouldSatisfy` all isJust
+          let discordId1 = pat1 >>= (.discordMessageId)
           isJust discordId1 `shouldBe` True
 
-          -- Make notification due again by pushing last_notified_at into the past
-          withResource tr.trPool \conn ->
-            void
-              $ PGS.execute
-                conn
-                [sql| UPDATE apis.error_patterns SET last_notified_at = ?::timestamptz - INTERVAL '2 hours' WHERE id = ? |]
-                (frozenTime, pat.id)
-
-          -- Second notification: should reuse same thread IDs (threading preserved)
-          (notifs2, _) <-
-            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
-          length [() | SlackNotification _ <- notifs2] `shouldSatisfy` (>= 1)
-
+          (notifs2, _) <- notifyAt (addUTCTime 7200 frozenTime)
+          let replies = [sd | SlackNotification sd <- notifs2, isJust sd.threadTs]
+          map (\sd -> (sd.channelId, sd.threadTs)) replies `shouldBe` roots1
+          roots `shouldReturn` roots1
           pat2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
-          (pat2 >>= (.slackThreadTs)) `shouldBe` slackTs1
           (pat2 >>= (.discordMessageId)) `shouldBe` discordId1
 
     it "9. Error fingerprint stability across IPs and timestamps" \tr -> do

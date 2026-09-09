@@ -1,4 +1,4 @@
-module Pkg.Mail (resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -325,9 +325,45 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
       , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
       ]
     actions = tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") issueUrl, slackButton "Open monitor" Nothing monitorUrl]
-    tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.String identifier) block
-    tagged _ block = block
     message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+-- | Error episodes retain the onset/chart while reminders carry current evidence.
+errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
+errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence =
+  (message [current, onset, chartBlock, actions], message [current, actions])
+  where
+    label = case alertType of NewRuntimeError -> "ALERTING"; RegressedErrors -> "REGRESSED"; EscalatingErrors -> "ESCALATING"; ErrorSpike -> "ESCALATING"
+    at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+    title = slackEscape $ T.take 160 err.errorType
+    text =
+      label
+        <> " · "
+        <> title
+        <> "\n"
+        <> slackEscape (T.take 300 err.message)
+        <> "\nObserved "
+        <> at now
+        <> foldMap (" · " <>) occurrence
+        <> foldMap (" · " <>) (slackEscape <$> err.serviceName)
+        <> foldMap (" · " <>) (slackEscape <$> err.environment)
+    current = slackSection text
+    onset = tagged "incident_onset" $ slackContext ["Started " <> at (maybe now (.startedAt) episode)]
+    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open incident>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
+    actions =
+      tagged "incident_actions"
+        $ slackActions
+          ( slackButton "Open incident" (Just "primary") incidentUrl
+              : maybeToList
+                ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
+          )
+    message :: [AE.Value] -> Incidents.SlackPayload
+    message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+tagged :: Text -> AE.Value -> AE.Value
+tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.String identifier) block
+tagged _ block = block
 
 
 resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Maybe Text -> Incidents.SlackPayload

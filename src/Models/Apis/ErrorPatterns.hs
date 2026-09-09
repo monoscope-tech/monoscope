@@ -21,7 +21,6 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternSubscription,
   NotifiedStamp (..),
   updateErrorPatternThreadIds,
-  revertLastNotifiedAt,
   setErrorPatternAssignee,
   updateErrorPatternAnalysis,
   -- Error spike detection
@@ -347,15 +346,6 @@ updateErrorPatternThreadIds stamp eid slackTs discordMsgId now =
         discord_message_id = COALESCE(#{discordMsgId}, discord_message_id),
         last_notified_at = CASE WHEN #{stamp == StampNotifiedAt} THEN #{now} ELSE last_notified_at END,
         updated_at = #{now} WHERE id = #{eid} |]
-
-
--- | Revert an atomic 'claimDueErrorNotifications' claim when the send was
--- skipped (e.g. rate-limited) so the next tick is eligible to retry. Passing
--- 'Nothing' restores the pre-claim 'never notified' state.
-revertLastNotifiedAt :: DB es => ErrorPatternId -> Maybe UTCTime -> UTCTime -> Eff es Int64
-revertLastNotifiedAt eid previous now =
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.error_patterns SET last_notified_at = #{previous}, updated_at = #{now} WHERE id = #{eid} |]
 
 
 -- | Bulk-update baselines for all active error patterns in a project using a single SQL CTE.

@@ -851,3 +851,41 @@ The source/closure regression explicitly seeds episodes; it is not evidence that
 the ingestion paths already create them. Current-tree CI signoff, full supported
 TimeFusion integration, live Slack acceptance, charts, and the remaining releases
 are still required. No push or deployment occurred.
+
+## Runtime-error ingestion and reminder outbox (September 9)
+
+Normal error ingestion, subscriptions, and spike notifications now use the
+error-source episode dispatcher. A transaction revalidates the active pattern,
+project, and issue; claims its notification slot; consumes the rate-limit token;
+and writes the episode event, issue notification stamp, and Slack outbox intent.
+An outbox failure rolls all those writes back. Concurrent ingestion retries create
+one root per workspace/channel. Slack sends use the existing durable worker;
+Discord and the other non-Slack transports retain their existing inline delivery.
+
+The root retains the onset/chart snapshot and original incident link. Reminders
+carry a compact current summary and trace link. Candidate selection chooses the
+newest issue before checking eligibility, so an older unnotified escalation cannot
+bypass a newer acknowledged issue. Active candidate states and their database
+codecs are derived. Unused handwritten ThreadRefs instances, duplicate producer
+plumbing, and the now-unused claim-reversion helper were removed.
+
+Verification completed during this increment:
+
+- `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=ErrorPatterns make live-test-dev`: 30 examples, zero failures. Tests use advancing notification times and inspect per-channel Slack roots while preserving trace-link/schema checks.
+- The same command with `TEST_MATCH=Notifications`: 10 examples, zero failures. This includes rate limits, project alert settings, acknowledgements, and older subscriptions. An unrelated Slack query fixture logs a missing agentic golden file; this is not proof of that background query's success.
+- The same command with `TEST_MATCH=Incident`: 14 examples, zero failures before removal of the unused helper. The watcher is rechecking that final deletion. The new test covers outbox/token rollback, concurrent ingestion, destination deduplication, reminders, newer-issue acknowledgement, and manual resolution.
+- Scoped Fourmolu and `git diff --no-ext-diff --check` passed. Scoped HLint exited 1 because installed 3.3.6 rejects `MultilineStrings`.
+- Weeder exited 228 with 142 report lines. Its newly unused `revertLastNotifiedAt` finding was removed; repository-wide remaining findings are not a passing check.
+- Each of `/hs-distill`, `/hs-evasion-review`, and `/hs-lob-review` ran three times; findings and fixes are in the review log.
+
+`make ci-signoff CHECKS="build doctests unit-tests"` was started, then stopped
+before any attestation to remove the Weeder finding. A fresh final-tree run is
+active; `/tmp/monoscope-slack-agent/runtime-ci-signoff-final.log` records its
+results. Do not treat the pending run as passed. TimeFusion cannot start on this
+ARM laptop, so full supported integration remains a GitHub-runner requirement.
+No branch push or deployment has occurred.
+
+Remaining durability gaps include earlier pattern-upsert/issue-creation and
+spike-state/issue-creation transactions, automatic error lifecycle transitions,
+and non-Slack transports. The full five-release plan, chart acceptance, live Slack
+validation, evidence tools, action drafts, and proactive policies remain incomplete.

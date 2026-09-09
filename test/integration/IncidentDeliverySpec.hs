@@ -1,6 +1,6 @@
 module IncidentDeliverySpec (spec) where
 
-import BackgroundJobs (evaluateQueryMonitorValue, runSlackIncidentDeliveries)
+import BackgroundJobs (evaluateQueryMonitorValue, notifyErrorSubscriptions, processProjectErrors, runSlackIncidentDeliveries)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
@@ -8,7 +8,7 @@ import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -33,6 +33,67 @@ import UnliftIO.Async (concurrently)
 spec :: Spec
 spec = around withTestResources do
   describe "Incident delivery" do
+    it "commits ingested error notification claims with two destination roots and retries an outbox failure" \tr -> do
+      setupSlackData tr testPid "T1"
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1','C2','C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
+        void $ PGS.execute conn [sql|UPDATE projects.projects SET error_alerts = true WHERE id = ?|] (PGS.Only testPid)
+        void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_ingested_delivery CHECK (false) NOT VALID|]
+      let sample = def{Errors.when = frozenTime, Errors.hash = "ingested-outbox", Errors.errorType = "CheckoutError", Errors.message = "Payment failed"}
+          ingest = captureNotifs tr $ processProjectErrors testPid [sample] frozenTime
+          messages ns = [sd | Notify.SlackNotification sd <- ns]
+      ingest `shouldThrow` anyException
+      Just unnotified <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
+      unnotified.lastNotifiedAt `shouldBe` Nothing
+      tokens <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.notification_rate_limit WHERE project_id = ?|] (PGS.Only testPid)
+      (tokens :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
+      slots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT last_notified_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, sample.hash)
+      (slots :: [PGS.Only (Maybe UTCTime)]) `shouldBe` [PGS.Only Nothing]
+      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_ingested_delivery|]
+      ((batchA, _), (batchB, _)) <- concurrently ingest ingest
+      let initial = messages $ batchA <> batchB
+      sort (map (.channelId) initial) `shouldBe` ["C1", "C2"]
+      map (.threadTs) initial `shouldBe` [Nothing, Nothing]
+      Just notified <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
+      notified.lastNotifiedAt `shouldSatisfy` isJust
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET subscribed = true, notify_every_minutes = 1 WHERE id = ?|] (PGS.Only notified.id)
+      advanceMinutes tr 2
+      (reminder, _) <- captureNotifs tr do
+        notifyErrorSubscriptions testPid [sample.hash]
+        replicateM_ 2 runSlackIncidentDeliveries
+      let updates = messages reminder
+      length updates `shouldBe` 4
+      length [sd | sd <- updates, isJust sd.threadTs] `shouldBe` 2
+      roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.slack_incident_roots r JOIN apis.incident_episodes e ON e.id = r.episode_id WHERE e.source_kind = 'error' AND e.source_id = ?|] (PGS.Only notified.id)
+      (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
+      -- A newer acknowledged issue must win over an older unnotified escalation.
+      withResource tr.trPool \conn ->
+        void
+          $ PGS.execute
+            conn
+            [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE project_id = ? AND target_hash = ?|]
+            (frozenTime, addUTCTime 3600 frozenTime, testPid, sample.hash)
+      newer <- runTestBgNoReset tr $ Issues.createNewErrorIssue testPid notified >>= Issues.insertIssueReturningId
+      withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ?, last_notified_at = ? WHERE id = ?|]
+            (frozenTime, addUTCTime 3600 frozenTime, frozenTime, newer)
+        void
+          $ PGS.execute
+            conn
+            [sql|UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_until = NULL, last_notified_at = NULL WHERE project_id = ? AND target_hash = ? AND id <> ?|]
+            (testPid, sample.hash, newer)
+        void $ PGS.execute conn [sql|UPDATE apis.error_patterns SET state = 'escalating' WHERE id = ?|] (PGS.Only notified.id)
+      advanceMinutes tr 1
+      (silenced, _) <- captureNotifs tr $ notifyErrorSubscriptions testPid [sample.hash]
+      messages silenced `shouldBe` []
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid notified.id.unErrorPatternId
+      (closed, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
+      length (messages closed) `shouldBe` 4
+      for_ (messages closed) \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RESOLVED" . decodeUtf8 . toStrict)
+
     it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
       update <- setup tr
       setupSlackData tr testPid "T1"

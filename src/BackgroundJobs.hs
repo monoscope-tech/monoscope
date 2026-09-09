@@ -16,6 +16,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
+import Data.Default qualified as Default
 import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
@@ -43,10 +44,11 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (concurrently_, forConcurrently)
+import Effectful.Concurrent.Async (concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -100,7 +102,7 @@ import Pages.Bots.Slack qualified as Slack
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -305,12 +307,7 @@ processBackgroundJob authCtx bgJob =
       tryStep "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryStep "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
     SafetyNetReprocess pid -> safetyNetReprocess pid
-    ProcessProjectErrorsJob pid errors now -> do
-      -- Preserves today's legacy issue-creation + alert-dispatch semantics, now
-      -- driven per-batch from the extraction worker instead of the 1-minute job.
-      -- Odd-jobs retries apply if either sub-call throws.
-      processProjectErrors pid errors now
-      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) errors)
+    ProcessProjectErrorsJob pid errors now -> processProjectErrors pid errors now
     NotificationSweepJob scheduledTime -> do
       -- Re-enqueue first so a mid-tick failure still produces a next tick.
       rescheduleSelf authCtx Jobs.NotificationSweepJob (addUTCTime 600 scheduledTime)
@@ -1433,13 +1430,18 @@ processDrainBatch isSummary batch now initial = Drain.buildDrainBatch tokenize l
 -- Error Detection Strategy:
 -- 1. Query spans with error indicators (status, events, attributes)
 -- 2. Extract error details from span events using OpenTelemetry conventions
+data ActiveErrorState = AESNew | AESEscalating | AESOngoing | AESRegressed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AES" ActiveErrorState
+
+
 data ErrorSubscriptionDue = ErrorSubscriptionDue
   { errorId :: ErrorPatterns.ErrorPatternId
   , errorData :: ErrorPatterns.ATError
-  , errorState :: ErrorPatterns.ErrorState
+  , errorState :: ActiveErrorState
   , issueId :: Issues.IssueId
   , issueTitle :: Text
-  , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
   , occurrences1h :: Int
   , createdAt :: UTCTime
@@ -1485,18 +1487,10 @@ broadcastToEveryone teamM alert pid title url =
 
 
 -- | Slack thread-ts / Discord message-id an alert threads its replies under.
--- '<>' keeps the first known id, so folding across a team's channels preserves
--- the parent message instead of overwriting it.
+-- Slack incident roots are stored separately for each destination.
 data ThreadRefs = ThreadRefs {slackTs :: Maybe Text, discordMsgId :: Maybe Text}
-  deriving stock (Eq, Show)
-
-
-instance Semigroup ThreadRefs where
-  a <> b = ThreadRefs{slackTs = a.slackTs <|> b.slackTs, discordMsgId = a.discordMsgId <|> b.discordMsgId}
-
-
-instance Monoid ThreadRefs where
-  mempty = ThreadRefs{slackTs = Nothing, discordMsgId = Nothing}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Default.Default)
 
 
 -- | Email leg of a fan-out. Recipients are resolved by the caller (project
@@ -1513,7 +1507,7 @@ data Fanout = Fanout
   { slack :: SlackFanout
   , threads :: Maybe ThreadRefs
   -- ^ 'Just': thread slack/discord under these ids and return the resulting ones.
-  -- 'Nothing': post standalone messages and return 'mempty'.
+  -- 'Nothing': post standalone messages and return empty thread references.
   , email :: Maybe FanoutEmail
   -- ^ 'Nothing': this fan-out has no email leg.
   }
@@ -1654,7 +1648,7 @@ runDueNotifications pid hashesM = do
   ctx <- ask @Config.AuthContext
   unless ctx.config.pauseNotifications do
     now <- Time.currentTime
-    dueErrors :: [ErrorSubscriptionDue] <- claimDueErrorNotifications pid hashesM now
+    dueErrors :: [ErrorSubscriptionDue] <- selectDueErrorNotifications pid hashesM now
     dispatchDueErrorNotifications ctx pid now dueErrors
 
 
@@ -1771,32 +1765,30 @@ runNotificationDigest _scheduledTime = do
 --       the last hour). Uses `apis.error_hourly_stats` because the decayed
 --       `occurrences_1h` on `error_patterns` is unreliable.
 --
--- This function *atomically claims* each due row by UPDATEing @last_notified_at@
--- to @now@ with a compare-and-swap (@IS NOT DISTINCT FROM@ the value read in
--- the CTE). Under read-committed isolation, a second concurrent caller sees
--- the already-updated row and its CAS fails → zero claimed rows → no duplicate
--- dispatch. Callers MUST revert via @ErrorPatterns.revertLastNotifiedAt@ if the
--- send is skipped (e.g. rate-limited), otherwise the row is suppressed until
--- the next cadence window. @ErrorSubscriptionDue.lastNotifiedAt@ carries the
--- pre-claim value for that purpose.
-claimDueErrorNotifications
+-- Select candidates without consuming their notification slot. The dispatch
+-- transaction revalidates and claims each row together with its delivery outbox.
+selectDueErrorNotifications
   :: Projects.ProjectId
   -> Maybe (V.Vector Text)
   -> UTCTime
   -> ATBackgroundCtx [ErrorSubscriptionDue]
-claimDueErrorNotifications pid mHashes now =
+selectDueErrorNotifications pid mHashes now =
   let hashes = fromMaybe V.empty mHashes
       applyHashFilter = isJust mHashes
    in Hasql.interp
         [HI.sql|
           WITH candidates AS (
-            SELECT DISTINCT ON (e.id)
-                   e.id, e.error_data, e.state, i.id AS issue_id, i.title,
-                   e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
+            SELECT e.id, e.error_data, e.state, i.id AS issue_id, i.title,
+                   e.discord_message_id, e.occurrences_1h,
                    e.created_at, e.last_notified_at,
                    i.acknowledged_until, i.archived_at
             FROM apis.error_patterns e
-            JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
+            JOIN LATERAL (
+              SELECT issue.* FROM apis.issues issue
+              WHERE issue.project_id = e.project_id AND issue.target_hash = e.hash
+                AND issue.issue_type = #{Issues.RuntimeException}::apis.issue_type
+              ORDER BY issue.created_at DESC, issue.id DESC LIMIT 1
+            ) i ON true
             WHERE e.project_id = #{pid}
               AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
               AND e.state != 'resolved'
@@ -1809,7 +1801,8 @@ claimDueErrorNotifications pid mHashes now =
               AND e.canonical_id IS NULL
               AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
               AND (
-                (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
+                (e.state = 'escalating' AND i.last_notified_at IS NULL)
+                OR (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
                 OR (e.subscribed = TRUE
                     AND #{now}::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
                 OR (e.state = 'regressed'
@@ -1829,30 +1822,14 @@ claimDueErrorNotifications pid mHashes now =
                           ELSE INTERVAL '24 hours'
                         END)
               )
-            ORDER BY e.id, i.created_at DESC
+            ORDER BY e.id
           )
-          UPDATE apis.error_patterns e
-          SET last_notified_at = #{now}, updated_at = #{now}
+          SELECT c.id, c.error_data, c.state, c.issue_id, c.title,
+                 c.discord_message_id, c.occurrences_1h,
+                 c.created_at, c.last_notified_at
           FROM candidates c
-          WHERE e.id = c.id
-            -- The issue the alert points at is acknowledged or archived: the user
-            -- has already told us to stop. Filtered here rather than inside
-            -- `candidates` so DISTINCT ON still picks the newest issue per pattern.
-            --
-            -- Note this also silences an explicit "Notify every N" subscription on
-            -- the same issue. Acknowledging is the later and more specific
-            -- instruction, and a silence that leaks one channel is not a silence.
-            -- To let a subscription outrank an ack instead ("I'm on it, but keep
-            -- reminding me"), add `e.subscribed OR` to the front of the ack
-            -- predicate below — that is the whole change.
-            AND c.archived_at IS NULL
+          WHERE c.archived_at IS NULL
             AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
-            AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at
-            -- Idempotency: same tick re-run shouldn't rewrite the row.
-            AND e.last_notified_at IS DISTINCT FROM #{now}::timestamptz
-          RETURNING c.id, c.error_data, c.state, c.issue_id, c.title,
-                    c.slack_thread_ts, c.discord_message_id, c.occurrences_1h,
-                    c.created_at, c.last_notified_at
         |]
 
 
@@ -1862,60 +1839,114 @@ dispatchDueErrorNotifications
   -> UTCTime
   -> [ErrorSubscriptionDue]
   -> ATBackgroundCtx ()
-dispatchDueErrorNotifications ctx pid now dueErrors =
-  unless (null dueErrors) do
-    Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
-    let ctxObj = AE.object ["project_id" AE..= pid.toText, "due_count" AE..= length dueErrors]
-    whenJustM (Projects.projectById pid) \project -> do
-      teamM <- ProjectMembers.getEveryoneTeam pid
-      let hasAnyChannel = maybe False ProjectMembers.teamHasAnyEnabledChannel teamM
-      if
-        | not project.errorAlerts -> Log.logInfo "Error alerts disabled for project — skipping" ctxObj
-        | not hasAnyChannel -> Log.logAttention "Notifications skipped: no channels configured" ctxObj
-        | otherwise -> do
-            users <- Projects.usersByProjectId pid
-            let alertTypeForState = \case
-                  ErrorPatterns.ESEscalating -> EscalatingErrors
-                  ErrorPatterns.ESRegressed -> RegressedErrors
-                  ErrorPatterns.ESNew -> NewRuntimeError
-                  ErrorPatterns.ESOngoing -> NewRuntimeError
-                  ErrorPatterns.ESResolved -> NewRuntimeError
-            results <- forConcurrently dueErrors \sub -> do
-              let alertType = alertTypeForState sub.errorState
-                  errorsUrl = projectUrl ctx pid <> "/issues/" <> sub.issueId.toText
-                  occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
-                  -- Surface an ongoing-duration banner once we've already notified on this
-                  -- issue and it's still in a non-regressed state; a regression restarts
-                  -- the narrative and deserves its own fresh-looking alert.
-                  ongoingForM =
-                    humanDuration now sub.createdAt
-                      <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= ErrorPatterns.ESRegressed)
-              (chartUrlM, alert) <- runtimeErrorAlert ctx pid now sub.issueId.toText sub.issueTitle alertType sub.errorData sub.createdAt occTextM ongoingForM
-              let ~(subj, html) = case alertType of
-                    EscalatingErrors -> ET.escalatingErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
-                    RegressedErrors -> ET.regressedErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
-                    _ -> ET.runtimeErrorsEmail project.title (projectUrl ctx pid) errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
-              -- Rate-limit gate. Overflow lands in apis.notification_digest_queue
-              -- and is flushed by NotificationDigestJob. On rate-limit we must
-              -- revert the claim so the next tick re-evaluates the row.
-              allowed <- consumeNotificationToken pid now
-              if allowed
-                then do
-                  (finalRefs, dispatched) <-
-                    sendAlertToChannels alert pid project users errorsUrl subj html ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}
-                  Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType, "dispatched" AE..= dispatched])
-                  pure (sub.errorId, finalRefs, dispatched)
-                else do
-                  void $ ErrorPatterns.revertLastNotifiedAt sub.errorId sub.lastNotifiedAt now
-                  enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
-                  Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
-                  pure (sub.errorId, ThreadRefs{slackTs = sub.slackThreadTs, discordMsgId = sub.discordMessageId}, False)
-            -- last_notified_at is already stamped atomically by the claim query.
-            -- Only persist slack/discord thread IDs when the send actually went out.
-            forM_ results \(errorId, refs, delivered) ->
-              when (delivered && (isJust refs.slackTs || isJust refs.discordMsgId))
-                $ void
-                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId refs.slackTs refs.discordMsgId now
+dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors) do
+  whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
+    teamM <- ProjectMembers.getEveryoneTeam pid
+    case teamM of
+      Just team | ProjectMembers.teamHasAnyEnabledChannel team -> do
+        installation <- Integrations.getProjectSlackData pid
+        users <- Projects.usersByProjectId pid
+        let destinations = [Incidents.SlackDestination sd.teamId channel | sd <- maybeToList installation, ProjectMembers.isChannelEnabled ProjectMembers.Slack team, channel <- toList team.slack_channels]
+        forConcurrently_ dueErrors \sub -> do
+          let alertType = case sub.errorState of
+                AESEscalating -> EscalatingErrors
+                AESRegressed -> RegressedErrors
+                AESNew -> NewRuntimeError
+                AESOngoing -> NewRuntimeError
+              baseUrl = projectUrl ctx pid
+              errorsUrl = baseUrl <> "/issues/" <> sub.issueId.toText
+              occText = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
+              ongoingFor = humanDuration now sub.createdAt <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= AESRegressed)
+              source = Incidents.ErrorIncident sub.errorId
+          (chart, alert) <- runtimeErrorAlert ctx pid now sub.issueId.toText sub.issueTitle alertType sub.errorData sub.createdAt occText ongoingFor
+          committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+            let execute sql' = HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
+            claimed <-
+              execute
+                [HI.sql|UPDATE apis.error_patterns e SET last_notified_at = #{now}, updated_at = #{now}
+              WHERE e.id = #{sub.errorId} AND e.project_id = #{pid} AND e.state = #{sub.errorState}::text
+                AND e.state <> 'resolved' AND e.canonical_id IS NULL
+                AND e.last_notified_at IS NOT DISTINCT FROM #{sub.lastNotifiedAt}
+                AND e.last_notified_at IS DISTINCT FROM #{now}::timestamptz
+                AND EXISTS (SELECT 1 FROM apis.issues issue JOIN projects.projects project ON project.id = issue.project_id
+                  WHERE issue.id = #{sub.issueId} AND issue.project_id = e.project_id AND issue.target_hash = e.hash
+                    AND issue.issue_type = 'runtime_exception' AND issue.archived_at IS NULL
+                    AND (issue.acknowledged_until IS NULL OR issue.acknowledged_until <= #{now}::timestamptz)
+                    AND project.active AND project.deleted_at IS NULL AND project.error_alerts)|]
+            if claimed == 0
+              then pure $ Right NotificationSkipped
+              else do
+                allowed <- consumeNotificationTokenTx pid now
+                if not allowed
+                  then do
+                    void $ execute [HI.sql|UPDATE apis.error_patterns SET last_notified_at = #{sub.lastNotifiedAt} WHERE id = #{sub.errorId}|]
+                    void
+                      $ execute
+                        [HI.sql|INSERT INTO apis.notification_digest_queue (project_id, error_pattern_id, issue_id, reason, title)
+                  VALUES (#{pid}, #{sub.errorId}, #{sub.issueId}, 'rate_limit', #{sub.issueTitle})|]
+                    pure $ Right NotificationDigested
+                  else do
+                    previous <- Incidents.latestEpisodeTx pid source
+                    let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
+                        incidentUrl = baseUrl <> "/issues/" <> (fromMaybe sub.issueId (active >>= (.issueId))).toText
+                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active baseUrl incidentUrl chart occText
+                        change
+                          | isNothing active = Incidents.IncidentAlert
+                          | sub.errorState == AESEscalating = Incidents.IncidentObservation
+                          | otherwise = Incidents.IncidentReminder
+                    result <-
+                      Incidents.recordIncidentEventTx
+                        Incidents.IncidentUpdate
+                          { projectId = pid
+                          , source
+                          , observedAt = now
+                          , change
+                          , delivery = Incidents.PublishIncident
+                          , issueId = Just sub.issueId
+                          , rootPayload
+                          , replyPayload
+                          , destinations
+                          }
+                    case result of
+                      Incidents.Recorded{} -> do
+                        void $ execute [HI.sql|UPDATE apis.issues SET last_notified_at = #{now} WHERE id = #{sub.issueId}|]
+                        pure $ Right NotificationQueued
+                      Incidents.AlreadyRecorded{} -> Tx.condemn $> Right NotificationSkipped
+                      Incidents.OlderThanCurrentEpisode -> Tx.condemn $> Left result
+                      Incidents.NoOpenEpisode -> Tx.condemn $> Left result
+                      Incidents.UnknownIncidentSource -> Tx.condemn $> Left result
+                      Incidents.InactiveIncidentSource -> Tx.condemn $> Left result
+                      Incidents.IncidentIssueMismatch -> Tx.condemn $> Left result
+          decision <- either (throwIO . IncidentCommitError) pure committed
+          case decision of
+            NotificationSkipped -> pass
+            NotificationDigested -> Log.logInfo "notification_digested" (pid, sub.errorId)
+            NotificationQueued -> do
+              let (subj, html) = case alertType of
+                    EscalatingErrors -> ET.escalatingErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
+                    RegressedErrors -> ET.regressedErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
+                    NewRuntimeError -> ET.runtimeErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
+                    ErrorSpike -> ET.errorSpikesEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
+              refs <-
+                fanOutToTeam
+                  team
+                  Fanout
+                    { slack = QueuedSlack
+                    , threads = Just ThreadRefs{slackTs = Nothing, discordMsgId = sub.discordMessageId}
+                    , email = Just FanoutEmail{recipients = map (CI.original . (.email)) users, subject = subj, body = ET.renderEmail subj html}
+                    }
+                  alert
+                  pid
+                  project.title
+                  errorsUrl
+              whenJust refs.discordMsgId \messageId ->
+                void $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt sub.errorId Nothing (Just messageId) now
+        tryStep "slack-error-incident-delivery" runSlackIncidentDeliveries
+      _ -> Log.logAttention "Error notifications skipped: no channels configured" pid
+
+
+data NotificationDecision = NotificationSkipped | NotificationDigested | NotificationQueued
+  deriving stock (Eq, Show)
 
 
 notificationsPerProjectPerHour :: Int
@@ -1933,18 +1964,24 @@ newPatternCooldownHours = 6
 -- and increments the counter when under the cap; False otherwise. Atomic via
 -- `INSERT … ON CONFLICT DO UPDATE … RETURNING`.
 consumeNotificationToken :: Projects.ProjectId -> UTCTime -> ATBackgroundCtx Bool
-consumeNotificationToken pid now = do
-  -- UPSERT…RETURNING always produces one row; Nothing is treated as pass-through.
-  countM :: Maybe Int <-
-    Hasql.interpOne
-      [HI.sql|
-          INSERT INTO apis.notification_rate_limit (project_id, window_start, count)
-          VALUES (#{pid}, date_trunc('hour', #{now}::timestamptz), 1)
-          ON CONFLICT (project_id, window_start)
-          DO UPDATE SET count = apis.notification_rate_limit.count + 1
-          RETURNING count
-        |]
-  pure $ maybe True (<= notificationsPerProjectPerHour) countM
+consumeNotificationToken pid now = Hasql.transaction TxS.ReadCommitted TxS.Write $ consumeNotificationTokenTx pid now
+
+
+consumeNotificationTokenTx :: Projects.ProjectId -> UTCTime -> Tx.Transaction Bool
+consumeNotificationTokenTx pid now = do
+  count <-
+    HI.getOneRow @Int
+      <$> Tx.statement
+        ()
+        ( HI.interp
+            True
+            [HI.sql|INSERT INTO apis.notification_rate_limit (project_id, window_start, count)
+      VALUES (#{pid}, date_trunc('hour', #{now}::timestamptz), 1)
+      ON CONFLICT (project_id, window_start)
+      DO UPDATE SET count = apis.notification_rate_limit.count + 1
+      RETURNING count|]
+        )
+  pure $ count <= notificationsPerProjectPerHour
 
 
 -- | Push a rate-limited or low-signal notification into the digest queue. The
@@ -2015,21 +2052,21 @@ notifyIssue
   -> Html () -- email body
   -> ATBackgroundCtx (ThreadRefs, Bool)
 notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html
-  | not project.errorAlerts = pure (mempty, False)
+  | not project.errorAlerts = pure (def, False)
   | otherwise = do
       now <- Time.currentTime
       claimed <- claimIssueNotification issue.id now cooldownHours
       allowed <- if claimed then consumeNotificationToken project.id now else pure False
       if
-        | not claimed -> pure (mempty, False)
+        | not claimed -> pure (def, False)
         | allowed -> do
-            (refs, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html mempty
+            (refs, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html def
             Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
             pure (refs, dispatched)
         | otherwise -> do
             enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
             Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
-            pure (mempty, False)
+            pure (def, False)
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
@@ -2054,26 +2091,7 @@ processProjectErrors pid errors now = do
             errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
             errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
-      -- Look up the full ATError payload by hash for the notification path —
-      -- ErrorPattern alone lacks the stack trace / request context the alert uses.
-      let atErrByHash = HM.fromList [(e.hash, e) | e <- V.toList errors]
-      projectM <- Projects.projectById pid
-      users <- Projects.usersByProjectId pid
       authCtx <- ask @Config.AuthContext
-      let notifyNewError :: Issues.Issue -> ErrorPatterns.ErrorPattern -> ErrorPatterns.ATError -> ATBackgroundCtx ()
-          notifyNewError issue err atErr = whenJust projectM \project -> do
-            (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title NewRuntimeError atErr atErr.when Nothing Nothing
-            let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-                (subj, html) = ET.runtimeErrorsEmail project.title (projectUrl authCtx pid) issueUrl [atErr] chartUrlM Nothing Nothing
-            (refs, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
-            -- Persist thread IDs + stamp error_patterns.last_notified_at so later
-            -- escalation/regression sweeps thread under this alert instead of
-            -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
-            -- of THIS issue; error_patterns.last_notified_at is what the sweep
-            -- path (notifyErrorSubscriptions) reads for per-pattern dedup.
-            when dispatched
-              $ void
-              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id refs.slackTs refs.discordMsgId now
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         -- A merged pattern is silent on every path, including this one. The
@@ -2090,7 +2108,6 @@ processProjectErrors pid errors now = do
                 ( do
                     issue <- createIssueForError pid err
                     Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
-                    whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
                 )
                 (handleRegression pid err)
                 existingM
@@ -2134,7 +2151,7 @@ processProjectErrors pid errors now = do
                   issue <- createIssueForError pid err
                   enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
                   Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
-                  whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
+      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) errors)
   where
     createIssueForError pid' err' = do
       issue <- Issues.createNewErrorIssue pid' err'
@@ -3044,7 +3061,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
               Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
               _ -> Tx.condemn $> Left result
       case committed of
-        Left result -> throwIO $ MonitorIncidentError result
+        Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
         Right (Just alertUrl) -> do
           let alert = if isRecovery then MonitorsRecoveryAlert monitor.alertConfig.title alertUrl else MonitorsAlert monitor.alertConfig.title alertUrl chartUrlM
@@ -3054,7 +3071,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           pure True
 
 
-data MonitorIncidentError = MonitorIncidentError Incidents.RecordResult
+data IncidentCommitError = IncidentCommitError Incidents.RecordResult
   deriving stock (Show)
   deriving anyclass (CE.Exception)
 
@@ -5285,7 +5302,10 @@ detectErrorSpikes pid = do
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
-              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId ThreadRefs{slackTs = errRate.slackThreadTs, discordMsgId = errRate.discordMessageId}
+              Issues.insertIssue issue
+              ctx <- ask @Config.AuthContext
+              enqueueJobs ctx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
+              notifyErrorSubscriptions pid (V.singleton errRate.hash)
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           _ ->
             -- No spike (or drop): de-escalate if currently escalating
@@ -5294,33 +5314,6 @@ detectErrorSpikes pid = do
               $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing now
       _ -> pass -- Skip errors without established baseline
   Log.logTrace "Finished error spike detection" pid
-
-
--- | Insert an issue, queue LLM enhancement, and send alerts to all channels.
--- Shared by detectErrorSpikes and other error notification paths.
-createAndNotifyErrorIssue
-  :: Projects.ProjectId
-  -> Issues.Issue
-  -> RuntimeAlertType
-  -> ErrorPatterns.ATError
-  -> (Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
-  -> ErrorPatterns.ErrorPatternId
-  -> ThreadRefs
-  -> ATBackgroundCtx ()
-createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId existingRefs = do
-  authCtx <- ask @Config.AuthContext
-  now <- Time.currentTime
-  Issues.insertIssue issue
-  enqueueJobs authCtx [EnhanceIssuesWithLLM pid (V.singleton issue.id)]
-  whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
-    users <- Projects.usersByProjectId pid
-    (chartUrlM, alert) <- runtimeErrorAlert authCtx pid now issue.id.toText issue.title runtimeAlertType errorData errorData.when Nothing Nothing
-    let errorsUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-        (subj, html) = emailFn project.title (projectUrl authCtx pid) errorsUrl [errorData] chartUrlM Nothing Nothing
-    (finalRefs, dispatched) <- sendAlertToChannels alert pid project users errorsUrl subj html existingRefs
-    when dispatched
-      $ void
-      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalRefs.slackTs finalRefs.discordMsgId now
 
 
 -- | How many shape groups one review run may ask about. Mirrors
