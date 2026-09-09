@@ -119,7 +119,7 @@ live-test-reload-all:
 # NB: GHCi's :main only strips quotes at token start, so `--match="X"` would
 # pass the quote chars to hspec and silently match nothing — keep the space form.
 TEST_MATCH ?=
-live-test-dev:
+live-test-dev: build-chart-cli
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -fobject-code -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log

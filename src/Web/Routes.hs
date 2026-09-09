@@ -1228,29 +1228,47 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
       height = clamp (100, 2000) $ fromMaybe defaultHeight heightM
   -- The signature covers the dataset as well as the query. Saved report charts
   -- carry their measured data, and must remain usable after telemetry expires.
-  processedWidget <- case widget.dataset of
-    Just _ -> pure widget
-    Nothing -> Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+  chart <- case widget.dataset of
+    Just _ -> pure $ Right widget
+    Nothing -> do
+      md <- Dashboards.widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+      pure $ case md.error of
+        Just queryError -> Left queryError
+        Nothing ->
+          Right $ widget
+            & #dataset ?~ case widget.wType of
+              Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+              _ -> Widget.toWidgetDataset md
+  whenLeft_ chart \queryError ->
+    Log.logAttention "widgetPngGetH: chart query unavailable" $ AE.object ["widgetId" AE..= widget.id, "error" AE..= queryError]
 
-  let input =
+  let darkMode = case L.lookup "appearance" allParams of
+        Just (Just "dark") -> True
+        Just (Just "light") -> False
+        _ -> widget.theme == Just "dark"
+      input =
         AE.encode
           $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts (processedWidget & #_staticRender ?~ True)
-            , "profile" AE..= fromMaybe Widget.PngStandard processedWidget.pngProfile
+            [ "echarts"
+                AE..= either
+                  (const $ AE.object ["graphic" AE..= AE.object ["type" AE..= ("text" :: Text), "left" AE..= ("center" :: Text), "top" AE..= ("middle" :: Text), "style" AE..= AE.object ["text" AE..= ("Chart unavailable\nOpen the incident or monitor for details." :: Text), "fontSize" AE..= (18 :: Int), "fill" AE..= (bool "#334155" "#cbd5e1" darkMode :: Text), "textAlign" AE..= ("center" :: Text)]]])
+                  (Widget.widgetToECharts . (& #_staticRender ?~ True))
+                  chart
+            , "profile" AE..= fromMaybe Widget.PngStandard widget.pngProfile
             , "width" AE..= width
             , "height" AE..= height
-            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            , "theme" AE..= fromMaybe "default" widget.theme
             , -- Presentation only, like width/height; the signed widget data is unchanged.
-              "darkMode" AE..= (case L.lookup "appearance" allParams of Just (Just "dark") -> True; Just (Just "light") -> False; _ -> processedWidget.theme == Just "dark")
+              "darkMode" AE..= darkMode
             ]
 
   pngBytes <-
     liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
-      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height])
+      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height])
       Just (ExitSuccess, bytes, _) -> pure bytes
-      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id])
+      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id])
 
-  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
+  pure $ addHeader @"Cache-Control" (if isLeft chart then "no-store" else bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 
 
 -- =============================================================================

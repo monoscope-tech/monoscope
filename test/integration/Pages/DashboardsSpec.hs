@@ -1,6 +1,9 @@
 module Pages.DashboardsSpec (spec) where
 
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time (addUTCTime)
@@ -24,8 +27,11 @@ import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext (..))
+import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Environment qualified as Env
 import Test.Hspec
+import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash qualified as Crypto
 
 
@@ -217,6 +223,24 @@ spec = sequential $ aroundAll withTestResources do
       recovered <- run Widget.WTTimeseries "name == \"GET /api/stat-widget\""
       (recovered.error :: Maybe Text) `shouldBe` Nothing
       V.length recovered.dataset `shouldSatisfy` (> 0)
+
+    it "does not cache query failures as successful empty PNGs" \tr -> do
+      let render query appearance = do
+            let widget = (def :: Widget.Widget){Widget.query = Just query, Widget.pngProfile = Just Widget.PngSlack}
+                encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
+                signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
+            runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just signature) [("appearance", Just appearance)]
+      failed <- render "name ==" "light"
+      failedDark <- render "name ==" "dark"
+      emptyResponse <- render "name == \"no-such-png-fixture-operation\"" "light"
+      for_ [failed, failedDark, emptyResponse] \response ->
+        LBS.take 8 (Servant.getResponse response) `shouldBe` "\137PNG\r\n\26\n"
+      List.lookup "Cache-Control" (Servant.getHeaders failed) `shouldBe` Just "no-store"
+      List.lookup "Cache-Control" (Servant.getHeaders emptyResponse) `shouldBe` Just "public, max-age=31536000, immutable"
+      Servant.getResponse failed `shouldNotBe` Servant.getResponse emptyResponse
+      captureDir <- Env.lookupEnv "SLACK_PNG_CAPTURE_DIR"
+      for_ captureDir \dir -> for_ [("failure", failed), ("failure-dark", failedDark), ("empty", emptyResponse)] \(name, response) ->
+        LBS.writeFile (dir <> "/" <> name <> ".png") $ Servant.getResponse response
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do

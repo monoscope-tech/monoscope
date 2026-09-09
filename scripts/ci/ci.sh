@@ -157,6 +157,7 @@ detect_caps() {
   local caps=''
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
+  command -v bun >/dev/null 2>&1 && caps="$caps bun"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
   # shellcheck disable=SC2086
@@ -317,6 +318,8 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
+  (cd web-components && npm ci --prefer-offline --no-audit)
+  make build-chart-cli
   cabal build integration-tests "$CABAL_OPTS"
   bin=$(cabal list-bin integration-tests)
   rm -f build-shard-*.log

@@ -175,3 +175,10 @@ Edit `ci/checks.tsv` and the matching case in `run_body` (`scripts/ci/ci.sh`).
 `make ci-selftest` checks the two stay in sync, along with the fingerprint and
 capability logic. Narrow a check's `inputs` only where it is provably sound: a
 too-wide set costs a rerun, a too-narrow one ships an untested change.
+
+
+The integration suite exercises signed PNG requests through the real renderer.
+It requires Node and Bun as well as the database services. Local CI installs the
+frontend dependencies and builds `chart-cli` before running integration shards.
+The native `make live-test-dev` watcher also builds the renderer first; install
+`web-components` dependencies before starting it.

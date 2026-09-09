@@ -1017,3 +1017,36 @@ fingerprints `9aab909d02beed42304bd9658a1d62f1e4df68a4156124d2cb6d11f8180a84f0`
 Integration-tests, weeder, hlint, ui-tests, and e2e remain for GitHub; the CLI
 attestation is reused. These results do not cover the subsequent query-failure
 draft. No deployment-branch push or deployment occurred.
+
+
+## Query failure PNG response
+
+The PNG handler now preserves MetricsData.error before widget conversion. Failed
+queries render “Chart unavailable” with a direction to the incident or monitor,
+whose existing Slack message supplies the link. The image respects light/dark
+appearance and uses no-store caching. It does not expose the query error. Embedded
+snapshots and successful query results retain their existing paths and cache policy.
+
+The signed-handler regression first failed because a malformed query returned
+`public, max-age=31536000, immutable`. After the fix, the native watcher compiled
+206 modules and passed both PNG examples. The test drives signature verification,
+the real query path, and the real chart-cli process, compares failure against a
+valid empty result, and checks PNG signatures and cache headers. Actual light/dark
+failure images and the still-unlabeled empty result were captured and inspected in
+`docs/slack/chart-fixtures/query-failure/`.
+
+Command: `SLACK_PNG_CAPTURE_DIR=/tmp/monoscope-slack-agent/handler-png
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=PNG make live-test-dev`
+(on one shell line). Log: `/tmp/monoscope-slack-agent/chart-failure-tests.log`.
+The watcher now builds chart-cli first. CI integration setup installs frontend
+dependencies and builds chart-cli; Node and Bun are declared required capabilities.
+`scripts/ci/ci.sh selftest` and shell syntax checks passed. Fourmolu and scoped
+whitespace checks passed. HLint remains blocked by unsupported MultilineStrings;
+Weeder exited 228 with repository findings in `chart-failure-weeder.log` under the
+same log directory. All three requested review skills ran three times.
+
+Full CI signoff remains outstanding for this increment, including the runner
+metadata change. Earlier attestations cover their recorded fingerprints only.
+Empty-state labels, coverage labels, units, complete production request/result/
+options evidence, live Slack acceptance, and later releases remain unfinished.
+No deployment or deployment-branch push occurred.
