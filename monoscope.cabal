@@ -199,6 +199,7 @@ extra-source-files:
     static/migrations/0168_investigation_journal.sql
     static/migrations/0169_slack_turn_answers.sql
     static/migrations/0170_slack_turn_checkpoints.sql
+    static/migrations/0171_slack_investigation_progress.sql
 
 source-repository head
   type: git
@@ -253,6 +254,7 @@ library
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
+      Pages.Bots.SlackProgress
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
@@ -870,6 +872,7 @@ test-suite test-dev
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
+      Pages.Bots.SlackProgress
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts

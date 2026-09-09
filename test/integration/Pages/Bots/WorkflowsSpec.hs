@@ -596,6 +596,55 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "updates one progress checklist while investigating and reuses it after a rejected answer delivery" \tr -> do
+        setupLinkedSlackData tr testPid "T_PROGRESS"
+        started <- newEmptyMVar
+        updated <- newEmptyMVar
+        posts <- newIORef (0 :: Int)
+        modelCalls <- newIORef (0 :: Int)
+        let transport = withHTTPResponses \_ endpoint -> case endpoint of
+              "https://slack.com/api/chat.postMessage" -> do
+                number <- atomicModifyIORef' posts (\n -> (n + 1, n))
+                case number of
+                  0 -> void (tryPutMVar started ()) $> Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}"
+                  1 -> pure $ Just "{\"ok\":false,\"error\":\"ratelimited\"}"
+                  _ -> pure $ Just "{\"ok\":true,\"ts\":\"1735689611.000001\"}"
+              "https://slack.com/api/chat.update" -> void (tryPutMVar updated ()) $> Just "{\"ok\":true}"
+              _ -> pure $ Just "{\"ok\":true,\"messages\":[]}"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                modifyIORef' modelCalls (+ 1)
+                let tools = [message | message <- toList history, Chat.role message == Chat.Tool]
+                liftIO $ timeout 10_000_000 (takeMVar $ if null tools then started else updated) >>= (`shouldBe` Just ())
+                pure
+                  $ Right
+                  $ if null tools
+                    then Chat.Message Chat.Assistant "private model narration" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "schema" "function" (Chat.ToolFunction "get_schema" mempty)]}
+                    else Chat.Message Chat.Assistant "Evidence check complete; cause remains unconfirmed." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
+        receipt <- receiveSlackEvent tr $ slackThreadedEvent "T_PROGRESS" "C_PROGRESS" "Investigate checkout" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+        (firstRequests, failed) <- work receipt
+        failed `shouldSatisfy` isLeft
+        (retryRequests, succeeded) <- work receipt
+        succeeded `shouldSatisfy` isRight
+        readIORef modelCalls >>= (`shouldBe` 2)
+        let bodies requests endpoint = [value | (url, body) <- requests, url == endpoint, Just value <- [AE.decode @AE.Value body]]
+            progressPosts = filter (\value -> value ^? key "blocks" . _Array . ix 0 . key "type" . _String == Just "plan") $ bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.postMessage"
+            updates = bodies (firstRequests <> retryRequests) "https://slack.com/api/chat.update"
+        length progressPosts `shouldBe` 1
+        for_ progressPosts $ \value -> value ^? key "thread_ts" . _String `shouldBe` Just "1735689600.000001"
+        updates `shouldSatisfy` (not . null)
+        for_ updates $ \value -> do
+          value ^? key "channel" . _String `shouldBe` Just "C_PROGRESS"
+          value ^? key "ts" . _String `shouldBe` Just "1735689610.000001"
+          T.isInfixOf "private model narration" (decodeUtf8 $ AE.encode value) `shouldBe` False
+        updates `shouldSatisfy` any (\value -> value ^? key "blocks" . _Array . ix 0 . key "title" . _String == Just "Investigation response ready")
+        bodies retryRequests "https://slack.com/api/chat.update" `shouldSatisfy` (not . null)
+        (replayed, _) <- work receipt
+        replayed `shouldBe` []
+
       it "resumes between tool reads with the original model context and remaining iteration budget" \tr -> do
         setupLinkedSlackData tr testPid "T_CHECKPOINT"
         let cfg = tr.trATCtx.config

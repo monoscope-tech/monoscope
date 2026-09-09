@@ -37,6 +37,7 @@ import Control.Exception (ErrorCall (..))
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
+import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (race_)
 import Effectful.Error.Static (runErrorNoCallStack, throwError)
 import Effectful.Log qualified as Log
@@ -45,6 +46,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackDefaultChannel)
 import Models.Apis.Integrations qualified as Integrations
+import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.DashboardTemplates qualified as DashboardTemplates
 import Models.Projects.Dashboards qualified as Dashboards
@@ -55,6 +57,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
+import Pages.Bots.SlackProgress qualified as Progress
 import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
@@ -69,7 +72,7 @@ import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (withRunInIO)
-import UnliftIO.Exception (bracket_, catch, throwIO, tryAny)
+import UnliftIO.Exception (bracket_, catch, finally, throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -917,12 +920,61 @@ processSlackEvent receiptId = do
             )
             ( race_
                 (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
-                (runBotQuery Slack (sendSlackChatMessageChecked slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+                (withInvestigationProgress slackData access $ runBotQuery Slack (sendSlackChatMessageChecked slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
             )
         )
         `catch` \AI.AgentStopped -> do
           AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) slackData.projectId
           sendSlackChatMessage slackData.botToken $ addThread $ AE.object ["text" AE..= ("Investigation stopped. Send another message to continue." :: Text)]
+
+
+-- | Poll only committed activity. The thread lock serializes publication and
+-- retries reuse an acknowledged progress message. Progress failure does not
+-- discard a completed investigation answer.
+withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
+withInvestigationProgress slackData access action = case access of
+  AI.SlackInvestigationAccess run -> do
+    previous <- newIORef Nothing
+    let publish allowCreate = do
+          let progressAccess = if allowCreate then access else AI.SlackAccess run.teamId run.slackUserId run.userId
+          AI.requireAgentAccess progressAccess slackData.projectId
+          history <- Investigations.recentEvents slackData.projectId run.teamId run.channelId run.threadTs
+          for_ (Progress.snapshot run.messageTs history) $ \progress -> do
+            old <- readIORef previous
+            when (old /= Just progress) do
+              existing <-
+                Hasql.interpOne @(HI.OneColumn Text)
+                  [HI.sql|SELECT progress_ts FROM apis.slack_investigation_progress
+                  WHERE project_id = #{slackData.projectId} AND team_id = #{run.teamId}
+                    AND channel_id = #{run.channelId} AND thread_ts = #{run.threadTs} AND message_ts = #{run.messageTs}|]
+              AI.requireAgentAccess progressAccess slackData.projectId
+              when (allowCreate || isJust existing) do
+                let body = mergeSlackContent (Progress.payload progress) $ AE.object ["channel" AE..= run.channelId]
+                case existing of
+                  Just (HI.OneColumn ts) -> do
+                    result <- slackApi slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
+                    either (throwIO . ErrorCall . toString) pure result
+                  Nothing -> do
+                    response <-
+                      postWith
+                        (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
+                        "https://slack.com/api/chat.postMessage"
+                        (mergeSlackContent body $ AE.object ["thread_ts" AE..= run.threadTs])
+                    let bytes = response ^. responseBody
+                    either (throwIO . ErrorCall . toString) pure $ parseSlackOkOrErr bytes
+                    ts <- maybe (throwIO $ ErrorCall "Slack progress acknowledgement has no timestamp") pure $ AE.decode @AE.Value bytes >>= (^? key "ts" . _String)
+                    Hasql.interpExecute_
+                      [HI.sql|INSERT INTO apis.slack_investigation_progress
+                      (project_id, team_id, channel_id, thread_ts, message_ts, progress_ts)
+                      VALUES (#{slackData.projectId}, #{run.teamId}, #{run.channelId}, #{run.threadTs}, #{run.messageTs}, #{ts})
+                      ON CONFLICT (project_id, team_id, channel_id, thread_ts, message_ts) DO NOTHING|]
+                writeIORef previous $ Just progress
+        publishSafely allowCreate = whenLeftM_ (tryAny $ publish allowCreate) $ \_ -> do
+          Log.logAttention "Slack investigation progress update failed" $ AE.object ["channel_id" AE..= run.channelId, "thread_ts" AE..= run.threadTs]
+          when allowCreate $ liftIO $ threadDelay 28_000_000
+        updates = forever $ liftIO (threadDelay 2_000_000) >> publishSafely True
+    race_ updates action `finally` publishSafely False
+  _ -> action
 
 
 data SlackWorkerBusy = SlackWorkerBusy

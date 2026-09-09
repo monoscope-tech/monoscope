@@ -1392,3 +1392,51 @@ Full integration-tests, weeder, hlint and e2e remain outstanding. Local full
 integration requires the unavailable tf-real capability. Live progress, response
 outbox/reconciliation, active human steering, investigation quality evaluation,
 tested action drafts, proactive policy and live Slack acceptance remain unfinished.
+
+
+### Native investigation progress
+
+Slack investigations now poll committed journal activity every two seconds and
+show recorded work in a native plan block. Updates edit an acknowledged message
+inside the same thread. A dedicated scoped row retains its timestamp for retries.
+Unchanged snapshots are not sent again within a run. Publication failures are
+logged and back off to thirty seconds during polling; they do not discard the
+answer. Short runs do not create a completed-only progress message.
+
+The projection groups model rounds and evidence reads, marks interrupted work,
+and includes an observation timestamp and capped-history notice. A completed
+step means its response was recorded, including possible domain failures; it does
+not establish a successful diagnosis. Model narration, arguments and raw tool
+results are absent. Fallback text includes task states for screen readers.
+Final updates use current Slack/project authorization and can finish an existing
+checklist after cancellation. Stopped-run publication still needs an explicit
+transport regression and live acceptance.
+
+Slack contract references checked on September 9, 2026:
+https://docs.slack.dev/reference/block-kit/blocks/plan-block/
+https://docs.slack.dev/reference/block-kit/blocks/task-card-block/
+
+Native validation: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` passed 39 examples, zero failures, in
+25.1717 seconds. The watcher was restarted to load the new registered module;
+older 38-example output was not used as evidence for this change. The regression
+waits for progress during a model call, observes updates, rejects answer delivery,
+and verifies that replay uses the same progress timestamp without another model
+call. It also checks thread routing and absence of private model narration.
+Log: /tmp/monoscope-slack-agent/slack-progress-workflows-complete.log.
+
+All three requested skills ran three passes. Fourmolu and whitespace checks pass.
+HLint remains blocked by MultilineStrings; Weeder reports repository findings.
+Logs are slack-progress-hlint.log and slack-progress-weeder.log in the same folder.
+New pure doctests await CI signoff. No deployment or deployment-branch push.
+
+Acknowledged progress is reused. A crash or cancellation between remote acceptance
+and local timestamp persistence is still ambiguous; a durable response outbox and
+reconciliation are required before claiming duplicate-free publication. Rendering
+in live Slack, progress stop/error acceptance, active steering, diagnosis quality,
+tested draft PRs, proactive policies and the remaining release gates are unfinished.
+
+Checkpoint commit 34a3cebb0 passed `make ci-signoff CHECKS="build doctests unit-tests"`
+and published passing attestations. Full integration-tests, weeder, hlint and e2e
+remain outstanding; full local integration needs unavailable tf-real. Log:
+/tmp/monoscope-slack-agent/slack-checkpoints-ci-signoff.log.
