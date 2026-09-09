@@ -1559,3 +1559,34 @@ Best-effort progress/status cleanup does not yet have its own durable update
 outbox. Multi-part answer durability, missing-observation history reconciliation,
 live Slack acceptance, active steering, diagnosis evaluation, tested drafts and
 proactive policies remain unfinished.
+
+
+### Persist follow-ups while the investigation thread is busy
+
+Thread-lock contention now defers the receipt using the existing rate-limit
+scheduling transaction and a database-clock deadline one second ahead. The worker
+returns normally only after scheduling succeeds. Repeated attempts coalesce a
+future pending job; a completed receipt schedules nothing. Actual connection loss
+and other failures continue to propagate. This also applies to other uses of the
+worker lock, including onboarding and late progress observations.
+
+The extended concurrency regression holds the first model call open, retries both
+its duplicate and a follow-up twice, verifies pending receipts and one future job,
+and checks no extra HTTP/model work. It then verifies independent-thread work,
+follow-up conversation context, processed replay and lock-loss interruption.
+This establishes durable deferral, not FIFO ordering or active-run steering.
+
+Validation: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev` passed 41 examples, zero failures,
+31.1516 seconds, after recompiling the changed module and test. Evidence:
+/tmp/monoscope-slack-agent/slack-busy-workflows-complete.log.
+Three passes of each requested Haskell skill are recorded. Fourmolu and
+`git diff --check` pass. HLint exits 1 because its installed version cannot parse
+MultilineStrings; Weeder exits 228 with repository findings. Logs are
+slack-busy-hlint.log and slack-busy-weeder.log in the same temporary directory.
+
+Preceding rate-limit commit 05b4322ea passed
+`make ci-signoff CHECKS="build doctests unit-tests"`; passing results were attested.
+Its final status still requires integration-tests, weeder, hlint and e2e.
+Log: /tmp/monoscope-slack-agent/slack-rate-limit-ci-signoff.log.
+CI for this increment is pending. No deployment or deployment-branch push.

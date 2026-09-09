@@ -1321,7 +1321,7 @@ spec = around withTestResources do
         replayed `shouldBe` []
         length <$> readIORef observed >>= (`shouldBe` 3)
 
-      it "serializes concurrent questions and duplicate workers within one Slack thread" \tr -> do
+      it "defers busy-thread questions without failure retries and preserves conversation context" \tr -> do
         setupLinkedSlackData tr testPid "T_SERIAL"
         entered <- newEmptyMVar
         release <- newEmptyMVar
@@ -1343,9 +1343,20 @@ spec = around withTestResources do
         withAsync (work firstReceipt) \worker -> do
           timeout 10_000_000 (takeMVar entered) >>= (`shouldBe` Just ())
           for_ [firstReceipt, secondReceipt] \receipt -> do
-            (requests, outcome) <- work receipt
-            outcome `shouldSatisfy` isLeft
-            requests `shouldBe` []
+            replicateM_ 2 do
+              (requests, outcome) <- work receipt
+              outcome `shouldSatisfy` isRight
+              requests `shouldBe` []
+            queued <- withResource tr.trPool $ \conn ->
+              PGS.query
+                conn
+                [sql|SELECT processed_at IS NULL,
+                (SELECT count(*) FROM background_jobs
+                 WHERE payload = ? AND status = 'pending' AND run_at > clock_timestamp())
+                FROM apis.slack_events WHERE id = ?|]
+                (Aeson $ AE.toJSON $ Jobs.ProcessSlackEvent receipt, receipt)
+            queued `shouldBe` [(True, 1 :: Int)]
+          readIORef histories >>= (\observed -> length observed `shouldBe` 1)
           independent <- receiveSlackEvent tr $ event "1735689603.000001" & key "event" . key "channel" . _String .~ "C_INDEPENDENT"
           (_, separateThread) <- work independent
           separateThread `shouldSatisfy` isRight

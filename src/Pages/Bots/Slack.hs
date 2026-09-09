@@ -802,26 +802,30 @@ slackEventsPostH body timestamp signature = do
 
 processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
 processSlackEvent receiptId =
-  runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> do
-    let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
-    Hasql.transaction TxS.ReadCommitted TxS.Write do
-      pending <-
-        Tx.statement ()
-          $ HI.interp @[UUIDId "slack_event"]
-            True
-            [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]
-      unless (null pending)
-        $ void
-        $ Tx.statement ()
-        $ HI.interp @HI.RowsAffected
-          True
-          [HI.sql|WITH delayed AS (
-          UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
-          WHERE payload = #{job} AND status = 'pending' AND run_at > clock_timestamp()
-          RETURNING id
-        ) INSERT INTO background_jobs (run_at, status, payload)
-          SELECT #{retryAt}, 'pending', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
+  (runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> defer retryAt)
+    `catch` \SlackWorkerBusy -> do
+      HI.OneColumn retryAt <- Hasql.interpOne @(HI.OneColumn UTCTime) [HI.sql|SELECT clock_timestamp() + interval '1 second'|] >>= maybe (throwIO $ ErrorCall "Slack retry clock returned no row") pure
+      defer retryAt
   where
+    defer retryAt = do
+      let job = Aeson $ AE.toJSON $ BgJobs.ProcessSlackEvent receiptId
+      Hasql.transaction TxS.ReadCommitted TxS.Write do
+        pending <-
+          Tx.statement ()
+            $ HI.interp @[UUIDId "slack_event"]
+              True
+              [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]
+        unless (null pending)
+          $ void
+          $ Tx.statement ()
+          $ HI.interp @HI.RowsAffected
+            True
+            [HI.sql|WITH delayed AS (
+            UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
+            WHERE payload = #{job} AND status = 'pending' AND run_at > clock_timestamp()
+            RETURNING id
+          ) INSERT INTO background_jobs (run_at, status, payload)
+            SELECT #{retryAt}, 'pending', #{job} WHERE NOT EXISTS (SELECT 1 FROM delayed)|]
     runReceipt = do
       pending <-
         Hasql.interpOne @(HI.OneColumn (Aeson SlackEventPayload))
