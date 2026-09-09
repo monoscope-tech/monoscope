@@ -1004,3 +1004,16 @@ signoff for this increment is still outstanding; the preceding lifecycle signoff
 does not cover these edits. Chart coverage/failure labels, measurement units,
 production captures, live Slack acceptance, and later releases remain incomplete.
 No deployment or deployment-branch push occurred.
+
+
+CI for compact-chart commit `ee0bcd4f1` passed with
+`make ci-signoff CHECKS="build doctests unit-tests frontend"`: build, 1,538
+doctests, 308 unit examples, and frontend build passed. Passing attestations use
+fingerprints `9aab909d02beed42304bd9658a1d62f1e4df68a4156124d2cb6d11f8180a84f0`
+(build), `2eabeff76139c693652ad518ff435ea4850592514727d9deb3527387b7f22aa2`
+(doctests), `0190a437812d0df22636fc9721bcfe899eb5e86dcef24621eb217c4663c8b4b6`
+(unit-tests), and `b350f17f15c8c7249e0a90a7e756fce4ee3468309487cc597a1bf7df11ae2cbd`
+(frontend). Log: `/tmp/monoscope-slack-agent/chart-ci-signoff.log`.
+Integration-tests, weeder, hlint, ui-tests, and e2e remain for GitHub; the CLI
+attestation is reused. These results do not cover the subsequent query-failure
+draft. No deployment-branch push or deployment occurred.
