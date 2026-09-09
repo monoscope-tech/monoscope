@@ -959,3 +959,13 @@ dependency, migration, warning suppression, or client script was introduced.
 Current-tree CI still needs a new signoff after these lifecycle changes. Charts,
 live Slack acceptance, earlier ingestion/spike transaction gaps, and the later
 releases remain unfinished. No push or deployment occurred.
+
+CI signoff for lifecycle commit `72278018e` completed successfully with
+`make ci-signoff CHECKS="build doctests unit-tests"`: build passed, 1,536 doctests
+passed, and 308 unit examples passed. Published fingerprints are
+`478d0bec4a98bb954b4510ef7249b74b374d008cf64606f1996f088bee436fc0`,
+`3f93d72545edf8032b2c397f05363569b81b33c46b62c0e06dbed4f18fa7fee4`, and
+`34966bd0ecd1dbf8cd5696c8268b07416b76d1e62e280576d250889f3e8932ff` respectively.
+The existing CLI attestation was reused. Frontend, integration-tests, weeder,
+hlint, ui-tests, and e2e remain for GitHub. The complete log is
+`/tmp/monoscope-slack-agent/lifecycle-ci-signoff.log`. No deployment was triggered.
