@@ -243,19 +243,14 @@ getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
 getSlackDataByTeamId teamId = Hasql.interpOne (selectSlack <> [HI.sql|WHERE team_id = #{teamId}|])
 
 
--- | Update the OAuth-time default channel cached on apis.slack.
---
--- Note: this is NOT purely display metadata. @channel_id@ is the discriminator
--- @Pkg.Mail.sendSlackAlertWith@ uses to decide webhook-vs-chat-API routing
--- (@cid == sd.channelId@). Updating @channel_id@ here without also re-issuing
--- @webhook_url@ will desync the pair — the webhook is channel-bound at
--- install time and cannot be moved. Callers that change this should either
--- re-run OAuth (which rewrites both) or clear @webhook_url@ so the alert path
--- falls through to chat.postMessage.
-updateSlackDefaultChannel :: DB es => Text -> Text -> Maybe Text -> Eff es Int64
-updateSlackDefaultChannel teamId channelId channelName =
+-- | Change one project's default channel. An incoming webhook is tied to its
+-- installation channel, so moving the default clears it and uses the bot API.
+updateSlackDefaultChannel :: DB es => Projects.ProjectId -> Text -> Maybe Text -> Eff es Int64
+updateSlackDefaultChannel pid channelId channelName =
   Hasql.interpExecute
-    [HI.sql|UPDATE apis.slack SET channel_id = #{channelId}, channel_name = #{channelName} WHERE team_id = #{teamId}|]
+    [HI.sql|UPDATE apis.slack SET channel_id = #{channelId}, channel_name = #{channelName},
+      webhook_url = CASE WHEN channel_id = #{channelId} THEN webhook_url ELSE NULL END
+      WHERE project_id = #{pid}|]
 
 
 data DiscordData = DiscordData
@@ -295,8 +290,8 @@ dashboardsByProjectJoin :: DB es => HI.Sql -> Eff es [(Text, Text)]
 dashboardsByProjectJoin joinWhere = Hasql.interp ([HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d |] <> joinWhere)
 
 
-getDashboardsForSlack :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForSlack teamId = dashboardsByProjectJoin [HI.sql|JOIN apis.slack s ON d.project_id = s.project_id WHERE s.team_id = #{teamId}|]
+getDashboardsForSlack :: DB es => Projects.ProjectId -> Eff es [(Text, Text)]
+getDashboardsForSlack pid = dashboardsByProjectJoin [HI.sql|WHERE d.project_id = #{pid}|]
 
 
 getDashboardsForWhatsapp :: DB es => Text -> Eff es [(Text, Text)]

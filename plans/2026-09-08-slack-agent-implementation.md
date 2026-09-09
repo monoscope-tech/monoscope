@@ -320,3 +320,36 @@ compiled the full route wiring and linked the server and test executables.
 The final status reuses build and CLI tests. Frontend, doctests, unit-tests,
 integration-tests, weeder, hlint, ui-tests, and e2e still require current-tree
 results. This build signoff does not attest execution of those test suites.
+
+
+## Personal authorization for slash commands (2026-09-09)
+
+Every slash-command branch now resolves the Slack user's personal binding against
+live account, membership, project, and installation state. Unlinked or revoked
+users receive an ephemeral instruction to link or check their access. Background
+investigations carry the resolved identity in `SlackAccess`, so the existing model,
+tool, and delivery checks apply to commands too.
+
+`/monoscope-here` requires project-admin permission. Channel updates and dashboard
+lists use a typed project ID rather than a workspace-wide lookup. Changing the
+default channel clears the old channel-bound webhook; another project's channel
+and webhook stay intact even in the same Slack workspace.
+
+Three review passes of each requested skill are recorded in the review report.
+The workflow suite passed 24 examples, 0 failures with:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+The regression checks unlinked users, view/edit denial, revocation, same-workspace
+project isolation, and webhook preservation. The existing missing-dashboard test
+now fails on an unexpected success. Fourmolu and `git diff --check` passed.
+
+The preceding build attestation must be refreshed before pushing these new edits.
+Dashboard actions still need personal authorization and typed, validated metadata;
+native sessions, conversation roles, evidence tools, drafts, and live acceptance
+remain open. No push or deployment occurred.
+
+Final Slack regression command:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Slack make live-test-dev`
+passed 31 examples, 0 failures. The attempted spaced `Slack Bot` filter was
+rejected by the runner before testing. The first Slack run caught the old
+missing-dashboard test's lazy exception assertion; the final test inspects the
+Servant error inside the effect stack and asserts HTTP 400 directly.

@@ -17,8 +17,13 @@ A Slack identity cannot be reassigned to a different Monoscope account through
 this flow. A new link can change the same user's default project. Existing
 investigation threads retain their original project. Signed-event investigations
 recheck access before model calls, before and after tools, and before delivery.
-Slash-command and button authorization, plus the remaining native Agent lifecycle
-gates, are still required before rollout.
+Slash commands use the linked user's current default project. `/monoscope-here`
+requires project-admin permission and changes only that project's notification
+channel. Moving the channel clears the old channel-bound incoming webhook so
+notifications use the bot API. Unlinked or revoked users receive a private prompt
+to link or check their access. Dashboard buttons still require personal
+authorization and metadata validation before rollout, along with the remaining
+native Agent lifecycle gates.
 
 Set `SLACK_SIGNING_SECRET` and `SLACK_APP_ID` for the Slack app that posts incident alerts.
 The signing secret verifies incoming requests. The app ID verifies the author of a captured message.

@@ -51,7 +51,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, formatBotError, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -232,43 +232,42 @@ slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value
 slackInteractionsH interaction = do
   Log.logTrace ("Slack interaction received" :: Text) $ AE.object ["command" AE..= interaction.command, "text" AE..= interaction.text, "team_id" AE..= interaction.team_id, "channel_id" AE..= interaction.channel_id]
   authCtx <- ask @AuthContext
-  case interaction.command of
-    "/monoscope-here" ->
-      withSlackDataByTeam "/monoscope-here" interaction.team_id (runMonoscopeHere interaction)
-        <&> fromMaybe workspaceNotLinkedResp
-        >>= traceResp
-    "/dashboard" -> do
-      dashboards <- V.fromList <$> getDashboardsForSlack interaction.team_id
-      when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
-      slackDataM <- withSlackDataByTeam "/dashboard" interaction.team_id \slackData ->
-        triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
-      when (isNothing slackDataM) $ throwError err400{errBody = "This Slack workspace is not linked to a Monoscope project. Please reinstall the Monoscope app."}
-      traceResp $ textResp "modal opened"
-    _ -> do
-      slackDataM <- getSlackDataByTeamId interaction.team_id
-      when (isNothing slackDataM) $ Log.logAttention ("Slack slash command for unlinked workspace" :: Text) $ AE.object ["team_id" AE..= interaction.team_id, "command" AE..= interaction.command]
-      forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
-        $ maybe
-          (sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError))
-          (\sd -> runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env AI.ServiceAccess sd.projectId interaction.text (pure Nothing))
-          slackDataM
-      traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
+  principalM <- Integrations.resolveSlackPrincipal interaction.team_id interaction.user_id Nothing
+  case principalM of
+    Nothing ->
+      traceResp
+        $ AE.object
+          [ "response_type" AE..= ("ephemeral" :: Text)
+          , "text" AE..= ("Link your Monoscope account by mentioning Monoscope or sending it a direct message, then retry this command. If already linked, check your project access and Slack installation." :: Text)
+          ]
+    Just principal -> do
+      slackData <- getProjectSlackData principal.projectId >>= maybe (throwError err403) pure
+      unless (slackData.teamId == interaction.team_id) $ throwError err403
+      let access = AI.SlackAccess interaction.team_id interaction.user_id principal.userId
+      case interaction.command of
+        "/monoscope-here" -> do
+          permission <- ProjectMembers.getUserPermission principal.projectId principal.userId
+          unless (permission == Just ProjectMembers.PAdmin) $ throwError err403
+          AI.requireAgentAccess access principal.projectId
+          runMonoscopeHere interaction slackData >>= traceResp
+        "/dashboard" -> do
+          dashboards <- V.fromList <$> getDashboardsForSlack principal.projectId
+          when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
+          AI.requireAgentAccess access principal.projectId
+          triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
+          traceResp $ textResp "modal opened"
+        _ -> do
+          forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")")
+            $ runBotQuery Slack (sendSlackFollowupResponse interaction.response_url . botReplyPayload) authCtx.env access principal.projectId interaction.text (pure Nothing)
+          traceResp $ textResp $ getLoadingMessage (detectReportIntent interaction.text)
   where
     traceResp resp = resp <$ Log.logTrace ("Slack interaction response" :: Text) resp
-
-    workspaceNotLinkedResp =
-      AE.object
-        [ "response_type" AE..= ("ephemeral" :: Text)
-        , "text" AE..= ("This Slack workspace is not linked to a Monoscope project. Please install the Monoscope app from your project's integrations page." :: Text)
-        , "replace_original" AE..= True
-        , "delete_original" AE..= True
-        ]
 
     runMonoscopeHere :: SlackInteraction -> SlackData -> ATBaseCtx AE.Value
     runMonoscopeHere inter slackData = do
       -- Refresh apis.slack's display cache for the "default" channel and
       -- ensure the team routes alerts there.
-      _ <- updateSlackDefaultChannel inter.team_id inter.channel_id Nothing
+      _ <- updateSlackDefaultChannel slackData.projectId inter.channel_id Nothing
       wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId inter.channel_id
       when wasAdded
         $ Projects.projectById slackData.projectId

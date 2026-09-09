@@ -3,6 +3,7 @@
 module Pages.Bots.BotTestHelpers (
   -- * Setup Helpers
   setupSlackData,
+  setupLinkedSlackData,
   receiveSlackEvent,
   slackRootEvent,
   setupDiscordData,
@@ -81,6 +82,7 @@ import Pages.Bots.Slack qualified as SlackEvents
 import Pkg.DeriveUtils (UUIDId)
 import Pkg.TestUtils
 import Relude
+import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -109,6 +111,19 @@ setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
   _ <- Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test"
   ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
+
+
+-- | A linked command requester; unlinked event tests use setupSlackData instead.
+setupLinkedSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
+setupLinkedSlackData tr pid teamId = do
+  setupSlackData tr pid teamId
+  withResource tr.trPool \conn ->
+    void
+      $ PGS.execute
+        conn
+        [sql|INSERT INTO apis.slack_identities (team_id, slack_user_id, user_id, project_id)
+      VALUES (?, 'U0123ABCDEF', ?, ?)|]
+        (teamId, (getResponse tr.trSessAndHeader).user.id, pid)
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

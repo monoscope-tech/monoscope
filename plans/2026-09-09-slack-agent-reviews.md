@@ -178,3 +178,15 @@ routes, and workflow regression.
 The signature boundary is now shared across Slack ingress. Personal authorization
 for legacy slash commands and dashboard actions remains unfinished; signed payloads
 do not by themselves grant Monoscope project access.
+
+
+## Personal authorization for slash commands
+
+Three passes applied all three skills to the command handler, changed model
+queries, fixtures, and workflow/Slack regressions.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse `resolveSlackPrincipal`, `requireAgentAccess`, and the existing permission enum. Remove workspace-fallback plumbing. | All command branches require a live personal binding. Investigations carry `SlackAccess` into background work; channel changes require admin. | No client behavior added; private responses use Slack's existing message format. |
+| 2 | Reuse the dashboard query helper with a typed project ID; remove newly unused imports. | Scope dashboard reads and channel updates to one project. Fix webhook/channel desynchronization when changing the default channel. Update every caller of the changed signatures. | Keep the multi-step database authorization flow in Hspec. |
+| 3 | Re-read the complete command branches and model consumers. No manual derivable instances, string packing, or warning suppressions. | Regression covers unlinked users, view/edit denial, revocation, dashboard isolation, and another project's channel/webhook preservation within the same workspace. Dashboard action authorization remains a separate open gate. | Tests use an explicit linked-user fixture; unlinked event fixtures remain unlinked. Fix the missing-dashboard test to fail if the handler unexpectedly succeeds. No frontend tier changes. |

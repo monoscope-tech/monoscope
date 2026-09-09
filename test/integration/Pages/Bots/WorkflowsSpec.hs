@@ -171,7 +171,7 @@ spec = around withTestResources do
 
     describe "Query → Process → Respond" do
       it "Slack: handles general query end-to-end" \tr -> do
-        setupSlackData tr testPid "T_WF_SLACK"
+        setupLinkedSlackData tr testPid "T_WF_SLACK"
         let interaction = slackInteraction "/monoscope" "show errors" "T_WF_SLACK"
 
         -- Get immediate loading response
@@ -218,8 +218,49 @@ spec = around withTestResources do
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Platform-Specific Commands" do
+      it "Slack commands require a linked active member and scope admin channel changes to one project" \tr -> do
+        setupLinkedSlackData tr testPid "T_COMMAND"
+        otherPid <- createTestProject tr "Other workspace project"
+        setupSlackData tr otherPid "T_COMMAND"
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            command = slackInteraction "/monoscope-here" "" "T_COMMAND"
+            readChannel pid = fmap (\sd -> (sd.channelId, sd.webhookUrl)) <$> toBaseServantResponse tr (Slack.getProjectSlackData pid)
+            status interaction =
+              toBaseServantResponse tr
+                $ catchError @ServerError (slackInteractionsH interaction $> 200) (\_ err -> pure err.errHTTPCode)
+            changePermission permission = withResource tr.trPool \conn ->
+              void
+                $ PGS.execute
+                  conn
+                  [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ? AND user_id = ?|]
+                  (permission :: Text, testPid, userId)
+        original <- readChannel testPid
+        unlinked <- toBaseServantResponse tr $ slackInteractionsH command{SlackPage.user_id = "U_UNLINKED"}
+        extractResponseType unlinked `shouldBe` Just "ephemeral"
+        for_ ["view", "edit"] \permission -> do
+          changePermission permission
+          status command >>= (`shouldBe` 403)
+          readChannel testPid >>= (`shouldBe` original)
+        changePermission "admin"
+        status command >>= (`shouldBe` 200)
+        readChannel testPid >>= (`shouldBe` Just ("C0123ABCDEF", Nothing))
+        readChannel otherPid >>= (`shouldBe` original)
+        withResource tr.trPool \conn -> do
+          for_ [testPid, otherPid] \pid ->
+            void
+              $ PGS.execute
+                conn
+                [sql|INSERT INTO projects.dashboards (project_id, created_by, title) VALUES (?, ?, ?)|]
+                (pid, userId, pid.toText)
+          void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = FALSE WHERE project_id = ? AND user_id = ?|] (testPid, userId)
+        dashboards <- toBaseServantResponse tr $ Slack.getDashboardsForSlack testPid
+        map fst dashboards `shouldBe` [testPid.toText]
+        revoked <- toBaseServantResponse tr $ slackInteractionsH command{SlackPage.channel_id = "C_DENIED"}
+        extractResponseType revoked `shouldBe` Just "ephemeral"
+        readChannel testPid >>= (`shouldBe` Just ("C0123ABCDEF", Nothing))
+
       it "Slack: /here command workflow" \tr -> do
-        setupSlackData tr testPid "T_HERE_WF"
+        setupLinkedSlackData tr testPid "T_HERE_WF"
         let interaction = slackInteraction "/monoscope-here" "" "T_HERE_WF"
 
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
@@ -378,7 +419,7 @@ spec = around withTestResources do
 
       it "Slack: deduplicates unrelated threaded events without starting a conversation" \tr -> do
         setupSlackData tr testPid "T_THREAD_WF"
-        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel "T_THREAD_WF" "C_THREAD_CHANNEL" Nothing
+        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel testPid "C_THREAD_CHANNEL" Nothing
 
         let threadedEventJson = slackThreadedEvent "T_THREAD_WF" "C_THREAD_CHANNEL" "follow up question" "1700000002.000" "1700000001.000"
             body = toStrict $ AE.encode threadedEventJson
@@ -420,7 +461,7 @@ spec = around withTestResources do
     describe "Multi-Platform Integration" do
       it "handles same project with multiple platforms" \tr -> do
         let testPhone = getTestPhoneNumber tr
-        setupSlackData tr testPid "T_MULTI_SLACK"
+        setupLinkedSlackData tr testPid "T_MULTI_SLACK"
         setupDiscordData tr testPid "guild_multi_discord"
         setupWhatsappNumber tr testPid testPhone
 
@@ -444,7 +485,7 @@ spec = around withTestResources do
 
     describe "Response Format Validation" do
       it "Slack responses have correct structure" \tr -> do
-        setupSlackData tr testPid "T_FORMAT_SLACK"
+        setupLinkedSlackData tr testPid "T_FORMAT_SLACK"
         let interaction = slackInteraction "/monoscope-here" "" "T_FORMAT_SLACK"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
