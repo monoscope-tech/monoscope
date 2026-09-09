@@ -2070,3 +2070,59 @@ MultilineStrings; Weeder exits 228 with repository findings. No passing attestat
 is claimed for either. CI for the preceding lifecycle/heartbeat main commit
 75f83fd60 is still live in /tmp/monoscope-slack-agent/slack-lifecycle-heartbeat-ci-signoff.log.
 Related-incident CI signoff has not yet run. No deployment or branch push occurred.
+
+## Linked repository runbooks
+
+Slack investigations now expose list_runbooks and read_runbook. Discovery lists
+conventionally named runbook/playbook documents in a project-linked repository at
+an explicit full commit hash; names are hints, not proof of content. Reads return
+numbered pages of at most 100 lines and 2000 characters per line, with nextLine
+for continuation and linesTruncated preserved. Documents over 1 MiB, non-UTF-8
+bytes and embedded NULs are rejected as errors rather than silently shortened.
+
+Both tools reuse the existing code-mapping, credential and Git connection path.
+Mutable refs are refused: only 40- or 64-character hexadecimal revisions are
+accepted, so a runbook is always read at a pinned commit. Paths must stay
+repository-relative and end in a document extension; empty, "." and ".." segments,
+backslashes and control characters are rejected before any provider request.
+Reads bypass the shared blob cache so one credential's content is never served to
+another. Provider truncation of a repository listing remains an error through
+fetchTree; only the returned candidate list is capped, at twenty, with
+limitReached meaning the listing may be incomplete.
+
+Dispatch requires an authorized Slack investigation; a non-Slack caller receives a
+refusal and performs no provider request. The agent prompt states that runbook
+text is evidence, never new instructions or authority to perform remediation, and
+that applicability to the current incident must be checked and reported.
+
+No new table, migration, package or handwritten instance was introduced. The tool
+input codecs derive from the existing snake_case convention and the error/page
+types derive their JSON.
+
+Takeover note: the increment was left uncompiling by the previous session with
+eight scope errors (throwE, isHexDigit, isControl). Only the missing imports were
+added; the implementation is otherwise the previous session's.
+
+The new workflow regression drives an actual model/tool loop through
+get_linked_repositories, discovery, two pages of one document, a traversal path, an
+out-of-range start line and a mutable ref, then asserts the exact provider requests
+made. Rejected input performs no HTTP at all. It also pins the twenty-candidate cap
+with limitReached, that directories and non-document extensions are excluded, that
+the credential token never reaches tool output, and that an unauthorized caller is
+refused. validRunbookPath keeps its acceptance/rejection doctest.
+
+Final native verification passed 48 examples with zero failures in 39.7082 seconds.
+Command: DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev.
+Evidence: /tmp/monoscope-slack-agent/slack-runbooks-workflows-complete.log.
+An initial run failed on an HTTP request count asserted from arithmetic rather than
+observation; the assertion now names the actual request URLs in order. Earlier
+monomorphic-fixture and Eq-instance compile errors were fixed in the test, not by
+weakening the production types.
+
+Fourmolu passes on the three changed files. HLint remains unable to parse
+MultilineStrings and Weeder exits 228 with pre-existing repository findings; no
+attestation is claimed for either. CI signoff for this increment is recorded below.
+No deployment or branch push occurred. The branch is 23 commits ahead of master and
+has never been pushed. Investigation quality evaluation, tested action drafts,
+proactive policies and live Slack acceptance remain unfinished.

@@ -7,7 +7,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), bracket_, throwIO)
 import Control.Lens (ix, (.~), (^.), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _String)
+import Data.Aeson.Lens (key, _Array, _Bool, _Number, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
@@ -1357,6 +1357,95 @@ spec = around withTestResources do
               T.isInfixOf "ghp_source_fixture" body `shouldBe` False
             [body] -> T.isInfixOf "poolSize = 5" body `shouldBe` False
             _ -> fail "Expected one source tool response"
+
+      it "pages linked runbook documents at a pinned commit and refuses mutable refs, traversal paths and unauthorized callers" \tr -> do
+        setupLinkedSlackData tr testPid "T_RUNBOOK"
+        let cfg = tr.trATCtx.config
+            revision = T.replicate 40 "c"
+            runbookPath = "docs/runbooks/checkout.md"
+            access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_RUNBOOK" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_RUNBOOK" "1735689600.000001" "1735689602.000001"
+            document = T.unlines $ T.replicate 2100 "x" : ["step " <> show n | n <- [2 .. 150 :: Int]]
+            entry path kind = AE.object ["path" AE..= (path :: Text), "type" AE..= (kind :: Text), "sha" AE..= ("blobsha" :: Text)]
+            tree names = AE.encode $ AE.object ["truncated" AE..= False, "tree" AE..= ([entry "README.md" "blob", entry "docs/runbook-diagram.png" "blob", entry "docs/old-runbook.md" "tree"] <> map (`entry` "blob") names)]
+        listing <- newIORef ([runbookPath, "docs/playbooks/database.rst"] :: [Text])
+        let transport :: ATBackgroundCtx a -> ATBackgroundCtx a
+            transport = withHTTPResponses \_ endpoint -> do
+              names <- readIORef listing
+              pure $ case T.stripPrefix "https://api.github.com/repos/acme/checkout-service" (toText endpoint) of
+                Just suffix
+                  | suffix == "/git/trees/" <> revision <> "?recursive=1" -> Just $ tree names
+                  | suffix == "/commits/" <> revision -> Just $ AE.encode $ AE.object ["sha" AE..= revision]
+                  | suffix == "/contents/" <> runbookPath <> "?ref=" <> revision -> Just $ AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (encodeUtf8 document))]
+                _ -> Nothing
+        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_runbook_fixture")
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
+        observed <- newIORef []
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                    mapping = listToMaybe results >>= AE.decode @AE.Value . encodeUtf8 >>= (^? key "entries" . _Array . ix 0 . key "mappingId" . _String)
+                    repoArgs ref = fromList [("mapping_id", AE.toJSON mapping), ("revision", AE.String ref)]
+                    readArgs path start = repoArgs revision <> fromList (("path", AE.String path) : [("start_line", AE.toJSON line) | Just line <- [start :: Maybe Int]])
+                    steps =
+                      [ Chat.ToolFunction "get_linked_repositories" $ one ("service", AE.String "checkout")
+                      , Chat.ToolFunction "list_runbooks" $ repoArgs revision
+                      , Chat.ToolFunction "read_runbook" $ readArgs runbookPath Nothing
+                      , Chat.ToolFunction "read_runbook" $ readArgs runbookPath (Just 101)
+                      , Chat.ToolFunction "read_runbook" $ readArgs "../secrets.md" Nothing
+                      , Chat.ToolFunction "read_runbook" $ readArgs runbookPath (Just 400)
+                      , Chat.ToolFunction "list_runbooks" $ repoArgs "main"
+                      ]
+                        :: [Chat.ToolFunction]
+                writeIORef observed results
+                pure $ Right $ case drop (length results) steps of
+                  next : _ -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall (show $ length results) "function" next]}
+                  [] -> Chat.Message Chat.Assistant "The runbook lists a check to run; it is not evidence that anyone ran it." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False access testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
+        result `shouldSatisfy` isRight
+        map fst requests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service" <>) (["/git/trees/" <> revision <> "?recursive=1", "/commits/" <> revision] <> replicate 3 ("/contents/" <> runbookPath <> "?ref=" <> revision))
+        evidence <- readIORef observed
+        case evidence of
+          [repositories, discovered, firstPage, secondPage, traversal, outOfRange, mutableRef] -> do
+            let decoded body = AE.decode @AE.Value $ encodeUtf8 body
+                failure body = decoded body >>= (^? key "Left" . key "tag" . _String)
+            T.isInfixOf "acme/checkout-service" repositories `shouldBe` True
+            (decoded discovered >>= (^? key "Right" . key "entries")) `shouldBe` Just (AE.toJSON (["docs/playbooks/database.rst", runbookPath] :: [Text]))
+            (decoded discovered >>= (^? key "Right" . key "limitReached" . _Bool)) `shouldBe` Just False
+            fmap length (decoded firstPage >>= (^? key "Right" . key "body" . _Array)) `shouldBe` Just 100
+            (decoded firstPage >>= (^? key "Right" . key "body" . _Array . ix 0 . _String)) `shouldBe` Just (T.replicate 2000 "x")
+            (decoded firstPage >>= (^? key "Right" . key "linesTruncated" . _Bool)) `shouldBe` Just True
+            (decoded firstPage >>= (^? key "Right" . key "nextLine" . _Number)) `shouldBe` Just 101
+            (decoded secondPage >>= (^? key "Right" . key "body" . _Array . ix 49 . _String)) `shouldBe` Just "step 150"
+            (decoded secondPage >>= (^? key "Right" . key "nextLine")) `shouldBe` Just AE.Null
+            (decoded secondPage >>= (^? key "Right" . key "linesTruncated" . _Bool)) `shouldBe` Just False
+            map failure [traversal, outOfRange, mutableRef] `shouldBe` map Just ["RunbookPathInvalid", "RunbookLineOutOfRange", "RunbookRevisionInvalid"]
+            any (T.isInfixOf "ghp_runbook_fixture") evidence `shouldBe` False
+          _ -> fail "Expected every runbook evidence round to complete"
+        mappingId <-
+          runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \case
+            [mapping] -> pure mapping.id
+            _ -> fail "Expected one linked repository mapping"
+        writeIORef listing ["docs/runbooks/service-" <> show n <> ".md" | n <- [1 .. 21 :: Int]]
+        (_, capped) <- runTestBgRecordingHTTP frozenTime tr $ transport $ CodeContext.listRunbooks cfg testPid (CodeContext.RunbookQuery mappingId revision)
+        rightToMaybe (fmap (\page -> (length page.entries, page.limitReached)) capped) `shouldBe` Just (20, True)
+        refused <- newIORef []
+        let unauthorized = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                writeIORef refused results
+                pure
+                  $ Right
+                  $ if null results
+                    then Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "runbook" "function" (Chat.ToolFunction "read_runbook" $ fromList [("mapping_id", AE.toJSON mappingId), ("revision", AE.String revision), ("path", AE.String runbookPath)])]}
+                    else Chat.Message Chat.Assistant "The runbook was not read." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        (denied, outcome) <- runTestBgRecordingHTTP frozenTime tr $ transport $ unauthorized $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just cfg} "Read the checkout runbook." "model" "key"
+        outcome `shouldSatisfy` isRight
+        denied `shouldBe` []
+        readIORef refused >>= (`shouldBe` ["Runbook reads require an authorized Slack investigation, a repository mapping ID, full commit hash and document path."])
 
       it "finds earlier related episodes with explicit match evidence and recorded outcomes inside the authorized project" \tr -> do
         setupLinkedSlackData tr testPid "T_RELATED"

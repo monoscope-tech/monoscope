@@ -724,3 +724,15 @@ rejected progress posts as answers. Three follow-up passes covered their fix:
 | 1 | Share one answer-specific response fixture across lost acknowledgement, multipart retry and cached-answer retry. Reuse withHTTPResponses and Wreq's existing payload renderer. | Select answer posts by their actual metadata event type rather than request ordinal alone. Keep recording every request. | Keep faults and assertions in the existing effectful workflows; no production or browser behavior changes. |
 | 2 | Remove repeated endpoint/default-response branches from callers. | Reject unsupported body forms, preserve original request values and delegate other HTTP operations. Fix local effect-row inference using the existing send @HTTP.HTTP/coerce pattern from SlackRateLimit. | Answer-count assertions filter answer metadata; they continue to detect duplicate answers while permitting independent progress. |
 | 3 | Re-read the final helper and all three callers; no new instance, dependency or general HTTP framework. | Progress is acknowledged normally and cannot consume a reply fault. Missing answer metadata fails the expected delivery/retry assertions instead of silently passing them. Coercion changes only the HTTP effect's phantom local environment. | The helper performs HTTP effects; it is not an isolated pure helper needing a separate Hspec block. |
+
+## Linked repository runbooks
+
+One pass of each requested skill covered the runbook query/read functions, their
+tool registration and dispatch, and the new workflow regression. This is one pass,
+not the three recorded for earlier increments.
+
+| Skill | Finding |
+| --- | --- |
+| hs-distill | No reduction found that pays for itself. Discovery and reads share runbookRepository; EvidencePage, the code-mapping lookup and mappingConnection are reused; every codec derives. RunbookRead repeating RunbookQuery's two fields is cheaper than nesting, which would need a handwritten flattening decoder. The test shares one args builder and one HTTP fixture across all seven rounds. |
+| hs-evasion-review | No type weakened and no warning suppressed. Failures stay in a typed RunbookError rather than a message string; truncation is reported, never silent. Two accepted costs are documented rather than hidden: a listing of exactly twenty candidates reports limitReached, matching getLinkedRepositories, and RunbookNotText discards the underlying decode position. fetchTree's own head-revision request is spent per discovery call. |
+| hs-lob-review | No client-side surface, styling or hyperscript changed. The regression exercises DB, HTTP and an actual model loop, so it belongs in the effectful workflow suite rather than a pure Hspec block; the pure path validation stays a doctest. |
