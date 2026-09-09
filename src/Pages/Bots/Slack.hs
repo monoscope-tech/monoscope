@@ -119,6 +119,7 @@ data TokenResponse = TokenResponse
   { accessToken :: Text
   , incomingWebhook :: IncomingWebhook
   , team :: TokenResponseTeam
+  , scope :: Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
@@ -154,7 +155,7 @@ startInstallGetH pid onboarding = do
   envCfg <- asks env
   let params =
         [ ("client_id", envCfg.slackClientId)
-        , ("scope", "chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
+        , ("scope", "assistant:write,chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public")
         , ("redirect_uri", envCfg.slackRedirectUri)
         , ("state", stateId.toText)
         ]
@@ -220,7 +221,7 @@ linkProjectGetH slack_code stateM = do
       whenJust existing \prev -> when (prev.teamId /= token'.team.id) do
         Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
         ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
-      void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url
+      void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url (Just $ V.fromList $ filter (not . T.null) $ map T.strip $ T.splitOn "," token'.scope)
       void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
       wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
       when wasAdded do
@@ -836,7 +837,18 @@ processSlackEvent receiptId = do
               bound <- Integrations.bindSlackInvestigation principal workspaceId event.channel threadTs
               unless bound $ throwError err403{errBody = "Slack investigation thread belongs to another project"}
               void $ withProjectSlackDataLogged "Slack authorized investigation" principal.projectId \slackData ->
-                processThreadedEvent principal envCfg slackData event workspaceId threadTs
+                if Integrations.slackAgentScopesGranted slackData
+                  then processThreadedEvent principal envCfg slackData event workspaceId threadTs
+                  else do
+                    AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
+                    result <-
+                      slackApi slackData.botToken "chat.postEphemeral"
+                        $ AE.object
+                          [ "channel" AE..= event.channel
+                          , "user" AE..= event.user
+                          , "text" AE..= ("Reconnect Slack from <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect.")
+                          ]
+                    either (throwIO . ErrorCall . toString) pure result
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do

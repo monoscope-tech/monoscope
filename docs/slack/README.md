@@ -1,4 +1,4 @@
-# Incident message capture
+# Slack agent installation
 
 Install or reconnect Slack from the project's integrations page or onboarding.
 The initiating Monoscope user must be an active project admin and stay signed in
@@ -6,6 +6,28 @@ as the same user when Slack returns to `/slack/oauth/callback`.
 Installation requests expire after 15 minutes and can be used once. If the
 exchange fails or the request expires, start again from Monoscope.
 Do not construct an OAuth URL with a project ID as `state`; the callback rejects it.
+
+The OAuth request includes `assistant:write` alongside the existing scopes. The
+callback stores the scopes returned by Slack. Installations with missing or
+unknown `assistant:write`/`chat:write` grants receive a private reconnect prompt
+before native investigation work. Existing credentials, webhook destinations,
+and notification paths stay configured. The integrations page also offers the
+existing admin-authorized reconnect flow. Stored grants establish permissions,
+not live Agent availability or acceptance.
+
+[`agent-manifest.json`](agent-manifest.json) is the reviewable app configuration
+template. Replace every `https://YOUR_MONOSCOPE_HOST` with the deployed origin,
+then compare it with the current app manifest before applying it in the selected
+sandbox. It includes `agent_view`, the four suggested prompts, commands, signed
+callback routes, event subscriptions, incoming webhooks, and incident metadata.
+It retains the existing notification scopes. Preserve unrelated live app settings
+when merging the template. The Agent declaration is required in addition to OAuth
+grants; see [Slack's Agent guide](https://docs.slack.dev/ai/developing-agents/).
+
+Slack documents migration from `assistant_view` to `agent_view` as irreversible.
+This repository change does not apply that migration. App-home/context/title
+handling, live manifest validation, plan availability, and workspace acceptance
+remain rollout gates. See [the manifest reference](https://docs.slack.dev/reference/app-manifest/).
 
 To link a personal account, mention Monoscope or message it directly in Slack.
 An unlinked user receives an ephemeral link addressed to that Slack user. Sign in
@@ -62,7 +84,8 @@ Events, slash commands, actions, and external-option requests verify the origina
 before decoding. Missing or invalid signatures return 401; an empty signing secret
 makes these endpoints return 503. An empty app ID prevents root capture.
 
-Merge `incident-metadata.json` into the app manifest's metadata configuration before enabling incident messages.
+The Agent manifest includes the metadata configuration below. For a metadata-only
+upgrade, merge `incident-metadata.json` into the existing app manifest before enabling incident messages.
 It registers the `monoscope_incident_root` event and its `root_id` field.
 Slack requires metadata schema registration; unregistered metadata can be ignored. See [Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
 

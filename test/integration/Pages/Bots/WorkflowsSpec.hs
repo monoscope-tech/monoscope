@@ -39,6 +39,7 @@ import Servant.API.ResponseHeaders (getResponse)
 import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
+import System.Types (atAuthToBase)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
@@ -52,6 +53,7 @@ spec = around withTestResources do
     describe "Slack personal linking" do
       it "sends only a private link, binds through the authenticated form, and rechecks access" \tr -> do
         setupSlackData tr testPid "T_IDENTITY"
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (PGS.Only testPid)
         let payload =
               slackThreadedEvent "T_IDENTITY" "C_IDENTITY" "follow up question" "1735689602.000001" "1735689601.000001"
                 & key "event"
@@ -149,6 +151,36 @@ spec = around withTestResources do
         toBaseServantResponse tr (Slack.getSlackLink $ linkId 4) >>= (`shouldSatisfy` isNothing)
 
     describe "Slack installation authorization" do
+      it "asks older installations to reconnect before native investigation work" \tr -> do
+        setupLinkedSlackData tr testPid "T_UPGRADE"
+        withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = NULL WHERE project_id = ?|] (PGS.Only testPid)
+        calls <- newIORef (0 :: Int)
+        let event = slackThreadedEvent "T_UPGRADE" "C_UPGRADE" "Investigate" "1735689601.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                modifyIORef' calls (+ 1)
+                pure $ Right $ Chat.Message Chat.Assistant "Answer" Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        receipt <- receiveSlackEvent tr event
+        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"messages\":[]}") $ provider $ tryAny $ processSlackEvent receipt
+        result `shouldSatisfy` isRight
+        readIORef calls >>= (`shouldBe` 0)
+        map fst requests `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        let texts = mapMaybe (\(_, body) -> AE.decode @AE.Value body >>= (^? key "text" . _String)) requests
+        texts `shouldSatisfy` any (T.isInfixOf "Reconnect")
+        saved <- toBaseServantResponse tr $ Slack.getProjectSlackData testPid
+        fmap (.webhookUrl) saved `shouldBe` Just (Just "https://hooks.slack.com/services/test")
+        for_ ([(1, "chat:write", False), (2, "assistant:write, chat:write", True)] :: [(Word32, Text, Bool)]) \(number, scope, granted) -> do
+          let stateId = UUIDId $ UUID.fromWords 0 0 9 number
+              oauth = AE.object ["access_token" AE..= ("new-token" :: Text), "scope" AE..= scope, "team" AE..= AE.object ["id" AE..= ("T_UPGRADE" :: Text), "name" AE..= ("Workspace" :: Text)], "incoming_webhook" AE..= AE.object ["channel" AE..= ("test-channel" :: Text), "channel_id" AE..= ("C_NOTIF_CHANNEL" :: Text), "url" AE..= ("https://hooks.slack.com/services/test" :: Text)]]
+          toBaseServantResponse tr (Slack.createSlackInstall stateId (getResponse tr.trSessAndHeader).user.id testPid False) >>= (`shouldBe` True)
+          void $ runAsBaseRecordingHTTP tr $ withHTTPResponses (\_ _ -> pure $ Just $ AE.encode oauth) $ atAuthToBase tr.trSessAndHeader $ SlackPage.linkProjectGetH (Just "code") (Just stateId.toText)
+          updated <- toBaseServantResponse tr $ Slack.getProjectSlackData testPid
+          fmap Slack.slackAgentScopesGranted updated `shouldBe` Just granted
+          fmap (.scopes) updated `shouldBe` Just (Just $ fromList $ map T.strip $ T.splitOn "," scope)
+          fmap (.webhookUrl) updated `shouldBe` Just (Just "https://hooks.slack.com/services/test")
+
       it "requires a current admin and consumes expiring state once for its initiating user" \tr -> do
         let userId = (getResponse tr.trSessAndHeader).user.id
             stateId n = UUIDId $ UUID.fromWords 0 0 1 n

@@ -1,0 +1,122 @@
+{
+  "display_information": {
+    "name": "Monoscope",
+    "description": "Investigate production issues, understand what changed, and coordinate recovery in Slack."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Monoscope"
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "agent_view": {
+      "agent_description": "Investigate production issues, understand what changed, and coordinate recovery in Slack.",
+      "suggested_prompts": [
+        {
+          "title": "What needs attention?",
+          "message": "What needs attention?"
+        },
+        {
+          "title": "Investigate this alert",
+          "message": "Investigate this alert"
+        },
+        {
+          "title": "What changed before this started?",
+          "message": "What changed before this started?"
+        },
+        {
+          "title": "Show the relevant dashboard",
+          "message": "Show the relevant dashboard"
+        }
+      ]
+    },
+    "slash_commands": [
+      {
+        "command": "/monoscope",
+        "url": "https://YOUR_MONOSCOPE_HOST/interactions/slack",
+        "description": "Investigate your Monoscope project",
+        "should_escape": true
+      },
+      {
+        "command": "/monoscope-here",
+        "url": "https://YOUR_MONOSCOPE_HOST/interactions/slack",
+        "description": "Set this project’s alert channel",
+        "should_escape": true
+      },
+      {
+        "command": "/dashboard",
+        "url": "https://YOUR_MONOSCOPE_HOST/interactions/slack",
+        "description": "Share a project dashboard",
+        "should_escape": true
+      }
+    ]
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://YOUR_MONOSCOPE_HOST/slack/oauth/callback"
+    ],
+    "scopes": {
+      "bot": [
+        "assistant:write",
+        "chat:write",
+        "commands",
+        "incoming-webhook",
+        "files:write",
+        "app_mentions:read",
+        "channels:read",
+        "groups:read",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+        "chat:write.public"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://YOUR_MONOSCOPE_HOST/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "app_home_opened",
+        "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
+        "assistant_thread_started",
+        "assistant_thread_context_changed"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://YOUR_MONOSCOPE_HOST/actions/slack",
+      "message_menu_options_url": "https://YOUR_MONOSCOPE_HOST/interactions/external_options"
+    },
+    "incoming_webhooks": {
+      "incoming_webhooks_enabled": true
+    }
+  },
+  "metadata": {
+    "event_subscriptions": [
+      {
+        "event_type": "monoscope_incident_root",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "root_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "root_id"
+          ]
+        }
+      }
+    ]
+  }
+}

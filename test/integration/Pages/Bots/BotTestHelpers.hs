@@ -114,7 +114,7 @@ getOpenAIModel tr = tr.trATCtx.env.openaiModel
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
-  _ <- Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test"
+  _ <- Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test" Nothing
   ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
 
 
@@ -122,6 +122,7 @@ setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
 setupLinkedSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupLinkedSlackData tr pid teamId = do
   setupSlackData tr pid teamId
+  withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET scopes = ARRAY['assistant:write', 'chat:write'] WHERE project_id = ?|] (PGS.Only pid)
   withResource tr.trPool \conn ->
     void
       $ PGS.execute

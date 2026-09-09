@@ -275,3 +275,15 @@ concurrent workflow regressions.
 This coordinates live workers. Ordered scheduling of delayed events, durable
 model/tool checkpoints, and reconciliation across ambiguous external deliveries
 remain separate plan work.
+
+
+## Agent installation scopes and manifest
+
+All three requested skills were applied in three passes to installation storage,
+OAuth decoding, the investigation capability check, integration copy, and fixtures.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Extend the existing derived `TokenResponse` and `SlackData` records and token upsert. Reuse the admin reconnect route and private Slack response method. | Add the missing Agent scope to OAuth, but persist returned grants rather than infer them from the requested list. Keep unknown historical grants nullable. | Use the existing reconnect link and inline paragraph styling; no new browser behavior. |
+| 2 | Centralize the required-scope predicate for the worker and integrations page. Normalize comma-separated OAuth scopes at the boundary. | Prevent native work when required grants are missing or unknown. Preserve webhook/channel credentials and require current project access before the private upgrade prompt. | Keep capability information beside the existing connection status and reconnect action. |
+| 3 | Re-read scope storage, positional row decoding, notification consumers, and installation call sites. All JSON/row instances remain derived; no warning suppression. | Regression first reproduced the old-install model call. Then verify no model/status call, unchanged webhook, and OAuth round-trips for partial/full grants. The manifest is a template, not proof of live Agent availability; current app-home/context/title support remains incomplete. | The OAuth/database/worker flow stays in Hspec. Static native prompts add no client glue or styling indirection. |

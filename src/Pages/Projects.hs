@@ -600,6 +600,7 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
             then faSprite_ "triangle-exclamation" "regular" "w-3.5 h-3.5 text-iconWarning"
             else faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
           span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected (Team ID: " <> sd.teamId <> ")") ("Workspace: " <>) sd.teamName
+        unless (Integrations.slackAgentScopesGranted sd) $ p_ [class_ "text-textWeak ml-5 mt-1"] "Reconnect Slack to grant Agent permissions. Existing alert destinations remain configured."
         when (isNothing sd.teamName) $ p_ [class_ "text-textWeak ml-5"] "Reconnect to see workspace name"
         whenJust channelsError \err -> p_ [class_ "text-textWeak ml-5 mt-1"] do
           toHtml
@@ -628,7 +629,7 @@ renderSlackIntegration pid slackData channels extraChannels existingChannels cha
         form_ ([hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTrigger_ "submit"] <> integrationsSwapAttrs_) do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
-      a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect to Slack"
+      a_ [target_ "_blank", class_ "btn btn-xs", href_ oauthUrl] "Connect Slack agent"
 
 
 renderDiscordIntegration :: EnvConfig -> Text -> Html ()

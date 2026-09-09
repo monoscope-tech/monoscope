@@ -566,3 +566,48 @@ cannot be undone. Durable delivery/status reconciliation and model/tool
 checkpoints are still required, as are installation upgrades, live Slack
 acceptance, current-tree CI signoff before push, and the remaining release work.
 No push, deployment, or live app configuration change occurred.
+
+
+## Agent installation capabilities (2026-09-09)
+
+OAuth now requests `assistant:write` alongside the existing notification and
+history scopes. Migration 0162 adds nullable granted scopes to the existing Slack
+installation row. The callback's derived decoder requires the returned scope
+field and stores its normalized values through the existing token upsert. Old
+rows remain unknown; requested scopes are never treated as granted scopes.
+
+Native investigation startup requires recorded `assistant:write` and `chat:write`.
+Missing or unknown grants produce an authorized private reconnect prompt before
+model/session work. The integrations page shows the same reconnect requirement.
+The migration and gate preserve existing credentials, channels, and webhooks;
+notification delivery is not gated on Agent permissions.
+
+`docs/slack/agent-manifest.json` supplies a reviewable configuration template with
+Agent view, four suggested prompts, existing scopes plus the Agent scope, signed
+callback paths, commands, event subscriptions, enabled incoming webhooks, and the
+existing incident metadata schema. Local checks verify JSON parsing, scope parity
+with OAuth, route paths, prompt count, description length, and metadata parity.
+The template requires a real origin and comparison with the current app settings
+before sandbox validation. It has not been applied. Slack documents the old
+Assistant-view migration as irreversible, and some native features require a paid
+plan; [official manifest reference](https://docs.slack.dev/reference/app-manifest/).
+
+The regression first failed because an older installation ran the model. The
+final workflow suite passed 29 examples, 0 failures, including no model/status work
+before reconnect, preserved webhook configuration, and partial/full granted-scope
+round trips through the OAuth callback. Command:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Workflows make live-test-dev`.
+The legacy notification fixture keeps unknown scopes, while linked-investigation
+fixtures explicitly grant Agent scopes. Notification integration tests passed
+9 examples, 0 failures with:
+`DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Pages.Projects.Integrations make live-test-dev`.
+These are local fixtures, not live Slack delivery acceptance.
+Fourmolu and scoped whitespace checks passed. Hpack includes migration 0162.
+Three passes of each requested Haskell skill are recorded in the review report.
+
+Granted scopes do not prove the app's live Agent declaration, Slack plan, native
+badge, or event subscriptions. App-home/context/title handling, Slack-side
+manifest validation, controlled workspace acceptance, durable delivery/status
+reconciliation, full conversation checkpoints, and the wider plan remain open.
+Current-tree CI signoff must run before push; prior attestations do not cover this
+change. No push, deployment, or live Slack configuration change occurred.

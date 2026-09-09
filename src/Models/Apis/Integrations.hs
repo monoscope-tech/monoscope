@@ -1,5 +1,6 @@
 module Models.Apis.Integrations (
   SlackData (..),
+  slackAgentScopesGranted,
   DiscordData (..),
   insertAccessToken,
   getSlackDataByTeamId,
@@ -30,6 +31,7 @@ module Models.Apis.Integrations (
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Vector qualified as V
 import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -248,25 +250,30 @@ data SlackData = SlackData
   , channelId :: Text
   , channelName :: Maybe Text
   , webhookUrl :: Maybe Text
+  , scopes :: Maybe (V.Vector Text)
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
   deriving (AE.FromJSON) via DAE.Snake SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid teamId channelId teamName botToken channelName webhookUrl =
+slackAgentScopesGranted :: SlackData -> Bool
+slackAgentScopesGranted installation = maybe False (\grants -> all (`elem` grants) (["assistant:write", "chat:write"] :: [Text])) installation.scopes
+
+
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Maybe (V.Vector Text) -> Eff es Int64
+insertAccessToken pid teamId channelId teamName botToken channelName webhookUrl scopes =
   Hasql.interpExecute
     [HI.sql|INSERT INTO apis.slack
-               (project_id, team_id, channel_id, team_name, bot_token, channel_name, webhook_url)
-               VALUES (#{pid},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName},#{webhookUrl})
+               (project_id, team_id, channel_id, team_name, bot_token, channel_name, webhook_url, scopes)
+               VALUES (#{pid},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName},#{webhookUrl},#{scopes})
                ON CONFLICT (project_id)
-               DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name, webhook_url = EXCLUDED.webhook_url |]
+               DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name, webhook_url = EXCLUDED.webhook_url, scopes = EXCLUDED.scopes |]
 
 
 -- | Column order must match 'SlackData''s field order — 'HI.DecodeRow' is positional.
 selectSlack :: HI.Sql
-selectSlack = [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack |]
+selectSlack = [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url, scopes FROM apis.slack |]
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
