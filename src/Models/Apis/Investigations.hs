@@ -20,6 +20,14 @@ module Models.Apis.Investigations (
   ToolResult (..),
   recordEvent,
   recentEvents,
+  ProgressTarget (..),
+  ProgressMessage (..),
+  loadProgress,
+  claimProgress,
+  confirmProgress,
+  rejectProgress,
+  captureProgress,
+  recentProgressEvents,
 ) where
 
 import Control.Exception (ErrorCall (..))
@@ -113,11 +121,16 @@ data History = History {entries :: [Entry], limitReached :: Bool}
 -- | The most recent fifty events, in chronological order. A full page may be
 -- incomplete; model/tool outputs stay evidence rather than conversation roles.
 recentEvents :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es History
-recentEvents pid team channel thread = do
+recentEvents pid team channel thread = readEvents pid team channel thread Nothing
+
+
+readEvents :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Eff es History
+readEvents pid team channel thread messageTs = do
   rows <-
     Hasql.interp
       [HI.sql|SELECT run_id, message_ts, observed_at, event FROM apis.investigation_journal
       WHERE project_id = #{pid} AND team_id = #{team} AND channel_id = #{channel} AND thread_ts = #{thread}
+        AND (#{messageTs}::text IS NULL OR message_ts = #{messageTs})
       ORDER BY id DESC LIMIT 50|]
   pure $ History (reverse rows) (length rows == 50)
 
@@ -263,3 +276,87 @@ commitProgress cursor scope checkpoint event
           void $ Tx.statement () $ HI.interp @HI.RowsAffected True $ recordEventSql key activity
         pure updated
       either throwIO pure result
+
+
+-- | A separate identity for a Slack turn's progress publication. A row without
+-- a timestamp is awaiting acknowledgement or a signed observation; do not repost.
+data ProgressTarget = ProgressTarget
+  { projectId :: Projects.ProjectId
+  , teamId :: Text
+  , channelId :: Text
+  , threadTs :: Text
+  , messageTs :: Text
+  , userId :: Projects.UserId
+  , slackUserId :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.Snake ProgressTarget
+
+
+recentProgressEvents :: DB es => ProgressTarget -> Eff es History
+recentProgressEvents target = readEvents target.projectId target.teamId target.channelId target.threadTs (Just target.messageTs)
+
+
+data ProgressMessage = ProgressMessage {publicationId :: UUIDId "slack_progress", timestamp :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+loadProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
+loadProgress target =
+  Hasql.interpOne
+    [HI.sql|SELECT publication_id, progress_ts FROM apis.slack_investigation_progress
+    WHERE project_id = #{target.projectId} AND team_id = #{target.teamId}
+      AND channel_id = #{target.channelId} AND thread_ts = #{target.threadTs} AND message_ts = #{target.messageTs}|]
+
+
+claimProgress :: DB es => ProgressTarget -> Eff es (Maybe ProgressMessage)
+claimProgress target =
+  Hasql.interpOne
+    [HI.sql|INSERT INTO apis.slack_investigation_progress
+    (project_id, team_id, channel_id, thread_ts, message_ts, user_id, slack_user_id)
+    VALUES (#{target.projectId}, #{target.teamId}, #{target.channelId}, #{target.threadTs}, #{target.messageTs}, #{target.userId}, #{target.slackUserId})
+    ON CONFLICT (project_id, team_id, channel_id, thread_ts, message_ts) DO NOTHING
+    RETURNING publication_id, progress_ts|]
+
+
+confirmProgress :: DB es => UUIDId "slack_progress" -> Text -> Eff es Bool
+confirmProgress publicationId timestamp =
+  isJust
+    <$> Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|UPDATE apis.slack_investigation_progress SET progress_ts = #{timestamp}
+    WHERE publication_id = #{publicationId} AND (progress_ts IS NULL OR progress_ts = #{timestamp}) RETURNING TRUE|]
+
+
+-- | Release only a definitely rejected publication. A concurrent signed
+-- observation wins over the rejection and must not be deleted.
+rejectProgress :: DB es => UUIDId "slack_progress" -> Eff es ()
+rejectProgress publicationId =
+  Hasql.interpExecute_
+    [HI.sql|DELETE FROM apis.slack_investigation_progress
+    WHERE publication_id = #{publicationId} AND progress_ts IS NULL|]
+
+
+-- | Mirror incident-root reconciliation: require a signed stored receipt and
+-- verify both the receiving app and message author before accepting its scope.
+captureProgress :: DB es => Text -> UUIDId "slack_event" -> Eff es [(ProgressTarget, Text)]
+captureProgress appId receiptId =
+  map (\(Aeson target, timestamp) -> (target, timestamp))
+    <$> Hasql.interp
+      [HI.sql|UPDATE apis.slack_investigation_progress p SET progress_ts = se.payload #>> '{event,ts}'
+    FROM apis.slack_events se, apis.slack s
+    WHERE se.id = #{receiptId} AND #{appId} <> ''
+      AND p.user_id IS NOT NULL AND p.slack_user_id IS NOT NULL
+      AND s.project_id = p.project_id AND s.team_id = p.team_id
+      AND p.publication_id::text = se.payload #>> '{event,metadata,event_payload,publication_id}'
+      AND se.team_id = p.team_id AND se.payload->>'api_app_id' = #{appId}
+      AND se.payload #>> '{event,channel}' = p.channel_id
+      AND se.payload #>> '{event,thread_ts}' = p.thread_ts
+      AND se.payload #>> '{event,type}' = 'message'
+      AND COALESCE(se.payload #>> '{event,subtype}', 'bot_message') = 'bot_message'
+      AND COALESCE(se.payload #>> '{event,app_id}', se.payload #>> '{event,bot_profile,app_id}') = #{appId}
+      AND COALESCE(se.payload #>> '{event,bot_id}', '') <> ''
+      AND se.payload #>> '{event,metadata,event_type}' = 'monoscope_investigation_progress'
+      AND (se.payload #>> '{event,ts}') ~ '^[0-9]+\.[0-9]+$'
+      AND (p.progress_ts IS NULL OR p.progress_ts = se.payload #>> '{event,ts}')
+    RETURNING to_jsonb(p), p.progress_ts|]

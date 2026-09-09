@@ -1464,3 +1464,54 @@ The progress implementation's main-checkout CI remains running at this point:
 `make ci-signoff CHECKS="build doctests unit-tests"`, log
 /tmp/monoscope-slack-agent/slack-progress-ci-signoff.log. The isolated worktree's
 new stop regression is not part of that run. No deployment or branch push.
+
+
+### Progress publication reservation and late reconciliation
+
+Progress sends now reserve a scoped publication ID before contacting Slack and
+include it in message metadata. An existing reservation without a timestamp is
+not reposted. Valid acknowledgements save the timestamp; conflicting saves fail.
+Clearly rejected successful-HTTP Slack envelopes release an unacknowledged
+reservation. Unknown outcomes retain it for reconciliation.
+
+A stored signed message observation must match publication ID, receiving app,
+message author app, workspace, channel and thread. It cannot replace an already
+recorded different timestamp. Matching observations refresh the original turn's
+latest checklist even after the answer receipt completed. The refresh verifies
+the original requester's current access and uses the investigation lock. Turn
+filtering now occurs before the fifty-event cap. Older acknowledged rows remain
+compatible; only new reservations carry requester information for late refresh.
+
+Migration 0172 adds the publication identity and requester columns and permits a
+pending timestamp. All new JSON and DB instances are derived. The Agent manifest
+registers monoscope_investigation_progress/publication_id and its JSON validates.
+The selected Slack sandbox must still prove receipt of complete own-message
+metadata. Contract reference: https://docs.slack.dev/messaging/message-metadata/.
+
+Final native command: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev`. Result: 40 examples, zero failures,
+28.1898 seconds. Evidence:
+/tmp/monoscope-slack-agent/slack-progress-publication-workflows-complete.log.
+The new regression loses a progress acknowledgement, verifies the outbound ID,
+rejects spoofed observations, finishes the answer, then checks a late signed
+observation updates the original checklist to its terminal state. It checks
+conflicting timestamps and rejected-reservation reuse as well.
+
+Three passes of all requested skills are recorded. Fourmolu, manifest JSON and
+whitespace checks pass. HLint is blocked by MultilineStrings; Weeder reports
+repository findings. Logs: slack-progress-publication-hlint.log and
+slack-progress-publication-weeder.log under /tmp/monoscope-slack-agent/.
+CI for this increment remains pending. No deployment or branch push.
+
+The earlier progress commit 794cfd6ad passed
+`make ci-signoff CHECKS="build doctests unit-tests"`: build, 1,551 doctest examples,
+and 308 unit examples passed and were attested. Full integration-tests, weeder,
+hlint and e2e remain outstanding. Full local integration requires unavailable
+tf-real. Log: /tmp/monoscope-slack-agent/slack-progress-ci-signoff.log.
+The signed-stop regression is integrated in main as 16a01462e.
+
+This is observation-based progress recovery, not a complete answer outbox.
+Absent observations remain unresolved instead of being treated as proof of a
+failed send. History-based reconciliation, HTTP rate-limit handling across all
+reply paths, multi-part answer durability, live Slack acceptance, active steering,
+quality evaluation, tested drafts and proactive policies remain unfinished.

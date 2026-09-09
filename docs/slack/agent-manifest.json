@@ -42,7 +42,7 @@
       {
         "command": "/monoscope-here",
         "url": "https://YOUR_MONOSCOPE_HOST/interactions/slack",
-        "description": "Set this project’s alert channel",
+        "description": "Set this project\u2019s alert channel",
         "should_escape": true
       },
       {
@@ -114,6 +114,20 @@
           },
           "required": [
             "root_id"
+          ]
+        }
+      },
+      {
+        "event_type": "monoscope_investigation_progress",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "publication_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "publication_id"
           ]
         }
       }

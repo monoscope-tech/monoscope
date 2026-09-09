@@ -200,6 +200,7 @@ extra-source-files:
     static/migrations/0169_slack_turn_answers.sql
     static/migrations/0170_slack_turn_checkpoints.sql
     static/migrations/0171_slack_investigation_progress.sql
+    static/migrations/0172_slack_progress_publication.sql
 
 source-repository head
   type: git

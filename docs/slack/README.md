@@ -123,3 +123,26 @@ establish recovery or trigger automatic resolution. An operator can resolve an
 error explicitly. Monitor recovery still requires a measured value that passes
 its recovery condition; missing or failed evaluations show DATA UNAVAILABLE in
 existing incident threads and retain the last verified reading.
+
+
+### Investigation progress reconciliation
+
+The Agent manifest registers `monoscope_investigation_progress` with a
+`publication_id` string. Import the updated manifest before testing progress
+reconciliation. The app must receive its own message events with the complete
+metadata payload, just as incident-root reconciliation requires. Verify this in
+the selected sandbox; metadata-only event subscriptions are not handled by this
+path. See [Slack message metadata](https://docs.slack.dev/messaging/message-metadata/).
+
+A progress publication is reserved before sending. If its acknowledgement is
+missing, Monoscope retains the reservation instead of posting another checklist.
+A stored signed message observation must match the configured receiving app,
+message author app, workspace, channel, thread and publication ID. A matching
+observation supplies the timestamp and refreshes the latest activity for that
+turn, including after the answer has finished. The refresh checks the original
+requester's current access and uses the investigation lock to serialize updates.
+
+Missing observations remain unresolved; no timeout is treated as proof that a
+message was not sent. History-based reconciliation and comprehensive rate-limit
+handling remain acceptance work. This does not yet provide a durable outbox for
+all answer parts or guarantee recovery when the message observation is absent.

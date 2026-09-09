@@ -810,6 +810,9 @@ processSlackEvent receiptId = do
             stillPending <- Hasql.interpOne @(HI.OneColumn Bool) [HI.sql|SELECT TRUE FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL|]
             when (isJust stillPending) do
               envCfg <- asks env
+              observedProgress <- Investigations.captureProgress envCfg.slackAppId receiptId
+              for_ observedProgress $ \(target, timestamp) ->
+                withInvestigationLock target.teamId target.channelId target.threadTs $ refreshObservedProgress target timestamp
               captured <- Incidents.captureSlackRoot envCfg.slackAppId receiptId
               when (Just "monoscope_incident_root" == (AE.toJSON event ^? key "metadata" . key "event_type" . _String) && not captured)
                 $ Log.logAttention "Slack root observation did not match the configured app or incident destination" (AE.object ["receipt_id" AE..= receiptId])
@@ -824,7 +827,8 @@ processSlackEvent receiptId = do
   where
     -- A transaction-scoped advisory lock stays on one checked-out connection.
     -- Other DB operations use their usual pools; stop ingress never waits on it.
-    withThreadLock workspaceId message = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, message.channel, fromMaybe message.ts message.thread_ts] :: [Text]))
+    withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
+    withInvestigationLock workspaceId channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspaceId, channel, thread] :: [Text]))
 
     withEventLock lockKey action = do
       connectionPool <- asks pool
@@ -938,43 +942,84 @@ withInvestigationProgress slackData access action = case access of
     let publish allowCreate = do
           let progressAccess = if allowCreate then access else AI.SlackAccess run.teamId run.slackUserId run.userId
           AI.requireAgentAccess progressAccess slackData.projectId
-          history <- Investigations.recentEvents slackData.projectId run.teamId run.channelId run.threadTs
+          let target = Investigations.ProgressTarget slackData.projectId run.teamId run.channelId run.threadTs run.messageTs run.userId run.slackUserId
+          history <- Investigations.recentProgressEvents target
           for_ (Progress.snapshot run.messageTs history) $ \progress -> do
             old <- readIORef previous
             when (old /= Just progress) do
-              existing <-
-                Hasql.interpOne @(HI.OneColumn Text)
-                  [HI.sql|SELECT progress_ts FROM apis.slack_investigation_progress
-                  WHERE project_id = #{slackData.projectId} AND team_id = #{run.teamId}
-                    AND channel_id = #{run.channelId} AND thread_ts = #{run.threadTs} AND message_ts = #{run.messageTs}|]
+              let body = mergeSlackContent (Progress.payload progress) $ AE.object ["channel" AE..= run.channelId]
+                  remembered = writeIORef previous $ Just progress
+              existing <- Investigations.loadProgress target
               AI.requireAgentAccess progressAccess slackData.projectId
-              when (allowCreate || isJust existing) do
-                let body = mergeSlackContent (Progress.payload progress) $ AE.object ["channel" AE..= run.channelId]
-                case existing of
-                  Just (HI.OneColumn ts) -> do
-                    result <- slackApi slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
-                    either (throwIO . ErrorCall . toString) pure result
-                  Nothing -> do
-                    response <-
-                      postWith
-                        (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
-                        "https://slack.com/api/chat.postMessage"
-                        (mergeSlackContent body $ AE.object ["thread_ts" AE..= run.threadTs])
-                    let bytes = response ^. responseBody
-                    either (throwIO . ErrorCall . toString) pure $ parseSlackOkOrErr bytes
-                    ts <- maybe (throwIO $ ErrorCall "Slack progress acknowledgement has no timestamp") pure $ AE.decode @AE.Value bytes >>= (^? key "ts" . _String)
-                    Hasql.interpExecute_
-                      [HI.sql|INSERT INTO apis.slack_investigation_progress
-                      (project_id, team_id, channel_id, thread_ts, message_ts, progress_ts)
-                      VALUES (#{slackData.projectId}, #{run.teamId}, #{run.channelId}, #{run.threadTs}, #{run.messageTs}, #{ts})
-                      ON CONFLICT (project_id, team_id, channel_id, thread_ts, message_ts) DO NOTHING|]
-                writeIORef previous $ Just progress
+              case existing of
+                Just publication -> for_ publication.timestamp $ \ts -> do
+                  result <- slackApi slackData.botToken "chat.update" $ mergeSlackContent body $ AE.object ["ts" AE..= ts]
+                  either (throwIO . ErrorCall . toString) pure result
+                  remembered
+                Nothing ->
+                  when allowCreate
+                    $ Investigations.claimProgress target
+                    >>= traverse_
+                      ( \publication -> do
+                          response <-
+                            postWith
+                              (defaults & contentTypeHeader "application/json" & authHeader "Bearer" slackData.botToken)
+                              "https://slack.com/api/chat.postMessage"
+                              ( mergeSlackContent body
+                                  $ AE.object
+                                    [ "thread_ts" AE..= run.threadTs
+                                    , "metadata"
+                                        AE..= AE.object
+                                          [ "event_type" AE..= ("monoscope_investigation_progress" :: Text)
+                                          , "event_payload" AE..= AE.object ["publication_id" AE..= publication.publicationId]
+                                          ]
+                                    ]
+                              )
+                          case AE.decode @SlackProgressAck (response ^. responseBody) of
+                            Just ack
+                              | statusIsSuccessful (response ^. Wreq.responseStatus)
+                              , ack.ok
+                              , Just ts <- ack.ts >>= Incidents.slackTimestamp -> do
+                                  confirmed <- Investigations.confirmProgress publication.publicationId $ Incidents.slackTimestampText ts
+                                  unless confirmed $ throwIO $ ErrorCall "Conflicting Slack progress acknowledgement"
+                                  remembered
+                              | statusIsSuccessful (response ^. Wreq.responseStatus)
+                              , not ack.ok
+                              , Just reason <- ack.error
+                              , reason `elem` ["ratelimited", "channel_not_found", "not_in_channel", "is_archived", "missing_scope", "invalid_auth", "token_revoked", "account_inactive"] -> do
+                                  Investigations.rejectProgress publication.publicationId
+                                  throwIO $ ErrorCall $ "Slack progress rejected: " <> toString reason
+                            _ -> throwIO $ ErrorCall "Slack progress publication awaits reconciliation"
+                      )
         publishSafely allowCreate = whenLeftM_ (tryAny $ publish allowCreate) $ \_ -> do
           Log.logAttention "Slack investigation progress update failed" $ AE.object ["channel_id" AE..= run.channelId, "thread_ts" AE..= run.threadTs]
           when allowCreate $ liftIO $ threadDelay 28_000_000
         updates = forever $ liftIO (threadDelay 2_000_000) >> publishSafely True
     race_ updates action `finally` publishSafely False
   _ -> action
+
+
+-- | Late observations can arrive after the answer receipt is complete. Refresh
+-- that turn directly, checking its original requester's current authorization.
+refreshObservedProgress :: (DB es, HTTP :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
+refreshObservedProgress target timestamp = do
+  AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
+  slackData <- getProjectSlackData target.projectId
+  for_ slackData $ \connection -> when (connection.teamId == target.teamId) do
+    history <- Investigations.recentProgressEvents target
+    for_ (Progress.snapshot target.messageTs history) $ \progress -> do
+      AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
+      result <-
+        slackApi connection.botToken "chat.update"
+          $ mergeSlackContent
+            (Progress.payload progress)
+            (AE.object ["channel" AE..= target.channelId, "ts" AE..= timestamp])
+      either (throwIO . ErrorCall . toString) pure result
+
+
+data SlackProgressAck = SlackProgressAck {ok :: Bool, ts :: Maybe Text, error :: Maybe Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
 
 
 data SlackWorkerBusy = SlackWorkerBusy
