@@ -110,6 +110,9 @@
           "properties": {
             "root_id": {
               "type": "string"
+            },
+            "delivery_id": {
+              "type": "string"
             }
           },
           "required": [
@@ -142,6 +145,24 @@
           },
           "required": [
             "publication_id"
+          ]
+        }
+      },
+      {
+        "event_type": "monoscope_incident_delivery",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "root_id": {
+              "type": "string"
+            },
+            "delivery_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "root_id",
+            "delivery_id"
           ]
         }
       }

@@ -13,6 +13,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -424,6 +425,18 @@ spec = around withTestResources do
       (edits, _) <- captureNotifs tr runSlackIncidentDeliveries
       sort [(sd.channelId, KM.lookup "ts" obj) | sd <- messages edits, AE.Object obj <- [sd.payload]]
         `shouldBe` [(cid, AE.String <$> ts) | (cid, ts) <- parents]
+      for_ ([("post_root", "monoscope_incident_root", rootNotifications), ("post_reply", "monoscope_incident_delivery", replies), ("update_root", "monoscope_incident_root", edits)] :: [(Text, Text, [Notify.Notification])]) $ \(operation, eventType, notifications) ->
+        for_ (messages notifications) $ \message -> do
+          message.payload ^? key "metadata" . key "event_type" . _String `shouldBe` Just eventType
+          Just metadata <- pure $ message.payload ^? key "metadata" . key "event_payload"
+          stored <- withResource tr.trPool $ \conn ->
+            PGS.query
+              conn
+              [sql|SELECT jsonb_build_object('root_id', r.id, 'delivery_id', d.id)
+            FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id
+            WHERE r.channel_id = ? AND d.operation = ?|]
+              (message.channelId, operation :: Text)
+          stored `shouldBe` [PGS.Only $ Aeson metadata]
       (again, _) <- captureNotifs tr runSlackIncidentDeliveries
       again `shouldBe` []
 
@@ -521,8 +534,8 @@ spec = around withTestResources do
         [root] <- run $ I.claimSlackDeliveries frozenTime
         run (I.finishSlackDelivery frozenTime root accepted) `shouldReturn` True
         void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
-        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_roots SET history_retry_at = ? WHERE id = ?|] (frozenTime, root.rootId)
-        [abandoned] <- run $ I.claimRootSearches frozenTime
+        withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (frozenTime, root.id)
+        [abandoned] <- run $ I.claimIncidentSearches frozenTime
         AE.Object fields <- maybe (fail "Expected root event") pure $ slackRootEvent "unused" "T1" "C1" root.rootId "1788900000.000001" "A_TEST" ^? key "event"
         let message = AE.Object fields
             page messages next = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= (next :: Text)]]
@@ -549,14 +562,14 @@ spec = around withTestResources do
                         when replace $ withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack SET team_id = 'T_OTHER' WHERE project_id = ?|] (PGS.Only testPid)
                       pure $ Just $ AE.encode body
                   )
-                  SlackPage.reconcileIncidentRoots
+                  SlackPage.reconcileIncidentDeliveries
         (leased, _) <- work
         leased `shouldBe` []
         advanceMinutes tr 3
         (searched, _) <- work
         map fst searched `shouldBe` ["https://slack.com/api/conversations.history"]
-        run $ I.saveRootSearchCursor abandoned (Just "stale") frozenTime
-        cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_roots WHERE id = ?|] (PGS.Only root.rootId)
+        run $ I.saveIncidentSearchCursor abandoned (Just "stale") frozenTime
+        cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only root.id)
         cursors `shouldBe` [PGS.Only (Just "next" :: Maybe Text)]
         advanceMinutes tr 1
         void work
@@ -568,6 +581,80 @@ spec = around withTestResources do
         expected <- timestamp "1788900000.000001"
         reply.operation `shouldBe` I.PostReply expected
         readIORef pages >>= (`shouldBe` [])
+
+    for_ [False, True] $ \lostAck ->
+      it ("reconciles lifecycle replies and edits after " <> if lostAck then "lost acknowledgements" else "expired send leases") \tr -> do
+        update <- setup tr
+        setupSlackData tr testPid "T1"
+        let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_TEST"}}}
+            run :: ATBackgroundCtx a -> IO a
+            run = runTestBgNoReset resources
+        void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+        [root] <- run $ I.claimSlackDeliveries frozenTime
+        parent <- timestamp "1788900000.000001"
+        run (I.finishSlackDelivery frozenTime root $ I.DeliveryConfirmed parent) `shouldReturn` True
+        void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 frozenTime, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
+        advanceMinutes tr 1
+        replicateM_ 2 do
+          now <- getTestTime tr.trTestClock
+          [delivery] <- run $ I.claimSlackDeliveries now
+          when lostAck $ run (I.finishSlackDelivery now delivery $ I.DeliveryUncertain "lost_ack") >>= (`shouldBe` True)
+          withResource tr.trPool $ \conn -> void $ PGS.execute conn [sql|UPDATE apis.slack_incident_deliveries SET history_retry_at = ? WHERE id = ?|] (now, delivery.id)
+          unless lostAck do
+            run (I.claimIncidentSearches now) >>= (\searches -> length searches `shouldBe` 0)
+            advanceMinutes tr 3
+          claimedAt <- getTestTime tr.trTestClock
+          [abandoned] <- run $ I.claimIncidentSearches claimedAt
+          (method, expectedTs, expectedCursor) <- case delivery.operation of
+            I.PostReply _ -> pure ("conversations.replies", "1788900000.000002", Just "next")
+            I.UpdateRoot _ -> pure ("conversations.history", "1788900000.000001", Nothing)
+            I.PostRoot -> fail "Expected a lifecycle delivery"
+          Just metadata <- pure $ AE.toJSON (I.correlateSlackDelivery delivery delivery.payload) ^? key "metadata"
+          let message = AE.object ["ts" AE..= (expectedTs :: Text), "thread_ts" AE..= I.slackTimestampText parent, "app_id" AE..= ("A_TEST" :: Text), "bot_id" AE..= ("B_TEST" :: Text), "metadata" AE..= metadata]
+              page messages cursor = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= fromMaybe "" (cursor :: Maybe Text)]]
+              wrong = message & key "metadata" . key "event_payload" . key "delivery_id" . _String .~ "00000000-0000-0000-0000-000000000000"
+              wrongThread = message & key "thread_ts" . _String .~ "1788900999.000001"
+              wrongApp = message & key "app_id" . _String .~ "A_OTHER"
+              wrongRoot = message & key "metadata" . key "event_payload" . key "root_id" . _String .~ "00000000-0000-0000-0000-000000000000"
+          pages <- newIORef [(Nothing, page [wrong, wrongThread, wrongApp, wrongRoot] expectedCursor), (expectedCursor, page [message] Nothing)]
+          let work = do
+                at <- getTestTime tr.trTestClock
+                runTestBgRecordingHTTP at resources
+                  $ withHTTPResponses
+                    ( \opts endpoint -> do
+                        endpoint `shouldBe` "https://slack.com/api/" <> method
+                        opts ^. Wreq.param "channel" `shouldBe` ["C1"]
+                        opts ^. Wreq.param "include_all_metadata" `shouldBe` ["true"]
+                        case delivery.operation of
+                          I.PostReply _ -> opts ^. Wreq.param "ts" `shouldBe` [I.slackTimestampText parent]
+                          I.UpdateRoot _ -> do
+                            opts ^. Wreq.param "oldest" `shouldBe` [I.slackTimestampText parent]
+                            opts ^. Wreq.param "latest" `shouldBe` [I.slackTimestampText parent]
+                            opts ^. Wreq.param "inclusive" `shouldBe` ["true"]
+                          I.PostRoot -> fail "Unexpected root search"
+                        next <- atomicModifyIORef' pages $ \case
+                          [] -> ([], Nothing)
+                          item : rest -> (rest, Just item)
+                        (cursor, body) <- maybe (fail "Unexpected lifecycle history request") pure next
+                        opts ^. Wreq.param "cursor" `shouldBe` maybeToList cursor
+                        pure $ Just $ AE.encode body
+                    )
+                    SlackPage.reconcileIncidentDeliveries
+          advanceMinutes tr 3
+          (unmatched, _) <- work
+          map fst unmatched `shouldBe` ["https://slack.com/api/" <> toText method]
+          found <- timestamp expectedTs
+          run (I.confirmIncidentSearch abandoned found) `shouldReturn` False
+          pendingAt <- getTestTime tr.trTestClock
+          run (I.claimSlackDeliveries pendingAt) `shouldReturn` []
+          advanceMinutes tr 1
+          (matched, _) <- work
+          map fst matched `shouldBe` ["https://slack.com/api/" <> toText method]
+          stored <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT state, message_ts FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only delivery.id)
+          stored `shouldBe` [("delivered" :: Text, Just expectedTs)]
+          readIORef pages >>= (`shouldBe` [])
+        completedAt <- getTestTime tr.trTestClock
+        run (I.claimSlackDeliveries completedAt) `shouldReturn` []
 
 
 setup :: TestResources -> IO I.IncidentUpdate

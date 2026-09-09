@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, resetSlackSession, reconcileIncidentRoots, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, verifySlackSignature, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
@@ -1199,13 +1199,13 @@ readPublicationHistory slackData method publicationId params cursor matching = d
       _ -> pending "History response rejected or malformed"
 
 
--- | Search only accepted/ambiguous roots; an empty history page never permits a repost.
-reconcileIncidentRoots :: ATBackgroundCtx ()
-reconcileIncidentRoots = do
+-- | Reconcile accepted/ambiguous deliveries without blindly repeating a send.
+reconcileIncidentDeliveries :: ATBackgroundCtx ()
+reconcileIncidentDeliveries = do
   appId <- (.slackAppId) <$> asks env
   unless (T.null appId) do
     now <- Time.currentTime
-    searches <- Incidents.claimRootSearches now
+    searches <- Incidents.claimIncidentSearches now
     for_ searches $ \search -> do
       let installation = do
             active <- Projects.activeProjectById search.projectId
@@ -1213,22 +1213,35 @@ reconcileIncidentRoots = do
             case (active, connection) of
               (Just _, Just slackData) | slackData.teamId == search.teamId -> pure slackData
               _ -> throwIO AI.AgentAccessDenied
-          params = [("channel", search.channelId), ("include_all_metadata", "true"), ("limit", "15")] <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
+          (method, scope) = case search.operation of
+            Incidents.PostRoot -> ("conversations.history", [("limit", "15")])
+            Incidents.PostReply root -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
+            Incidents.UpdateRoot root -> ("conversations.history", [("oldest", Incidents.slackTimestampText root), ("latest", Incidents.slackTimestampText root), ("inclusive", "true"), ("limit", "1")])
+          params = [("channel", search.channelId), ("include_all_metadata", "true")] <> scope <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
           matching message = do
-            guard $ fromMaybe message.ts message.thread_ts == message.ts
-            publicationTimestamp appId "monoscope_incident_root" "root_id" search.rootId message
-          retry = Incidents.saveRootSearchCursor search
+            guard $ (message.metadata >>= (^? key "event_payload" . key "root_id")) == Just (AE.toJSON search.rootId)
+            case search.operation of
+              Incidents.PostRoot -> do
+                guard $ fromMaybe message.ts message.thread_ts == message.ts
+                publicationTimestamp appId "monoscope_incident_root" "root_id" search.rootId message
+              Incidents.PostReply root -> do
+                guard $ message.thread_ts == Just (Incidents.slackTimestampText root) && message.ts /= Incidents.slackTimestampText root
+                publicationTimestamp appId "monoscope_incident_delivery" "delivery_id" search.id message
+              Incidents.UpdateRoot root -> do
+                guard $ message.ts == Incidents.slackTimestampText root && fromMaybe message.ts message.thread_ts == message.ts
+                publicationTimestamp appId "monoscope_incident_root" "delivery_id" search.id message
+          retry = Incidents.saveIncidentSearchCursor search
       outcome <- tryAny $ RateLimit.withRateLimits search.teamId do
         slackData <- installation
-        page <- readPublicationHistory slackData "conversations.history" search.rootId params search.cursor matching
+        page <- readPublicationHistory slackData method search.id params search.cursor matching
         void installation
         case page of
           PublicationFound timestamp -> do
-            confirmed <- Incidents.observeSlackRoot search.projectId (Incidents.SlackDestination search.teamId search.channelId) search.rootId timestamp
+            confirmed <- Incidents.confirmIncidentSearch search timestamp
             unless confirmed $ throwIO SlackPublicationPending
           PublicationCursor next -> retry next $ addUTCTime 60 now
       for_ (leftToMaybe outcome) $ \err -> do
-        Log.logAttention "Slack incident root history remains pending" $ AE.object ["root_id" AE..= search.rootId]
+        Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id]
         retry search.cursor $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
 
 

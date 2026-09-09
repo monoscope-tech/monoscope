@@ -1909,3 +1909,56 @@ marks expired post_reply and update_root leases uncertain as well as roots, and
 finishSlackDelivery retains uncertain outcomes for those operations. Root history
 recovery does not reconcile those lifecycle deliveries. They need their own recovery
 before the full incident-delivery requirement can be considered complete.
+
+## Lifecycle delivery history recovery
+
+The root-history loop now also reconciles uncertain lifecycle replies and root
+edits. Each outgoing lifecycle payload carries its stored delivery ID alongside
+the root ID. Replies are searched inside the original thread; edits are checked
+at the exact root timestamp and require the matching delivery ID. An older root
+snapshot cannot confirm a newer edit. Missing or mismatched history leaves the
+outbox pending and does not permit a blind resend.
+
+Migration 0180 moves search pagination and leases onto individual deliveries,
+backfills existing root cursors/retry times, and retains the previous root columns
+for rolling workers. Claims preserve delivery order and active installation scope.
+Timestamp decoding uses derived traversal inside the claim transaction; invalid
+stored timestamps roll back the lease. Stale searches cannot advance lifecycle
+state or replace another worker's cursor. Current installation/project checks run
+before and after Slack HTTP. Existing rate-limit deadlines remain authoritative.
+
+The manifest adds the lifecycle metadata schema and an optional delivery ID to
+the existing root schema. No live installation was changed.
+
+Final native IncidentDelivery verification passed 16 examples with zero failures
+in 88.4741 seconds. Command:
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=IncidentDelivery make live-test-dev.
+Evidence: /tmp/monoscope-slack-agent/slack-lifecycle-history-incident-complete.log.
+The two new scenarios cover lost acknowledgement and expired send leases for
+both replies and root edits, abandoned history leases, stale confirmation,
+wrong app/thread/root/delivery metadata, pagination and ordering without reposts.
+The existing actual notification-worker regression also checks that outgoing
+metadata contains the stored root and delivery IDs. An initial test type-inference
+error was fixed with an explicit list type; an interrupted run is not counted.
+
+All three requested skills ran three passes, recorded in the review log.
+Fourmolu, JSON syntax and whitespace checks pass. HLint 3.3.6 exits 1 because
+MultilineStrings is unsupported; Weeder exits 228 with repository findings.
+The final-code Workflows run completed 46 examples with one failure in
+249.9108 seconds. The role-preserving follow-up test received a libpq error:
+"another command is already in progress" at WorkflowsSpec.hs:1542. Evidence:
+/tmp/monoscope-slack-agent/slack-lifecycle-history-workflows.log. Inspection
+identified asynchronous cancellation of the existing lock-connection heartbeat
+as a likely cause: race_ cancels its query before withTransaction commits.
+This broader check is not passing; heartbeat shutdown needs a separate fix and
+verification. CI signoff for this increment has not yet run. No branch push or deployment occurred. Full Slack acceptance,
+investigation quality evaluation, tested drafts and proactive policies remain
+unfinished.
+
+The preceding root-recovery commit 8185692b1 passed
+make ci-signoff CHECKS="build doctests unit-tests" and the command exited 0.
+All three passing checks were attested; unit tests ran 308 examples with zero
+failures. The final status leaves integration-tests, weeder, hlint and e2e for
+GitHub. Evidence: /tmp/monoscope-slack-agent/slack-root-history-ci-signoff.log.
+These attestations cover the preceding commit, not lifecycle recovery.

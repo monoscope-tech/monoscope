@@ -4796,9 +4796,10 @@ runSlackIncidentDeliveries = do
                 Notify.SlackData
                   { Notify.channelId = delivery.channelId
                   , Notify.botToken = sd.botToken
-                  , Notify.payload = AE.toJSON $ case delivery.operation of
+                  , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
                       Incidents.PostReply _ -> delivery.payload
-                      _ -> Incidents.correlateSlackRoot delivery.rootId $ Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                      Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                      Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
                   , Notify.projectIdCtx = delivery.projectId.toText
@@ -4814,7 +4815,7 @@ runSlackIncidentDeliveries = do
       finishedAt <- Time.currentTime
       saved <- Incidents.finishSlackDelivery finishedAt delivery outcome
       unless saved $ Log.logAttention "Slack delivery completion did not match its lease or root" (delivery.id, delivery.rootId)
-    Slack.reconcileIncidentRoots
+    Slack.reconcileIncidentDeliveries
 
 
 -- | An unavailable evaluation changes evidence availability, not the alert state.
