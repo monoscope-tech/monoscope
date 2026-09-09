@@ -942,6 +942,22 @@ processSlackEvent receiptId =
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
+          deliverAnswer = do
+            let turn = Investigations.Turn slackData.projectId (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs) principal.userId event.ts
+            batch <-
+              Investigations.loadReplyBatch turn
+                >>= maybe
+                  ( do
+                      rendered <- newIORef []
+                      runBotQuery Slack (\reply -> modifyIORef' rendered (<> [botReplyPayload reply])) envCfg access slackData.projectId event.text resolveThread
+                      replies <- readIORef rendered >>= maybe (throwIO $ ErrorCall "Slack query produced no reply") pure . nonEmpty
+                      Investigations.saveReplyBatch turn replies
+                  )
+                  pure
+            for_ (zip [batch.deliveredCount ..] $ drop batch.deliveredCount $ toList batch.replies) $ \(part, reply) -> do
+              AI.requireAgentAccess access slackData.projectId
+              sendSlackChatMessageChecked slackData.botToken $ addThread reply
+              Investigations.confirmReplyPart turn part
       ( do
           AI.requireAgentAccess access slackData.projectId
           bracket_
@@ -951,7 +967,7 @@ processSlackEvent receiptId =
             )
             ( race_
                 (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
-                (withInvestigationProgress slackData access $ runBotQuery Slack (sendSlackChatMessageChecked slackData.botToken . addThread . botReplyPayload) envCfg access slackData.projectId event.text resolveThread)
+                (withInvestigationProgress slackData access deliverAnswer)
             )
         )
         `catch` \AI.AgentStopped -> do

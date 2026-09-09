@@ -13,6 +13,10 @@ module Models.Apis.Investigations (
   ToolCallInfo (..),
   loadAnswer,
   saveAnswer,
+  ReplyBatch (..),
+  loadReplyBatch,
+  saveReplyBatch,
+  confirmReplyPart,
   Event (..),
   Followup (..),
   pendingFollowups,
@@ -257,6 +261,51 @@ saveAnswer turn answer = do
         AND conversation_id = #{turn.conversationId} AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
     ) SELECT answer FROM saved|]
   maybe (throwIO $ ErrorCall "Saving a Slack answer returned no row") (pure . (\(HI.OneColumn (Aeson result)) -> result)) saved
+
+
+-- | Freeze every rendered part before the first send. A confirmed part is never
+-- replayed by a later delivery attempt for this turn.
+data ReplyBatch = ReplyBatch {replies :: NonEmpty AE.Value, deliveredCount :: Int}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ReplyBatch
+
+
+loadReplyBatch :: DB es => Turn -> Eff es (Maybe ReplyBatch)
+loadReplyBatch turn =
+  fmap (\(HI.OneColumn (Aeson batch)) -> batch)
+    <$> Hasql.interpOne
+      [HI.sql|SELECT to_jsonb(batch) FROM apis.slack_reply_batches batch
+      WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+        AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}|]
+
+
+saveReplyBatch :: DB es => Turn -> NonEmpty AE.Value -> Eff es ReplyBatch
+saveReplyBatch turn replies = do
+  saved <-
+    Hasql.interpOne
+      [HI.sql|WITH saved AS (
+      INSERT INTO apis.slack_reply_batches (project_id, conversation_id, user_id, message_ts, replies)
+      VALUES (#{turn.projectId}, #{turn.conversationId}, #{turn.userId}, #{turn.messageTs}, #{Aeson replies})
+      ON CONFLICT (project_id, conversation_id, user_id, message_ts)
+      DO UPDATE SET replies = slack_reply_batches.replies RETURNING *
+    ) SELECT to_jsonb(saved) FROM saved|]
+  maybe (throwIO $ ErrorCall "Saving Slack reply batch returned no row") (pure . (\(HI.OneColumn (Aeson batch)) -> batch)) saved
+
+
+confirmReplyPart :: DB es => Turn -> Int -> Eff es ()
+confirmReplyPart turn part = do
+  confirmed <-
+    Hasql.interpOne @(HI.OneColumn Bool)
+      [HI.sql|UPDATE apis.slack_reply_batches SET delivered_count = delivered_count + 1
+    WHERE project_id = #{turn.projectId} AND conversation_id = #{turn.conversationId}
+      AND user_id = #{turn.userId} AND message_ts = #{turn.messageTs}
+      AND delivered_count = #{part} RETURNING TRUE|]
+  unless (isJust confirmed) $ throwIO ReplyDeliveryConflict
+
+
+data ReplyDeliveryConflict = ReplyDeliveryConflict
+  deriving stock (Generic, Show)
+  deriving anyclass (Exception)
 
 
 -- | Exact model context and progress for one round. The API key is supplied by

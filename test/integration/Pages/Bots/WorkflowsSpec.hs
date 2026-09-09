@@ -892,6 +892,57 @@ spec = around withTestResources do
         run "checkpoint-changed" >>= (`shouldSatisfy` isRight)
         length <$> readIORef modelContexts >>= (`shouldBe` 2)
 
+      it "resumes a rendered Slack reply batch after its second part is rejected" \tr -> do
+        setupLinkedSlackData tr testPid "T_PARTS"
+        modelCalls <- newIORef (0 :: Int)
+        posts <- newIORef (0 :: Int)
+        let event = slackThreadedEvent "T_PARTS" "C_PARTS" "Investigate checkout latency" "1735689602.000001" "1735689600.000001" & key "event" . key "type" . _String .~ "app_mention"
+            provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> do
+                modifyIORef' modelCalls (+ 1)
+                pure
+                  $ Right
+                  $ Chat.Message
+                    Chat.Assistant
+                    "{\"query\":\"logs | summarize count() by bin(timestamp, 1m)\",\"visualization\":\"line\",\"explanation\":\"Inspect the checkout latency change.\",\"time_range\":\"last 1 hour\"}"
+                    Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            transport = withHTTPResponses \_ endpoint ->
+              if endpoint == "https://slack.com/api/chat.postMessage"
+                then do
+                  attempt <- atomicModifyIORef' posts (\n -> (n + 1, n + 1))
+                  pure $ Just $ if attempt == 2 then "{\"ok\":false,\"error\":\"ratelimited\"}" else "{\"ok\":true}"
+                else pure $ Just "{\"ok\":true,\"messages\":[]}"
+            work receipt = runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ tryAny $ processSlackEvent receipt
+            turn = Investigations.Turn testPid (Issues.slackScopedConversationId testPid "T_PARTS" "C_PARTS" "1735689600.000001") (getResponse tr.trSessAndHeader).user.id "1735689602.000001"
+        receipt <- receiveSlackEvent tr event
+        (_, rejected) <- work receipt
+        rejected `shouldSatisfy` isLeft
+        saved <- runQueryEffect tr $ Investigations.loadReplyBatch turn
+        case saved of
+          Nothing -> fail "Expected a rendered reply batch before delivery"
+          Just batch -> do
+            length batch.replies `shouldBe` 2
+            batch.deliveredCount `shouldBe` 1
+            -- An accidental second preparation cannot replace the original parts.
+            retained <- runQueryEffect tr $ Investigations.saveReplyBatch turn (AE.object ["text" AE..= ("replacement" :: Text)] :| [])
+            retained.replies `shouldBe` batch.replies
+            (requests, delivered) <- work receipt
+            delivered `shouldSatisfy` isRight
+            let sent = [value | (url, body) <- requests, url == "https://slack.com/api/chat.postMessage", Just value <- [AE.decode @AE.Value body]]
+            length sent `shouldBe` 1
+            mapMaybe (\value -> value ^? key "blocks" . _Array . ix 0 . key "text" . key "text" . _String) sent `shouldBe` ["Inspect the checkout latency change."]
+        readIORef modelCalls >>= (`shouldBe` 1)
+        readIORef posts >>= (`shouldBe` 3)
+        completed <- runQueryEffect tr $ Investigations.loadReplyBatch turn
+        fmap (.deliveredCount) completed `shouldBe` Just 2
+        stale <- tryAny $ runQueryEffect tr $ Investigations.confirmReplyPart turn 0
+        stale `shouldSatisfy` isLeft
+        (replayed, outcome) <- work receipt
+        outcome `shouldSatisfy` isRight
+        replayed `shouldBe` []
+
       it "retries a failed Slack delivery without repeating the model or duplicating conversation turns" \tr -> do
         setupLinkedSlackData tr testPid "T_REPLAY"
         calls <- newIORef (0 :: Int)

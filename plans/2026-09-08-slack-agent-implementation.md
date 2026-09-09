@@ -1635,3 +1635,45 @@ Steering takes effect between model decisions, after any outstanding tool batch;
 it does not interrupt a currently running HTTP/model call. Live Slack acceptance,
 complete answer delivery reconciliation, diagnosis evaluation, tested action drafts
 and proactive investigation policy remain unfinished.
+
+
+### Freeze rendered reply batches and resume confirmed delivery
+
+Native investigations now collect every rendered Slack reply before posting the
+first part. Migration 0174 stores the nonempty batch under the existing scoped
+turn key, with a delivery position constrained to the batch length. Repeated
+preparation returns the original payloads and position. Reports also use this
+batch path; their stable conversation key does not require creating chat history.
+
+The sender revalidates access for every remaining part and advances the expected
+position only after the checked Slack sender succeeds. A rejected later part no
+longer causes earlier confirmed parts to be reposted, and retries do not repeat
+chart/table rendering or queries. A stale confirmation raises a derived conflict
+exception. All new instances are derived.
+
+Native command: `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=Workflows make live-test-dev`. The own watcher was restarted after
+Hpack registered the migration. Final result: 42 examples, zero failures,
+35.0209 seconds, 209 modules. Evidence:
+/tmp/monoscope-slack-agent/slack-reply-batch-workflows-complete.log.
+The new test accepts a chart, rejects the explanation, confirms position one and
+the immutable two-part batch, retries only the explanation, verifies one model
+call, rejects a stale position update, and checks processed-event replay.
+
+Three passes of each requested skill are recorded. Fourmolu and whitespace checks
+pass. HLint exits 1 on unsupported MultilineStrings; Weeder exits 228 with
+repository findings. Logs: slack-reply-batch-hlint.log and
+slack-reply-batch-weeder.log in /tmp/monoscope-slack-agent/.
+
+Previous steering commit b3e62c374 passed
+`make ci-signoff CHECKS="build doctests unit-tests"`, including 1,554 doctest
+examples and 308 unit examples. Passing results were attested; integration-tests,
+weeder, hlint and e2e remain outstanding. Log:
+/tmp/monoscope-slack-agent/slack-steering-ci-signoff.log.
+CI for the reply-batch increment remains pending. No deployment or branch push.
+
+This is confirmed-part resumption, not exactly-once delivery. A lost Slack
+acknowledgement or interruption before saving the position still needs a durable
+publication reservation and observation/history reconciliation. Those remain part
+of the full answer-outbox requirement, alongside live Slack acceptance and the
+remaining investigation, action-draft and proactive-policy releases.
