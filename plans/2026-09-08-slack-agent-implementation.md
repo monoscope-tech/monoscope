@@ -697,3 +697,37 @@ Agent acceptance, per-message navigation evidence, durable delivery/status
 reconciliation and checkpoints, and the remaining releases still need work.
 Current-tree CI signoff is outstanding before push. No push, deployment, or live
 Slack app configuration change occurred.
+
+
+## Native Agent local CI signoff (2026-09-09)
+
+Validated runtime commit `2719928be` with:
+
+```sh
+make ci-signoff CHECKS="build doctests unit-tests"
+```
+
+The command exited 0. Build passed; doctests passed all 1,536 examples with
+zero errors or failures; unit tests passed 308 examples with zero failures.
+Passing attestations were published for these three checks. The earlier native
+Workflows run passed 32 examples with zero failures. The local signoff log is
+`/tmp/monoscope-slack-agent/native-agent-ci-signoff.log`.
+
+The final status reuses those three results and the existing CLI-tests
+attestation. GitHub still needs frontend, integration-tests, weeder, hlint,
+ui-tests, and e2e. Real TimeFusion did not start on this ARM laptop, so the
+full integration suite remains unavailable locally. No integration result was
+attested. Other outstanding checks were outside this limited signoff command.
+
+The three passes of each requested skill and their fixes are recorded in
+`plans/2026-09-09-slack-agent-reviews.md`. A further accumulated Slack/AI diff
+scan found no added handwritten instances or warning suppressions. This signoff
+changes documentation only and does not change the checked source inputs.
+
+Read-only acceptance review confirmed remaining release work: manual error
+resolution updates the error pattern and activity log without recording an
+incident-thread resolution event; compact Slack chart exports and the complete
+signed-request/dataset/options/PNG acceptance fixtures remain unfinished.
+Monitor charts already use recorded evaluation readings and preserve gaps.
+The full plan and live Slack acceptance remain open. No deployment or branch
+push occurred; only passing CI attestation refs were published.
