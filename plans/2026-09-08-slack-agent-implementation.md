@@ -1116,9 +1116,12 @@ No deployment or deployment-branch push occurred.
 
 ## Incident context in Slack investigations
 
-Unit propagation is committed on master as e09d27e9a. Combined local CI is running
+Unit propagation is committed on master as e09d27e9a. Combined local CI completed
 with `make ci-signoff CHECKS="build doctests unit-tests frontend ui-tests"`; its
-log is `/tmp/monoscope-slack-agent/units-ci-signoff.log`. No result is claimed yet.
+log is `/tmp/monoscope-slack-agent/units-ci-signoff.log`. Build, 1,538 doctests,
+308 unit examples, frontend build, and 934 UI tests in 57 files passed.
+CLI-tests, integration-tests, weeder, hlint, and e2e still require GitHub.
+These results cover e09d27e9a, not the subsequent incident-context commit.
 
 The isolated branch `slack-incident-context` at
 `/tmp/monoscope-slack-incident-context` adds a derived incident context record, a
@@ -1146,3 +1149,21 @@ Weeder reports repository findings; it is not a passing check. Its log is
 `/tmp/monoscope-slack-agent/incident-context-weeder.log`. Full CI for this increment,
 representative diagnosis-quality evaluation, deployment/code tools, action drafts,
 and live Slack acceptance remain outstanding. No deployment.
+
+
+The incident-context increment is now on master as 7ed58cde3 (reviewed/tested
+worktree commit 525c0dcb2). No deployment branch was pushed. Passing unit-change
+attestations were published for linux-aarch64, capabilities bun.ghc.minio.node.pg:
+
+- build: dc53fce9746474a6a886f21f26d771756cde161787b5264fd3396be158da732d
+- doctests: 1488ebd8617e5183a80e6af4408cf1f3dbcd3ac22d51db3e3e4a2cb86f3a3f20
+- unit-tests: 885c0e041326dd15625e59d2785cee4cea87f9a5e8c6b4d7fa04a8322a0982d8
+- frontend: 45a29ebc38a587dbe459b9dd70d3d1167d8369eb4bb13c8ed3ed6c00f87685c7
+- ui-tests: 011eb5b0c7606265083833b7b0a910c4833ed7a8f2d50dda8e08f1c1101c1c08
+
+The next code-context work can reuse Models.Projects.CodeContext's project-scoped
+repository mappings and source reader, plus existing Git credentials. They are
+not yet tools in the Slack agent. fetchSnippet currently needs the shared blob
+cache, EnvConfig, and HTTP effect; Pkg.AI currently receives none of those source
+reader dependencies. Preserve those authorization and test interception boundaries
+when exposing repository evidence. No new repository integration is claimed here.
