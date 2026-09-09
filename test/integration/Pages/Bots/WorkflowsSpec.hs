@@ -595,6 +595,65 @@ spec = around withTestResources do
         accept >>= (`shouldBe` AE.object [])
 
     describe "Thread/Conversation Context" do
+      it "compares deployed revisions and a control environment across more than five evidence rounds" \tr -> do
+        setupLinkedSlackData tr testPid "T_DEPLOYMENT"
+        let cfg = tr.trATCtx.config
+            oldRevision = T.replicate 40 "a"
+            newRevision = T.replicate 40 "b"
+            access = AI.SlackInvestigationAccess $ AI.SlackInvestigation "T_DEPLOYMENT" "U0123ABCDEF" (getResponse tr.trSessAndHeader).user.id "C_DEPLOYMENT" "1735689600.000001" "1735689602.000001"
+            deployment deploymentId revision environment = AE.object ["id" AE..= (deploymentId :: Int), "sha" AE..= (revision :: Text), "ref" AE..= ("main" :: Text), "environment" AE..= (environment :: Text), "created_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
+            deployments environment = AE.encode ([deployment 2 newRevision environment, deployment 1 oldRevision environment] :: [AE.Value])
+            source body = AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (body :: ByteString))]
+        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_workflow_fixture")
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
+        observed <- newIORef []
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history params _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                    mapping = listToMaybe results >>= AE.decode @AE.Value . encodeUtf8 >>= (^? key "entries" . _Array . ix 0 . key "mappingId" . _String)
+                    repoArgs environment = fromList [("mapping_id", AE.toJSON mapping), ("environment", AE.String environment)]
+                    sourceArgs revision = fromList [("path", AE.String "/srv/app/checkout.py"), ("revision", AE.String revision), ("service", AE.String "checkout")]
+                    steps =
+                      [ Chat.ToolFunction "get_linked_repositories" $ one ("service", AE.String "checkout")
+                      , Chat.ToolFunction "get_deployments" $ repoArgs "production"
+                      , Chat.ToolFunction "get_code_context" $ sourceArgs oldRevision
+                      , Chat.ToolFunction "get_code_context" $ sourceArgs newRevision
+                      , Chat.ToolFunction "get_deployments" $ repoArgs "staging"
+                      , Chat.ToolFunction "get_incident_context" mempty
+                      ]
+                        :: [Chat.ToolFunction]
+                writeIORef observed results
+                liftIO $ isJust (AE.toJSON params ^? key "tools" . _Array) `shouldBe` True
+                pure $ Right $ case drop (length results) steps of
+                  next : _ -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall (show $ length results) "function" next]}
+                  [] -> Chat.Message Chat.Assistant "Source comparison complete; no incident is bound, so onset correlation remains unconfirmed." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+            transport = withHTTPResponses \_ endpoint -> do
+              let base = "https://api.github.com/repos/acme/checkout-service"
+              pure $ case T.stripPrefix base (toText endpoint) of
+                Just "/deployments?per_page=5&environment=production" -> Just $ deployments "production"
+                Just "/deployments?per_page=5&environment=staging" -> Just $ deployments "staging"
+                Just "/deployments/1/statuses?per_page=10" -> Just "[]"
+                Just "/deployments/2/statuses?per_page=10" -> Just "[{\"state\":\"success\",\"created_at\":\"2025-01-01T00:05:00Z\"}]"
+                Just suffix | suffix == "/contents/checkout.py?ref=" <> oldRevision -> Just $ source "poolSize = 50\n"
+                Just suffix | suffix == "/contents/checkout.py?ref=" <> newRevision -> Just $ source "poolSize = 5\n"
+                _ -> Nothing
+        (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False access testPid "Could a pool setting change explain this? Compare production and staging." Nothing "model" "key"
+        result `shouldSatisfy` isRight
+        length requests `shouldBe` 8
+        evidence <- readIORef observed
+        case evidence of
+          [repositories, production, before, after, staging, incident] -> do
+            T.isInfixOf "acme/checkout-service" repositories `shouldBe` True
+            T.isInfixOf "production" production `shouldBe` True
+            T.isInfixOf "poolSize = 50" before `shouldBe` True
+            T.isInfixOf "poolSize = 5" after `shouldBe` True
+            T.isInfixOf "staging" staging `shouldBe` True
+            incident `shouldBe` "No incident is bound to this Slack thread."
+            any (T.isInfixOf "ghp_workflow_fixture") evidence `shouldBe` False
+          _ -> fail "Expected all six evidence rounds to complete"
+
       it "reads source from the linked repository at the supplied commit and rejects mutable refs" \tr -> do
         setupLinkedSlackData tr testPid "T_SOURCE"
         let cfg = tr.trATCtx.config

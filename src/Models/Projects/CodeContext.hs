@@ -20,6 +20,10 @@ module Models.Projects.CodeContext (
   fetchSnippet,
   SourceEvidence (..),
   fetchSourceEvidence,
+  LinkedRepository (..),
+  getLinkedRepositories,
+  fetchDeployments,
+  DeploymentError (..),
 ) where
 
 import Data.Aeson qualified as AE
@@ -100,6 +104,7 @@ data SnippetError
   | -- | The line is past the end of the file at that revision — almost always a build\/source mismatch.
     LineOutOfRange Text Int Text
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
 -- | The reason as a line of prose for the frame panel.
@@ -137,6 +142,53 @@ data SourceEvidence = SourceEvidence
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
+
+
+data LinkedRepository = LinkedRepository
+  { mappingId :: CodeMappingId
+  , service :: Maybe Text
+  , repository :: Text
+  , host :: Git.GitHost
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+getLinkedRepositories :: DB es => ProjectId -> Maybe Text -> Eff es (Git.EvidencePage LinkedRepository)
+getLinkedRepositories pid service = do
+  rows <-
+    Hasql.interp
+      [HI.sql|SELECT mapping.id, mapping.service, mapping.owner || '/' || mapping.repo, credential.host
+      FROM projects.code_mappings mapping JOIN projects.git_credentials credential ON credential.id = mapping.credential_id
+      WHERE mapping.project_id = #{pid} AND credential.project_id = #{pid}
+        AND (#{service}::text IS NULL OR mapping.service IS NULL OR mapping.service = #{service})
+      ORDER BY mapping.service, mapping.owner, mapping.repo, mapping.id LIMIT 50|]
+  pure $ Git.EvidencePage rows (length rows == 50)
+
+
+data DeploymentError
+  = DeploymentMappingMissing CodeMappingId
+  | DeploymentConnectionFailed SnippetError
+  | DeploymentProviderFailed Git.DeploymentReadError
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+fetchDeployments :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Maybe Text -> Eff es (Either DeploymentError (Git.EvidencePage Git.DeploymentEvidence))
+fetchDeployments cfg pid mappingId environment = runExceptT do
+  mapping <- ExceptT $ maybeToRight (DeploymentMappingMissing mappingId) . find ((== mappingId) . (.id)) <$> getCodeMappings pid
+  (_, conn) <- ExceptT $ first DeploymentConnectionFailed <$> mappingConnection cfg pid mapping
+  ExceptT $ first DeploymentProviderFailed <$> Git.listDeployments conn (Git.RepoRef mapping.owner mapping.repo mapping.ref) environment
+
+
+mappingConnection :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMapping -> Eff es (Either SnippetError (GitSync.GitHubCredential, Git.GitConn))
+mappingConnection cfg pid mapping = runExceptT do
+  cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid mapping.credentialId
+  creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
+  let located = mapping.owner <> "/" <> mapping.repo
+  token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
+  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  pure (cred, conn)
 
 
 getCodeMappings :: DB es => ProjectId -> Eff es [CodeMapping]
@@ -332,10 +384,7 @@ fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
   (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
       located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref
-  cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid cm.credentialId
-  creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
-  token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  (cred, conn) <- ExceptT $ mappingConnection cfg pid cm
   let blobKey = (cm.owner, cm.repo, repoRef.ref, repoPath)
   cached <- liftIO $ Cache.lookup blobCache blobKey
   blob <- case cached of

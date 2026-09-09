@@ -297,7 +297,18 @@ processAIQuery sourceConfig useTf access pid userQuery conversationId model apiK
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.conversationId = conversationId, AI.useTimefusion = useTf, AI.access = access, AI.sourceConfig = sourceConfig}
+  let defaults = AI.defaultAgenticConfig pid
+      config =
+        defaults
+          { AI.facetContext = facetSummaryM
+          , AI.conversationId = conversationId
+          , AI.useTimefusion = useTf
+          , AI.access = access
+          , AI.sourceConfig = sourceConfig
+          , AI.maxIterations = case access of
+              AI.SlackInvestigationAccess{} -> 12
+              _ -> defaults.maxIterations
+          }
   rawResult <- AI.runAgenticChatWithHistory config userQuery model apiKey
   whenRight_ rawResult \answer -> whenJust conversationId \convId -> do
     AI.requireAgentAccess access pid

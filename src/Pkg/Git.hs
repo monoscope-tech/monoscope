@@ -43,6 +43,13 @@ module Pkg.Git (
   listRepos,
   defaultBranchOf,
   computeContentSha,
+  Deployment (..),
+  DeploymentStatus (..),
+  DeploymentState (..),
+  DeploymentEvidence (..),
+  DeploymentReadError (..),
+  EvidencePage (..),
+  listDeployments,
 
   -- * Webhooks
   WebhookReq (..),
@@ -60,9 +67,11 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
@@ -71,7 +80,7 @@ import Network.HTTP.Types.Status (statusCode)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import Network.Wreq (FormParam (..))
-import Pkg.DeriveUtils (enumFromField, refineText)
+import Pkg.DeriveUtils (WrappedEnumSC (..), enumFromField, refineText)
 import Relude
 import Relude.Extra.Bifunctor (firstF)
 
@@ -511,6 +520,76 @@ pagedJson conn size items dec mkUrl = paginate size \p -> fmap (mapMaybe dec . i
 ----------------------------------------------------------------------
 -- Operations
 ----------------------------------------------------------------------
+
+data Deployment = Deployment
+  { id :: Int64
+  , revision :: Text
+  , ref :: Text
+  , environment :: Text
+  , createdAt :: UTCTime
+  , description :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "revision" "sha", DAE.CamelToSnake]] Deployment
+
+
+data DeploymentState = DSPending | DSQueued | DSInProgress | DSSuccess | DSFailure | DSError | DSInactive
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "DS" DeploymentState
+
+
+data DeploymentStatus = DeploymentStatus
+  { state :: DeploymentState
+  , createdAt :: UTCTime
+  , description :: Maybe Text
+  , logUrl :: Maybe Text
+  , environmentUrl :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DeploymentStatus
+
+
+-- | A bounded evidence read. Reaching the limit does not prove more rows exist,
+-- and callers must not treat a capped page as a complete deployment history.
+data EvidencePage a = EvidencePage {entries :: [a], limitReached :: Bool}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data DeploymentReadError
+  = UnsupportedDeploymentHost GitHost
+  | DeploymentRequestFailed Text
+  | InvalidDeploymentResponse Text
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data DeploymentEvidence = DeploymentEvidence
+  { requestUrl :: Text
+  , deployment :: Deployment
+  , statuses :: Either DeploymentReadError (EvidencePage DeploymentStatus)
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+getJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)
+getJson conn endpoint = fmap (first DeploymentRequestFailed >=> first (InvalidDeploymentResponse . toText) . AE.eitherDecode) $ get_ conn endpoint
+
+
+-- | GitHub deployment requests plus reported execution states. A status lookup
+-- failure stays explicit for its deployment; it is not an empty successful history.
+listDeployments :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Maybe Text -> Eff es (Either DeploymentReadError (EvidencePage DeploymentEvidence))
+listDeployments conn repo environment
+  | conn.host /= GitHub = pure $ Left $ UnsupportedDeploymentHost conn.host
+  | otherwise = runExceptT do
+      deployments <- ExceptT $ getJson @[Deployment] conn $ repoUrl conn repo ("/deployments?per_page=5" <> foldMap (("&environment=" <>) . enc) environment)
+      evidence <- lift $ forM (take 5 deployments) \deployment -> do
+        let requestUrl = repoUrl conn repo ("/deployments/" <> show deployment.id)
+        statuses <- getJson @[DeploymentStatus] conn (requestUrl <> "/statuses?per_page=10")
+        pure $ DeploymentEvidence requestUrl deployment $ (\rows -> EvidencePage (take 10 rows) (length rows >= 10)) <$> statuses
+      pure $ EvidencePage evidence (length deployments >= 5)
+
 
 -- | The resolved head commit of @r.ref@ — the revision marker every host can report.
 --

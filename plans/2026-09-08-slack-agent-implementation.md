@@ -1204,3 +1204,56 @@ published for linux-aarch64/bun.ghc.minio.node.pg. Log:
 /tmp/monoscope-slack-agent/incident-context-ci-signoff.log. Frontend/UI results
 were reused. Integration-tests, weeder, hlint, and e2e still require GitHub. These
 results precede the repository-source increment and do not attest its code.
+
+
+## Repository deployment evidence
+
+The preceding source-reader commit e7b8c8b85 passed
+`make ci-signoff CHECKS="build doctests unit-tests"`: build, 1,543 doctests,
+and 308 unit examples. The command completed successfully and published passing
+attestations. Frontend, CLI, and UI results were reused. Integration-tests,
+weeder, hlint, and e2e remain outstanding. Log:
+`/tmp/monoscope-slack-agent/source-context-ci-signoff.log`.
+These results cover the source reader, not this deployment increment.
+
+Slack investigations now discover project-linked repository mapping IDs and read
+GitHub deployment requests with their reported execution statuses. Reads use the
+existing project-scoped credential flow. Both mapping and credential ownership
+are checked; model arguments cannot select an arbitrary repository or URL.
+Status endpoints are constructed from the authorized connection, repository, and
+deployment ID, never followed from a provider-supplied URL.
+
+Requests and execution reports remain separate derived records with timestamps.
+Listings retain at most five deployment requests and ten statuses per request,
+with an explicit limitReached flag. Reaching a limit does not prove that more
+records exist, and does not establish complete history. Missing mappings,
+credential failures, unsupported hosts, request errors, and invalid response
+schemas retain typed error constructors with derived JSON. Individual status
+failures do not erase otherwise readable deployment requests.
+
+Slack investigations have a twelve-round tool budget so repository discovery,
+deployment lookup, source comparison, and additional evidence checks can complete.
+Other entry points retain their existing budget. The new controlled-model workflow
+uses six evidence rounds, comparing two commit-specific source reads and querying
+production and staging separately. This checks tool composition and budget
+availability; it is not an evaluation of model diagnosis accuracy.
+
+Native CodeContext validation passed 11 examples with zero failures in 6.0154
+seconds using `DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000
+TEST_MATCH=CodeContext make live-test-dev` in the isolated worktree. Coverage
+includes cross-project denial without HTTP, an untrusted status URL, deployment
+and status caps, and a malformed status response retained as failure. Log:
+`/tmp/monoscope-slack-agent/deployment-context-reader-complete.log`.
+Native Workflows validation with the same environment and TEST_MATCH=Workflows
+passed 35 examples, zero failures, in 16.8516 seconds. Log:
+`/tmp/monoscope-slack-agent/deployment-context-workflows-complete.log`.
+All three requested review skills ran three passes and findings were fixed.
+CI signoff for this increment remains pending.
+HLint 3.3.6 rejects MultilineStrings; Weeder exits 228 with repository findings.
+Neither is reported as passing. Logs are deployment-context-hlint.log and
+deployment-context-weeder.log under /tmp/monoscope-slack-agent/.
+
+No repository write, Slack publication, or deployment occurred. Representative
+investigation evaluation, progress detail, durable model/tool checkpoints and
+response delivery, tested action drafts, proactive policy, and live acceptance
+remain unfinished.

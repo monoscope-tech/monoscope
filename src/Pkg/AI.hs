@@ -86,7 +86,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude
@@ -712,7 +712,14 @@ agenticSetup config userQuery model =
                 Just $ V.fromList $ allToolDefs <> case config.access of
                   SlackInvestigationAccess{} ->
                     [mkToolDef "get_incident_context" "Get the stored incident state, onset and latest notification, evidence links, and current monitor query for this Slack thread. No arguments; project and thread scope are fixed by authorization." []]
-                      <> [mkToolDef "get_code_context" "Read source around a stack-frame line from a project-linked repository at an explicit commit hash. Use a revision observed in telemetry or supplied by the engineer; never invent one." [("path", "string", "Stack-frame file path"), ("revision", "string", "Required full 40- or 64-character hexadecimal commit hash"), ("line", "integer", "Positive line number, default 1"), ("service", "string", "Service name for selecting its repository mapping")] | isJust config.sourceConfig]
+                      <> [ tool
+                         | isJust config.sourceConfig
+                         , tool <-
+                             [ mkToolDef "get_code_context" "Read source around a stack-frame line from a project-linked repository at an explicit commit hash. Use a revision observed in telemetry or supplied by the engineer; never invent one." [("path", "string", "Stack-frame file path"), ("revision", "string", "Required full 40- or 64-character hexadecimal commit hash"), ("line", "integer", "Positive line number, default 1"), ("service", "string", "Service name for selecting its repository mapping")]
+                             , mkToolDef "get_linked_repositories" "List project-linked repository mapping IDs for a service. No credentials are returned; limitReached means the listing may be incomplete." [("service", "string", "Service name to match, including catch-all repository mappings")]
+                             , mkToolDef "get_deployments" "Read up to five GitHub deployment requests and up to ten reported statuses per request from a linked repository. Request creation does not prove successful deployment. Preserve status errors and limitReached; neither a failed nor a capped listing proves no deployment occurred." [("mapping_id", "string", "Repository mapping ID from get_linked_repositories"), ("environment", "string", "Optional exact deployment environment")]
+                             ]
+                         ]
                   _ -> []
             , OpenAIV1.messages = V.empty
             }
@@ -822,6 +829,18 @@ executeToolCall config tc = do
           maybe "No incident is bound to this Slack thread." (decodeUtf8 . AE.encode)
             <$> Incidents.slackInvestigationContext config.projectId run.teamId run.channelId run.threadTs
         _ -> pure "Incident context requires an authorized Slack investigation."
+    "get_linked_repositories" ->
+      noRaw <$> case config.access of
+        SlackInvestigationAccess{} -> decodeUtf8 . AE.encode <$> CodeContext.getLinkedRepositories config.projectId (getTextArg "service" args)
+        _ -> pure "Repository evidence requires an authorized Slack investigation."
+    "get_deployments" ->
+      noRaw <$> case (config.access, config.sourceConfig) of
+        (SlackInvestigationAccess{}, Just cfg) -> withArg "get_deployments" "mapping_id" args \mapping ->
+          maybe
+            (pure "Invalid repository mapping ID.")
+            (\mappingId -> decodeUtf8 . AE.encode <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
+            (idFromText mapping)
+        _ -> pure "Deployment evidence is unavailable for this conversation."
     "get_code_context" -> noRaw <$> executeGetCodeContext config args
     "get_field_values" -> noRaw <$> executeGetFieldValues config args
     "get_services" -> noRaw <$> executeGetServices config
