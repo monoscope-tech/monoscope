@@ -1,4 +1,4 @@
-module Pkg.Mail (monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -312,7 +312,7 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
       Monitors.MSNormal
         | monitor.currentStatus == Monitors.MSWarning -> fromMaybe monitor.alertThreshold (monitor.warningRecoveryThreshold <|> monitor.warningThreshold)
         | otherwise -> fromMaybe monitor.alertThreshold monitor.alertRecoveryThreshold
-    title = T.replace ">" "&gt;" $ T.replace "<" "&lt;" $ T.replace "&" "&amp;" $ T.take 160 monitor.alertConfig.title
+    title = slackEscape $ T.take 160 monitor.alertConfig.title
     at = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
     started = maybe observedAt (.startedAt) episode
     detail = "Value: " <> show value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> show threshold <> " · Observed " <> at observedAt
@@ -328,6 +328,29 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
     tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.String identifier) block
     tagged _ block = block
     message blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
+
+
+resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Incidents.SlackPayload
+resolvedErrorMessage err actor now issueUrl =
+  Incidents.SlackPayload
+    $ KEM.fromList
+      [ "text" AE..= text
+      , "blocks" AE..= ([slackSection text, slackContext ["<" <> issueUrl <> "|Open incident>"]] :: [AE.Value])
+      ]
+  where
+    name = T.strip $ actor.firstName <> " " <> actor.lastName
+    text =
+      "RESOLVED · "
+        <> slackEscape (T.take 160 err.errorType)
+        <> "\nResolved by "
+        <> slackEscape (if T.null name then actor.id.toText else name)
+        <> " · "
+        <> toText (formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now)
+        <> "\nMeasured recovery has not been verified."
+
+
+slackEscape :: Text -> Text
+slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"
 
 
 -- | Updating status must not replace the original onset and chart snapshot.

@@ -731,3 +731,65 @@ signed-request/dataset/options/PNG acceptance fixtures remain unfinished.
 Monitor charts already use recorded evaluation readings and preserve gaps.
 The full plan and live Slack acceptance remain open. No deployment or branch
 push occurred; only passing CI attestation refs were published.
+
+
+## Manual error resolution transaction (2026-09-09)
+
+The error-resolution handler now uses one transaction for pattern state, operator
+attribution, activity, and delivery intent for existing issue incident episodes.
+The model locks the error and membership rows, checks current project/account/
+membership status and edit-or-assignee permission, then records resolution for
+active runtime-error issue episodes of the same project and error hash. Stale
+incident transitions return an explicit conflict and roll back. An outbox SQL
+failure also rolls back the pattern and activity changes. Repeated and concurrent
+resolution calls preserve the original actor and do not enqueue duplicate updates.
+
+Migration 0165 adds nullable `resolved_by` to error patterns and extends the
+existing activity trigger. Manual resolution records `resolved` with the operator;
+automatic resolution records `auto_resolved` with the current activity clock.
+The handler no longer inserts a separate activity row. Recurrence and automatic
+state transitions clear the manual actor; unchanged-state updates are no-ops,
+so a redundant automatic call cannot erase manual attribution. The error record
+retains derived row and JSON codecs, including its aggregated read path.
+
+Resolution messages identify the operator and time and state that measured
+recovery has not been verified. Existing roots receive one threaded reply and
+one root update per destination through the existing worker. Snapshot retention
+remains in the worker. Resolving a legacy error without an episode does not
+create a channel post. No external request occurs in the resolution transaction.
+
+The regression first failed with a resolved error but an active episode. It now
+covers two channel roots, permission denial, an assigned viewer, revoked
+membership, project isolation, stale transitions, outbox rollback, concurrent
+clicks, activity attribution, unchanged-state calls, aggregated row decoding,
+recurrence, automatic activity timestamps, and legacy errors without roots.
+
+Validation on the final sources and migration:
+
+```sh
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=Incident make live-test-dev
+DB_HOST=127.0.0.1 MINIO_ENDPOINT=http://127.0.0.1:19000 TEST_MATCH=ErrorPatterns make live-test-dev
+fourmolu --mode check src/Models/Apis/ErrorPatterns.hs src/Models/Apis/Incidents.hs src/Pages/Anomalies.hs src/Pkg/Mail.hs test/integration/IncidentDeliverySpec.hs
+```
+
+The native runs passed 12 and 30 examples respectively, with zero failures.
+Fourmolu and scoped `git diff --check` passed; Hpack includes migration 0165.
+Logs are `/tmp/monoscope-slack-agent/manual-resolution-final-incident-tests.log`
+and `/tmp/monoscope-slack-agent/manual-resolution-final-error-pattern-tests.log`.
+The final error-pattern watcher remains available for subsequent work.
+
+Scoped HLint could not run: installed HLint 3.3.6 rejects `MultilineStrings`.
+`weeder` exited nonzero and reported 141 lines of repository findings; none name
+the new resolution helpers. These checks are not passing attestations. Their
+logs are `/tmp/monoscope-slack-agent/manual-resolution-hlint.log` and
+`/tmp/monoscope-slack-agent/manual-resolution-weeder.log`. All three requested
+skills ran at least three times; the review report records the fixes.
+
+The earlier build/doctest/unit signoff predates this runtime change. Current-tree
+CI signoff is required before push; full real-TimeFusion integration remains
+unavailable on this ARM laptop. Runtime-error alert creation and reminders still
+use legacy notification delivery and must be connected to the outbox. The new
+regression explicitly seeds an issue episode and does not prove that upstream
+integration. Missing-telemetry semantics, chart acceptance, live Slack acceptance,
+and the remaining releases stay open. No push, deployment, or live Slack change
+occurred.

@@ -69,6 +69,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
@@ -91,6 +92,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.ErrorFingerprint qualified as EF
+import Pkg.Mail qualified as Mail
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
@@ -99,7 +101,7 @@ import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -1432,13 +1434,22 @@ resolveErrorPostH pid errUuid = do
           addErrorToast "You do not have permission to resolve this error" Nothing
           addRespHeaders $ errorResolveAction pid err.id err.state False
       | otherwise -> do
-          when (err.state /= ErrorPatterns.ESResolved) do
-            now <- Time.currentTime
-            void $ ErrorPatterns.updateErrorPatternState err.id ErrorPatterns.ESResolved now
-            issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
-            whenJust issueM \issue -> Issues.logIssueActivity issue.id Issues.IEResolved (Just sess.user.id) Nothing
-          addSuccessToast "Error resolved" Nothing
-          addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
+          now <- Time.currentTime
+          ctx <- ask @AuthContext
+          let message iid = Mail.resolvedErrorMessage err sess.user now (hostPath ctx.env.hostUrl $ "p/" <> pid.toText <> "/issues/" <> iid.toText)
+              resolved = do
+                addSuccessToast "Error resolved" Nothing
+                addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
+          Incidents.resolveErrorIncident pid err.id sess.user.id now message >>= \case
+            Incidents.ErrorResolutionDenied -> do
+              addErrorToast "You do not have permission to resolve this error" Nothing
+              addRespHeaders $ errorResolveAction pid err.id err.state False
+            Incidents.ErrorResolutionConflict conflict -> do
+              Log.logAttention "Error resolution could not commit incident updates" (pid, err.id, show @Text conflict)
+              addErrorToast "The incident changed. Refresh and try resolving again." Nothing
+              addRespHeaders $ errorResolveAction pid err.id err.state False
+            Incidents.ErrorResolved -> resolved
+            Incidents.ErrorAlreadyResolved -> resolved
 
 
 errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))

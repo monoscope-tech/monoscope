@@ -17,6 +17,8 @@ module Models.Apis.Incidents (
   recordIncidentEventTx,
   getEpisode,
   latestEpisodeTx,
+  ErrorResolution (..),
+  resolveErrorIncident,
   SlackTimestamp,
   slackTimestamp,
   slackTimestampText,
@@ -42,6 +44,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
@@ -175,6 +178,56 @@ latestEpisodeTx pid source =
               <> [HI.sql|WHERE project_id = #{pid} AND source_kind = #{sourceKind} AND source_id = #{sourceId}
           ORDER BY started_at DESC, last_event_at DESC LIMIT 1|]
           )
+
+
+data ErrorResolution = ErrorResolved | ErrorAlreadyResolved | ErrorResolutionDenied | ErrorResolutionConflict RecordResult
+  deriving stock (Eq, Show)
+
+
+-- | Commit operator attribution, activity, and updates to existing incident threads
+-- together. Legacy errors without roots still resolve without creating a channel post.
+resolveErrorIncident :: DB es => Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> Projects.UserId -> UTCTime -> (Issues.IssueId -> SlackPayload) -> Eff es ErrorResolution
+resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  matched <-
+    queryTx @[(Text, ErrorPatterns.ErrorState)]
+      [HI.sql|SELECT pattern.hash, pattern.state FROM apis.error_patterns pattern
+      JOIN projects.project_members member ON member.project_id = pattern.project_id AND member.user_id = #{actor}
+      JOIN users.users account ON account.id = member.user_id
+      JOIN projects.projects project ON project.id = member.project_id
+      WHERE pattern.id = #{errorId} AND pattern.project_id = #{pid}
+        AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
+        AND project.active AND project.deleted_at IS NULL
+        AND (member.permission IN ('edit', 'admin') OR pattern.assignee_id = #{actor})
+      FOR UPDATE OF pattern, member|]
+  case listToMaybe matched of
+    Nothing -> pure ErrorResolutionDenied
+    Just (_, ErrorPatterns.ESResolved) -> pure ErrorAlreadyResolved
+    Just (hash, _) -> do
+      executeTx
+        [HI.sql|UPDATE apis.error_patterns SET state = 'resolved', resolved_at = #{now}, resolved_by = #{actor}, updated_at = #{now}
+        WHERE id = #{errorId} AND project_id = #{pid}|]
+      sources <-
+        queryTx @[Issues.IssueId]
+          [HI.sql|SELECT DISTINCT issue.id FROM apis.issues issue
+          JOIN apis.incident_episodes episode ON episode.source_kind = 'issue' AND episode.source_id = issue.id AND episode.project_id = issue.project_id
+          WHERE issue.project_id = #{pid} AND issue.target_hash = #{hash} AND issue.issue_type = 'runtime_exception' AND episode.phase = 'active'
+          ORDER BY issue.id|]
+      results <- forM sources \iid ->
+        recordIncidentEventTx
+          IncidentUpdate
+            { projectId = pid
+            , source = IssueIncident iid
+            , observedAt = now
+            , change = IncidentResolved actor
+            , delivery = PublishIncident
+            , issueId = Just iid
+            , rootPayload = message iid
+            , replyPayload = message iid
+            , destinations = []
+            }
+      case find (\case Recorded{} -> False; AlreadyRecorded{} -> False; NoOpenEpisode -> False; OlderThanCurrentEpisode -> True; UnknownIncidentSource -> True; IncidentIssueMismatch -> True) results of
+        Nothing -> pure ErrorResolved
+        Just conflict -> Tx.condemn $> ErrorResolutionConflict conflict
 
 
 recordIncidentEvent :: DB es => IncidentUpdate -> Eff es RecordResult

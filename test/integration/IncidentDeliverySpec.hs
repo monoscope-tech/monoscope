@@ -4,6 +4,7 @@ import BackgroundJobs (evaluateQueryMonitorValue, runSlackIncidentDeliveries)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -12,12 +13,18 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
+import Models.Apis.ErrorPatterns qualified as Errors
 import Models.Apis.Incidents qualified as I
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.Projects qualified as Projects
+import Pages.Anomalies qualified as Anomalies
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant qualified
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
 import UnliftIO.Async (concurrently)
@@ -26,6 +33,96 @@ import UnliftIO.Async (concurrently)
 spec :: Spec
 spec = around withTestResources do
   describe "Incident delivery" do
+    it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
+      update <- setup tr
+      setupSlackData tr testPid "T1"
+      let sample = def{Errors.when = frozenTime, Errors.hash = "manual-resolution", Errors.errorType = "CheckoutError", Errors.message = "payment declined"}
+          actor = (Servant.getResponse tr.trSessAndHeader).user
+      void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample] frozenTime
+      Just err <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid sample.hash
+      issue <- runTestBgNoReset tr do
+        created <- Issues.createNewErrorIssue testPid err
+        Issues.insertIssue created
+        pure created
+      I.Recorded episode _ <- runTestBgNoReset tr $ I.recordIncidentEvent update{I.source = I.IssueIncident issue.id, I.issueId = Just issue.id}
+      void $ captureNotifs tr runSlackIncidentDeliveries
+      advanceMinutes tr 1
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      Just denied <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
+      denied.state `shouldBe` Errors.ESNew
+      let resolve pid = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id (addUTCTime 60 frozenTime) (const update.rootPayload)
+      resolve testPid `shouldReturn` I.ErrorResolutionDenied
+      resolve (UUIDId $ UUID.fromWords 0 0 0 999) `shouldReturn` I.ErrorResolutionDenied
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET assignee_id = ? WHERE id = ?|] (actor.id, err.id)
+      runTestBgNoReset tr (I.resolveErrorIncident testPid err.id actor.id (addUTCTime (-1) frozenTime) (const update.rootPayload))
+        `shouldReturn` I.ErrorResolutionConflict I.OlderThanCurrentEpisode
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET active = false WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      resolve testPid `shouldReturn` I.ErrorResolutionDenied
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+        void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|]
+      testServant tr (Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
+      Just rolledBack <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
+      (rolledBack.state, rolledBack.resolvedAt, rolledBack.resolvedBy) `shouldBe` (Errors.ESNew, Nothing, Nothing)
+      activityBefore <- runTestBgNoReset tr $ Issues.selectIssueActivity testPid issue.id
+      activityBefore `shouldSatisfy` all (\a -> a.event /= Issues.IEResolved && a.event /= Issues.IEAutoResolved)
+      void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|]
+      void
+        $ concurrently
+          (testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId)
+      fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      events <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
+      events `shouldBe` [("resolved" :: Text, Just actor.id)]
+      activity <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
+      activity `shouldBe` [("resolved" :: Text, Just actor.id)]
+      runTestBgNoReset tr (Errors.updateErrorPatternState err.id Errors.ESResolved (addUTCTime 61 frozenTime)) `shouldReturn` 0
+      Just resolved <- runTestBgNoReset tr $ Errors.getErrorPatternLByHash testPid sample.hash (addUTCTime 61 frozenTime)
+      resolved.base.resolvedBy `shouldBe` Just actor.id
+      (replies, _) <- captureNotifs tr runSlackIncidentDeliveries
+      (edits, _) <- captureNotifs tr runSlackIncidentDeliveries
+      let messages = [sd | Notify.SlackNotification sd <- replies <> edits]
+      length messages `shouldBe` 4
+      sort [(sd.channelId, sd.threadTs) | sd <- messages, isJust sd.threadTs]
+        `shouldBe` sort [(sd.channelId, Just ts) | sd <- messages, AE.Object obj <- [sd.payload], Just (AE.String ts) <- [KM.lookup "ts" obj]]
+      for_ messages \sd -> do
+        let body = decodeUtf8 @Text $ toStrict $ AE.encode sd.payload
+        body `shouldSatisfy` T.isInfixOf "RESOLVED"
+        body `shouldSatisfy` T.isInfixOf actor.firstName
+        body `shouldSatisfy` T.isInfixOf "Measured recovery has not been verified"
+        body `shouldSatisfy` T.isInfixOf issue.id.toText
+      (again, _) <- captureNotifs tr runSlackIncidentDeliveries
+      again `shouldBe` []
+      advanceMinutes tr 1
+      now <- getTestTime tr.trTestClock
+      void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample{Errors.when = now}] now
+      Just regressed <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
+      (regressed.state, regressed.resolvedBy) `shouldBe` (Errors.ESRegressed, Nothing)
+      I.Recorded recurring _ <- runTestBgNoReset tr $ I.recordIncidentEvent update{I.source = I.IssueIncident issue.id, I.issueId = Just issue.id, I.observedAt = now}
+      recurring.id `shouldNotBe` episode.id
+      void $ runTestBgNoReset tr $ Errors.updateErrorPatternState err.id Errors.ESResolved now
+      activityAfter <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved') ORDER BY created_at|] (PGS.Only issue.id)
+      activityAfter `shouldBe` [("resolved" :: Text, Just actor.id), ("auto_resolved", Nothing)]
+      void $ runTestBgNoReset tr $ Errors.updateErrorPatternState err.id Errors.ESOngoing now
+      advanceMinutes tr 1
+      autoAt <- getTestTime tr.trTestClock
+      -- A SQL state transition can retain the previous resolved_at; activity must use this transition's clock.
+      void $ runHasqlEffect tr $ EHasql.interpExecute [HI.sql|UPDATE apis.error_patterns SET state = 'resolved' WHERE id = #{err.id}|]
+      autoTimes <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_at FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'auto_resolved' ORDER BY created_at DESC LIMIT 1|] (PGS.Only issue.id)
+      autoTimes `shouldBe` [PGS.Only autoAt]
+      let legacy = sample{Errors.hash = "legacy-resolution"} :: Errors.ATError
+      void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [legacy] now
+      Just legacyErr <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid legacy.hash
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
+      let deliveryCount = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] :: IO [PGS.Only Int64]
+      beforeLegacy <- deliveryCount
+      void $ testServant tr $ Anomalies.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
+      deliveryCount `shouldReturn` beforeLegacy
+      Just legacyResolved <- runTestBgNoReset tr $ Errors.getErrorPatternById legacyErr.id
+      (legacyResolved.state, legacyResolved.resolvedBy) `shouldBe` (Errors.ESResolved, Just actor.id)
+
     it "keeps warning, escalation, and recovery in two monitor threads and preserves the onset snapshot" \tr -> do
       update <- setup tr
       I.MonitorIncident mid <- pure update.source

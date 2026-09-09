@@ -119,6 +119,7 @@ data ErrorPattern = ErrorPattern
   , errorCategory :: Maybe Text
   , parentHash :: Maybe Text
   , isFramework :: Bool
+  , resolvedBy :: Maybe Projects.UserId
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
@@ -272,7 +273,8 @@ updateOccurrenceCountsBatch pids now =
         resolved_at = CASE
           WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN #{now}
           ELSE resolved_at
-        END
+        END,
+        resolved_by = CASE WHEN state != 'resolved' THEN NULL ELSE resolved_by END
       WHERE project_id = ANY(#{pids})
         AND (state != 'resolved' OR occurrences_24h > 0)
         -- Skip rows where every SET clause would be a no-op: counters all zero
@@ -294,8 +296,9 @@ updateErrorPatternState eid newState now =
         UPDATE apis.error_patterns SET
           state = #{newState},
           resolved_at = CASE WHEN #{newState}::text = 'resolved' THEN #{now}::timestamptz ELSE resolved_at END,
+          resolved_by = NULL,
           updated_at = #{now}
-        WHERE id = #{eid}
+        WHERE id = #{eid} AND state IS DISTINCT FROM #{newState}::text
       |]
 
 
@@ -523,6 +526,7 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
             quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
+            resolved_by = NULL,
             regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN #{now} ELSE apis.error_patterns.regressed_at END,
             regression_count = CASE WHEN apis.error_patterns.state = 'resolved'
                                     THEN apis.error_patterns.regression_count + 1

@@ -311,3 +311,28 @@ worker locking/dispatch, link creation/delivery, and personal-link regressions.
 | 1 | Derive the App Home record; reuse signed-receipt link creation and the existing link text/transport. | Handle Messages-tab visits explicitly without converting them into investigation messages. SQL only permits App Home link requests for the Messages tab. | Use the native tab event and existing private link flow; no custom browser behavior. |
 | 2 | Generalize the existing pinned-connection lock for onboarding while preserving investigation lock keys. | Serialize opens by workspace/conversation/user. Add explicit delivery time instead of treating receipt completion as proof of delivery; only an acknowledged send can suppress a repeat prompt. | Keep the full opening/retry/expiry/link-consumption flow in Hspec. |
 | 3 | Remove the now-unused workspace lookup wrapper and redundant test import. All new codecs remain derived, with no suppression. | Verify rejection retry, replay, repeat-open suppression, another user's independent prompt, expiry renewal, successful personal linking, and zero AI conversations. A missing installation fails instead of marking an undelivered prompt complete. | No JS/CSS/Lucid changes or styling indirection; other tabs deliberately retain their event without onboarding. |
+
+
+## Manual error resolution and incident delivery
+
+All three requested skills ran in three passes over the resolution model,
+handler, activity trigger, error-state consumers, message builder, and regression.
+
+| Pass | hs-distill | hs-evasion-review | hs-lob-review |
+| --- | --- | --- | --- |
+| 1 | Reuse the incident transaction/outbox, Slack blocks, and derived error-pattern codecs. Add the actor to the existing record and schema. | The regression reproduced a resolved error with an active incident episode. Commit state, operator activity, and existing-root delivery intent together; roll back on outbox failure. | Keep the existing HTMX resolution action and server response; Slack receives native message blocks. No new client behavior. |
+| 2 | Share Slack escaping and use the existing `hostPath` helper. Remove the handler's separate activity insert. | Distinguish manual and automatic resolution with an explicit actor column. Check current membership/account/project and edit-or-assignee permission in the transaction; lock the pattern and membership row. Clear the actor on recurrence and automatic transitions. | Keep complex handler/database/concurrency/notification assertions in Hspec. Styling remains inline and unchanged. |
+| 3 | Re-read the final diff and the aggregated error-pattern row decoder. No handwritten instances or suppressions were added. | Preserve manual attribution on unchanged-state calls; preserve the automatic activity clock when a previous `resolved_at` remains. Test stale transitions, revoked membership, rollback, concurrent clicks, legacy errors, recurrence, and derived row decoding. Existing roots receive replies/updates; resolving a legacy error does not invent a root. | Recheck all response branches and unchanged resolution controls: no JS/hyperscript escalation, hoisted classes, or misplaced simple pure assertions. |
+
+| File | Reuse / combinators | Derives | Consolidation / bloat |
+| --- | --- | --- | --- |
+| `src/Models/Apis/Incidents.hs` | Existing transaction helpers, incident event recorder, `forM` and `find`. | Result uses stock `Eq`/`Show`; IDs retain domain types. | No second outbox or transport. |
+| `src/Models/Apis/ErrorPatterns.hs` | Existing state/ingestion/decay queries. | Extended record retains derived JSON and row codecs. | Unchanged-state writes become no-ops. |
+| `src/Pages/Anomalies.hs` | Existing route, authorization, toast/rendering, and URL helper. | No instances added. | Remove the separately committed state/activity operations. |
+| `src/Pkg/Mail.hs` | Existing Slack section/context builders and shared escaping. | Existing derived `SlackPayload`. | One payload serves both resolution reply and root update; existing worker retains the original snapshot. |
+| `test/integration/IncidentDeliverySpec.hs` | Existing fixture, handler, clock, and notification interpreter. | No fixture codec instances. | One multi-step lifecycle regression exercises the relevant boundaries. |
+
+No further LoC reduction is proposed. Remaining plan work includes connecting
+runtime-error alert creation/reminders to this outbox, truthful missing-telemetry
+handling, and live Slack acceptance. The model regression seeds an issue episode;
+it does not claim the legacy runtime-error notification path already creates it.

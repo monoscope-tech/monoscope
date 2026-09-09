@@ -193,6 +193,7 @@ extra-source-files:
     static/migrations/0162_slack_granted_scopes.sql
     static/migrations/0163_slack_native_context.sql
     static/migrations/0164_slack_link_delivery.sql
+    static/migrations/0165_error_resolution_actor.sql
 
 source-repository head
   type: git
