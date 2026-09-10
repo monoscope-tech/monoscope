@@ -447,10 +447,49 @@ ci-selftest:
 # Build and push the production image for HEAD yourself, so CI's build-image
 # job finds it already in the registry and skips ~4 minutes. Requires a clean
 # tree (the image must match the SHA it is tagged with) and `docker login ghcr.io`.
-# Prod is amd64; on Apple Silicon this is Rosetta-emulated, not QEMU.
+# Prod is amd64: with a native builder (`make builder-setup`) this is a real
+# build; without one it is emulated on Apple Silicon and much slower.
 deploy-image:
 	./scripts/ci/ci.sh image $(SHA)
 
-.PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image
+# The whole deploy, locally: checks → image → push → CapRover. CI then has
+# nothing left to do but confirm it, because every check is attested and the
+# image and the deploy are already done.
+#
+#   make ship                    # everything
+#   make ship CHECKS="build doctests unit-tests cli-tests"
+ship:
+	./scripts/ci/ci.sh ship $(CHECKS)
+
+# Deploy an image that is already built and pushed (e.g. a rollback to an older
+# SHA, which is in the registry by construction).
+deploy-app:
+	./scripts/ci/ci.sh deploy $(SHA)
+
+deploy-status:
+	./scripts/ci/ci.sh deploy-status
+
+# One-time, per machine: a native amd64 buildx builder over SSH, so the image
+# build is not emulated. BUILD_HOST is any amd64 docker host you can ssh to.
+#   BUILD_HOST=ubuntu@build.example.com make builder-setup
+builder-setup:
+	./scripts/ci/ci.sh builder setup
+
+builder-status:
+	./scripts/ci/ci.sh builder status
+
+# Build TimeFusion for THIS machine's architecture. The published image is amd64
+# only and segfaults under emulation on Apple Silicon, which is the single reason
+# `integration-tests` could not run locally. Once built, `make ci`/`make ship`
+# find it on their own. TF_REPO points at your timefusion checkout.
+TF_REPO ?= ../timefusion
+tf-image:
+	docker build --platform linux/$(shell uname -m | sed 's/arm64/arm64/;s/x86_64/amd64/') \
+		-t timefusion:local-$(shell uname -m) -f $(TF_REPO)/Dockerfile $(TF_REPO)
+
+builder-rm:
+	./scripts/ci/ci.sh builder rm
+
+.PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship deploy-app deploy-status builder-setup builder-status builder-rm tf-image
 
 .PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

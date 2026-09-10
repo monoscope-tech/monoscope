@@ -458,12 +458,32 @@ cmd_local() {
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   note "starting CI services…"
+  # An arm64 TimeFusion built here is the difference between `integration-tests`
+  # running locally and it being CI's job forever — the published image is amd64
+  # only and segfaults under emulation. Pick it up automatically: needing two
+  # exported variables to get the one check that cannot otherwise run is exactly
+  # the friction that sends people back to pushing and waiting.
+  if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$(uname -m)" = arm64 ] \
+     && docker image inspect "$TF_LOCAL_IMAGE" >/dev/null 2>&1; then
+    export MONOSCOPE_CI_TF_IMAGE="$TF_LOCAL_IMAGE" MONOSCOPE_CI_TF_PLATFORM=linux/arm64
+    note "using locally built $TF_LOCAL_IMAGE (native arm64)"
+  fi
   compose up -d --wait postgres minio
   # TimeFusion publishes no arm64 image, and the amd64 one dies under emulation on
   # Apple Silicon (SIGSEGV). Don't let that sink the rest of the sweep: warn, carry
   # on, and let cmd_run refuse the one check that needs it. docs/local-ci.md has
   # the build-it-locally recipe.
-  compose up -d --wait timefusion 2>/dev/null || note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
+  # Readiness is probed from the runner, not by a compose healthcheck: TF's image
+  # is distroless, so it cannot run one (see ci/compose.yml). Waiting on the port
+  # this way also proves the thing the check actually needs — pgwire accepting
+  # connections — rather than that the container is up.
+  if compose up -d timefusion >/dev/null 2>&1 \
+     && compose run --rm -T --no-deps runner bash -c \
+          'for _ in $(seq 1 60); do (exec 3<>/dev/tcp/timefusion/5432) 2>/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null 2>&1; then
+    note "TimeFusion is accepting pgwire connections"
+  else
+    note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
+  fi
   rm -f .ci/attest.tsv
   local rc=0
   # --rm so a failed run leaves nothing behind; the caches live in named volumes.
@@ -503,25 +523,194 @@ cmd_clean() { compose down -v --remove-orphans; }
 # be recorded at build time or it is unanswerable.
 IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
 
+# The image must be linux/amd64 because prod is. On an Apple Silicon laptop that
+# means emulation, and an emulated GHC build is the slowest thing in this repo —
+# slow enough that it pushes people back to "push it and let CI do it", which is
+# the habit this whole file exists to kill. A BUILDER naming a native amd64
+# buildx endpoint removes the emulation instead of tolerating it.
+#
+# `make builder-setup` creates one over SSH. Nothing here requires it: with no
+# builder configured this falls back to the local emulated build, which is what
+# it always did.
+BUILDER=${MONOSCOPE_BUILDER:-monoscope-amd64}
+
+# A TimeFusion image built for this machine's own architecture. `make tf-image`
+# produces it; cmd_local picks it up on its own.
+TF_LOCAL_IMAGE=${MONOSCOPE_TF_LOCAL_IMAGE:-timefusion:local-arm64}
+
 image_exists() { docker manifest inspect "$IMAGE:$1" >/dev/null 2>&1; }
 
+# The configured builder, but only if it actually exists and is usable — a stale
+# name in the environment must degrade to the default builder, not fail a deploy.
+builder_args() {
+  [ -n "$BUILDER" ] || return 0
+  docker buildx inspect "$BUILDER" >/dev/null 2>&1 || return 0
+  printf -- '--builder\n%s' "$BUILDER"
+}
+
 cmd_image() { # [sha] — build and push the production image for a commit
-  local sha date
-  sha=${1:-$(git rev-parse HEAD)}
+  local sha date args
+  sha=${1:-HEAD}
   [ -z "$(git status --porcelain)" ] || die "working tree is dirty; the image would not match $sha"
   git cat-file -e "$sha^{commit}" 2>/dev/null || die "unknown commit $sha"
+  # Tags are full SHAs. Taking a short one at face value would look up a tag that
+  # cannot exist and report the image as missing, which reads as "the build
+  # failed" rather than "you abbreviated".
+  sha=$(git rev-parse "$sha^{commit}")
   if image_exists "$sha"; then
     note "$IMAGE:$sha already exists — nothing to do (CI will skip its build)"
     return 0
   fi
   date=$(git show -s --format=%cI "$sha")
-  note "building $IMAGE:$sha for linux/amd64 (prod runs amd64; this is Rosetta-emulated on Apple Silicon)"
-  docker buildx build --platform linux/amd64 -f Dockerfile \
+  args=$(builder_args)
+  if [ -n "$args" ]; then
+    note "building $IMAGE:$sha on builder '$BUILDER' (native linux/amd64)"
+  else
+    note "building $IMAGE:$sha for linux/amd64 (no native builder — emulated here; see \`make builder-setup\`)"
+  fi
+  # :latest must move with :<sha>. docker-compose.yml (self-hosters) pulls
+  # :latest, and CI tags both — a local build that tagged only the sha would
+  # leave :latest pointing at whatever CI last published.
+  # Share CI's registry build cache, in both directions. Without it a laptop
+  # build starts cold every time — it re-does the dependency layers CI already
+  # published, which is most of the wall clock and the reason a local build felt
+  # slower than letting CI do it. Writing it back means a local build also warms
+  # the cache for CI and for everyone else.
+  # shellcheck disable=SC2086
+  docker buildx build ${args:+$args} --platform linux/amd64 -f Dockerfile \
     --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$date" \
-    --provenance=false --push -t "$IMAGE:$sha" .
+    --cache-from "type=registry,ref=$IMAGE:buildcache" \
+    --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+    --provenance=false --push -t "$IMAGE:$sha" -t "$IMAGE:latest" .
   # Record who built it BEFORE anyone can deploy it.
   publish_attestation image "$sha" docker linux-amd64
   note "pushed. Push commit $sha and CI will reuse this image instead of rebuilding."
+}
+
+# A native amd64 builder, so the image build is a build and not an emulation.
+# BUILD_HOST is any amd64 machine you can `ssh` to that runs Docker; the deploy
+# host itself is the obvious one, and it is also the machine that will pull the
+# image, so the push is a local-network hop.
+#
+# The buildkit container is capped, because that host is usually production:
+# BUILD_CPUS cores and BUILD_MEMORY are all it may take. Uncapped, a -j48 GHC
+# build competes with the thing it is being built to replace.
+cmd_builder() { # setup | rm | status
+  local host=${BUILD_HOST:-} cpus=${BUILD_CPUS:-12} mem=${BUILD_MEMORY:-48g} container
+  container="buildx_buildkit_${BUILDER}0"
+  case "${1:-status}" in
+    setup)
+      [ -n "$host" ] || die "BUILD_HOST is unset, e.g. BUILD_HOST=ubuntu@build.example.com make builder-setup"
+      ssh -o BatchMode=yes "$host" 'docker info >/dev/null' \
+        || die "cannot reach docker on $host over ssh"
+      case "$(ssh -o BatchMode=yes "$host" 'uname -m')" in
+        x86_64|amd64) ;;
+        *) die "$host is not amd64 — a builder there would emulate too" ;;
+      esac
+      docker buildx inspect "$BUILDER" >/dev/null 2>&1 && { note "builder '$BUILDER' already exists"; return 0; }
+      docker buildx create --name "$BUILDER" --driver docker-container \
+        --platform linux/amd64 --driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=-1 "ssh://$host" >/dev/null
+      docker buildx inspect --bootstrap "$BUILDER" >/dev/null
+      # Resource limits are applied to the container rather than passed as
+      # driver-opts: buildx only learned those opts after the version Docker
+      # Desktop ships, and a builder that refuses to be created is worse than
+      # one that is capped a second later.
+      ssh -o BatchMode=yes "$host" "docker update --cpus $cpus --memory $mem --memory-swap $mem $container" >/dev/null \
+        || note "could not cap the builder container — it will use the whole host"
+      note "builder '$BUILDER' ready on $host (capped at ${cpus} cpus / ${mem})"
+      ;;
+    rm)     docker buildx rm "$BUILDER" >/dev/null 2>&1 && note "removed '$BUILDER'" || note "no builder '$BUILDER'" ;;
+    status) docker buildx inspect "$BUILDER" 2>/dev/null | grep -E '^(Name|Status|Platforms|Endpoint):' || note "no builder '$BUILDER' — \`make builder-setup\`" ;;
+    *)      die "usage: ci.sh builder [setup|rm|status]" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- deploy
+#
+# Deploying is one HTTP call telling CapRover which image to run, so there is no
+# reason it had to live only inside a GitHub job. Doing it here is what closes
+# the loop: checks, image and deploy all happen on the machine that has the
+# code, and CI becomes a verifier rather than the critical path.
+#
+# Credentials are env-only (.env is read for them, and .env is gitignored). A
+# per-app deploy token, not the admin password: it deploys this one app and can
+# be rotated without touching anything else.
+caprover_env() {
+  if [ -z "${CAPROVER_URL:-}" ] && [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+  fi
+  [ -n "${CAPROVER_URL:-}" ]    || die "CAPROVER_URL is unset (see docs/local-ci.md)"
+  [ -n "${CAPROVER_APP:-}" ]    || die "CAPROVER_APP is unset (see docs/local-ci.md)"
+  [ -n "${CAPROVER_APP_TOKEN:-}" ] || die "CAPROVER_APP_TOKEN is unset (see docs/local-ci.md)"
+}
+
+cmd_deploy() { # [sha] — point the CapRover app at this commit's image
+  local sha body code
+  sha=${1:-HEAD}
+  git cat-file -e "$sha^{commit}" 2>/dev/null || die "unknown commit $sha"
+  sha=$(git rev-parse "$sha^{commit}")
+  caprover_env
+  # Never deploy an image that is not in the registry: CapRover would accept the
+  # request and then fail to pull, taking the app down rather than leaving the
+  # previous version running.
+  image_exists "$sha" || die "$IMAGE:$sha is not in the registry — run \`make deploy-image\` first"
+  # Refuse to deploy a commit origin has never seen. What runs in production has
+  # to be a commit someone else can check out; otherwise a rollback has nothing
+  # to roll back to and provenance is a local-only claim.
+  git fetch -q "$REMOTE" 2>/dev/null || true
+  git merge-base --is-ancestor "$sha" "$REMOTE/master" 2>/dev/null \
+    || die "$sha is not on $REMOTE/master — push it before deploying"
+  note "deploying $IMAGE:$sha to $CAPROVER_APP"
+  body=$(printf '{"captainDefinitionContent":"{\\"schemaVersion\\":2,\\"imageName\\":\\"%s:%s\\"}","gitHash":"%s"}' "$IMAGE" "$sha" "$sha")
+  code=$(curl -sS -o /tmp/caprover-deploy.$$ -w '%{http_code}' -X POST \
+    "$CAPROVER_URL/api/v2/user/apps/appData/$CAPROVER_APP?detached=1" \
+    -H 'Content-Type: application/json' -H 'x-namespace: captain' \
+    -H "x-captain-auth: $CAPROVER_APP_TOKEN" -d "$body")
+  # CapRover answers 200 with a status field even when it refuses, so the body
+  # decides, not the HTTP code.
+  if [ "$code" = 200 ] && grep -q '"status":100' /tmp/caprover-deploy.$$; then
+    rm -f /tmp/caprover-deploy.$$
+    publish_attestation deploy "$sha" caprover "$CAPROVER_APP"
+    note "deploy accepted. CapRover is pulling the image; \`make deploy-status\` to watch it."
+  else
+    note "CapRover refused the deploy (http $code): $(cat /tmp/caprover-deploy.$$)"
+    rm -f /tmp/caprover-deploy.$$
+    return 1
+  fi
+}
+
+# Reading what is deployed needs an admin session; the per-app deploy token can
+# only deploy. That asymmetry is the right way round — the credential that sits
+# in every developer's .env is the one that cannot enumerate the server — so
+# status is the optional extra here, not deploy.
+cmd_deploy_status() { # what the app is running right now
+  local token
+  caprover_env
+  [ -n "${CAPROVER_PASSWORD:-}" ] || { note "CAPROVER_PASSWORD unset — deploy works without it, status needs it"; return 0; }
+  token=$(curl -sS -X POST "$CAPROVER_URL/api/v2/login" -H 'Content-Type: application/json' \
+    -H 'x-namespace: captain' -d "{\"password\":\"$CAPROVER_PASSWORD\"}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("token",""))')
+  [ -n "$token" ] || { note "could not log in to $CAPROVER_URL for status"; return 0; }
+  curl -sS "$CAPROVER_URL/api/v2/user/apps/appDefinitions" \
+    -H 'x-namespace: captain' -H "x-captain-auth: $token" \
+    | python3 -c "
+import json,sys
+for a in json.load(sys.stdin).get('data',{}).get('appDefinitions',[]):
+    if a['appName']==sys.argv[1]:
+        v={x['version']:x for x in a.get('versions',[])}.get(a.get('deployedVersion'),{})
+        print('deployed: version', a.get('deployedVersion'), '|', v.get('deployedImageName','?'))
+" "$CAPROVER_APP"
+}
+
+# Has this commit already been deployed from someone's machine? The gate asks so
+# CI does not restart production a second time with the identical image.
+cmd_deployed() { # <sha> — exit 0 if a deploy attestation exists
+  local sha
+  sha=$(git rev-parse "${1:-HEAD}^{commit}" 2>/dev/null) || sha=$1
+  remote_refs | grep -q "^$NS/deploy/$sha/" || return 1
 }
 
 cmd_image_who() { # <sha> — one line naming who built the image for this commit
@@ -531,6 +720,64 @@ cmd_image_who() { # <sha> — one line naming who built the image for this commi
   git fetch -q "$REMOTE" "$ref" 2>/dev/null \
     && echo "built by: $(git cat-file commit FETCH_HEAD | sed -n 's/^runner=//p')" \
     || echo "built by: (record exists but could not be read) $ref"
+}
+
+# ---------------------------------------------------------------- ship
+#
+# The whole path in one command: prove the tree, build the image, publish the
+# commit, deploy it. Every step already existed; what did not exist was doing
+# them in one place, so the slow half (image + deploy, ~85 minutes of CI wall
+# clock) stopped being something you waited on a remote queue for.
+#
+# The order is deliberate. Checks first, because everything after them is
+# expensive and irreversible-ish. Image before push, so CI's probe finds it and
+# skips its own build. Push before deploy, because production must run a commit
+# that exists on origin.
+cmd_ship() {
+  local sha rc=0
+  [ -z "$(git status --porcelain)" ] || die "working tree is dirty — commit or stash first"
+  [ "$(git rev-parse --abbrev-ref HEAD)" = master ] || [ -n "${SHIP_ANY_BRANCH:-}" ] \
+    || die "not on master (deploying another branch needs SHIP_ANY_BRANCH=1)"
+  git fetch -q "$REMOTE" 2>/dev/null || true
+  git merge-base --is-ancestor "$REMOTE/master" HEAD 2>/dev/null \
+    || die "$REMOTE/master has commits you do not have — rebase before shipping"
+  sha=$(git rev-parse HEAD)
+  # Pin BEFORE the checks run, for the same reason the gate does: the run
+  # rewrites the tree as it goes (hpack regenerates the cabal file, `npm ci`
+  # touches lockfiles), so a fingerprint computed afterwards would not be the one
+  # anything attested, and every check would look unproven.
+  # shellcheck disable=SC2046
+  pin_fingerprints $(selected_checks "$@")
+
+  note "ship: 1/4 checks"
+  # Keep going past a failure. The sweep runs in checks.tsv order, so stopping at
+  # the first one would let a red `weeder` — which does not gate the deploy —
+  # prevent `e2e`, which does, from ever running. Decide what blocks below, on
+  # evidence, rather than on which check happened to fail first.
+  CI_KEEP_GOING=true cmd_local "$@" || rc=$?
+  # weeder and hlint are not on the deploy path (they gate pull requests, not
+  # this), so a failure there must not block a ship the same way a failed test
+  # does. Anything on the deploy path failing is fatal.
+  if [ "$rc" -ne 0 ]; then
+    local blocking=''
+    # The checks just published refs; the cached listing predates them.
+    REMOTE_REFS_CACHE=''
+    for c in build doctests unit-tests cli-tests integration-tests e2e; do
+      find_attestation "$c" >/dev/null 2>&1 || blocking="$blocking $c"
+    done
+    [ -z "$blocking" ] || die "not shipping: unproven deploy-path checks:$blocking"
+    note "checks reported a failure, but every deploy-path check is proven — continuing"
+  fi
+
+  note "ship: 2/4 image"
+  cmd_image "$sha"
+
+  note "ship: 3/4 push $sha"
+  git push -q "$REMOTE" HEAD:master
+
+  note "ship: 4/4 deploy"
+  cmd_deploy "$sha"
+  cmd_deploy_status
 }
 
 # ---------------------------------------------------------------- selftest
@@ -602,6 +849,25 @@ cmd_selftest() {
   assert "ref roundtrip check" x "$(printf '%s' "$(attest_ref x deadbeef 'ghc')" | cut -d/ -f4)"
   assert "ref roundtrip fp" deadbeef "$(printf '%s' "$(attest_ref x deadbeef 'ghc')" | cut -d/ -f5)"
 
+  # A stale or mistyped builder name must fall back to the default builder. The
+  # alternative — failing the build — would mean one developer's leftover
+  # environment variable blocks a deploy on a machine that could build fine.
+  assert "builder falls back" "" "$(BUILDER=definitely-not-a-builder builder_args)"
+  assert "no builder configured" "" "$(BUILDER='' builder_args)"
+
+  # deploy/image records reuse the attestation ref shape, so `deployed` can
+  # answer from ref names alone — same one-ls-remote property as the checks.
+  assert "deploy ref sha"  deadbeef "$(printf '%s' "$(attest_ref deploy deadbeef caprover monoscope)" | cut -d/ -f5)"
+  assert "deploy ref app"  monoscope "$(printf '%s' "$(attest_ref deploy deadbeef caprover monoscope)" | cut -d/ -f6)"
+  assert "deploy ref check" deploy "$(printf '%s' "$(attest_ref deploy deadbeef caprover monoscope)" | cut -d/ -f4)"
+
+  # Every subcommand the Makefile and the workflows invoke must exist. A rename
+  # here is otherwise found by a failing deploy, at the worst possible moment.
+  local sub
+  for sub in ship deploy deploy-status deployed image image-who builder; do
+    assert "dispatch has $sub" yes "$(grep -qE "^  $sub\)|^  $sub\b" "$0" && echo yes)"
+  done
+
   [ "$SELFTEST_RC" -eq 0 ] && echo "selftest: all good"
   return $SELFTEST_RC
 }
@@ -622,6 +888,11 @@ case "$cmd" in
   clean)       cmd_clean ;;
   image)       cmd_image "$@" ;;
   image-who)   cmd_image_who "$@" ;;
+  deploy)      cmd_deploy "$@" ;;
+  deploy-status) cmd_deploy_status ;;
+  deployed)    cmd_deployed "$@" ;;
+  ship)        cmd_ship "$@" ;;
+  builder)     cmd_builder "$@" ;;
   gc)          cmd_gc "$@" ;;
   selftest)    cmd_selftest ;;
   checks)      checks_all ;;

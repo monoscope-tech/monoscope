@@ -68,11 +68,11 @@ services:
     environment: *tf-env
     depends_on:
       minio: {condition: service_healthy}
-    healthcheck:
-      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/127.0.0.1/5432']
-      interval: 5s
-      timeout: 3s
-      retries: 30
+    # Deliberately no healthcheck. TimeFusion's image is distroless: no /bin/sh
+    # for a CMD-SHELL probe, no curl or nc for any other, so every probe reports
+    # unhealthy however healthy the process is. CI does not need one either —
+    # GitHub `services:` declares TF without a health-cmd. ci.sh waits on the
+    # pgwire port from the runner container, which does have a shell.
 
   runner:
     image: ${MONOSCOPE_CI_DEPS_IMAGE:-ghcr.io/monoscope-tech/monoscope-deps:latest}

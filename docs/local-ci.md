@@ -92,8 +92,16 @@ Two deliberate differences from your normal `make test`:
   `make ci-down` keeps them; `make ci-clean` deletes them and buys you the cold
   build back.
 
-**TimeFusion has no arm64 image**, and the amd64 one segfaults under emulation on
-Apple Silicon. So on a Mac:
+**TimeFusion publishes no arm64 image**, and the amd64 one segfaults under
+emulation on Apple Silicon. Build one for this machine, once:
+
+```bash
+make tf-image            # docker build ../timefusion for this architecture
+```
+
+`make ci` and `make ship` then find it on their own — no exported variables — and
+`integration-tests` runs and attests here like every other check. Without it, on
+a Mac:
 
 - everything except `integration-tests` runs and attests normally;
 - `integration-tests` is refused, and stays CI's job.
@@ -101,11 +109,85 @@ Apple Silicon. So on a Mac:
 `CI_ALLOW_DEGRADED=true make ci` runs it anyway against the
 Postgres-as-TimeFusion fallback. That is genuinely useful feedback and it is
 **not** attested — the dual-write TF leg is exactly what that check exists to
-exercise. On a Linux/amd64 box the real service starts and the whole suite
-attests.
+exercise.
+
+TF's image is distroless, so it has no shell for a compose healthcheck; `ci.sh`
+waits for its pgwire port from the runner container instead. A TF container that
+shows no health status is therefore normal, not broken.
 
 Dependency images rebuild when their declared inputs change or through a manual workflow run.
 There is no weekly rebuild. Use the manual run for base image or system package updates.
+
+## Shipping without waiting for CI
+
+`make ship` is the whole deploy from this machine: checks, image, push, deploy.
+
+```bash
+make ship
+```
+
+It runs, in this order, and stops at the first thing that fails:
+
+1. **Checks**, exactly as `make ci` runs them, attesting each pass.
+2. **Image** — build and push `ghcr.io/…/monoscope:<sha>` (and move `:latest`).
+3. **Push** the commit to `origin/master`.
+4. **Deploy** — tell CapRover to run that image, and record that it was deployed.
+
+Why this order: checks first because everything after is expensive; image before
+push so CI's probe finds it and skips its own build; push before deploy because
+production must run a commit that exists on origin — `ship` refuses to deploy a
+commit `origin/master` does not contain, so a rollback always has something to
+roll back to.
+
+CI still runs on the push, but there is nothing left for it to do: every check is
+attested, the image is in the registry, and the deploy job asks
+`ci.sh deployed <sha>` first and skips when the answer is yes. It becomes a
+second opinion instead of the critical path.
+
+**`ship` will not deploy something it cannot vouch for.** If a deploy-path check
+(`build`, `doctests`, `unit-tests`, `cli-tests`, `integration-tests`, `e2e`) has
+no attestation for this exact tree, it stops. A `weeder` or `hlint` failure does
+not stop it — those gate pull requests, not the deploy — but it says so.
+
+Related commands:
+
+```bash
+make deploy-status         # what CapRover is running right now
+make deploy-app SHA=<sha>  # deploy an already-built image, e.g. a rollback
+```
+
+### A native amd64 builder (do this once)
+
+Prod is `linux/amd64`. On Apple Silicon that build is emulated, and an emulated
+GHC build is slow enough that people go back to letting CI do it — which is the
+habit this file exists to remove. Point buildx at any amd64 machine you can SSH
+to and the build is native:
+
+```bash
+BUILD_HOST=ubuntu@your-amd64-box make builder-setup
+make builder-status
+```
+
+The buildkit container is capped (`BUILD_CPUS`, default 12; `BUILD_MEMORY`,
+default 48g) because that host is often also serving something. Nothing requires
+a builder: with none configured the build falls back to the emulated local one,
+and a stale `MONOSCOPE_BUILDER` name falls back too rather than failing a deploy.
+
+### Credentials
+
+Deploying needs three values, read from the environment or `.env` (gitignored):
+
+| Variable | What |
+|---|---|
+| `CAPROVER_URL` | e.g. `https://captain.example.com` |
+| `CAPROVER_APP` | the app name to deploy |
+| `CAPROVER_APP_TOKEN` | that app's deploy token (CapRover → app → Deployment) |
+| `CAPROVER_PASSWORD` | optional, admin password — only `make deploy-status` needs it |
+
+Use the per-app deploy token, not the admin password: it deploys that one app and
+nothing else, and it can be rotated on its own. The password is optional on
+purpose — the credential every developer keeps is the one that cannot enumerate
+the server.
 
 ## Building the deploy image yourself
 
@@ -148,7 +230,10 @@ QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
 | `CI_NO_ATTEST=true` | run, publish nothing |
 | `CI_SHARDS=n` | integration-test shard count (CI uses 4; more needs more `max_connections`) |
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
-| `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image |
+| `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
+| `BUILD_HOST` / `BUILD_CPUS` / `BUILD_MEMORY` | the native amd64 build host and its caps (`make builder-setup`) |
+| `MONOSCOPE_BUILDER` | buildx builder to build the image with; falls back to the default builder if absent |
+| `SHIP_ANY_BRANCH=1` | let `make ship` deploy something other than master |
 
 ## When you need to invalidate everything
 

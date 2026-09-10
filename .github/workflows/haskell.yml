@@ -385,7 +385,23 @@ jobs:
       # command registers — every deploy crashed on startup for two days before
       # 2.4.3 fixed it. 2.3.1 is the last version on the permissive commander and
       # is what was deploying successfully before that. Bump it on purpose.
+      # A developer's `make ship` deploys this exact image before pushing, and
+      # records it. Deploying again would pull the identical image and restart
+      # production for no reason, so ask first. Read-only and never fatal: if the
+      # lookup cannot reach the remote we deploy, because a redundant deploy is a
+      # restart and a missed one is an undeployed commit.
+      - name: Was this commit already deployed from a developer machine?
+        id: shipped
+        run: |
+          if scripts/ci/ci.sh deployed "${{ github.sha }}" 2>/dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Already deployed by \`make ship\` — skipping." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy Image to CapRrover
+        if: steps.shipped.outputs.already != 'true'
         run: |
           npx -y caprover@2.3.1 deploy \
             --caproverUrl "$CAPROVER_URL" \
