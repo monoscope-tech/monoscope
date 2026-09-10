@@ -131,6 +131,13 @@ spec = sequential $ aroundAll withTestResources do
       -- The Overview warms the Performance tab's heaviest scan in the background, with the
       -- response discarded — so opening Performance answers from cache.
       overview `shouldContainAll` ["panel=vital_trend", "hx-swap=\"none\""]
+      -- The LIVE badge is only honest if something listens for the time transport's tick, and
+      -- the panels hold every number on this page. Each re-fetches itself in place.
+      overview `shouldContainAll` ["hx-trigger=\"update-query from:window\"", "hx-sync=\"this:replace\""]
+      -- All of them except the service picker: it is an option list, not data, and swapping it
+      -- under an open dropdown would take the viewer's selection with it.
+      picker <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "services")
+      T.isInfixOf "update-query from:window" picker `shouldBe` False
 
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data

@@ -916,9 +916,13 @@ instance ToHtml RumData where
 -- viewer sees last-known data instantly and the fresh result swaps in when the recompute
 -- lands. The refreshed response is fresh by construction (refresh bypasses the stale band),
 -- so it carries no trigger of its own and the cycle always terminates.
+--
+-- Rendered content also re-fetches itself on the time transport's live tick, which is what
+-- makes the LIVE badge tell the truth on this page: the panels hold every number on it, and
+-- nothing else here was listening for the tick.
 slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
 slot_ page panel skeleton content
-  | page.panel == Just panel = div_ [id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] do
+  | page.panel == Just panel = div_ ([id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] <> liveAttrs) do
       content
       when page.servedStale
         $ div_
@@ -949,6 +953,24 @@ slot_ page panel skeleton content
         []
         skeleton
   where
+    -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
+    -- position and any open replay stay exactly as they were, and a tick that lands inside
+    -- the panel's cache TTL costs a cache read. The service picker is excluded — it is an
+    -- option list, not data, and re-rendering it under an open dropdown would take the
+    -- viewer's selection with it.
+    liveAttrs
+      | panel == PanelServices = []
+      | otherwise =
+          [ hxGet_ $ panelUrl panel
+          , hxTrigger_ "update-query from:window"
+          , hxTarget_ refreshTarget
+          , hxSelect_ refreshTarget
+          , hxSwap_ "outerHTML"
+          , -- A tick arriving while the previous one is still in flight replaces it rather
+            -- than queueing behind it: the newer window is the one being looked at.
+            term "hx-sync" "this:replace"
+          , makeAttribute "hx-preload" "false"
+          ]
     refreshTarget = if page.tab == Sessions && panel == PanelSessions then "#rum-sessions-list" else "#" <> panelId panel
     panelUrl p =
       rumUrl page.links

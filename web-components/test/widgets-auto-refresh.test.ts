@@ -79,6 +79,23 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(Number.isFinite(option.yAxis.max(empty))).toBe(true);
   });
 
+  // The label used to print echarts' raw `{c}`, so a millisecond widget read "Alert: 1800"
+  // under an axis labelled "1.8s". It formats through the same helper the axis does.
+  test('a threshold label reads in the widget’s unit, like its axis', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="ms-thresholds" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'p75'], dataset: [[0, 1]],
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    (window as any).chartWidget({ ...widget('ms-thresholds'), unit: 'ms', alertThreshold: 1800, warningThreshold: 800 });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+
+    const labels = instance.setOption.mock.calls.at(-1)![0].series[0].markLine.data.map((line: any) => line.label.formatter);
+    expect(labels).toEqual(['Alert: 1.8s', 'Warning: 800.0ms']);
+  });
+
   test('holds fetch slots until streaming bodies finish', async () => {
     const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
     document.body.innerHTML = Array.from({ length: 5 }, (_, i) => `<div id="prefetch-${i}" data-chart-widget></div>`).join('');

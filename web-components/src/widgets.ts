@@ -396,7 +396,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
   if (widgetData.alertThreshold != null && Number.isFinite(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
   if (widgetData.warningThreshold != null && Number.isFinite(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
   if (Object.keys(thresholds).length > 0 && opt.series?.length) {
-    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) };
+    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, widgetData.unit ?? '') };
     // ECharts excludes markLines from automatic extents. Include thresholds in
     // the data-derived bounds, including streamed updates, with room for labels.
     const values = Object.values(thresholds);
@@ -956,7 +956,7 @@ const chartWidget = (widgetData: WidGetData) => {
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
   chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
   applyHighlightBand(chart, widgetData);
-  (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
+  (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds, widgetData.unit ?? '');
 
   // Opt-in per chart: the Lucid container declares data-exemplars-url next to the
   // chart it decorates (see Pages.Telemetry.metricDetailChart).
@@ -1219,12 +1219,14 @@ document.addEventListener('click', (e) => {
   } catch { /* ignore malformed data attributes */ }
 });
 
-// Create threshold markLines for ECharts (reads semantic colors from CSS tokens)
-const createThresholdMarkLines = (thresholds: Record<string, number>) => {
+// Create threshold markLines for ECharts (reads semantic colors from CSS tokens).
+// `unit` is the widget's, so a threshold prints the way its axis does — "Alert: 1.8s"
+// against an axis of seconds, not the raw 1800 the label used to carry.
+const createThresholdMarkLines = (thresholds: Record<string, number>, unit = '') => {
   const styles = getChartStyles();
-  const thresholdStyles: Record<string, { color: string; formatter: string }> = {
-    alert: { color: styles.errorColor, formatter: 'Alert: {c}' },
-    warning: { color: styles.warningColor, formatter: 'Warning: {c}' },
+  const thresholdStyles: Record<string, { color: string; label: string }> = {
+    alert: { color: styles.errorColor, label: 'Alert' },
+    warning: { color: styles.warningColor, label: 'Warning' },
   };
   return Object.entries(thresholds)
     .filter(([_, value]) => !isNaN(value))
@@ -1234,7 +1236,9 @@ const createThresholdMarkLines = (thresholds: Record<string, number>) => {
         yAxis: value,
         name: type,
         label: {
-          formatter: thresholdStyles[type]?.formatter || `${type}: {c}`,
+          // Formatted here rather than left to echarts' `{c}`: that prints the raw number,
+          // which read "Alert: 1800" under an axis labelled "1.8s".
+          formatter: `${thresholdStyles[type]?.label || type}: ${formatStatValue(value, unit)}`,
           // Below the line rather than above it. The axis headroom around a threshold is 5%
           // of the range (see updateChartConfiguration) — less than a line of text — so the
           // topmost threshold's label was drawn half outside the grid and clipped.
@@ -1260,14 +1264,14 @@ const createThresholdMarkLines = (thresholds: Record<string, number>) => {
 };
 
 // Apply thresholds to a chart
-const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
+const applyThresholds = (chart: any, thresholds: Record<string, number>, unit = '') => {
   const option = chart?.getOption();
   if (!option?.series?.length) return;
 
   chart.setOption({
     series: option.series.map((s: any) => ({
       ...s,
-      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) },
+      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, unit) },
     })),
   });
 };
