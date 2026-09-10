@@ -482,10 +482,20 @@ builder-status:
 # only and segfaults under emulation on Apple Silicon, which is the single reason
 # `integration-tests` could not run locally. Once built, `make ci`/`make ship`
 # find it on their own. TF_REPO points at your timefusion checkout.
+#
+# Built from a REF, piped through `git archive`, never from the checkout's
+# working tree: that tree routinely holds someone's half-finished work, and an
+# image built from it produces integration failures that look like your bug and
+# are not. origin/master is what publishes the amd64 image CI uses, so it is the
+# ref that makes a local result mean the same thing as a CI result.
 TF_REPO ?= ../timefusion
+TF_REF ?= origin/master
 tf-image:
-	docker build --platform linux/$(shell uname -m | sed 's/arm64/arm64/;s/x86_64/amd64/') \
-		-t timefusion:local-$(shell uname -m) -f $(TF_REPO)/Dockerfile $(TF_REPO)
+	git -C $(TF_REPO) fetch -q origin
+	@echo "building timefusion:local-$(shell uname -m) from $(TF_REF) ($$(git -C $(TF_REPO) rev-parse --short $(TF_REF)))"
+	git -C $(TF_REPO) archive --format=tar $(TF_REF) \
+		| docker build --platform linux/$(shell uname -m | sed 's/x86_64/amd64/') \
+			-t timefusion:local-$(shell uname -m) -
 
 builder-rm:
 	./scripts/ci/ci.sh builder rm
