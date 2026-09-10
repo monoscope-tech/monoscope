@@ -407,6 +407,23 @@ spec = sequential $ aroundAll withTestResources do
       md.error `shouldBe` Nothing
       md.dataText `shouldBe` V.singleton (V.fromList ["", "after"])
 
+    -- The same trap one decoder over: a plotted widget's SQL runs as DTMetric, whose leading
+    -- column the pivot reads as an epoch number. `time_bucket('1m', timestamp) AS timestamp`
+    -- — the obvious way to bucket by hand, and what the KQL builder writes before wrapping it
+    -- in extract(epoch …) — is a timestamptz, and took the whole widget down with
+    -- `Incompatible {errSQLType = "timestamptz", errSQLField = "timestamp", errHaskellType = "Int"}`.
+    it "plots a timestamptz bucket column, not just an epoch number" \tr -> do
+      let plotSql q = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
+      stamped <- plotSql "SELECT '2026-01-02 03:04:05+00'::timestamptz AS timestamp, 'value'::text, 7::double precision"
+      stamped.error `shouldBe` Nothing
+      -- Epoch milliseconds, the same wire shape an epoch-number bucket lands in.
+      (stamped.dataset V.!? 0 >>= (V.!? 0)) `shouldBe` Just (Just 1767323045000)
+      epoch <- plotSql "SELECT 1767323045::int4 AS timestamp, 'value'::text, 7::double precision"
+      epoch.dataset `shouldBe` stamped.dataset
+      -- A first column that is neither still fails: there is nothing to plot a series against.
+      wrong <- plotSql "SELECT 'not a bucket'::text, 'value'::text, 7::double precision"
+      wrong.error `shouldSatisfy` isJust
+
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
     it "emits partial data and the same final chart as the JSON endpoint" \tr -> do
