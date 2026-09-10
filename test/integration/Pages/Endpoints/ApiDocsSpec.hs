@@ -98,6 +98,11 @@ fetchSpec :: TestResources -> Maybe Text -> IO AE.Value
 fetchSpec tr endpointM = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid (Just host) (Just "Incoming") endpointM)
 
 
+-- | No host = the whole project, which is what the API Docs nav entry opens.
+fetchProjectSpec :: TestResources -> IO AE.Value
+fetchProjectSpec tr = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid Nothing (Just "Incoming") Nothing)
+
+
 spec :: Spec
 spec = sequential $ aroundAll withTestResources $ describe "API catalog – learned OpenAPI" do
   it "documents a learned endpoint as a valid-shaped OpenAPI 3.1 operation" \tr -> do
@@ -145,6 +150,13 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
     (_, yamlText) <- testServant tr (ApiCatalog.apiSpecYamlH pid (Just host) (Just "Incoming") (Just seededHash))
     either (const AE.Null) id (Yaml.decodeEither' @AE.Value (encodeUtf8 yamlText)) `shouldBe` scoped
 
+  it "documents the whole project when no host is given, with servers drawn from the traffic" \tr -> do
+    seed tr
+    doc <- fetchProjectSpec tr
+    doc ^? key "paths" . key "/v1/stores/{store_id}/orders" `shouldSatisfy` isJust
+    -- The caller supplies no server, so the hosts observed are the servers.
+    doc ^? key "servers" . _Array `shouldBe` Just (V.singleton (AE.object ["url" AE..= ("https://" <> host)]))
+
   it "renders the docs page with a Swagger UI mount pointed at the spec route" \tr -> do
     seed tr
     (_, page) <- testServant tr (ApiCatalog.apiDocsH pid (Just host) (Just "Incoming") (Just seededHash))
@@ -152,7 +164,7 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
     forM_
       [ "id=\"swagger-ui\""
       , "swagger-ui/swagger-ui-bundle."
-      , "api_catalog/openapi.json?host="
+      , "api_catalog/openapi.json?request_type=Incoming&amp;host=api.example.com"
       , "openapi.yaml"
       , "1 learned operation"
       ]

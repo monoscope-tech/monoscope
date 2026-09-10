@@ -46,7 +46,6 @@ module Models.Apis.Investigations (
   recentProgressEvents,
 ) where
 
-import Control.Exception (ErrorCall (..))
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM ()
@@ -56,7 +55,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
 import Models.Apis.Integrations qualified as Integrations

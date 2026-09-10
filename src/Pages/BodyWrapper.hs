@@ -888,7 +888,9 @@ navFlyoutItems pidTxt = \case
   "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
   "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
   "Real User Monitoring" -> [("Overview", p "/rum"), ("Sessions", p "/rum?tab=sessions"), ("Performance", p "/rum?tab=performance")]
-  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
+  -- API Docs carries no host: it is the whole project's learned spec. The
+  -- per-host and per-endpoint scopes are reached from the catalog rows.
+  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing"), ("API Docs", p "/api_catalog/docs?request_type=Incoming")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
   "Settings" -> [(t, l) | (t, l, _) <- navBottomList pidTxt]

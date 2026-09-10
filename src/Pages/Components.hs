@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (lookup)
@@ -906,6 +906,44 @@ confirmModal_ modalId title description confirmAttrs confirmText =
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
       button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+
+
+-- | One quiet row action. @attrs@ carries whatever the destination needs — the
+-- HTMX nav triple for an in-app tab swap, nothing for a link that must do a
+-- full page load.
+data RowAction = RowAction
+  { icon :: Text
+  , label :: Text
+  , href :: Text
+  , attrs :: [Attribute]
+  }
+
+
+-- | The trailing action cluster on a table row.
+--
+-- Two rules make this readable in a long table. It is neutral at rest, because
+-- brand blue belongs to the row's primary link — twenty rows of blue secondary
+-- actions out-shout the thing they sit next to. And the caller right-aligns it
+-- (@justify-between@ against the row's name), so the actions land in one fixed
+-- vertical lane instead of ragging off the end of names of different lengths.
+--
+-- Labels drop below @lg@ where the row gets tight; the accessible name is on
+-- the anchor, so the icon-only state is still announced and still tooltipped.
+rowActions_ :: [RowAction] -> Html ()
+rowActions_ acts = div_ [class_ "flex items-center gap-0.5 shrink-0 max-md:gap-1"] $ forM_ acts \a ->
+  a_
+    ( [ href_ a.href
+      , -- Below md the label drops and the control is icon-only, so it grows a
+        -- real tap target instead of shrinking to the glyph.
+        class_ "inline-flex items-center justify-center gap-1.5 rounded-sm px-1.5 py-1 text-xs text-textWeak transition-colors max-md:min-h-10 max-md:min-w-10 hover:bg-fillWeak hover:text-textBrand focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-strokeBrand-strong"
+      , Aria.label_ a.label
+      , term "data-tippy-content" a.label
+      ]
+        <> a.attrs
+    )
+    do
+      faSprite_ a.icon "regular" "h-3.5 w-3.5 shrink-0"
+      span_ [class_ "max-md:hidden"] $ toHtml a.label
 
 
 -- | Copy-to-clipboard button. @src@ is the hyperscript expression naming what to copy — an

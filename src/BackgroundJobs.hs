@@ -37,7 +37,7 @@ import Data.Time (DayOfWeek (Monday), UTCTime (..), ZonedTime, addDays, addUTCTi
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
