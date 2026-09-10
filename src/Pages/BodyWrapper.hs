@@ -177,6 +177,10 @@ data BWConfig = BWConfig
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
   let isProd = bcfg.config.environment /= Dev
+      -- One condition for the SDK <script> and the constructor that needs it. They were two
+      -- different conditions, and the constructor's omitted `isProd`: any non-prod deploy
+      -- carrying a telemetry key rendered `new Monoscope(...)` with nothing having loaded it.
+      browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
       initialTheme = maybe "dark" (.theme) bcfg.sessM
       themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
   doctype_
@@ -281,7 +285,7 @@ bodyWrapper bcfg child = do
       -- Vendored (not unpkg): a third-party CDN must never sit on our critical path — a
       -- slow or unreachable CDN stalled first paint for every visitor. defer keeps even
       -- the local copy off the parser.
-      when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
+      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
 
       -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
@@ -511,20 +515,26 @@ bodyWrapper bcfg child = do
                   // echarts.connect('default');
                 });
       |]
-      -- Initialize Monoscope only when telemetryApiKey is available
-      when (bcfg.config.telemetryApiKey /= "" && bcfg.config.enableBrowserMonitoring)
+      -- Constructed on DOMContentLoaded, not inline: the SDK <script> above is `defer`, so it
+      -- executes after the parser finishes — after this inline script would have run. Calling
+      -- the constructor directly threw `Monoscope is not defined` on every page load and no
+      -- browser telemetry was ever collected from the dashboard. Deferred scripts are
+      -- guaranteed to run before DOMContentLoaded fires, so this is the earliest safe moment.
+      when browserMonitoring
         $ let enableReplay = bool "false" "true" bcfg.config.enableSessionReplay
            in script_
                 [text|
-                  window.monoscope = new Monoscope({
-                    apiKey: "${telemetryApiKey}",
-                    serviceName: "${telemetryServiceName}",
-                    debug: undefined,
-                    sessionReplay: ${enableReplay},
-                    user: {
-                      email: ${email},
-                      name: "${name}"
-                    }
+                  window.addEventListener('DOMContentLoaded', () => {
+                    window.monoscope = new Monoscope({
+                      apiKey: "${telemetryApiKey}",
+                      serviceName: "${telemetryServiceName}",
+                      debug: undefined,
+                      sessionReplay: ${enableReplay},
+                      user: {
+                        email: ${email},
+                        name: "${name}"
+                      }
+                    });
                   });
               |]
 
