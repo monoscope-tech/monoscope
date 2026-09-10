@@ -999,11 +999,21 @@ renderChart widget = do
                 p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
             let sumBy = fromMaybe SBSum widget.summarizeBy
                 theme = fromMaybe "default" widget.theme
-                echartOpt = encodeText $ widgetToECharts widget
+                -- Encoded again, deliberately: the first encode produces JSON, the
+                -- second makes that JSON a *JS string literal*. Interpolating it
+                -- into a `template literal` instead — which is what this did —
+                -- means JS unescapes it before JSON.parse sees it, so every \" in
+                -- a value collapses to " and the parse dies with "Expected ',' or
+                -- '}' after property value". Harmless until a value contained a
+                -- quote; the unit-aware `label.formatter` function string added one
+                -- and took every chart on the page down with it.
+                echartOptJS = encodeText $ encodeText $ widgetToECharts widget
                 yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
                 query = encodeText widget.query
                 pid = encodeText $ widget._projectId <&> (.toText)
-                querySQL = maybeToMonoid widget.sql
+                -- Same reason as echartOptJS: a backtick or a ${…} in stored SQL
+                -- would otherwise end the template literal or interpolate.
+                querySQLJS = encodeText $ maybeToMonoid widget.sql
                 chartType = mapWidgetTypeToChartType widget.wType
                 summarizeBy = toText $ encodeEnumSC @"SB" sumBy
                 summarizeByPfx = summarizeByPrefix sumBy
@@ -1033,11 +1043,11 @@ renderChart widget = do
                 // Configuration for this specific widget
                 const config = {
                   chartId: "${chartId}",
-                  echartOpt: `${echartOpt}`,
+                  echartOpt: ${echartOptJS},
                   chartType: '${chartType}',
                   widgetType: ${wType},
                   query: ${query},
-                  querySQL: `${querySQL}`,
+                  querySQL: ${querySQLJS},
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},

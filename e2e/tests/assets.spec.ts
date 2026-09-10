@@ -23,7 +23,10 @@ async function load(page: Page, url: string) {
   const requests: string[] = [];
   const errors: string[] = [];
   page.on("request", (r) => BUNDLE.test(r.url()) && requests.push(r.url()));
-  page.on("pageerror", (e) => errors.push(String(e)));
+  // The stack, not just the message: a bare "SyntaxError: Expected ',' or '}'"
+  // names neither the file nor the call that threw, so a red run here says only
+  // that some JSON on the page is malformed and leaves you bisecting for it.
+  page.on("pageerror", (e) => errors.push(e.stack ?? String(e)));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
   await page.goto(url, { waitUntil: "networkidle" });
