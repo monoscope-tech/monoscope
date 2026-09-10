@@ -119,8 +119,11 @@ spec = sequential $ aroundAll withTestResources do
               , fileSha = Nothing
               }
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
-      for_ ["hx-select=\"#dashboard-tabs-content\"", "hx-select-oob=\"#dashboard-tabs-container:morph\"", "hx-swap=\"morph\"", "hx-push-url=\"true\""] \attr ->
+      -- `morph`/`:morph` are htmx 2 + idiomorph names; htmx 4 calls them outerMorph/innerMorph
+      -- and throws "Unknown swap style: morph" at swap time, so the names are asserted here.
+      for_ ["hx-select=\"#dashboard-tabs-content\"", "hx-select-oob=\"#dashboard-tabs-container:outerMorph\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
         html `shouldSatisfy` T.isInfixOf attr
+      html `shouldSatisfy` (not . T.isInfixOf "\"morph\"")
       -- No /content partial, and no hyperscript managing the active class.
       html `shouldSatisfy` (not . T.isInfixOf "/content")
       html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")

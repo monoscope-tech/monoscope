@@ -255,8 +255,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             , hxGet_ tabUrl
             , hxTarget_ "#dashboard-tabs-content"
             , hxSelect_ "#dashboard-tabs-content"
-            , term "hx-select-oob" "#dashboard-tabs-container:morph"
-            , hxSwap_ "morph"
+            , term "hx-select-oob" "#dashboard-tabs-container:outerMorph"
+            , hxSwap_ "outerMorph"
             , hxPushUrl_ "true"
             , [__|on click set my.preloadState to 'DONE'|]
             ]
