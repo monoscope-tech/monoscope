@@ -65,7 +65,7 @@ import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), encodeEnumSC, rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
-import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
+import Pkg.Parser.Expr (flattenedOtelAttributes, severityIsErrorSql, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -800,7 +800,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             attributes___url___path AS url_path,
             attributes___user_agent___original AS user_agent,
             COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) AS error_text,
-            (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR') AS is_error,
+            (|]
+          <> rawSql severityIsErrorSql
+          <> [HI.sql|) AS is_error,
             timestamp, end_time, level, severity___severity_number, status_code,
             floor(extract(epoch from timestamp) / #{bucketW})::BIGINT AS bi
           FROM otel_logs_and_spans
