@@ -2,7 +2,7 @@
 
 module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
-import Control.Concurrent (threadWaitRead)
+import Control.Concurrent (threadDelay, threadWaitRead)
 import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as E
 import Control.Exception.Annotated (checkpoint, try)
@@ -16,6 +16,7 @@ import Data.Default
 import Data.Effectful.Hasql (runHasqlPool)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -442,6 +443,43 @@ fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTim
 fetchMetricsData = fetchMetricsDataWithProgress Nothing
 
 
+-- | Is this failure TimeFusion's shared query pool being momentarily full,
+-- rather than anything wrong with the query?
+--
+-- TF's query memory pool is process-wide and its sort-merge reservations are
+-- unspillable, so a dashboard that fires every widget at once can exhaust it
+-- and whichever widget allocates next loses (2026-09-10, Overview/Infra tab).
+-- The same SQL succeeds on its own seconds later.
+--
+-- >>> isPoolExhaustion "Resources exhausted: Additional allocation failed for ExternalSorter[4]"
+-- True
+-- >>> isPoolExhaustion "Not enough memory to continue external sort. Consider increasing ..."
+-- True
+-- >>> isPoolExhaustion "column \"nope\" does not exist"
+-- False
+isPoolExhaustion :: Text -> Bool
+isPoolExhaustion msg = any (`T.isInfixOf` msg) ["Resources exhausted", "Not enough memory to continue external sort"]
+
+
+-- | Retry a widget query while it fails with 'isPoolExhaustion': the siblings
+-- holding the pool are themselves short-lived, so waiting is the whole fix.
+-- Backs off 200/400 ms with up to 100 ms of jitter (from the monotonic clock,
+-- so no RNG dependency) — the widgets of one dashboard render arrive together
+-- and must not retry in lockstep.
+retryOnPoolExhaustion :: IO (Either SomePostgreSqlException a) -> IO (Either SomePostgreSqlException a)
+retryOnPoolExhaustion act = go (0 :: Int)
+  where
+    go n =
+      act >>= \case
+        Left e
+          | n < 2
+          , isPoolExhaustion . toText $ displayException e -> do
+              jitter <- (`mod` 100_000) . fromIntegral <$> getMonotonicTimeNSec
+              threadDelay $ 200_000 * (n + 1) + jitter
+              go (n + 1)
+        result -> pure result
+
+
 metricsPool :: AuthContext -> Maybe Text -> Pool Connection
 metricsPool authCtx dbSource = case dbSource of
   Just "postgres" -> authCtx.pool
@@ -456,7 +494,7 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
   let runQ :: FromRow r => IO [r]
       runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
 
-  try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+  retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
       chartData <- runQ :: IO [Only (Maybe Double)]
       pure

@@ -497,6 +497,13 @@ export const chartDataUrl = ({
   return `/chart_data?${params}`;
 };
 
+// A widget whose data the server computed and embedded has no project to query — RUM's
+// Web Vitals trends are one (Pages.RealUserMonitoring.vitalTrendPanel_). Fetching for one
+// asks /chart_data for a default `count(*)` against `pid=null`, which answers 401, and a
+// 401 on a chart fetch reloads the page: the 15s live tick was rebuilding the entire page
+// — skeletons and all — instead of updating data in place.
+const canFetchData = (widgetData: WidGetData) => !!widgetData.pid && widgetData.pid !== 'null';
+
 // A widget's first request used to wait on echarts loading, the stagger queue, chart
 // construction and an IntersectionObserver — on the log explorer that put it ~2.8s into
 // the page. Nothing about the request depends on any of that, so it starts as soon as this
@@ -512,7 +519,7 @@ const checkChartResponse = (res: Response) => {
 
 const prefetchChartData = (widgetData: WidGetData) => {
   const { chartId } = widgetData;
-  if (!chartId || chartDataPrefetch.has(chartId)) return;
+  if (!chartId || !canFetchData(widgetData) || chartDataPrefetch.has(chartId)) return;
   // Same viewport gate as queueChartInit. Off-screen widgets deliberately don't fetch
   // until scrolled to, so prefetching every one would turn a 40-widget dashboard into
   // 40 requests on load. Absent element (not yet in the DOM) counts as near.
@@ -569,7 +576,7 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
 };
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
-  if (!shouldFetch || lifetimeSignal.aborted) return;
+  if (!shouldFetch || !canFetchData(widgetData) || lifetimeSignal.aborted) return;
   // A timer must not replace an unfinished stream with a blocking refresh.
   if (!showLoader && chartRequests.has(chart)) return;
   chartRequests.get(chart)?.abort();
@@ -1221,12 +1228,35 @@ const createThresholdMarkLines = (thresholds: Record<string, number>) => {
   };
   return Object.entries(thresholds)
     .filter(([_, value]) => !isNaN(value))
-    .map(([type, value]) => ({
-      yAxis: value,
-      name: type,
-      label: { formatter: thresholdStyles[type]?.formatter || `${type}: {c}`, position: 'insideEndTop' },
-      lineStyle: { color: thresholdStyles[type]?.color || styles.textColor, width: 2, type: 'dashed' },
-    }));
+    .map(([type, value]) => {
+      const color = thresholdStyles[type]?.color || styles.textColor;
+      return {
+        yAxis: value,
+        name: type,
+        label: {
+          formatter: thresholdStyles[type]?.formatter || `${type}: {c}`,
+          // Below the line rather than above it. The axis headroom around a threshold is 5%
+          // of the range (see updateChartConfiguration) — less than a line of text — so the
+          // topmost threshold's label was drawn half outside the grid and clipped.
+          position: 'insideEndBottom',
+          // Left unstyled, the label inherited echarts' mark defaults: white, stroked in the
+          // mark colour, which over a dashed line of that same colour reads as doubled text.
+          // Say the colour, kill the stroke, and sit it on a chip of the chart background so
+          // it stays readable where the series crosses it.
+          color,
+          fontSize: 10,
+          fontWeight: 600,
+          textBorderWidth: 0,
+          textShadowBlur: 0,
+          // The raised-surface token, not the chart's translucent overlay: the label has to
+          // stay readable where the series itself passes under it.
+          backgroundColor: styles.tooltipBg,
+          padding: [2, 4],
+          borderRadius: 3,
+        },
+        lineStyle: { color, width: 2, type: 'dashed' },
+      };
+    });
 };
 
 // Apply thresholds to a chart
