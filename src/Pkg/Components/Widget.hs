@@ -1122,15 +1122,37 @@ extractSeriesNamesFromDataset ds = case ds <&> (.source) of
   _ -> []
 
 
+-- | Whether a free-text unit word ("rows", "requests") is spelled out after the number.
+-- The y axis drops it: repeating it down every tick — @3.0K rows@ over @0 rows@ — widens the
+-- axis gutter by a word the widget's title already carries, and on a log-explorer-sized chart
+-- that gutter is plotting area. Duration and byte units are unaffected either way, because
+-- there the suffix is the number's own magnitude (@10.0m@, @1 GiB@), not a label.
+data UnitWord = KeepUnitWord | DropUnitWord
+  deriving stock (Eq)
+
+
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration
 -- units convert+format, everything else uses formatNumber. Shared by the
 -- tooltip valueFormatter and the yAxis axisLabel formatter.
-unitValueExprJS :: Maybe Text -> Text
-unitValueExprJS unitM
+--
+-- >>> unitValueExprJS DropUnitWord (Just "rows")
+-- "formatNumber(value)"
+-- >>> unitValueExprJS KeepUnitWord (Just "rows")
+-- "formatNumber(value) + \" rows\""
+--
+-- A duration formats identically on both, so an axis keeps reading @10.0m@ / @0ns@:
+--
+-- >>> unitValueExprJS DropUnitWord (Just "ms") == unitValueExprJS KeepUnitWord (Just "ms")
+-- True
+unitValueExprJS :: UnitWord -> Maybe Text -> Text
+unitValueExprJS unitWord unitM
   | Just u <- durationUnit = "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
   | isBytes = "formatBytes(value)"
-  | otherwise = "formatNumber(value)" <> foldMap (\u -> " + " <> encodeText (" " <> u)) unitM
+  | otherwise = "formatNumber(value)" <> foldMap (\u -> " + " <> encodeText (" " <> u)) unitWordM
   where
+    unitWordM = case unitWord of
+      KeepUnitWord -> unitM
+      DropUnitWord -> Nothing
     durationUnit = guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM
     -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
     -- chart's axis read "1.0B" for a gigabyte -- B for "billion" -- directly above a table
@@ -1159,7 +1181,7 @@ widgetToECharts widget =
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
               , "valueFormatter"
-                  AE..= ("function(value) { return " <> unitValueExprJS widget.unit <> "; }")
+                  AE..= ("function(value) { return " <> unitValueExprJS KeepUnitWord widget.unit <> "; }")
               ]
         , "legend"
             AE..= AE.object
@@ -1237,7 +1259,7 @@ widgetToECharts widget =
                     , "margin" AE..= (8 :: Int)
                     , "hideOverlap" AE..= True
                     , "formatter"
-                        AE..= let fmt = unitValueExprJS widget.unit
+                        AE..= let fmt = unitValueExprJS DropUnitWord widget.unit
                                   showOnlyMax = fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
                                in if showOnlyMax
                                     then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
@@ -1274,7 +1296,7 @@ addMarkLinesToFirstSeries widget series
       AE.object
         [ "yAxis" AE..= threshold
         , "lineStyle" AE..= AE.object ["color" AE..= (color :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-        , "label" AE..= AE.object ["formatter" AE..= (("function(params) { var value = params.value; return " <> encodeText (label <> ": " :: Text) <> " + " <> unitValueExprJS widget.unit <> "; }") :: Text), "position" AE..= ("insideEndTop" :: Text)]
+        , "label" AE..= AE.object ["formatter" AE..= (("function(params) { var value = params.value; return " <> encodeText (label <> ": " :: Text) <> " + " <> unitValueExprJS KeepUnitWord widget.unit <> "; }") :: Text), "position" AE..= ("insideEndTop" :: Text)]
         ]
 
     markLineData :: [AE.Value]
