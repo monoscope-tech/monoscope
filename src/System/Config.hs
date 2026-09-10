@@ -508,8 +508,10 @@ configToEnv config = do
   -- blocks once it is exhausted, so it staggers a dashboard's widgets for free.
   -- It has to be this low, because TF's sort machinery reserves
   -- `sort_spill_reservation_bytes` per partition UP FRONT and unspillably:
-  -- 8 x 24 partitions x 64 MB = 12.3 GB fits TF's 16 GB query pool, 10 did not
-  -- (2026-09-10, Overview/Infra tab: `Resources exhausted` on a 28 MB request).
+  -- the pool must fit N x partitions x that reservation. 8 x 24 x 64 MiB =
+  -- 12 GiB of TF's 16 GiB query pool. At the 128 MiB prod was running on
+  -- 2026-09-10 even five concurrent sorts filled it, which is how the
+  -- Overview/Infra tab killed a 28.8 MiB request with `Resources exhausted`.
   -- Note this pool also serves Anomalies and the log explorer, so it throttles
   -- those reads too — that is the price of not failing them instead.
   timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (fromIntegral timefusionIdleSeconds) 8 & setNumStripes (Just 2))
