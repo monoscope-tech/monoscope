@@ -1146,6 +1146,63 @@ body, :host {
     --skeleton-highlight: color-mix(in oklch, var(--color-fillBrand-strong) 20%, transparent);
   }
 
+  /* RUM identity + environment markers. The hue arrives inline as --hue (hashed from the
+     identity, or fixed per browser/OS/device family); the classes only set lightness and
+     chroma, so light and dark themes share the one declaration. */
+  .rum-avatar {
+    --hue: 261;
+    background: oklch(0.93 0.05 var(--hue));
+    color: oklch(0.45 0.14 var(--hue));
+  }
+  [data-theme="dark"] .rum-avatar {
+    background: oklch(0.36 0.07 var(--hue));
+    color: oklch(0.88 0.09 var(--hue));
+  }
+
+  .rum-chip {
+    --hue: 261;
+    background: oklch(0.92 0.06 var(--hue));
+    color: oklch(0.48 0.15 var(--hue));
+  }
+  [data-theme="dark"] .rum-chip {
+    background: oklch(0.38 0.08 var(--hue));
+    color: oklch(0.86 0.1 var(--hue));
+  }
+
+  .rum-bar {
+    --hue: 261;
+    background: oklch(0.6 0.14 var(--hue) / 0.65);
+  }
+  [data-theme="dark"] .rum-bar {
+    background: oklch(0.68 0.12 var(--hue) / 0.55);
+  }
+
+  /* Live-session dot: a solid core with a ping ring, matching the pulse affordance used
+     elsewhere for live updates. */
+  .rum-pulse-dot {
+    position: relative;
+    display: inline-block;
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 9999px;
+    background: var(--color-fillSuccess-strong);
+  }
+  .rum-pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--color-fillSuccess-strong);
+    animation: rum-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes rum-ping {
+    0% { transform: scale(1); opacity: 0.7; }
+    75%, 100% { transform: scale(2.6); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rum-pulse-dot::after { animation: none; }
+  }
+
   .skeleton-wave {
     animation-delay: calc(var(--row-index) * 0.1s);
   }

@@ -77,7 +77,7 @@ renderScoped tr tab query sessionFilterM selected service =
 
 renderPanel :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderPanel tr tab query sessionFilterM selected service panel = do
-  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service panel (Just "1")
+  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service panel (Just "1") Nothing
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
@@ -93,10 +93,10 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
     it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
-      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
+      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
       toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
-      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
+      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
       toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
@@ -115,7 +115,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
-      (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1")
+      (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1") Nothing
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
@@ -135,7 +135,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
-      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing
+      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
       let shell = toStrict $ Lucid.renderText $ Lucid.toHtml shellPage
       shell `shouldContainAll` ["Real User Monitoring", "tabs tabs-box tabs-outline", "id=\"rum-page\"", "hx-trigger=\"load\"", "deferred=1"]
       T.isInfixOf "Ada Lovelace" shell `shouldBe` False
@@ -149,7 +149,7 @@ spec = sequential $ aroundAll withTestResources do
       sessions `shouldContainAll` ["panel=sessions&amp;deferred=1"]
       -- And the shells a deep link renders must carry its filter and selection, or the panel
       -- they fetch comes back unfiltered with nothing selected.
-      (_, deepShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing (Just "errors") Nothing Nothing (Just "24H") (Just sessionId) Nothing Nothing (Just "1")
+      (_, deepShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing (Just "errors") Nothing Nothing (Just "24H") (Just sessionId) Nothing Nothing (Just "1") Nothing
       toStrict (Lucid.renderText $ Lucid.toHtml deepShell) `shouldContainAll` ["filter=errors", "session=00000000-0000-0000-0000-000000000042"]
 
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
@@ -261,18 +261,34 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr testPid "rum-l2-key"
       ingestSpanReq tr $ mkSpanRequest "80000000000000000000000000000008" "8000000000000001" Nothing "documentLoad" [] Nothing [mkAttr "session.id" "session-l2", mkAttr "url.full" "https://l2.example/cached"] (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" "Mozilla/5.0 L2"]) frozenTime
       -- A window no earlier example used, so the shared table has no entry yet for this key.
-      let renderPages since = do
-            (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1")
+      let renderPages since refreshM = do
+            (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1") refreshM
             pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
-      firstRender <- renderPages "6H"
+      firstRender <- renderPages "6H" Nothing
       -- Top pages renders path-only routes ('pageRoute'), so the host is stripped.
       firstRender `shouldContainAll` ["/cached"]
       -- Memory only — the shared table entry is exactly what a fresh replica would find.
       Cache.purge tr.trATCtx.rumCache
       withResource tr.trPool \conn ->
         void $ PG.execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ? AND attributes___session___id = ?" (testPid, "session-l2" :: Text)
-      secondRender <- renderPages "6H"
+      secondRender <- renderPages "6H" Nothing
       secondRender `shouldContainAll` ["/cached"]
+      -- A fresh entry answers and asks for nothing more; only a stale one may schedule a refetch.
+      T.isInfixOf "refresh=1" secondRender `shouldBe` False
+
+      -- Past expiry but inside the prune horizon: the panel must still paint its last-known
+      -- data rather than a cold scan, and carry the hidden refresh trigger that revalidates
+      -- it. Without the trigger the page would show aged data forever.
+      Cache.purge tr.trATCtx.rumCache
+      withResource tr.trPool \conn ->
+        void $ PG.execute_ conn "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute'"
+      staleRender <- renderPages "6H" Nothing
+      staleRender `shouldContainAll` ["/cached", "refresh=1"]
+      -- And the revalidation terminates: refresh bypasses the stale band, so its response
+      -- carries no trigger of its own.
+      Cache.purge tr.trATCtx.rumCache
+      refreshRender <- renderPages "6H" (Just "1")
+      T.isInfixOf "refresh=1" refreshRender `shouldBe` False
 
     it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
       purgeRumCaches tr
