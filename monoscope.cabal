@@ -310,6 +310,7 @@ library
       Pkg.Mail
       Pkg.Metrics
       Pkg.Minio
+      Pkg.OpenApi
       Pkg.Parser
       Pkg.PatternMerge
       Pkg.Prometheus
@@ -700,6 +701,7 @@ test-suite integration-tests
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec
+      Pages.Endpoints.ApiDocsSpec
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
@@ -834,6 +836,7 @@ test-suite integration-tests
     , wai-extra
     , warp
     , wreq
+    , yaml
     , zlib
   default-language: GHC2024
 
@@ -929,6 +932,7 @@ test-suite test-dev
       Pkg.Mail
       Pkg.Metrics
       Pkg.Minio
+      Pkg.OpenApi
       Pkg.Parser
       Pkg.PatternMerge
       Pkg.Prometheus
@@ -1000,6 +1004,7 @@ test-suite test-dev
       Pages.DashboardsSpec
       Pages.DashboardWidgetsSpec
       Pages.Endpoints.ApiCatalogSpec
+      Pages.Endpoints.ApiDocsSpec
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec

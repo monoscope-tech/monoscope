@@ -18,6 +18,7 @@ module Models.Apis.SchemaCatalog (
   upsertTemplates,
   upsertCatalogRows,
   getByKeysBatch,
+  endpointCatalog,
   getSummary,
   upsertSummary,
   freshSummaryProjects,
@@ -220,6 +221,40 @@ getByKeysBatch pairs
                    JOIN unnest(#{pids}::uuid[], #{khs}::text[]) m(pid, kh)
                      ON c.project_id = m.pid AND c.key_hash = m.kh |]
       pure $ HM.fromList [((UUIDId r.projectId, r.keyHash), readRowToEntry r) | r <- rows]
+
+
+-- | The learned HTTP endpoints of one host — or one endpoint, when
+-- @keyHashM@ is given — most-recently-seen first. Feeds "Pkg.OpenApi" and the
+-- api_catalog schema views. @kindM@ separates the two directions a host can
+-- carry (@server@ = incoming, @client@ = outgoing).
+--
+-- The cap keeps a pathological host (a WordPress site with thousands of
+-- learned routes) from building a spec no browser can render; callers surface
+-- the truncation.
+endpointCatalog
+  :: DB es
+  => Projects.ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Int
+  -> Eff es (V.Vector (Text, Catalog.CatalogEntry))
+endpointCatalog pid hostM kindM keyHashM limit = do
+  rows :: [CatalogReadRow] <-
+    Hasql.interp
+      [HI.sql| SELECT c.project_id, c.key_kind, c.key_hash, c.template_hash,
+                      c.scope, t.fields, c.values_delta, c.counts,
+                      c.sample_count, c.first_seen, c.last_seen
+               FROM apis.schema_catalog c
+               JOIN apis.schema_template t ON c.template_hash = t.template_hash
+               WHERE c.project_id = #{pid}
+                 AND c.key_kind = 'http_endpoint'
+                 AND (#{hostM}::text IS NULL OR c.scope->>'host' = #{hostM}::text)
+                 AND (#{kindM}::text IS NULL OR c.scope->>'kind' = #{kindM}::text)
+                 AND (#{keyHashM}::text IS NULL OR c.key_hash = #{keyHashM}::text)
+               ORDER BY c.last_seen DESC
+               LIMIT #{fromIntegral limit :: Int64} |]
+  pure $ V.fromList [(r.keyHash, readRowToEntry r) | r <- rows]
 
 
 -- ---------------------------------------------------------------------------

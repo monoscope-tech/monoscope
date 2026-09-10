@@ -215,6 +215,19 @@ instance MimeRender PNG LBS.ByteString where
   mimeRender _ = id
 
 
+-- | The learned OpenAPI spec, served as YAML. Response-only, so no
+-- 'MimeUnrender'.
+data YAML
+
+
+instance Accept YAML where
+  contentType _ = "application/yaml"
+
+
+instance MimeRender YAML Text where
+  mimeRender _ = fromStrict . encodeUtf8
+
+
 -- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
 -- importing Opentelemetry.OtlpServer would drag proto-lens's orphan IsLabel
 -- instances into scope and break the generic-lens #labels used by widget code.
@@ -510,6 +523,12 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
   , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
+  , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
+    -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
+    -- because these URLs are meant to be pasted into curl, CI, and codegen.
+    apiCatalogDocs :: mode :- "p" :> ProjectId :> "api_catalog" :> "docs" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[HTML] (RespHeaders ApiCatalog.ApiDocsPage)
+  , apiCatalogSpecJson :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.json" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[JSON] (RespHeaders AE.Value)
+  , apiCatalogSpecYaml :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.yaml" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[YAML] (RespHeaders Text)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
@@ -987,6 +1006,9 @@ cookieProtectedServer =
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
     , apiCatalogBulkAction = ApiCatalog.apiCatalogBulkActionH
+    , apiCatalogDocs = ApiCatalog.apiDocsH
+    , apiCatalogSpecJson = ApiCatalog.apiSpecJsonH
+    , apiCatalogSpecYaml = ApiCatalog.apiSpecYamlH
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
