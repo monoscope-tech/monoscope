@@ -901,7 +901,11 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
-              , twilioAccountSid = bool envConfig.twilioAccountSid "ACtest_account_sid_for_tests_only" (T.null envConfig.twilioAccountSid)
+              , -- Must stay the SID in the committed golden file's name: the golden key is
+                -- derived from the request path, so a different fallback asks for a file that
+                -- does not exist and the WhatsApp examples die in setup (39de508e2 redacted the
+                -- names and contents without moving this default with them).
+                twilioAccountSid = bool envConfig.twilioAccountSid "ACREDACTED00000000000000000000000" (T.null envConfig.twilioAccountSid)
               , twilioAuthToken = bool envConfig.twilioAuthToken "test_auth_token_for_tests_only" (T.null envConfig.twilioAuthToken)
               , whatsappFromNumber = bool envConfig.whatsappFromNumber "+15555551234" (T.null envConfig.whatsappFromNumber)
               , whatsappMonitorTemplate = envConfig.whatsappMonitorTemplate <|> mkTwilioContentSid "HX00000000000000000000000000000000"
