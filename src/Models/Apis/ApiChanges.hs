@@ -90,8 +90,6 @@ data AnomalyVM = AnomalyVM
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
-  , acknowlegedAt :: Maybe ZonedTime
-  , acknowlegedBy :: Maybe Projects.UserId
   , anomalyType :: AnomalyTypes
   , action :: AnomalyActions
   , targetHash :: Text
@@ -152,8 +150,6 @@ SELECT
     an.created_at,
     an.updated_at,
     an.project_id,
-    an.acknowledged_at,
-    an.acknowledged_by,
     an.anomaly_type,
     an.action,
     an.target_hash,
