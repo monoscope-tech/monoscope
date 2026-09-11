@@ -293,6 +293,31 @@ spec = sequential $ aroundAll withTestResources do
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
         >>= (`shouldBe` 1)
 
+    -- A swept sibling is acknowledged without ever being named, so its own
+    -- timeline is the only place that can explain why it went quiet.
+    it "ackCascade reports the siblings it swept so their timelines can say so" \tr -> do
+      runTestBg frozenTime tr pass
+      let sess = Servant.getResponse tr.trSessAndHeader
+          prefix = "casc-logged-01" :: Text
+          insertAt conn i h =
+            PGS.execute
+              conn
+              [sql| INSERT INTO apis.issues
+                      (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                       severity, critical, affected_requests, affected_clients,
+                       issue_data, created_at, updated_at)
+                    VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                            false, 1, 1, '{}'::jsonb, ?, ?) |]
+              (i, testPid, h, h, frozenTime, frozenTime)
+      parentIid <- UUIDId <$> UUID.nextRandom
+      childIid <- UUIDId <$> UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void $ insertAt conn parentIid prefix
+        void $ insertAt conn childIid (prefix <> ":child")
+
+      swept <- runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [parentIid]
+      sort swept `shouldBe` sort [parentIid, childIid]
+
     -- Regression: the archive path took no project at all. The issue ids come off a
     -- bulk-action form, so any tenant could archive any issue by id.
     it "setArchiveState_crossTenant_archivesOnlyTheCallersProject" \tr -> do

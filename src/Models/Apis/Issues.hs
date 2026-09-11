@@ -1,17 +1,22 @@
--- | Issues module - User-facing representation of anomalies
+-- | An issue is the one thing a user triages, and the only object any of this is
+-- read from. Everything else in this area is either a detector feeding issues or
+-- machinery delivering notifications about them:
 --
--- This module is the primary interface for the anomaly detection system.
--- Issues are created from anomalies detected by database triggers and
--- background jobs. They represent actionable items for developers.
+--   * detectors — @apis.anomalies@ (API change, see "Models.Apis.ApiChanges"),
+--     error patterns, log patterns, and query monitors. Evidence, not triage.
+--   * issues — this module. One row per signal, carrying its whole history.
+--   * delivery — "Models.Apis.Incidents": alert episodes and the Slack thread
+--     ledger. An episode is a chapter of an issue and hangs off @issue_id@; it
+--     has no page of its own and is read from the issue's timeline.
 --
--- Issue Types:
--- - APIChange: Groups endpoint/shape/format changes by endpoint
--- - RuntimeException: Individual issues for each error pattern
--- - QueryAlert: Threshold violations from monitoring
+-- Issue types, one per detector: @ApiChange@ groups endpoint\/shape\/format drift
+-- by endpoint; @RuntimeException@ is one issue per error pattern; @QueryAlert@ is
+-- a monitor threshold breach, long-lived and reopened rather than duplicated per
+-- firing; @LogPattern@ and @LogPatternRateChange@ cover log signals.
 --
--- For detailed documentation on the anomaly detection system, see:
--- - docs/anomaly-detection-system.md (architecture overview)
--- - docs/anomaly-detection-triggers.sql (database trigger details)
+-- On the API-change detector specifically:
+-- - docs\/anomaly-detection-system.md (architecture overview)
+-- - docs\/anomaly-detection-triggers.sql (database trigger details)
 module Models.Apis.Issues (
   IssuePayload (..),
   payloadType,
@@ -841,9 +846,9 @@ hashPrefixWidth = 8
 -- than the target itself and the filter would drop rows the LIKE would match.
 -- Hence the guard rather than an unconditional narrowing — an 8-char hash is what
 -- the schema produces, but this also sweeps legacy hashes and must keep finding them.
-ackCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> AckWindow -> [IssueId] -> Eff es Int64
+ackCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> AckWindow -> [IssueId] -> Eff es [IssueId]
 ackCascade pid uid window iids
-  | null iids = pure 0
+  | null iids = pure []
   | otherwise = do
       now <- Time.currentTime
       -- The selected issues need no separate UPDATE: a target hash always matches
@@ -855,13 +860,15 @@ ackCascade pid uid window iids
           prefixNarrowing
             | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
             | otherwise = mempty
-      Hasql.interpExecute
+      -- Returns every row it touched, not the caller's selection: a swept sibling
+      -- is just as acknowledged, and its own timeline has to say so.
+      Hasql.interp @[IssueId]
         $ [HI.sql| UPDATE apis.issues
                    SET acknowledged_by = #{uid}, acknowledged_at = #{now},
                        acknowledged_until = #{ackUntil now window}, updated_at = #{now}
                    WHERE project_id = #{pid} |]
         <> prefixNarrowing
-        <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) |]
+        <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) RETURNING id |]
 
 
 -- | Clear acknowledgements whose window has closed, returning the affected ids so

@@ -127,8 +127,10 @@ acknowledgeIssueGetH pid enable issueId durationM = do
   ackState <-
     if enable
       then do
-        void $ Issues.ackCascade pid sess.user.id window [issueId]
-        Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
+        -- Every swept sibling, not just the one clicked: the cascade acknowledges
+        -- them all, so they all owe their timeline an entry saying why.
+        acked <- Issues.ackCascade pid sess.user.id window [issueId]
+        forM_ acked \i -> Issues.logIssueActivity i Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
         addSuccessToast (untilLabel "Acknowledged" now until' <> " \x2014 notifications paused") Nothing
         pure $ Just until'
       else do
@@ -189,20 +191,22 @@ issueBulkActionsPostH pid action durationM items = do
       let issueIds = UUIDId <$> mapMaybe UUID.fromText items.itemId
           window = maybe Issues.AckIndefinite Issues.AckFor durationM
           until' = Issues.ackUntil now window
-      (eventType, msg) <- case action of
+      -- Acknowledging sweeps siblings the selection never named, so each branch
+      -- reports the rows it actually touched and those are what get logged.
+      (logIds, eventType, msg) <- case action of
         BAAcknowledge -> do
-          void $ Issues.ackCascade pid sess.user.id window issueIds
-          pure (Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
+          acked <- Issues.ackCascade pid sess.user.id window issueIds
+          pure (acked, Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
         BAUnacknowledge -> do
           void $ Issues.setAckState pid issueIds Nothing
-          pure (Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
+          pure (issueIds, Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         BAArchive -> do
           void $ Issues.setArchiveState pid issueIds (Just now)
-          pure (Issues.IEArchived, "Archived \x2014 notifications stopped")
+          pure (issueIds, Issues.IEArchived, "Archived \x2014 notifications stopped")
         BAUnarchive -> do
           void $ Issues.setArchiveState pid issueIds Nothing
-          pure (Issues.IEUnarchived, "Restored to the Inbox")
-      forM_ issueIds \u -> Issues.logIssueActivity u eventType (Just sess.user.id) Nothing
+          pure (issueIds, Issues.IEUnarchived, "Restored to the Inbox")
+      forM_ logIds \u -> Issues.logIssueActivity u eventType (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
