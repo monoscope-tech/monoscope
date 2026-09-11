@@ -56,7 +56,6 @@ import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerE
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
-import Web.WireSchemas ()
 
 -- Model imports
 

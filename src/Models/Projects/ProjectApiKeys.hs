@@ -21,7 +21,7 @@ import Data.Base64.Types qualified as B64T
 import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -51,12 +51,8 @@ import "cryptonite" Crypto.Error (throwCryptoError)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField, ToParamSchema, ToSchema)
   deriving anyclass (FromRow, ToRow)
-
-
-instance ToSchema ProjectApiKeyId where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
-instance ToParamSchema ProjectApiKeyId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 instance HasField "toText" ProjectApiKeyId Text where

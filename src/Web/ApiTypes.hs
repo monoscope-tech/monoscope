@@ -81,10 +81,6 @@ import Web.Wire (Paged (..))
 type TeamId = UUIDId "team"
 
 
--- Orphan: Widget's nested types don't have ToSchema — emit an open-value schema.
-deriving via JsonValueSchema Widget.Widget instance ToSchema Widget.Widget
-
-
 -- | Input for creating or replacing (PUT) a monitor. Maps onto `QueryMonitor`
 -- fields without surfacing db-internal lifecycle columns.
 data MonitorInput = MonitorInput

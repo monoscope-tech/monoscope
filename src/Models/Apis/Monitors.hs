@@ -32,7 +32,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema (..), ToSchema (..))
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text.Display (Display)
 import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
@@ -60,12 +60,11 @@ import System.Types (DB)
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField, ToSchema)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField, ToParamSchema, ToSchema)
   deriving anyclass (HI.DecodeRow)
 
 
 instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
-instance ToParamSchema QueryMonitorId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFailed

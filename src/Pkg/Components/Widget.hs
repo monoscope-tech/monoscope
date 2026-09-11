@@ -13,6 +13,7 @@ import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
@@ -35,7 +36,7 @@ import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
-import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -248,6 +249,8 @@ data Widget = Widget
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
+  -- Widget's nested types have no ToSchema; document it as an open JSON value.
+  deriving (ToSchema) via JsonValueSchema Widget
 
 
 instance ToHtml Widget where
