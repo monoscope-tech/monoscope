@@ -20,7 +20,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldSatisfy, shouldThrow)
 
 
 -- | Put the project on a known plan/provider footing. `billing_day` anchors the cycle, and
@@ -41,6 +41,18 @@ setBilling tr pid plan subItem subId lastReported = withResource tr.trPool \conn
 
 stripeSub :: Maybe Text
 stripeSub = Just "sub_test_reportusage"
+
+
+setActive :: TestResources -> Projects.ProjectId -> Bool -> IO ()
+setActive tr pid isActive = withResource tr.trPool \conn ->
+  void $ PGS.execute conn [sql| UPDATE projects.projects SET active = ? WHERE id = ? |] (isActive, pid)
+
+
+-- | (active, is-deleted) — the pair migration 0181 constrains.
+projectFlags :: TestResources -> Projects.ProjectId -> IO (Bool, Bool)
+projectFlags tr pid = withResource tr.trPool \conn -> do
+  [row] <- PGS.query conn [sql| SELECT active, deleted_at IS NOT NULL FROM projects.projects WHERE id = ? |] (PGS.Only pid)
+  pure row
 
 
 submissions :: TestResources -> Projects.ProjectId -> IO [(UTCTime, UTCTime, Int, Text)]
@@ -414,3 +426,27 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       void $ runReportRecording tr pid
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "submitted")])
       map (\(_, _, r) -> r) <$> dailyUsage tr pid >>= \replays -> sum replays `shouldBe` 2
+
+  -- "Engine/API Prod" (LemonSqueezy sub 445873) was left at active = false with
+  -- deleted_at IS NULL by a direct DB write on 2026-07-17 while its subscription
+  -- kept billing. Nothing in the app can produce, show or undo that pair, and
+  -- once the API-key lookup started joining on projects.active (2026-08-25) the
+  -- customer's ingestion just stopped. Migration 0181 makes it unrepresentable.
+  describe "projects_subscribed_not_deactivated" do
+    it "refuses to switch off a project we are still billing" \(tr, pid) -> do
+      setBilling tr pid "GraduatedPricing" (Just "sub_item_1") stripeSub frozenTime
+      setActive tr pid False `shouldThrow` \e -> PGS.sqlState e == "23514"
+
+    -- Deleting one is still fine: deleted_at is the soft-delete marker, and the
+    -- subscription is cancelled on that path.
+    it "still allows deleting a subscribed project" \(tr, pid) -> do
+      setBilling tr pid "GraduatedPricing" (Just "sub_item_1") stripeSub frozenTime
+      void $ runTestBg frozenTime tr $ Projects.deleteProject pid
+      projectFlags tr pid >>= (`shouldBe` (False, True))
+
+    -- The unsubscribed half of the same column: a 2024 cleanup switched off 749
+    -- projects that way on purpose, and that must keep working.
+    it "allows switching off a project with no subscription" \(tr, pid) -> do
+      setBilling tr pid "Free" Nothing Nothing frozenTime
+      setActive tr pid False
+      projectFlags tr pid >>= (`shouldBe` (False, False))
