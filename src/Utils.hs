@@ -19,6 +19,7 @@ module Utils (
   lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
+  isoT,
   hostPath,
   formatUTCMicros,
   fmtDate,
@@ -660,6 +661,16 @@ displayTimestamp inputDateString =
 
 formatUTC :: UTCTime -> Text
 formatUTC = fmtDate "%Y-%m-%dT%H:%M:%S%QZ"
+
+
+-- | ISO-8601 to whole seconds — the spelling @from@\/@to@ query params and the
+-- time picker round-trip. Three modules had their own copy of this format string.
+--
+-- >>> import Data.Time (UTCTime (UTCTime), fromGregorian)
+-- >>> isoT (UTCTime (fromGregorian 2026 1 2) 3661.5)
+-- "2026-01-02T01:01:01Z"
+isoT :: FormatTime t => t -> Text
+isoT = fmtDate "%FT%TZ"
 
 
 -- | ISO-8601 with fixed 6-digit (microsecond) fractional seconds.

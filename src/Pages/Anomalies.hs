@@ -35,7 +35,7 @@ where
 import BackgroundJobs qualified
 import Control.Exception qualified as Exception
 import Data.Aeson qualified as AE
-import Data.Aeson.Types (Parser, parseMaybe)
+import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isHexDigit)
 import Data.Default (Default, def)
@@ -101,7 +101,7 @@ import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, htmxOverlayIndicator_, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -215,17 +215,17 @@ anomalyBulkActionsPostH pid action durationM items = do
 
 
 anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueById pid issueId
+anomalyDetailGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueById pid issueId
 
 
 anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailHashGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
+anomalyDetailHashGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
-anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailCore pid firstM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
-  issueM <- fetchIssue pid
+  issueM <- fetchIssue
   now <- Time.currentTime
   useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
@@ -258,18 +258,18 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       -- The relative branch stays because a *live* issue's last activity is ~now, and
       -- a trailing 24H window over recent (sparse, hot) partitions measures ~3.4s —
       -- the same budget the 4h bracket buys over the dense older ones.
-      let isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
-          -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
-          bracketAround t = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) t) (Just $ isoT $ addUTCTime 7200 t)
-          lastActive = zonedTimeToUTC issue.updatedAt
-          -- The URL's range drives the picker, sample lookup and log links together.
-          -- Previously only widgets saw absolute dates; the server silently used defaults.
-          tp = case Issues.issuePayload issue of
-            _ | any (maybe False (not . T.null)) [requestedRange.since, requestedRange.from, requestedRange.to] -> requestedRange
-            Just (Issues.QueryAlertP d) -> bracketAround d.triggeredAt
-            _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
-            _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
-      stateEvent <- enriching "latest_state_event" Nothing $ Issues.selectLatestStateEvent issue.id
+      let
+        -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
+        bracketAround t = TimePicker.TimePicker Nothing (Just $ isoT $ addUTCTime (-7200) t) (Just $ isoT $ addUTCTime 7200 t)
+        lastActive = zonedTimeToUTC issue.updatedAt
+        -- The URL's range drives the picker, sample lookup and log links together.
+        -- Previously only widgets saw absolute dates; the server silently used defaults.
+        tp = case Issues.issuePayload issue of
+          _ | any (maybe False (not . T.null)) [requestedRange.since, requestedRange.from, requestedRange.to] -> requestedRange
+          Just (Issues.QueryAlertP d) -> bracketAround d.triggeredAt
+          _ | diffUTCTime now lastActive > 43200 -> bracketAround lastActive
+          _ -> TimePicker.TimePicker (Just $ defaultSinceRange issue.createdAt now) Nothing Nothing
+      stateEvent <- enriching "latest_state_event" $ Issues.selectLatestStateEvent issue.id
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
         Nothing -> pure False
@@ -297,7 +297,7 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
         Just (Issues.RuntimeExceptionP _) -> case errorM of
           Nothing -> pure Nothing
           Just errL -> do
-            refs <- enriching "trace_references" Nothing $ ErrorPatterns.selectErrorTraceRefs pid issue.targetHash
+            refs <- enriching "trace_references" $ ErrorPatterns.selectErrorTraceRefs pid issue.targetHash
             let base = errL.base
                 (selectedTraceId, capturedAt) = case refs of
                   Just r -> if isFirst then (r.firstTraceId, r.firstTraceAt) else (r.recentTraceId, r.recentTraceAt)
@@ -318,7 +318,7 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       -- 504'd the whole issue. The Investigation panel now pulls it as its own
       -- HTMX fragment, and the only thing this page still needs from the trace is
       -- the session id for the replay section — one scalar, not 1300 rows.
-      tracedSession <- enriching "replay_session_id" Nothing $ flip foldMapM mTraceRef \(tId, tTs) ->
+      tracedSession <- enriching "replay_session_id" $ flip foldMapM mTraceRef \(tId, tTs) ->
         Hasql.withHasqlTimefusion useTf
           $ listToMaybe @Text
           <$> Hasql.interp
@@ -334,10 +334,13 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       -- only once a recording exists. A non-UUID session key (backend SDKs
       -- without setSession, where the session is derived from user identity)
       -- can never have one, so it never reaches the lookup.
-      replaySession <- enriching "replay_recording" Nothing $ flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
+      replaySession <- enriching "replay_recording" $ flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp stateEvent
+      addRespHeaders
+        $ PageCtx bwconf
+        $ anomalyDetailPage
+          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent}
 
 
 -- The snapshot is available immediately; telemetry never holds up the page shell.
@@ -365,8 +368,7 @@ issueSampleGetH pid issueId sinceM fromM toM = do
             Just (Issues.LogPatternRateChangeP d) -> d.sampleMessage
             _ -> Nothing
       result <-
-        trySync
-          $ timeout 5_000_000
+        tryWithin (Just 5_000_000) "ISSUE_SAMPLE" ["issue_id" AE..= issueId]
           $ liftIO
           $ withResource (if appCtx.env.enableTimefusionReads then appCtx.timefusionPgPool else appCtx.pool) \conn -> do
             previous <- PG.query_ conn "SHOW statement_timeout" :: IO [PG.Only Text]
@@ -383,11 +385,7 @@ issueSampleGetH pid issueId sinceM fromM toM = do
                         (pid.toText, from, to, patHash)
                   )
               _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
-      sample <- case result of
-        Right (Just (Just (at, PGArray summary, sampleTraceId))) -> pure $ SampleFound at (V.fromList summary) sampleTraceId
-        Right (Just Nothing) -> pure SampleEmpty
-        Right Nothing -> SampleUnavailable <$ Log.logAttention "ISSUE_SAMPLE_TIMEOUT" (AE.object ["issue_id" AE..= issueId])
-        Left err -> SampleUnavailable <$ Log.logAttention "ISSUE_SAMPLE_FAILED" (AE.object ["issue_id" AE..= issueId, "error" AE..= show @Text err])
+      let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result
       addRespHeaders $ issueSampleCard_ pid snapshot sample
     _ -> addRespHeaders $ p_ [class_ "text-sm text-textWeak"] "This issue has no event sample."
 
@@ -494,12 +492,19 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 -- someone is most likely reading about an incident. @anomalyDetailCore@ already
 -- states the principle in its own comments ("the trace is supporting evidence,
 -- not the page"); this makes it true of the queries as well as the rendering.
-enriching :: Text -> a -> ATAuthCtx a -> ATAuthCtx a
-enriching what fallback act =
-  trySync act
-    >>= either
-      (\e -> fallback <$ Log.logAttention "ISSUE_DETAIL_OPTIONAL_LOOKUP_FAILED" (AE.object ["lookup" AE..= what, "error" AE..= show @Text e]))
-      pure
+enriching :: Text -> ATAuthCtx (Maybe a) -> ATAuthCtx (Maybe a)
+enriching what = fmap join . tryWithin Nothing "ISSUE_DETAIL_OPTIONAL_LOOKUP" ["lookup" AE..= what]
+
+
+-- | Run an optional lookup, bounded by @limitM@ microseconds where a slow read is
+-- itself a failure mode. @Nothing@ means "could not be loaded" — which a caller
+-- must be able to tell apart from "loaded, found nothing", so the timeout and the
+-- exception are reported here rather than being flattened into an empty panel.
+tryWithin :: Maybe Int -> Text -> [Pair] -> ATAuthCtx a -> ATAuthCtx (Maybe a)
+tryWithin limitM what ctx act =
+  trySync (maybe (Just <$> act) (`timeout` act) limitM) >>= \case
+    Right res -> res <$ when (isNothing res) (Log.logAttention (what <> "_TIMEOUT") (AE.object ctx))
+    Left e -> Nothing <$ Log.logAttention (what <> "_FAILED") (AE.object $ ctx <> ["error" AE..= show @Text e])
 
 
 -- | Recover a monitor id from @QueryAlertData.queryId@.
@@ -596,62 +601,39 @@ utcToEpochMs :: UTCTime -> Integer
 utcToEpochMs = floor . (* 1000) . POSIX.utcTimeToPOSIXSeconds
 
 
--- | Source 1: legacy stringified JSON array under @attributes.breadcrumbs@.
-breadcrumbsFromCustomAttr :: Telemetry.SpanRecord -> [Breadcrumb]
-breadcrumbsFromCustomAttr sr = fromMaybe [] do
-  raw <- Telemetry.atMapText "breadcrumbs" sr.attributes
-  AE.decodeStrict (encodeUtf8 raw)
-
-
--- | Source 2: OTel-native span events. Some SDKs record breadcrumbs as span events with
--- attribute keys prefixed @sentry.breadcrumb.*@; we also handle plain OTel events
--- (using the event name as the kind and @attributes.message\/body@ as the message).
-breadcrumbsFromSpanEvents :: Telemetry.SpanRecord -> [Breadcrumb]
-breadcrumbsFromSpanEvents sr = foldMap (map toBreadcrumb) (parseMaybe AE.parseJSON sr.events :: Maybe [Telemetry.SpanEvent])
-  where
-    toBreadcrumb ev =
-      let attrs = ev.eventAttributes
-          sentryKind = lookupValueText attrs "sentry.breadcrumb.category" <|> lookupValueText attrs "sentry.breadcrumb.type"
-          msg =
-            asum
-              $ lookupValueText attrs
-              <$> ["sentry.breadcrumb.message", "message", "body", "exception.message"]
-       in Breadcrumb
-            { kind = fromMaybe ev.eventName sentryKind
-            , message = msg
-            , payload = Just attrs
-            , timestamp = utcToEpochMs ev.eventTime
-            }
-
-
--- | Source 3: trace-scoped log records — every record in the trace that isn't the error
--- span itself. For backend traces this surfaces "user logged in -> queried db -> exception"
--- without any custom instrumentation.
-breadcrumbsFromTraceLogs :: Text -> Telemetry.SpanRecord -> [Breadcrumb]
-breadcrumbsFromTraceLogs errorSpanId sr =
-  [ Breadcrumb
-      { kind = sr.spanName
-      , message = sr.statusMessage <|> Telemetry.atMapText "body" sr.attributes <|> Telemetry.atMapText "message" sr.attributes
-      , payload = AE.toJSON <$> sr.attributes
-      , timestamp = utcToEpochMs sr.startTime
-      }
-  | sr.spanId /= errorSpanId
-  ]
-
-
--- | Combine all breadcrumb sources for a trace, dedupe near-duplicates emitted by
--- overlapping instrumentation (e.g. an SDK that ships both legacy attr + OTel events),
--- and sort chronologically.
+-- | Every breadcrumb the trace can yield, deduped across overlapping
+-- instrumentation (an SDK may ship both the legacy attribute and OTel events) and
+-- sorted chronologically. Three sources, in order of how explicit they are:
+--
+--  1. the legacy stringified JSON array under @attributes.breadcrumbs@;
+--  2. OTel span events — @sentry.breadcrumb.*@ keys when the SDK sets them, else
+--     the event name as the kind and @message@\/@body@ as the message;
+--  3. every trace-scoped log record that is not the error span itself, which
+--     gives backend traces a journey with no custom instrumentation at all.
 extractBreadcrumbs :: V.Vector Telemetry.SpanRecord -> Maybe (NonEmpty Breadcrumb)
 extractBreadcrumbs spans =
   let recs = V.toList spans
       errorSpanId = maybe "" (.spanId) $ viaNonEmpty last $ sortOn (.startTime) recs
-      raw =
-        concatMap breadcrumbsFromCustomAttr recs
-          <> concatMap breadcrumbsFromSpanEvents recs
-          <> concatMap (breadcrumbsFromTraceLogs errorSpanId) recs
+      fromAttr sr = fromMaybe [] $ AE.decodeStrict . encodeUtf8 =<< Telemetry.atMapText "breadcrumbs" sr.attributes
+      fromEvents sr = foldMap (map fromEvent) (parseMaybe AE.parseJSON sr.events :: Maybe [Telemetry.SpanEvent])
+      fromEvent ev =
+        Breadcrumb
+          { kind = fromMaybe ev.eventName $ asum $ lookupValueText ev.eventAttributes <$> ["sentry.breadcrumb.category", "sentry.breadcrumb.type"]
+          , message = asum $ lookupValueText ev.eventAttributes <$> ["sentry.breadcrumb.message", "message", "body", "exception.message"]
+          , payload = Just ev.eventAttributes
+          , timestamp = utcToEpochMs ev.eventTime
+          }
+      fromLog sr =
+        [ Breadcrumb
+            { kind = sr.spanName
+            , message = sr.statusMessage <|> Telemetry.atMapText "body" sr.attributes <|> Telemetry.atMapText "message" sr.attributes
+            , payload = AE.toJSON <$> sr.attributes
+            , timestamp = utcToEpochMs sr.startTime
+            }
+        | sr.spanId /= errorSpanId
+        ]
       dedupKey bc = (bc.timestamp, bc.kind, T.take 80 $ fromMaybe "" bc.message)
-   in nonEmpty $ sortOn dedupKey $ ordNubOn dedupKey raw
+   in nonEmpty $ sortOn dedupKey $ ordNubOn dedupKey $ foldMap (`concatMap` recs) [fromAttr, fromEvents, fromLog]
 
 
 -- | Icon id + tailwind colour class for a breadcrumb @type@.
@@ -721,8 +703,8 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
 -- | The user-journey half needs the issue's trace, which is the slow read on this
 -- page — so the whole panel arrives through the one fragment it already used for
 -- issue events, with the trace reference passed along rather than pre-fetched.
-activityPanel_ :: Projects.ProjectId -> Text -> Text -> Maybe (Text, UTCTime) -> Html ()
-activityPanel_ pid issueId extraClass traceRef = do
+activityPanel_ :: Projects.ProjectId -> Text -> Maybe (Text, UTCTime) -> Html ()
+activityPanel_ pid issueId traceRef = do
   let activityUrl =
         "/p/"
           <> pid.toText
@@ -730,7 +712,7 @@ activityPanel_ pid issueId extraClass traceRef = do
           <> issueId
           <> "/activity"
           <> foldMap (\(tId, tTs) -> "?trace_id=" <> toUriStr tId <> "&trace_ts=" <> toUriStr (formatUTC tTs)) traceRef
-  details_ [class_ $ "surface-raised rounded-2xl group/activity overflow-hidden " <> extraClass, term "open" ""] do
+  details_ [class_ "surface-raised rounded-2xl group/activity overflow-hidden min-w-0", term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
       faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
       span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
@@ -825,483 +807,461 @@ issueStatusStrip_ now issue = forM_ banners \(icon, cls, msg) ->
         ]
 
 
--- | @traceRef@ is the (trace id, when-it-happened) the Investigation panel loads
--- its waterfall from — the panel fetches it itself, so a slow trace can't hold up
--- this page. @replaySession@ is the one value the page still needs out of that
--- trace, resolved by a scalar lookup rather than by reading every span.
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe Issues.IssueEvent -> Html ()
-anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEvent = do
+-- | Everything the issue detail page's sections read. Bundled because the nine
+-- values travelled together through every section as positional arguments.
+--
+-- @traceRef@ is the (trace id, when-it-happened) the Investigation panel loads its
+-- waterfall from — the panel fetches it itself, so a slow trace can't hold up the
+-- page. @replaySession@ is the only value the page still needs out of that trace.
+-- @errM@ carries a runtime exception's real first\/last seen, which live on the
+-- error pattern rather than the issue row.
+data IssueView = IssueView
+  { pid :: Projects.ProjectId
+  , issue :: Issues.Issue
+  , traceRef :: Maybe (Text, UTCTime)
+  , replaySession :: Maybe Text
+  , errM :: Maybe ErrorPatterns.ErrorPatternL
+  , now :: UTCTime
+  , isFirst :: Bool
+  , tp :: TimePicker.TimePicker
+  , stateEvent :: Maybe Issues.IssueEvent
+  }
+
+
+anomalyDetailPage :: IssueView -> Html ()
+anomalyDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
+  div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
+    issueHeader_ v
+    -- Activity sits beside the whole evidence path on wide screens, so its height
+    -- cannot push the trace below an empty stack.
+    div_ [class_ "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem] gap-4 items-start"] do
+      div_ [class_ "min-w-0 space-y-4"] do
+        -- Seed the URL with whichever form of range the page defaulted to, so the
+        -- standalone chart widgets read the window the picker shows. A query alert
+        -- defaults to an absolute from/to, so seeding `since` would override it.
+        let seedParams = TimePicker.rangeJson tp
+        script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({seedParams})}});|]
+        issueEvidence_ v
+        investigationPanel_ v
+        whenJust replaySession \sessionId ->
+          detailCard_ (Just "video") def{headCls = Just "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2", attrs = [id_ "replay-section"]} "Session Replay"
+            $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+      activityPanel_ pid issue.id.toText traceRef
+  aiSidePanel_ pid issue.id
+
+
+-- | The facts every issue leads with: state banners, title, recommended action,
+-- the type-specific chip row, then the fact row every type shares.
+issueHeader_ :: IssueView -> Html ()
+issueHeader_ IssueView{..} = do
+  issueStatusStrip_ now issue
+  -- h2, not h3: the shell's breadcrumb owns h1, and an h3 here ranked below the
+  -- empty-state h2s further down the page.
+  let detailTitle = case Issues.issuePayload issue of
+        Just (Issues.QueryAlertP alertData) | not (T.null $ T.strip alertData.queryName) -> alertData.queryName
+        _ -> issue.title
+  h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong pr-8 break-words"] $ if "⇒" `T.isInfixOf` detailTitle then renderSummaryText_ detailTitle else toHtml detailTitle
+  unless (Issues.isBoilerplateAction issue.recommendedAction)
+    $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
+    $ toHtml issue.recommendedAction
+  div_ [class_ "flex flex-wrap gap-2 items-center"] do
+    severityBadge_ issue.severity
+    issueTypeChip_ False issue.issueType issue.critical
+    issueStateBadge_ stateEvent
+    -- Only what is peculiar to the type belongs here; service, environment and
+    -- first/last seen are common to every issue and live in the fact row below.
+    case Issues.issuePayload issue of
+      Just (Issues.LogPatternP d) -> do
+        logLevelChip_ d.logLevel d.logPattern
+        -- "all time" is explicit: the chart header carries an EVENTS figure scoped
+        -- to the selected range, and an unqualified count beside "No data in this
+        -- time range" reads as the page contradicting itself.
+        metadataChip_ "tally" $ show d.occurrenceCount <> " all time"
+      Just (Issues.LogPatternRateChangeP d) -> do
+        logLevelChip_ d.logLevel d.logPattern
+        metadataChip_ "arrow-trend-up" $ display d.changeDirection
+        metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
+        metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
+        metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
+      Just (Issues.RuntimeExceptionP _) -> whenJust (errM >>= (.base.errorData.runtime)) $ metadataChip_ "code"
+      Just (Issues.QueryAlertP _) -> pass
+      Just (Issues.ApiChangeP _) -> pass
+      Nothing -> unparsablePayload_
+  issueFactRow_ now issue
+    $ maybe
+      (zonedTimeToUTC issue.createdAt, zonedTimeToUTC issue.updatedAt)
+      (\errL -> (zonedTimeToUTC errL.base.createdAt, zonedTimeToUTC errL.base.updatedAt))
+      errM
+
+
+-- | Evidence on the left at whatever width is left over, its context panel on the
+-- right, stacking under lg. Every issue type lays out this way.
+sideBySide_ :: Html () -> Html () -> Html ()
+sideBySide_ evidence aside = div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+  div_ [class_ "min-w-0 flex-1"] evidence
+  aside
+
+
+-- | The right-hand context panel every type puts beside its chart.
+contextCard_ :: Text -> Text -> Html () -> Html ()
+contextCard_ bodyCls = detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just bodyCls}
+
+
+-- | The page's chart, with the range picker and the EVENTS total in its header —
+-- the total is the widget's own value slot hoisted here (`naked` suppresses the
+-- widget's), so it cannot disagree with the chart. @thresholdM@ draws the alert's
+-- breach line; @heightCls@ is taller when the chart *is* the evidence.
+issueChartCard_ :: IssueView -> Text -> Text -> Maybe Double -> Text -> Html ()
+issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
-      issueId = UUID.toText issue.id.unUUIDId
-  div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
-    -- LEFT: scrollable main content
-    div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
-      -- Header: title
-      issueStatusStrip_ now issue
-      -- h2: the page shell's breadcrumb already owns h1. This was an h3 sitting
-      -- \*below* empty-state h2s, so a screen reader heard "No stack trace in this
-      -- event" outrank the incident it was reporting.
-      let detailTitle = case Issues.issuePayload issue of
-            Just (Issues.QueryAlertP alertData) | not (T.null $ T.strip alertData.queryName) -> alertData.queryName
-            _ -> issue.title
-      h2_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong pr-8 break-words"] $ if "⇒" `T.isInfixOf` detailTitle then renderSummaryText_ detailTitle else toHtml detailTitle
-      unless (Issues.isBoilerplateAction issue.recommendedAction)
-        $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
-        $ toHtml issue.recommendedAction
-      let logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
-            detailCard_ Nothing def{trailing = Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField} "Log Pattern"
-              $ renderLogContent_ logPattern
-            let fallbackRange =
-                  decodeUtf8 @Text
-                    $ AE.encode
-                    $ AE.object
-                      [key AE..= value | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
-            div_
-              [ id_ "issue-sample"
-              , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issueId <> "/sample"
-              , hxTrigger_ "load, update-query from:window delay:200ms, retryIssueSample"
-              , hxSwap_ "innerHTML"
-              , term "hx-sync" "this:replace"
-              , hxVals_ $ "js:{...(()=>{const p=new URLSearchParams(location.search);return p.get('since')||p.get('from')||p.get('to')?Object.fromEntries(p):" <> fallbackRange <> "})()}"
-              ]
-              $ issueSampleCard_ pid sampleMessage SampleLoading
-      div_ [class_ "flex flex-wrap gap-2 items-center"] do
-        severityBadge_ issue.severity
-        issueTypeLabel issue.issueType issue.critical
-        -- "This was fixed and came back" is the most consequential thing an on-call
-        -- reader can learn, and it used to survive only in the list they came from.
-        issueStateBadge_ stateEvent
-        case Issues.issuePayload issue of
-          -- Only what is peculiar to the type belongs here. Service, environment and
-          -- first/last seen are common to every issue and live in the fact row below.
-          Just (Issues.LogPatternP d) -> do
-            logLevelChip_ d.logLevel d.logPattern
-            -- "all time", explicitly: the chart header now carries an EVENTS figure
-            -- scoped to the selected range, and an unqualified "14 occurrences" beside a
-            -- chart reading "No data in this time range" is read as the page
-            -- contradicting itself rather than as two different, both-true numbers.
-            metadataChip_ "tally" $ show d.occurrenceCount <> " all time"
-          Just (Issues.LogPatternRateChangeP d) -> do
-            logLevelChip_ d.logLevel d.logPattern
-            metadataChip_ "arrow-trend-up" $ display d.changeDirection
-            metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
-            metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
-            metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
-          Just (Issues.RuntimeExceptionP _) -> whenJust (errM >>= (.base.errorData.runtime)) $ metadataChip_ "code"
-          Just (Issues.QueryAlertP _) -> pass
-          Just (Issues.ApiChangeP _) -> pass
-          Nothing -> unparsablePayload_
-      -- A runtime exception's real first/last seen live on its error pattern; every
-      -- other type's are the issue row's own.
-      issueFactRow_ now issue
-        $ maybe
-          (zonedTimeToUTC issue.createdAt, zonedTimeToUTC issue.updatedAt)
-          (\errL -> (zonedTimeToUTC errL.base.createdAt, zonedTimeToUTC errL.base.updatedAt))
-          errM
-      -- Evidence has one reading path. Activity stays beside the whole path on
-      -- wide screens, so its height cannot push the trace below an empty stack.
-      div_ [class_ "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_20rem] gap-4 items-start"] do
-        div_ [class_ "min-w-0 space-y-4"] do
-          -- Seed URL params with default time range so standalone chart widgets can read it
-          -- Seed the URL with whichever form of range the page defaulted to, so the
-          -- standalone chart widgets read the same window the picker shows. A query
-          -- alert defaults to an absolute from/to around its trigger, so seeding
-          -- `since` unconditionally (as this used to) would have overridden it.
-          let seedParams =
-                T.replace "<" "\\u003c"
-                  $ decodeUtf8 @Text
-                  $ AE.encode
-                  $ AE.object
-                    [key AE..= value | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
-          script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{const p=new URLSearchParams(location.search);if(!p.get('since')&&!p.get('from')&&!p.get('to'))window.setParams({seedParams})}});|]
-          -- Volume chart + issue type content
-          -- @thresholdM@ draws the alert's own breach line on the chart, so a reader can
-          -- see the crossing rather than being told about it in the title. @heightCls@
-          -- is taller when the chart *is* the evidence (query alerts) than when it is
-          -- context beside a stack trace.
-          let chartCard_ chartTitle heightCls thresholdM chartQuery = do
-                let refreshId = "anomaly-chart-refresh"
-                    chartId = issueId <> "-pattern-volume"
-                    -- "How many, over the range I am looking at" — the number Sentry and
-                    -- Datadog both make the largest thing on an issue page, and the one
-                    -- this page had nowhere. The chart already computes it; this is the
-                    -- widget's own value slot, hoisted into the header this card owns
-                    -- because `naked` suppresses the widget's. Same number as the chart
-                    -- by construction — there is no second query to disagree with it.
-                    picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
-                      TimePicker.timepicker_ (Just refreshId) currentRange Nothing
-                      TimePicker.refreshButton_
-                    -- Sentry and Datadog both make this the largest number on the page; it
-                    -- shipped as a grey pill smaller than the time picker beside it. It sits
-                    -- at the header's left edge now, labelled, so "how bad is this" is
-                    -- answered before the reader reaches the chart.
-                    total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
-                      Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
-                div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
-                detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto max-md:w-full"] picker)} chartTitle
-                  $ div_ [class_ heightCls]
-                  $ Widget.widget_
-                    (def :: Widget.Widget)
-                      { Widget.standalone = Just True
-                      , Widget.naked = Just True
-                      , Widget.id = Just chartId
-                      , Widget.wType = Widget.WTTimeseries
-                      , Widget.showTooltip = Just True
-                      , Widget.query = Just chartQuery
-                      , Widget._projectId = Just issue.projectId
-                      , Widget.hideLegend = Just True
-                      , Widget.hideSubtitle = Just True
-                      , Widget.alertThreshold = thresholdM
-                      , Widget.showThresholdLines = "always" <$ thresholdM
-                      , -- Error volume is red; a query alert's series is whatever the alert
-                        -- happens to count (checkout throughput, on the reference issue) and
-                        -- must not borrow the error colour just because it is on an issue page.
-                        Widget.seriesIntent = "error" <$ guard (issue.issueType `elem` [Issues.RuntimeException, Issues.LogPattern, Issues.LogPatternRateChange])
-                      }
-              volumeChart_ chartTitle = whenJust (Issues.hashPrefix issue.issueType) \prefix ->
-                chartCard_ chartTitle "h-24" Nothing $ "hashes[*]==\"" <> prefix <> issue.targetHash <> "\" | summarize count(*) by bin_auto(timestamp)"
-          let patternLayout sf lp sm =
-                div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                  div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
-                    volumeChart_ "Pattern Volume"
-                    logPatternCards sf lp sm
-          case Issues.issuePayload issue of
-            Nothing -> unparsablePayload_
-            Just (Issues.LogPatternP d) ->
-              patternLayout d.sourceField d.logPattern d.sampleMessage
-            Just (Issues.LogPatternRateChangeP d) ->
-              patternLayout d.sourceField d.logPattern d.sampleMessage
-            Just (Issues.RuntimeExceptionP exceptionData) -> do
-              let trimmedStack = T.strip exceptionData.stackTrace
-                  hasStack = not $ T.null trimmedStack
-                  errorFirstLine = if hasStack then fromMaybe trimmedStack $ viaNonEmpty head $ lines trimmedStack else exceptionData.errorMessage
-              -- Chart + Error Details in one row
-              div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Error Frequency"
-                -- The runtime rides in the chip row now, and everything else this panel
-                -- used to hold is in the shared fact row, so it renders only when there is
-                -- actually request context to show — rather than a titled card around one
-                -- line, which is what deduplicating it left behind.
-                whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                  detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4"} "Request" do
-                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                    span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
-              -- Error evidence precedes Investigation; activity has its own shared column.
-              div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                div_ [class_ "min-w-0 flex-1"]
-                  $ details_ [class_ "surface-raised rounded-2xl group/details", term "open" "", term "_" "init if window.innerWidth < 768 remove @open from me"]
-                  $ do
-                    summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
-                      faSprite_ "code" "regular" "w-3.5 h-3.5 text-textWeak"
-                      h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide shrink-0"] $ if hasStack then "Stack trace" else "Error details"
-                      span_ [class_ "text-xs text-fillError-strong truncate min-w-0 flex-1"] $ toHtml errorFirstLine
-                      faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/details:rotate-180 transition-transform"
-                    div_ [class_ "border-t border-strokeWeak"] do
-                      -- Full error message first — visible whether or not we have a stack trace, since the
-                      -- summary truncates and the user expanded specifically to read it in full.
-                      unless (T.null exceptionData.errorMessage) $ div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
-                        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
-                        pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml exceptionData.errorMessage
-                      if hasStack
-                        then stackTrace_ pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) (errM >>= (.base.errorData.runtime)) trimmedStack
-                        else
-                          -- Every runtime exception in the demo project (151 of 151) lands
-                          -- here: OTel's exception event carries `message` and `type` but no
-                          -- `exception.stacktrace` unless the SDK opts in, which the Go
-                          -- services do not. Blaming browsers was wrong for most readers, and
-                          -- pointing at a "User Journey" section named that nowhere on the
-                          -- page was not actionable. Name the runtime that stayed silent, and
-                          -- point at the evidence this page actually has.
-                          div_ [class_ "px-4 py-3 text-sm text-textWeak space-y-2"] do
-                            p_ do
-                              "No stack trace in this event. "
-                              toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") (errM >>= (.base.errorData.runtime)) <> " reported this exception without frames."
-                            a_ [href_ "#error-details-container", class_ "text-textBrand underline underline-offset-2 hover:no-underline"]
-                              $ if isJust traceRef then "Inspect the trace and service calls" else "Inspect the related logs"
-              -- Similar patterns
-              whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
-            Just (Issues.QueryAlertP alertData) -> do
-              let below = alertData.thresholdType == Issues.Below
-                  meetsThreshold = if below then alertData.actualValue <= alertData.thresholdValue else alertData.actualValue >= alertData.thresholdValue
-                  conditionLabel = if below then "At or below" else "At or above" :: Text
-                  explorerLink = a_
-                    [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", alertData.queryExpression)] tp.from tp.to tp.since
-                    , data_ "preserve-time-range" ""
-                    , class_ "ml-auto text-xs text-textBrand hover:underline flex items-center gap-1"
-                    ]
-                    do
-                      "Open query in Explorer"
-                      faSprite_ "arrow-up-right-from-square" "regular" "h-3 w-3 shrink-0"
-              div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                div_ [class_ "min-w-0 flex-1"] $ chartCard_ "Alert Query" "h-56" (Just alertData.thresholdValue) alertData.queryExpression
-                detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-4"} "Recorded evaluation" do
-                  div_ [class_ "flex items-start gap-6"] do
-                    div_ [class_ "flex flex-col gap-1"] do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Recorded value"
-                      span_ [class_ $ "text-2xl font-semibold tabular-nums leading-none " <> if meetsThreshold then "text-fillWarning-strong" else "text-textStrong"] do
-                        toHtml $ formatWithCommas alertData.actualValue
-                    div_ [class_ "flex flex-col gap-1"] do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Threshold"
-                      span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml $ formatWithCommas alertData.thresholdValue
-                      span_ [class_ "text-xs text-textWeak"] $ toHtml conditionLabel
-                  unless meetsThreshold
-                    $ p_
-                      [class_ "text-sm text-textWeak"]
-                      "This value does not meet the recorded threshold. Check the monitor’s warning and recovery settings."
-                  detailRow_ [("bolt", "text-fillWarning-strong", "Recorded", compactTimeAgo $ toText $ prettyTimeAuto now alertData.triggeredAt)]
-                  whenJust (monitorIdFromStored alertData.queryId) \mid_ ->
-                    a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> mid_ <> "/overview", class_ "text-xs text-textBrand hover:underline flex items-center gap-1.5 w-fit"] do
-                      faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
-                      "View monitor"
-              detailCard_ (Just "terminal") def{bodyCls = Just "p-3", trailing = Just explorerLink} "Query"
-                $ pre_ [class_ "text-sm font-mono text-textStrong whitespace-pre-wrap break-words"]
-                $ toHtml alertData.queryExpression
-            Just (Issues.ApiChangeP d) -> do
-              let fieldChip color f = span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color] $ toHtml f
-                  fieldList :: Text -> Text -> Text -> V.Vector Text -> Html ()
-                  fieldList lbl color icn fields
-                    | V.null fields = pass
-                    | otherwise = div_ [class_ "flex flex-col gap-1.5"] do
-                        div_ [class_ "flex items-center gap-1.5"] do
-                          faSprite_ icn "regular" $ "w-3 h-3 " <> color
-                          span_ [class_ $ "text-xs font-semibold uppercase tracking-wide " <> color] $ toHtml lbl
-                          span_ [class_ "text-xs text-textWeak"] $ toHtml $ "(" <> show (V.length fields) <> ")"
-                        div_ [class_ "flex flex-wrap gap-1"] $ V.forM_ fields (fieldChip color)
-                  hasFieldChanges = not (V.null d.newFields) || not (V.null d.deletedFields) || not (V.null d.modifiedFields)
-              -- Endpoint chip line
-              div_ [class_ "flex flex-wrap items-center gap-3"] do
-                span_ [class_ $ "cbadge-sm whitespace-nowrap badge-" <> d.endpointMethod] $ toHtml d.endpointMethod
-                span_ [class_ "font-mono bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
-                span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
-                  faSprite_ "server" "regular" "h-3 w-3"
-                  toHtml d.endpointHost
-              -- Chart + endpoint details panel side-by-side
-              div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Request Trend"
-                detailCard_ (Just "circle-info") def{wrapCls = Just "lg:w-72 shrink-0", bodyCls = Just "p-4 flex flex-col gap-3"} "Endpoint Details" do
-                  detailRow_ [("hashtag", "text-fillBrand-strong", "Requests", formatWithCommas (fromIntegral issue.affectedRequests :: Double))]
-              -- Field changes or the originating request for a new endpoint.
-              div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-                div_ [class_ "min-w-0 flex-1"]
-                  $ if hasFieldChanges
-                    then detailCard_ (Just "list-check") def{bodyCls = Just "p-4 flex flex-col gap-4"} "Field Changes" do
-                      fieldList "New" "text-fillSuccess-strong" "plus" d.newFields
-                      fieldList "Deleted" "text-fillError-strong" "minus" d.deletedFields
-                      fieldList "Modified" "text-fillWarning-strong" "code" d.modifiedFields
-                    else
-                      div_ [class_ "surface-raised rounded-2xl"]
-                        $ emptyState_
-                          def{icon = Just "rocket"}
-                          "New endpoint discovered"
-                          "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
-          let isLogPatternIssue = issue.issueType `elem` ([Issues.LogPattern, Issues.LogPatternRateChange] :: [Issues.IssueType])
-          -- A query alert is a threshold crossing on an aggregate; it has no originating
-          -- request, so `mTraceRef` is `Nothing` by construction and the Logs tab could
-          -- only filter on our own synthetic "Monitoring" service. Rendering the panel
-          -- anyway reserved `lg:h-[70vh]` and filled it with "No trace data available" —
-          -- roughly 1100px of void under a two-line query box.
-          -- Escape closes the open span panel before it exits fullscreen — the panel's close
-          -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
-          unless (issue.issueType == Issues.QueryAlert)
-            $ div_
-              [ -- overflow-clip, not overflow-hidden: hidden makes this a scroll container,
-                -- which would trap the sticky span-details panel and waterfall header inside
-                -- a box that no longer scrolls (the trace tab flows with the page scroll).
-                class_ "surface-raised rounded-2xl overflow-clip group/inv"
-              , id_ "error-details-container"
-              , makeAttribute "tabindex" "-1"
-              , -- Same contract as the log explorer's #apiLogsPage: senders `send toggleFullscreen`
-                -- to the container, which is the only receiver and owns the state flip.
-                -- `the first <…/> exists`, not a bare `<…/>`: a query literal evaluates to a lazy
-                -- query object that is truthy even when it matches nothing, so `if <sel/>` never
-                -- falls through to the fullscreen branch.
-                [__|on toggleFullscreen(active)
-                      default active to (I do not match .investigation-fullscreen)
-                      if active add .investigation-fullscreen to me
-                      otherwise remove .investigation-fullscreen from me
-                      end
-                      call window.scrollTo({top:0})
-                    end
-                    on keydown[key is 'Escape'] from window
-                      if the first <#trace_details_container.open/> exists
-                        send closeDetailPanel to #trace_details_container
-                      otherwise if I match .investigation-fullscreen
-                        send toggleFullscreen(active: false) to me
-                      end|]
-              ]
-              do
-                div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
-                  div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
-                    faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
-                    h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
-                  div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
-                    let rangeParams = [(key, value) | (key, Just value) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null value)]
-                        aUrl useFirst =
-                          "/p/"
-                            <> pid.toText
-                            <> "/issues/"
-                            <> issueId
-                            <> "?"
-                            <> T.intercalate
-                              "&"
-                              [key <> "=" <> toUriStr value | (key, value) <- [("first_occurrence", "true") | useFirst] <> rangeParams]
-                        navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
-                        -- Radio inside the label, panel shown by a CSS variant off
-                        -- #error-details-container's group: no JS, and the choice
-                        -- survives the htmx morphs this card does on every filter.
-                        tabBtn (marker, lbl, isActive) = detailTab_ "err-tabs" marker "max-md:px-2 err-tab font-medium" isActive $ toHtml (lbl :: Text)
-                    -- Labelled, because "First | Recent" sitting beside "Trace | Logs" with only a
-                    -- 1px rule between them reads as four peers. They are not: one picks *which
-                    -- occurrence* you are looking at, the other picks *how* you look at it. Sentry
-                    -- and Datadog both name this control ("First | Last | Recommended", "Error
-                    -- sample") rather than leaving the reader to infer the grouping.
-                    unless isLogPatternIssue do
-                      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mr-1 max-md:hidden"] "Occurrence"
-                      forM_ ([(aUrl True, isFirst, "Show the first occurrence", "First"), (aUrl False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
-                      span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-                    when (isJust traceRef) $ tabBtn ("err-tab-trace", "Trace", True)
-                    tabBtn ("err-tab-logs", "Logs", isNothing traceRef)
-                    span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
-                    -- Icon state is CSS-driven off the container's fullscreen class; the click only
-                    -- sends the event. tippy, not daisyUI: the card is `overflow-hidden`, which clips
-                    -- daisyUI's ::before bubble (see the tooltip rules in page-chrome.ts).
-                    button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #error-details-container|]] do
-                      faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
-                      faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
-                div_ [class_ "max-md:p-1 p-2 w-full overflow-x-clip investigation-content"] do
-                  -- The trace ships its own details panel (#trace_details_container), so this tab renders
-                  -- no second one — clicking a span replaces the open panel instead of stacking another.
-                  -- No fixed height: the trace tab flows at natural height so the page
-                  -- scroll carries the whole waterfall (see the .investigation-content
-                  -- overrides in tailwind.css). The Logs tab below keeps its 70vh because
-                  -- its table is virtualized over an unbounded result set.
-                  div_ [class_ "hidden group-has-[.err-tab-trace:checked]/inv:block w-full err-tab-content", id_ "span-content"] do
-                    -- The waterfall arrives on its own: a cold read of a multi-thousand-span
-                    -- trace took >56s and used to 504 this entire page. `load`, not
-                    -- `intersect` — the pane is full-height and its trigger never scrolls
-                    -- into view, which would leave it stuck on the spinner.
-                    div_ [id_ "trace_container", class_ "w-full h-full min-w-0"] case traceRef of
-                      Nothing -> div_ [class_ "flex items-center justify-center h-48"] $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
-                      Just (tId, tTs) ->
-                        div_
-                          -- Open the waterfall on the span that actually failed. A stackless
-                          -- exception sends the reader here for the call path (see the empty
-                          -- state above), and this trace is 40+ spans across seven services —
-                          -- landing on the root and asking them to find `PlaceOrder` themselves
-                          -- is the same work the stack trace was supposed to save.
-                          [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True Nothing (errM >>= (.base.errorData.spanId))
-                          , hxTrigger_ "load"
-                          , hxSwap_ "outerHTML"
-                          , class_ "h-48 flex items-center justify-center"
-                          ]
-                          $ loadingIndicator_ LdMD LdSpinner
+      refreshId = "anomaly-chart-refresh"
+      chartId = issue.id.toText <> "-pattern-volume"
+      total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
+        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
+        Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
+      picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
+        TimePicker.timepicker_ (Just refreshId) currentRange Nothing
+        TimePicker.refreshButton_
+  div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
+  detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto max-md:w-full"] picker)} chartTitle
+    $ div_ [class_ heightCls]
+    $ Widget.widget_
+      (def :: Widget.Widget)
+        { Widget.standalone = Just True
+        , Widget.naked = Just True
+        , Widget.id = Just chartId
+        , Widget.wType = Widget.WTTimeseries
+        , Widget.showTooltip = Just True
+        , Widget.query = Just chartQuery
+        , Widget._projectId = Just issue.projectId
+        , Widget.hideLegend = Just True
+        , Widget.hideSubtitle = Just True
+        , Widget.alertThreshold = thresholdM
+        , Widget.showThresholdLines = "always" <$ thresholdM
+        , -- A query alert's series is whatever the alert counts, so it must not
+          -- borrow the error colour just because it is on an issue page.
+          Widget.seriesIntent = "error" <$ guard (issue.issueType `elem` [Issues.RuntimeException, Issues.LogPattern, Issues.LogPatternRateChange])
+        }
 
-                div_ [id_ "log-content", class_ "hidden group-has-[.err-tab-logs:checked]/inv:flex err-tab-content flex-col lg:flex-row w-full lg:h-[70vh]"] do
-                  let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
-                      isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
-                      lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
-                      -- A trace happens at an instant, so both trace-scoped and service-scoped
-                      -- reads get a +/-5min window rather than the page's range. Measured on the
-                      -- reference issue: the same 14 rows come back in 0.37s scoped this way and
-                      -- 35.9s over the page's +/-2h — and `virtualTable` fetches on connect, not
-                      -- on tab activation, so that cost was paid on every page load even though
-                      -- Trace is the default tab.
-                      around t = "&from=" <> isoT (addUTCTime (-300) t) <> "&to=" <> isoT (addUTCTime 300 t)
-                      -- `traceRef` rather than the error pattern's recentTraceId: it is the trace
-                      -- the rest of the page is showing (it honours First/Recent) and it carries
-                      -- the timestamp the window needs, which a bare id does not.
-                      (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, traceRef) of
-                        (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", pickerParams)
-                        (_, Just (tId, tTs)) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
-                        -- ~24% of error patterns never captured a trace id (log records carry no trace
-                        -- context; spans always do). The old empty-string fallback rendered
-                        -- @context___trace_id==""@, which filters nothing — the tab dumped the project's
-                        -- entire retention window (6s / 550KB of unrelated logs). With no trace to pin
-                        -- to, scope to the issue's service instead.
-                        _ ->
-                          ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
-                          , around lastSeen
-                          )
-                  div_ [class_ "grow-1 min-w-0 h-full flex flex-col"] do
-                    -- The way out. Every persona walkthrough ended the same way: the page runs
-                    -- out of answers — routinely, since three of four types render at least one
-                    -- empty state — and there was no route onward carrying what the reader
-                    -- already knows. This hands the Explorer the exact query and window this tab
-                    -- is showing, which is Sentry's "All Events" and Datadog's "View All Errors".
-                    div_ [class_ "shrink-0 flex justify-end px-1 pb-1"]
-                      $ a_
-                        [ href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr logsQuery <> logsParams
-                        , class_ "text-2xs text-textBrand hover:underline flex items-center gap-1"
-                        , term "data-tippy-content" "Open these logs in the Explorer, with this issue's filter and window applied"
-                        ]
-                        do
-                          "Open in Explorer"
-                          faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5 shrink-0"
-                    div_ [class_ "grow min-w-0 min-h-0"]
-                      $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
-                  -- Starts hidden alongside the collapsed pane; the swap handler below reveals
-                  -- both together, and closeDetailPanel puts them back.
-                  div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-                  div_
-                    [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/3 investigation-details"
-                    , id_ "log_details_container"
-                    , -- Collapsed until a row is actually selected. The log explorer's own panel
-                      -- does this (`w-0 max-w-0`, Log.hs), but its open state is driven by
-                      -- `group-has-[#viz-logs:checked]` variants that do not exist on this page, so
-                      -- the width is inline here and `lg:w-1/3` is what it reopens to: the two
-                      -- hyperscript handlers below already clear and restore exactly that.
-                      -- Without it the panel held half the Investigation area blank from first
-                      -- paint, which on an issue whose telemetry is missing is most of a screen
-                      -- of nothing.
-                      style_ "width:0"
-                    , -- Last-click-wins; see the matching note in Pages.LogExplorer.Log.detailsPanel.
-                      term "hx-sync" "this:replace"
-                    , [__|on closeDetailPanel
-                      set my *width to '0px'
-                      remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-                      add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-                      call updateUrlState('details_width', '', 'delete')
-                    end
-                    on htmx:after:swap if event.target is me
-                      set my *width to ''
-                      remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
-                      if window.innerWidth < 1024 call me.scrollIntoView({behavior:'smooth', block:'start'}) end
-                    end|]
-                    ]
-                    $ htmxOverlayIndicator_ "details_indicator"
 
-          whenJust replaySession \sessionId ->
-            detailCard_ (Just "video") def{headCls = Just "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2", attrs = [id_ "replay-section"]} "Session Replay"
-              $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
-        activityPanel_ pid issueId "min-w-0" traceRef
+-- | Volume of the issue's own signal over the selected range.
+issueVolumeChart_ :: IssueView -> Text -> Html ()
+issueVolumeChart_ v chartTitle = whenJust (Issues.hashPrefix v.issue.issueType) \prefix ->
+  issueChartCard_ v chartTitle "h-24" Nothing $ "hashes[*]==\"" <> prefix <> v.issue.targetHash <> "\" | summarize count(*) by bin_auto(timestamp)"
 
-    -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
-    input_
-      [ type_ "checkbox"
-      , id_ "ai-panel-toggle"
-      , class_ "hidden"
-      , -- The event name must be quoted: hyperscript tokenizes the `-` in a bare
-        -- `load-chat` as minus, which failed to parse and left the panel never loading.
-        [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
-              if my.checked trigger 'load-chat' on #ai-response-container end
+
+-- | The evidence for the issue's type. Each arm is chart + whatever that type can
+-- actually show; the shared facts are already in 'issueHeader_'.
+issueEvidence_ :: IssueView -> Html ()
+issueEvidence_ v@IssueView{..} = case Issues.issuePayload issue of
+  Nothing -> unparsablePayload_
+  Just (Issues.LogPatternP d) -> patternEvidence d.sourceField d.logPattern d.sampleMessage
+  Just (Issues.LogPatternRateChangeP d) -> patternEvidence d.sourceField d.logPattern d.sampleMessage
+  Just (Issues.RuntimeExceptionP d) -> do
+    let trimmedStack = T.strip d.stackTrace
+        hasStack = not $ T.null trimmedStack
+        errorFirstLine = if hasStack then fromMaybe trimmedStack $ viaNonEmpty head $ lines trimmedStack else d.errorMessage
+        runtimeM = errM >>= (.base.errorData.runtime)
+    -- The runtime rides in the chip row and the rest of this panel's old content is
+    -- in the fact row, so it renders only when there is request context to show.
+    sideBySide_ (issueVolumeChart_ v "Error Frequency")
+      $ whenJust ((,) <$> d.requestMethod <*> d.requestPath) \(method, path) ->
+        contextCard_ "p-4" "Request" do
+          span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+          span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
+    details_ [class_ "surface-raised rounded-2xl group/details", term "open" "", term "_" "init if window.innerWidth < 768 remove @open from me"] do
+      summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
+        faSprite_ "code" "regular" "w-3.5 h-3.5 text-textWeak"
+        h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide shrink-0"] $ if hasStack then "Stack trace" else "Error details"
+        span_ [class_ "text-xs text-fillError-strong truncate min-w-0 flex-1"] $ toHtml errorFirstLine
+        faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/details:rotate-180 transition-transform"
+      div_ [class_ "border-t border-strokeWeak"] do
+        -- The summary truncates and the reader expanded to read this in full, so it
+        -- shows whether or not there is a stack trace.
+        unless (T.null d.errorMessage) $ div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
+          span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
+          pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
+        if hasStack
+          then stackTrace_ pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) runtimeM trimmedStack
+          else
+            -- OTel's exception event carries `message` and `type` but no
+            -- `exception.stacktrace` unless the SDK opts in, which most do not (151
+            -- of 151 demo exceptions land here). Name the runtime that stayed
+            -- silent and point at the evidence this page does have.
+            div_ [class_ "px-4 py-3 text-sm text-textWeak space-y-2"] do
+              p_ do
+                "No stack trace in this event. "
+                toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
+              a_ [href_ "#error-details-container", class_ "text-textBrand underline underline-offset-2 hover:no-underline"]
+                $ if isJust traceRef then "Inspect the trace and service calls" else "Inspect the related logs"
+    whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
+  Just (Issues.QueryAlertP d) -> do
+    let below = d.thresholdType == Issues.Below
+        meetsThreshold = if below then d.actualValue <= d.thresholdValue else d.actualValue >= d.thresholdValue
+        -- Hands the Explorer the alert's own query and the page's window.
+        queryExplorerLink = a_
+          [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", d.queryExpression)] tp.from tp.to tp.since
+          , data_ "preserve-time-range" ""
+          , class_ "ml-auto text-xs text-textBrand hover:underline flex items-center gap-1"
+          ]
+          do
+            "Open query in Explorer"
+            faSprite_ "arrow-up-right-from-square" "regular" "h-3 w-3 shrink-0"
+    sideBySide_ (issueChartCard_ v "Alert Query" "h-56" (Just d.thresholdValue) d.queryExpression)
+      $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
+        div_ [class_ "flex items-start gap-6"] do
+          div_ [class_ "flex flex-col gap-1"] do
+            span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Recorded value"
+            span_ [class_ $ "text-2xl font-semibold tabular-nums leading-none " <> if meetsThreshold then "text-fillWarning-strong" else "text-textStrong"]
+              $ toHtml
+              $ formatWithCommas d.actualValue
+          div_ [class_ "flex flex-col gap-1"] do
+            span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Threshold"
+            span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml $ formatWithCommas d.thresholdValue
+            span_ [class_ "text-xs text-textWeak"] $ toHtml $ bool "At or above" "At or below" below
+        unless meetsThreshold
+          $ p_
+            [class_ "text-sm text-textWeak"]
+            "This value does not meet the recorded threshold. Check the monitor’s warning and recovery settings."
+        detailRow_ [("bolt", "text-fillWarning-strong", "Recorded", compactTimeAgo $ toText $ prettyTimeAuto now d.triggeredAt)]
+        whenJust (monitorIdFromStored d.queryId) \mid_ ->
+          a_ [href_ $ "/p/" <> pid.toText <> "/monitors/" <> mid_ <> "/overview", class_ "text-xs text-textBrand hover:underline flex items-center gap-1.5 w-fit"] do
+            faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
+            "View monitor"
+    detailCard_ (Just "terminal") def{bodyCls = Just "p-3", trailing = Just queryExplorerLink} "Query"
+      $ pre_ [class_ "text-sm font-mono text-textStrong whitespace-pre-wrap break-words"]
+      $ toHtml d.queryExpression
+  Just (Issues.ApiChangeP d) -> do
+    let fieldList :: Text -> Text -> Text -> V.Vector Text -> Html ()
+        fieldList lbl color icn fields = unless (V.null fields) $ div_ [class_ "flex flex-col gap-1.5"] do
+          div_ [class_ "flex items-center gap-1.5"] do
+            faSprite_ icn "regular" $ "w-3 h-3 " <> color
+            span_ [class_ $ "text-xs font-semibold uppercase tracking-wide " <> color] $ toHtml lbl
+            span_ [class_ "text-xs text-textWeak"] $ toHtml $ "(" <> show (V.length fields) <> ")"
+          div_ [class_ "flex flex-wrap gap-1"]
+            $ V.forM_ fields
+            $ span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color]
+            . toHtml
+    div_ [class_ "flex flex-wrap items-center gap-3"] do
+      span_ [class_ $ "cbadge-sm whitespace-nowrap badge-" <> d.endpointMethod] $ toHtml d.endpointMethod
+      span_ [class_ "font-mono bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+      span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+        faSprite_ "server" "regular" "h-3 w-3"
+        toHtml d.endpointHost
+    sideBySide_ (issueVolumeChart_ v "Request Trend")
+      $ contextCard_ "p-4 flex flex-col gap-3" "Endpoint Details"
+      $ detailRow_ [("hashtag", "text-fillBrand-strong", "Requests", formatWithCommas (fromIntegral issue.affectedRequests :: Double))]
+    if not (all V.null [d.newFields, d.deletedFields, d.modifiedFields])
+      then detailCard_ (Just "list-check") def{bodyCls = Just "p-4 flex flex-col gap-4"} "Field Changes" do
+        fieldList "New" "text-fillSuccess-strong" "plus" d.newFields
+        fieldList "Deleted" "text-fillError-strong" "minus" d.deletedFields
+        fieldList "Modified" "text-fillWarning-strong" "code" d.modifiedFields
+      else
+        div_ [class_ "surface-raised rounded-2xl"]
+          $ emptyState_
+            def{icon = Just "rocket"}
+            "New endpoint discovered"
+            "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
+  where
+    -- The log-pattern types differ only in their chip row, which the header owns.
+    patternEvidence sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
+      issueVolumeChart_ v "Pattern Volume"
+      detailCard_ Nothing def{trailing = Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField} "Log Pattern"
+        $ renderLogContent_ logPattern
+      -- The sample is re-fetched on every range change, from the URL when it
+      -- carries one and from the page's own default otherwise.
+      div_
+        [ id_ "issue-sample"
+        , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/sample"
+        , hxTrigger_ "load, update-query from:window delay:200ms, retryIssueSample"
+        , hxSwap_ "innerHTML"
+        , term "hx-sync" "this:replace"
+        , hxVals_ $ "js:{...(()=>{const p=new URLSearchParams(location.search);return p.get('since')||p.get('from')||p.get('to')?Object.fromEntries(p):" <> TimePicker.rangeJson tp <> "})()}"
+        ]
+        $ issueSampleCard_ pid sampleMessage SampleLoading
+
+
+-- | Trace waterfall and trace-scoped logs, in tabs. A query alert is a threshold
+-- crossing on an aggregate — no originating request, so no panel at all rather
+-- than ~1100px of "No trace data available".
+investigationPanel_ :: IssueView -> Html ()
+investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert) do
+  let isLogPatternIssue = issue.issueType `elem` ([Issues.LogPattern, Issues.LogPatternRateChange] :: [Issues.IssueType])
+  div_
+    [ -- overflow-clip, not overflow-hidden: hidden makes this a scroll container,
+      -- which would trap the sticky span-details panel and waterfall header inside
+      -- a box that no longer scrolls.
+      class_ "surface-raised rounded-2xl overflow-clip group/inv"
+    , id_ "error-details-container"
+    , makeAttribute "tabindex" "-1"
+    , -- Same contract as the log explorer's #apiLogsPage: senders `send
+      -- toggleFullscreen` here, and this is the only receiver. Escape closes an open
+      -- span panel before it exits fullscreen. `the first <…/> exists`, not a bare
+      -- `<…/>`: a query literal is a lazy object that is truthy even when it matches
+      -- nothing, so `if <sel/>` never falls through.
+      [__|on toggleFullscreen(active)
+            default active to (I do not match .investigation-fullscreen)
+            if active add .investigation-fullscreen to me
+            otherwise remove .investigation-fullscreen from me
             end
-            on change
-              call localStorage.setItem('ai-panel-open', my.checked)
-              if my.checked trigger 'load-chat' on #ai-response-container end
+            call window.scrollTo({top:0})
+          end
+          on keydown[key is 'Escape'] from window
+            if the first <#trace_details_container.open/> exists
+              send closeDetailPanel to #trace_details_container
+            otherwise if I match .investigation-fullscreen
+              send toggleFullscreen(active: false) to me
             end|]
-      ]
-    label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"] do
-      faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
-    div_ [class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:block"] $ resizer_ "ai_chat_container" "ai_width" False
-    div_ [id_ "ai_chat_container", class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak"] do
-      div_ [class_ "shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between"] do
-        div_ [class_ "flex items-center gap-2"] do
-          faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-fillBrand-strong"
-          span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "AI Assistant"
-        label_ [Lucid.for_ "ai-panel-toggle", class_ "p-1.5 rounded-lg hover:bg-fillWeaker cursor-pointer transition-colors tap-target", Aria.label_ "Close AI Assistant"]
-          $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
-      anomalyAIChatBody_ pid issue.id
+    ]
+    do
+      div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
+        div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
+          faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
+          h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
+        div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
+          let aUrl useFirst =
+                "/p/"
+                  <> pid.toText
+                  <> "/issues/"
+                  <> issue.id.toText
+                  <> "?"
+                  <> T.drop 1 (mconcat ["&first_occurrence=true" | useFirst] <> TimePicker.rangeQuery tp)
+              navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
+              -- Radio inside the label, panel shown by a CSS variant off this
+              -- container's group: no JS, and the choice survives the htmx morphs
+              -- this card does on every filter.
+              tabBtn (marker, lbl, isActive) = detailTab_ "err-tabs" marker "max-md:px-2 err-tab font-medium" isActive $ toHtml (lbl :: Text)
+              divider cls = span_ [class_ cls] pass
+          -- Labelled, because "First | Recent" beside "Trace | Logs" otherwise reads
+          -- as four peers: one picks which occurrence, the other how you look at it.
+          unless isLogPatternIssue do
+            span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mr-1 max-md:hidden"] "Occurrence"
+            forM_ ([(aUrl True, isFirst, "Show the first occurrence", "First"), (aUrl False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Text, Bool, Text, Text)]) navLink
+            divider "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"
+          when (isJust traceRef) $ tabBtn ("err-tab-trace", "Trace", True)
+          tabBtn ("err-tab-logs", "Logs", isNothing traceRef)
+          divider "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"
+          -- Icon state is CSS-driven off the container's fullscreen class; the click
+          -- only sends the event. tippy, not daisyUI, whose ::before bubble is
+          -- clipped by the card's overflow.
+          button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #error-details-container|]] do
+            faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
+            faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
+      div_ [class_ "max-md:p-1 p-2 w-full overflow-x-clip investigation-content"] do
+        -- No fixed height: the trace tab flows at natural height so the page scroll
+        -- carries the whole waterfall (see the .investigation-content overrides in
+        -- tailwind.css). The Logs tab keeps its 70vh — its table is virtualized over
+        -- an unbounded result set. The trace ships its own #trace_details_container,
+        -- so this tab renders no second details panel.
+        div_ [class_ "hidden group-has-[.err-tab-trace:checked]/inv:block w-full err-tab-content", id_ "span-content"]
+          $ div_ [id_ "trace_container", class_ "w-full h-full min-w-0"]
+          $ case traceRef of
+            Nothing -> div_ [class_ "flex items-center justify-center h-48"] $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
+            Just (tId, tTs) ->
+              -- Fetched here rather than with the page: a cold read of a
+              -- multi-thousand-span trace took >56s and 504'd the whole issue. `load`,
+              -- not `intersect` — the pane is full-height and its trigger never
+              -- scrolls into view. Opens on the span that actually failed; landing on
+              -- the root of a 40-span trace is the work the stack trace should save.
+              div_
+                [ hxGet_ $ traceFragmentUrl pid tId (Just tTs) True Nothing (errM >>= (.base.errorData.spanId))
+                , hxTrigger_ "load"
+                , hxSwap_ "outerHTML"
+                , class_ "h-48 flex items-center justify-center"
+                ]
+                $ loadingIndicator_ LdMD LdSpinner
+        div_ [id_ "log-content", class_ "hidden group-has-[.err-tab-logs:checked]/inv:flex err-tab-content flex-col lg:flex-row w-full lg:h-[70vh]"] do
+          -- A trace happens at an instant, so trace- and service-scoped reads get a
+          -- +/-5min window rather than the page's range: 0.37s for the same 14 rows
+          -- against 35.9s over +/-2h, paid on every page load because `virtualTable`
+          -- fetches on connect rather than on tab activation.
+          let around t = "&from=" <> toUriStr (isoT $ addUTCTime (-300) t) <> "&to=" <> toUriStr (isoT $ addUTCTime 300 t)
+              -- `traceRef`, not the error pattern's recentTraceId: it is the trace the
+              -- rest of the page shows (it honours First/Recent) and it carries the
+              -- timestamp the window needs.
+              (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, traceRef) of
+                (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", TimePicker.rangeQuery tp)
+                (_, Just (tId, tTs)) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
+                -- ~24% of error patterns never captured a trace id (log records carry
+                -- no trace context; spans always do). The old empty-string fallback
+                -- rendered `context___trace_id==""`, which filters nothing and dumped
+                -- the project's entire retention window.
+                _ ->
+                  ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
+                  , around $ zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
+                  )
+          div_ [class_ "grow-1 min-w-0 h-full flex flex-col"] do
+            -- Three of four issue types render at least one empty state, so the page
+            -- runs out of answers routinely; this is the route onward, carrying the
+            -- exact query and window the tab is showing.
+            div_ [class_ "shrink-0 flex justify-end px-1 pb-1"]
+              $ a_
+                [ href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr logsQuery <> logsParams
+                , class_ "text-2xs text-textBrand hover:underline flex items-center gap-1"
+                , term "data-tippy-content" "Open these logs in the Explorer, with this issue's filter and window applied"
+                ]
+                do
+                  "Open in Explorer"
+                  faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5 shrink-0"
+            div_ [class_ "grow min-w-0 min-h-0"]
+              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
+          -- Starts hidden alongside the collapsed pane; the swap handler below reveals
+          -- both together, and closeDetailPanel puts them back.
+          div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+          div_
+            [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/3 investigation-details"
+            , id_ "log_details_container"
+            , -- Collapsed until a row is selected: the log explorer's own panel does
+              -- this with `group-has-[#viz-logs:checked]` variants that do not exist
+              -- here, so the width is inline and `lg:w-1/3` is what the two handlers
+              -- below restore.
+              style_ "width:0"
+            , -- Last-click-wins; see the matching note in Pages.LogExplorer.Log.detailsPanel.
+              term "hx-sync" "this:replace"
+            , [__|on closeDetailPanel
+              set my *width to '0px'
+              remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+              add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
+              call updateUrlState('details_width', '', 'delete')
+            end
+            on htmx:after:swap if event.target is me
+              set my *width to ''
+              remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
+              if window.innerWidth < 1024 call me.scrollIntoView({behavior:'smooth', block:'start'}) end
+            end|]
+            ]
+            $ htmxOverlayIndicator_ "details_indicator"
+
+
+-- | Collapsible AI chat, open-state in localStorage and driven by a checkbox +
+-- group-has variants so it survives htmx swaps.
+aiSidePanel_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
+aiSidePanel_ pid issueId = do
+  input_
+    [ type_ "checkbox"
+    , id_ "ai-panel-toggle"
+    , class_ "hidden"
+    , -- The event name must be quoted: hyperscript reads the `-` in a bare
+      -- `load-chat` as minus, which left the panel never loading.
+      [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
+            if my.checked trigger 'load-chat' on #ai-response-container end
+          end
+          on change
+            call localStorage.setItem('ai-panel-open', my.checked)
+            if my.checked trigger 'load-chat' on #ai-response-container end
+          end|]
+    ]
+  label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"]
+    $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
+  div_ [class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:block"] $ resizer_ "ai_chat_container" "ai_width" False
+  div_ [id_ "ai_chat_container", class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak"] do
+    div_ [class_ "shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between"] do
+      div_ [class_ "flex items-center gap-2"] do
+        faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-fillBrand-strong"
+        span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "AI Assistant"
+      label_ [Lucid.for_ "ai-panel-toggle", class_ "p-1.5 rounded-lg hover:bg-fillWeaker cursor-pointer transition-colors tap-target", Aria.label_ "Close AI Assistant"]
+        $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
+    anomalyAIChatBody_ pid issueId
 
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -1643,38 +1603,53 @@ buildSystemPromptForIssue pid issue now = do
           ]
     formatCompleteAlertContext alertData monitorM metricsData =
       unlines
-        $ catMaybes
-          [ Just ""
-          , Just "## Alert Configuration"
-          , Just ""
-          , Just "### Query & Thresholds"
-          , Just $ "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
-          , Just $ "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
-          , Just $ "- **Current Value**: " <> show alertData.actualValue
-          , Just $ "- **Triggered At**: " <> formatUTC alertData.triggeredAt
-          , Just ""
-          , Just "### Execution Schedule"
-          , monitorM <&> \m -> "- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes"
-          , monitorM <&> \m -> "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)"
-          , monitorM <&> \m -> "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated
-          , Just ""
-          , Just "### Trigger Conditions"
-          , monitorM <&> \m -> "- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan
-          , monitorM >>= (.warningThreshold) <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
-          , monitorM >>= (.alertRecoveryThreshold) <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
-          , monitorM >>= (.warningRecoveryThreshold) <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
-          , Just ""
-          , Just "### Current Status"
-          , monitorM <&> \m -> "- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")"
-          , monitorM >>= (.alertLastTriggered) <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
-          , monitorM >>= (.warningLastTriggered) <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
-          , Just ""
-          , Just "### Notification Configuration"
-          , monitorM <&> \m -> "- **Alert Title**: " <> m.alertConfig.title
-          , monitorM <&> \m -> "- **Severity**: " <> m.alertConfig.severity
-          , monitorM <&> \m -> "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
-          , monitorM <&> \m -> if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
-          , guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
+        $ [ ""
+          , "## Alert Configuration"
+          , ""
+          , "### Query & Thresholds"
+          , "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
+          , "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
+          , "- **Current Value**: " <> show alertData.actualValue
+          , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
+          ]
+        -- Every remaining section is read off the monitor row, so each empties out
+        -- under its own heading when the monitor has been deleted.
+        <> concat
+          [ ["", heading] <> foldMap body monitorM
+          | (heading, body) <-
+              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
+              ,
+                ( "### Trigger Conditions"
+                , \m ->
+                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
+                      : catMaybes
+                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
+                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
+                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
+                        ]
+                )
+              ,
+                ( "### Current Status"
+                , \m ->
+                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
+                      : catMaybes
+                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
+                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
+                        ]
+                )
+              ,
+                ( "### Notification Configuration"
+                , \m ->
+                    [ "- **Alert Title**: " <> m.alertConfig.title
+                    , "- **Severity**: " <> m.alertConfig.severity
+                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
+                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
+                    ]
+                )
+              ]
+          ]
+        <> catMaybes
+          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
           , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
           ]
     formatQueryResults md =
@@ -2105,12 +2080,16 @@ instance ToHtml AnomalyListGet where
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
-issueRowAttrs (IssueVM _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
+issueRowAttrs (IssueVM _ _ issue) = class_ ("group/row hover:bg-fillWeaker " <> bg) : sty
   where
-    (bg, sty) = case display issue.base.severity of
-      "critical" -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
-      "warning" -> ("bg-fillWarning-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"])
-      _ -> ("", [])
+    -- Matched on the constructor, not on @display@: severity is typed everywhere
+    -- else on this page, and a Text round-trip would drop both tints silently if a
+    -- constructor were ever renamed.
+    (bg, sty) = case issue.base.severity of
+      Issues.Critical -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
+      Issues.Warning -> ("bg-fillWarning-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"])
+      Issues.Info -> ("", [])
+      Issues.Low -> ("", [])
 
 
 issueRowId :: IssueVM -> Text
@@ -2122,13 +2101,17 @@ issueRowId (IssueVM _ _ issue) = issue.base.id.toText
 -- their own icon and everything else reads as plain Active. Severity was 'Text' here for
 -- the same reason it was in 'severityBadge_' — callers 'display'ed a typed value to have
 -- it re-matched.
-anomalyStatusIndicator :: Bool -> Bool -> Issues.IssueSeverity -> (Text, Text, Text)
-anomalyStatusIndicator _ True _ = ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
-anomalyStatusIndicator True False _ = ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
-anomalyStatusIndicator False False Issues.Critical = ("octagon-exclamation", "text-fillError-strong", "Critical")
-anomalyStatusIndicator False False Issues.Warning = ("triangle-alert", "text-fillWarning-strong", "Warning")
-anomalyStatusIndicator False False Issues.Info = ("circle-alert", "text-textWeak", "Active")
-anomalyStatusIndicator False False Issues.Low = ("circle-alert", "text-textWeak", "Active")
+anomalyStatusIndicator :: Issues.Issue -> (Text, Text, Text)
+anomalyStatusIndicator issue
+  | isJust issue.archivedAt = ("archive", "text-fillStrong", "Archived \x2014 hidden, no notifications")
+  | isJust issue.acknowledgedAt = ("bell-slash", "text-fillSuccess-strong", "Acknowledged \x2014 notifications paused")
+  | otherwise = case issue.severity of
+      Issues.Critical -> ("octagon-exclamation", "text-fillError-strong", "Critical")
+      Issues.Warning -> ("triangle-alert", "text-fillWarning-strong", "Warning")
+      Issues.Info -> active
+      Issues.Low -> active
+  where
+    active = ("circle-alert", "text-textWeak", "Active")
 
 
 data IssueVM = IssueVM UTCTime Text Issues.IssueL
@@ -2231,7 +2214,7 @@ renderIssueMainCol pid (IssueVM currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt
-      (icon, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived b.severity
+      (icon, iconColor, tooltip) = anomalyStatusIndicator b
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
       stateBadges = do
         severityBadge_ b.severity
@@ -2271,7 +2254,7 @@ renderIssueMainCol pid (IssueVM currTime period issue) = do
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let b = issue.base
-      (icon, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) b.severity
+      (icon, iconColor, tooltip) = anomalyStatusIndicator b
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> b.id.toText
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
@@ -2312,7 +2295,7 @@ issueStateBadge_ = \case
 
 issuePreview_ :: Issues.IssueL -> Html ()
 issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
-  issueTypeBadge base.issueType base.critical
+  issueTypeChip_ True base.issueType base.critical
   whenJust base.service $ span_ [class_ "shrink-0", term "data-tippy-content" "Service"] . toHtml
   span_ [class_ "shrink-0 opacity-40"] "·"
   snippet
@@ -2326,9 +2309,8 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
         previewSnippet $ d.endpointMethod <> " " <> d.endpointPath <> if T.null d.endpointHost then "" else " on " <> d.endpointHost
       Nothing -> unparsablePayload_
     previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescSummary txt
-    summaryPreview txt = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ txt
     logPatternPreview pat sampleMsg
-      | "⇒" `T.isInfixOf` pat = summaryPreview pat
+      | "⇒" `T.isInfixOf` pat = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ pat
       | Just msg <- sampleMsg, not (T.null msg) = previewSnippet msg
       | otherwise = previewSnippet pat
 
@@ -2396,16 +2378,18 @@ anomalyArchiveButton pid aid archived =
       span_ [class_ "max-md:hidden"] $ toHtml $ bool @Text "Archive" "Unarchive" archived
 
 
-issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
-issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 text-xs font-medium " <> color] do
-  faSprite_ icon "regular" "w-3 h-3"; toHtml txt
-  where
-    (color, icon, txt) = issueTypeMeta issueType critical
-
-
-issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
-issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 text-2xs whitespace-nowrap " <> color, term "data-tippy-content" fullTxt] do
-  faSprite_ icon "regular" "w-3 h-3 shrink-0"; toHtml shortTxt
+-- | The issue's type as icon + label. @compact@ is the list\'s chip: tighter,
+-- abbreviated where the full label would not fit in a row, with the full text on
+-- hover. The detail header takes the roomier form.
+issueTypeChip_ :: Bool -> Issues.IssueType -> Bool -> Html ()
+issueTypeChip_ compact issueType critical =
+  span_
+    ( [class_ $ bool "flex items-center gap-1.5 text-xs font-medium " "flex items-center gap-1 text-2xs whitespace-nowrap " compact <> color]
+        <> [term "data-tippy-content" fullTxt | compact]
+    )
+    do
+      faSprite_ icon "regular" $ bool "w-3 h-3" "w-3 h-3 shrink-0" compact
+      toHtml $ bool fullTxt shortTxt compact
   where
     (color, icon, fullTxt) = issueTypeMeta issueType critical
     shortTxt = case issueType of
@@ -2453,13 +2437,14 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
   -- The journey comes out of the issue's trace, the one read on this page big
   -- enough to time out; it is bounded here so a slow trace costs the journey, not
   -- the issue-events timeline beside it.
-  journeySpans <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) -> do
-    res <- trySync $ timeout (env.traceViewTimeoutSecs * 1_000_000) $ Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now Nothing
-    case res of
-      Right (Just (Just (_, spans, _))) -> pure spans
-      Right (Just Nothing) -> pure V.empty
-      Right Nothing -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_TIMEOUT" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId])
-      Left e -> V.empty <$ Log.logAttention "ISSUE_JOURNEY_FETCH_FAILED" (AE.object ["issue_id" AE..= issueId, "trace_id" AE..= tId, "error" AE..= show @Text e])
+  journeySpans <- flip foldMapM ((,) <$> traceIdM <*> traceTsM) \(tId, tTs) ->
+    foldMap (\(_, spans, _) -> spans)
+      . join
+      <$> tryWithin
+        (Just $ env.traceViewTimeoutSecs * 1_000_000)
+        "ISSUE_JOURNEY_FETCH"
+        ["issue_id" AE..= issueId, "trace_id" AE..= tId]
+        (Telemetry.getTraceDetailsForView env.enableTimefusionReads pid tId (Just tTs) now Nothing)
   let userIds = ordNub $ mapMaybe (.createdBy) activities
   users :: [Projects.User] <-
     if null userIds
