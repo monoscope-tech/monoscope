@@ -672,9 +672,15 @@ newtype CustomerId = CustomerId {unCustomerId :: Text}
 -- Does /not/ touch @onboarding_steps_completed@: it used to take the caller's already-read
 -- vector and write the whole array back, which lost any step recorded in between. Callers
 -- that also complete a step call 'completeOnboardingStep' alongside this.
+--
+-- @active@ rides along on every statement that attaches a subscription (here,
+-- 'updateProjectBilling', 'upgradeToPaid', 'updateStripeProjectBilling'): we do not bill a
+-- switched-off project, which is the invariant @projects_subscribed_not_deactivated@
+-- (migration 0181) enforces. Without it, subscribing one of the projects a manual cleanup
+-- switched off would take the payment and then fail the write.
 updateProjectPricing :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)} where id=#{pid};|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{billingProviderFromSubId (Just subId.unSubId)}, active=TRUE where id=#{pid};|]
 
 
 -- | Mark an onboarding step complete, idempotently and atomically.
@@ -694,7 +700,7 @@ completeOnboardingStep pid step =
 
 updateProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItemId -> OrderId -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider}, active=TRUE WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
 
 -- | Which periodic report a row/notification belongs to. Encodes to exactly
@@ -1088,7 +1094,7 @@ upgradeToPaid orderId subId subItemId plan =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.projects
-         SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text, billing_provider = #{LemonSqueezyProvider}
+         SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text, billing_provider = #{LemonSqueezyProvider}, active = TRUE
        WHERE sub_id = #{subId}::text
           OR (sub_id IS NULL AND order_id = #{orderId}::text) |]
 
@@ -1413,7 +1419,7 @@ updateStripeProjectBilling :: DB es => ProjectId -> PlanName -> SubId -> SubItem
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
   -- Clear order_id so a late LemonSqueezy cancel webhook (from a prior LS→Stripe
   -- switch) can't rematch this project by order_id and downgrade to Free.
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId}, order_id = NULL, billing_provider = #{StripeProvider} WHERE id = #{pid}|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId}, order_id = NULL, billing_provider = #{StripeProvider}, active = TRUE WHERE id = #{pid}|]
 
 
 -- Sessions

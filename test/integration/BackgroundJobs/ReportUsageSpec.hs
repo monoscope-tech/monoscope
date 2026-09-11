@@ -450,3 +450,14 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       setBilling tr pid "Free" Nothing Nothing frozenTime
       setActive tr pid False
       projectFlags tr pid >>= (`shouldBe` (False, False))
+
+    -- …and subscribing one of those switches it back on rather than failing the
+    -- write: taking the payment and then rejecting the plan change is the worse
+    -- half of the same bug.
+    it "switches a project back on when a subscription is attached" \(tr, pid) -> do
+      setBilling tr pid "Free" Nothing Nothing frozenTime
+      setActive tr pid False
+      void
+        $ runTestBg frozenTime tr
+        $ Projects.updateProjectPricing pid (Projects.PlanName "GraduatedPricing") (Projects.SubId "445873") (Projects.SubItemId "377166") (Projects.OrderId "3062810")
+      projectFlags tr pid >>= (`shouldBe` (True, False))
