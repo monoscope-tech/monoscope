@@ -95,7 +95,7 @@ import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
-import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), JobOrdering (EarliestRunAtFirst), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
+import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
@@ -3132,8 +3132,20 @@ jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
   startJobRunner
     $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
   where
+    -- Drop the poll chatter. odd-jobs emits 'LogPoll' on every poll of the job
+    -- table, and a LevelWarn @LogText "NOT polling the job queue due to
+    -- concurrency control"@ on every poll while at max concurrency — so the
+    -- more backed up the queue is, the more log volume it produces. monoscope
+    -- re-ingests its own logs, making that a feedback loop: on 2026-09-11 the
+    -- records stalling an ingest partition were 105 KiB Kafka batches of 100
+    -- identical copies of exactly that line. Job outcomes still get logged.
     jobLogger :: OddJobs.Job.LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent)
+    jobLogger logLevel = \case
+      LogPoll -> pass
+      LogDeletionPoll _ -> pass
+      LogWebUIRequest -> pass
+      LogText t | "concurrency control" `T.isInfixOf` t -> pass
+      logEvent -> runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent)
 
 
 -- | Ensure a DailyJob is queued for today. Safe to call from multiple pods —

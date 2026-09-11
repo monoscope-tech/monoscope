@@ -339,6 +339,15 @@ workQueueBound :: Natural
 workQueueBound = 64
 
 
+-- | Consecutive 1s committer ticks with zero commits and unchanged, non-zero
+-- in-flight bytes before the consumer is declared wedged. 5 min is well past
+-- any legitimate batch: a backlog-drain batch is slow but still moves
+-- inflight_bytes as sub-chunks complete, so a value frozen to the byte for
+-- this long means a worker is parked, not busy.
+stallTicks :: Int
+stallTicks = 300
+
+
 data RetryRoute = RetryTier Text Int | Parking Text
   deriving stock (Eq, Show)
 
@@ -506,6 +515,28 @@ kafkaService appLogger appCtx tp role label dlqBase kafkaTopics batchSize fn = c
         <> K.extraProp "max.partition.fetch.bytes" "125829120" -- 120 MiB (librdkafka default 1 MiB)
         <> K.extraProp "fetch.max.bytes" "125829120" -- 120 MiB total per fetch (default 50 MiB)
         <> K.extraProp "receive.message.max.bytes" "167772160" -- 160 MiB socket buffer (> fetch.max.bytes)
+        -- Bound the NATIVE prefetch queue, which lives outside both the ingest
+        -- byte budget and the GHC heap. The pause/resume backpressure below
+        -- watches `inflightVar` (application bytes) and so cannot see it: on
+        -- 2026-09-11 a consumer held 5.25 GB of fetch queue while inflight sat
+        -- at 151 MB, well under the 256 MiB high-water mark — its container
+        -- carried ~3.4 GiB more RSS than its peers.
+        --
+        -- Defaults do not hold it. `queued.min.messages` is 100000 PER
+        -- topic+partition, which at the ~105 KiB records this topic carries is
+        -- an intent to buffer gigabytes per partition, and the byte cap
+        -- (`queued.max.messages.kbytes`, 64 MB) is documented as "may be
+        -- overshot by fetch.message.max.bytes" — for which
+        -- `max.partition.fetch.bytes` above is an alias, i.e. 120 MiB of
+        -- overshoot per partition. Both knobs are therefore set explicitly
+        -- rather than inherited.
+        --
+        -- The three ceilings above are deliberately NOT lowered: fbf0e2fef
+        -- (#442) raised them after an observed MSG_SIZE_TOO_LARGE re-seek wedge
+        -- on an oversized-but-valid DLQ re-publish, so shrinking them to bound
+        -- memory would trade this failure for that one.
+        <> K.extraProp "queued.max.messages.kbytes" "131072" -- 128 MiB
+        <> K.extraProp "queued.min.messages" "10000" -- default 100000, per partition
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         -- NO group.instance.id (static membership): a fenced/evicted static
         -- member never rejoins in-process — the group sat at 0 members while
@@ -608,6 +639,8 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
   inflightVar <- newTVarIO (0 :: Int)
   pausedVar <- newTVarIO False
+  -- (last inflight_bytes seen by the committer, consecutive stalled ticks).
+  stallVar <- newTVarIO (0 :: Int, 0 :: Int)
   -- Partitions a worker couldn't ack (transient failure): the poll thread reseeks
   -- each back to the recorded base so its un-acked chunk is redelivered+retried.
   reseekVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
@@ -677,6 +710,25 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
         unless (null commits && inflight == 0)
           $ LogBase.logInfo "kafka.consumer.metrics"
           $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
+        -- Escalate the wedge signature. A worker parked in one uninterruptible
+        -- libpq call (2026-07-04, and twice again on 2026-09-11) commits
+        -- nothing while inflight_bytes stays frozen at the identical value
+        -- every tick — the consumer looks alive, logs no error, and holds its
+        -- IngestBudget reservation, which starves the other consumer sharing
+        -- this process (the budget is a FIFO QSemN). Both incidents were found
+        -- by reading `rpk group describe` by hand; nothing paged. The info line
+        -- above carries the same numbers but is far too noisy to alert on, so
+        -- assert the invariant here instead: no commits AND unchanged non-zero
+        -- inflight for 'stallTicks' consecutive 1s ticks is never healthy.
+        stalledFor <- atomically do
+          (prev, n) <- readTVar stallVar
+          let n' = if null commits && inflight > 0 && inflight == prev then n + 1 else 0
+          writeTVar stallVar (inflight, n') $> n'
+        -- Re-warn on the same period so a wedge that persists keeps paging
+        -- rather than scrolling away after one line.
+        when (stalledFor >= stallTicks && stalledFor `mod` stallTicks == 0)
+          $ LogBase.logAttention "kafka.consumer.stalled"
+          $ AE.object ["client_id" AE..= clientId, "stalled_seconds" AE..= stalledFor, "inflight_bytes" AE..= inflight, "tracked_partitions" AE..= tracked]
       pollOnce = do
         -- Self-heal commit-starvation: redeliver chunks workers couldn't ack by
         -- seeking each partition back to its recorded base, and reset that

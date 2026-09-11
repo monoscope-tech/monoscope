@@ -103,6 +103,7 @@ library
     , http-types
     , lens
     , megaparsec
+    , openapi3
     , parser-combinators
     , regex-tdfa
     , relude                >=1.2.0.0
