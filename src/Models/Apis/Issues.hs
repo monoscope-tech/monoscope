@@ -1567,7 +1567,7 @@ selectIssueActivity pid issueId = do
         ORDER BY 3 DESC LIMIT 200 |]
   -- A spelling neither vocabulary knows means the DB grew an event kind that
   -- 'ActivityEvent' has not; say so rather than dropping it off the timeline.
-  let (unparsable, activities) = partitionEithers $ map toActivity rows
+  let (unparsable, activities) = partitionEithers (toActivity <$> rows)
   unless (null unparsable)
     $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])
   pure activities
