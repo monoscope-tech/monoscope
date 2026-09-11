@@ -303,7 +303,7 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
 -- The root retains onset evidence; thread replies contain only the new observation.
 monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
-  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open incident>"]])
+  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open issue>"]])
   where
     label = case status of Monitors.MSNormal -> "RECOVERED"; Monitors.MSWarning -> "WARNING"; Monitors.MSAlerting -> "ALERTING"
     threshold = case status of
@@ -360,11 +360,11 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         <> foldMap (" · " <>) (slackEscape <$> err.environment)
     current = slackSection text
     onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
-    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open incident>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
+    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
     actions =
       tagged "incident_actions"
         $ slackActions
-          ( slackButton "Open incident" (Just "primary") incidentUrl
+          ( slackButton "Open issue" (Just "primary") incidentUrl
               : maybeToList
                 ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
           )
@@ -391,7 +391,7 @@ incidentHeadline = slackEscape . T.take 160
 
 incidentActions :: Text -> Text -> AE.Value
 incidentActions incidentUrl monitorUrl =
-  tagged "incident_actions" $ slackActions [slackButton "Open incident" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]
+  tagged "incident_actions" $ slackActions [slackButton "Open issue" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]
 
 
 -- | Blocks a root update carries forward from the message that opened the
@@ -404,7 +404,7 @@ resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -
 resolvedErrorMessage err actor now projectUrl issueUrl =
   incidentMessage text [slackSection text, slackContext ["<" <> url <> "|" <> label <> ">"]]
   where
-    (url, label) = maybe (projectUrl <> "/issues", "Open project issues") (,"Open incident") issueUrl
+    (url, label) = maybe (projectUrl <> "/issues", "Open project issues") (,"Open issue") issueUrl
     name = T.strip $ actor.firstName <> " " <> actor.lastName
     text =
       "RESOLVED · "

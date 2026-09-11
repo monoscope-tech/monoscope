@@ -65,7 +65,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
@@ -86,7 +86,6 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
-import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
@@ -99,6 +98,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.Infrastructure qualified as Infrastructure
+import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -567,7 +567,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
-  , anomalies :: mode :- "p" :> ProjectId :> "issues" :> AnomaliesRoutes
+  , issues :: mode :- "p" :> ProjectId :> "issues" :> IssuesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
   , monitors :: mode :- "p" :> ProjectId :> "monitors" :> MonitorsRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
@@ -615,24 +615,24 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   deriving stock (Generic)
 
 
--- Anomalies Routes
-type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
+-- Issues Routes
+type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 
-type AnomaliesRoutes' :: Type -> Type
-data AnomaliesRoutes' mode = AnomaliesRoutes'
-  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowledge" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" AnomalyList.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
+type IssuesRoutes' :: Type -> Type
+data IssuesRoutes' mode = IssuesRoutes'
+  { acknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unAcknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
+  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
-  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
@@ -1017,7 +1017,7 @@ cookieProtectedServer =
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
-    , anomalies = anomaliesServer
+    , issues = issuesServer
     , monitors = monitorsServer
     , traces = telemetryServer
     }
@@ -1052,27 +1052,27 @@ logExplorerServer pid =
     }
 
 
--- Anomalies server
-anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
-anomaliesServer pid =
-  AnomaliesRoutes'
-    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid True
-    , unAcknowlegeGet = \aid -> AnomalyList.acknowledgeAnomalyGetH pid False aid Nothing
-    , archiveGet = AnomalyList.archiveAnomalyGetH pid True
-    , unarchiveGet = AnomalyList.archiveAnomalyGetH pid False
-    , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
-    , listGet = AnomalyList.anomalyListGetH pid
-    , anomalyGet = AnomalyList.anomalyDetailGetH pid
-    , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
-    , assignErrorPost = AnomalyList.assignErrorPostH pid
-    , resolveErrorPost = AnomalyList.resolveErrorPostH pid
-    , errorSubscriptionPost = AnomalyList.errorSubscriptionPostH pid
-    , aiChatPost = AnomalyList.aiChatPostH pid
-    , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
-    , sampleGet = AnomalyList.issueSampleGetH pid
-    , activityGet = AnomalyList.issueActivityGetH pid
-    , errorGroupMembersGet = AnomalyList.errorGroupMembersGetH pid
-    , errorUnmergePost = AnomalyList.errorUnmergePostH pid
+-- Issues server
+issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
+issuesServer pid =
+  IssuesRoutes'
+    { acknowlegeGet = IssuesPage.acknowledgeIssueGetH pid True
+    , unAcknowlegeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
+    , archiveGet = IssuesPage.archiveIssueGetH pid True
+    , unarchiveGet = IssuesPage.archiveIssueGetH pid False
+    , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid
+    , listGet = IssuesPage.issueListGetH pid
+    , detailGet = IssuesPage.issueDetailGetH pid
+    , detailHashGet = IssuesPage.issueDetailHashGetH pid
+    , assignErrorPost = IssuesPage.assignErrorPostH pid
+    , resolveErrorPost = IssuesPage.resolveErrorPostH pid
+    , errorSubscriptionPost = IssuesPage.errorSubscriptionPostH pid
+    , aiChatPost = IssuesPage.aiChatPostH pid
+    , aiChatHistoryGet = IssuesPage.aiChatHistoryGetH pid
+    , sampleGet = IssuesPage.issueSampleGetH pid
+    , activityGet = IssuesPage.issueActivityGetH pid
+    , errorGroupMembersGet = IssuesPage.errorGroupMembersGetH pid
+    , errorUnmergePost = IssuesPage.errorUnmergePostH pid
     }
 
 

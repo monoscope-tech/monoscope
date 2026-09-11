@@ -887,6 +887,9 @@ processSlackEvent receiptId =
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
       unless (slackData.teamId == workspaceId) $ throwError err403
+      -- An alert thread resolves to the issue it is about, so the Slack
+      -- investigation and that issue's in-app chat are one conversation.
+      convId <- Incidents.threadConversationId slackData.projectId workspaceId event.channel threadTs
       let access = AI.SlackInvestigationAccess $ AI.SlackInvestigation workspaceId event.user principal.userId event.channel threadTs event.ts
           addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           historyMessage message =
@@ -896,12 +899,12 @@ processSlackEvent receiptId =
               <$> withBotThread
                 Slack
                 slackData.projectId
-                (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs)
+                convId
                 Issues.CTSlackThread
                 (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
                 (fmap (map historyMessage . filter ((/= event.ts) . (.ts))) <$> getChannelMessages access slackData.projectId slackData.botToken event.channel threadTs event.ts)
           deliverAnswer = do
-            let turn = Investigations.Turn slackData.projectId (Issues.slackScopedConversationId slackData.projectId workspaceId event.channel threadTs) principal.userId event.ts
+            let turn = Investigations.Turn slackData.projectId convId principal.userId event.ts
             batch <-
               Investigations.loadReplyBatch turn
                 >>= maybe
@@ -1074,7 +1077,8 @@ reconcileReplyHistory :: (DB es, HTTP :> es, Log.Log :> es) => Text -> AI.AgentA
 reconcileReplyHistory appId access slackData turn part =
   unless (T.null appId) $ Investigations.loadReplySearch turn part >>= traverse_ \search -> do
     AI.requireAgentAccess access turn.projectId
-    unless (search.teamId == slackData.teamId && turn.conversationId == Issues.slackScopedConversationId turn.projectId search.teamId search.channelId search.threadTs) $ throwIO AI.AgentAccessDenied
+    expected <- Incidents.threadConversationId turn.projectId search.teamId search.channelId search.threadTs
+    unless (search.teamId == slackData.teamId && turn.conversationId == expected) $ throwIO AI.AgentAccessDenied
     outcome <- searchPublicationHistory appId slackData "monoscope_investigation_reply" search
     AI.requireAgentAccess access turn.projectId
     settlePublicationSearch (Investigations.confirmReplyPublication search.publicationId) (Investigations.saveReplySearchCursor search) outcome

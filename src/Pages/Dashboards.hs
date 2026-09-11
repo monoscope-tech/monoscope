@@ -92,12 +92,12 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
-import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
+import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
@@ -324,7 +324,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           -- Tab system with htmx lazy loading - only render active tab content
           -- Re-init grids after htmx settles new tab content. The id guard stays: swaps
           -- inside individual widgets bubble up to this element too. htmx 4's native
-          -- event detail carries no `elt` (see Anomalies.hs), so branch on event.target.
+          -- event detail carries no `elt` (see ApiChanges.hs), so branch on event.target.
           div_
             [ class_ "dashboard-tabs-container"
             , id_ "dashboard-tabs-content"
@@ -915,7 +915,7 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
       $ widget
       & #html
         ?~ renderText
-          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ AnomalyList.issueCardCompact_ pid now)
+          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
     -- Fetch table data
     tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams

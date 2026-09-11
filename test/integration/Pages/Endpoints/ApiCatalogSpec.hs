@@ -357,19 +357,19 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
     --   if V.length nonEndpointIssues > 0 then do
     --     -- Get anomalies through the API
     --     pg <- testServant tr $
-    --       AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    --       IssuesPage.issueListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
     --
     --     case pg of
-    --       AnomalyList.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
+    --       IssuesPage.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
     --         -- We should have anomalies (shape, field, or format)
     --         V.length anomalies `shouldSatisfy` (> 0)
     --
     --         -- Test bulk acknowledge with first anomaly
     --         case V.headM anomalies of
-    --           Just (AnomalyList.IssueVM _ _ _ firstAnomaly) -> do
-    --             let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
+    --           Just (IssuesPage.IssueVM _ _ _ firstAnomaly) -> do
+    --             let bulkFrm = IssuesPage.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
     --             _ <- testServant tr $
-    --               AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
+    --               IssuesPage.issueBulkActionsPostH testPid "acknowlege" bulkFrm
     --             pass
     --           Nothing -> error "Expected at least one anomaly"
     --       _ -> error "Unexpected response from anomaly list"

@@ -1,4 +1,12 @@
-module Models.Apis.Anomalies (
+-- | The API-change detector: rows in @apis.anomalies@ that the schema-learning
+-- worker writes when an endpoint, shape, field, or format drifts. They are
+-- evidence, not a triage object — every one of them rolls up into an
+-- @api_change@ 'Models.Apis.Issues.Issue', which is what a user acts on.
+--
+-- Lifecycle state (acknowledged\/archived) lives on the issue alone; it used to
+-- be mirrored onto these rows and kept in sync by a prefix sweep over 6.3M rows
+-- that nothing ever read back.
+module Models.Apis.ApiChanges (
   AnomalyVM (..),
   AnomalyActions (..),
   AnomalyTypes (..),
@@ -10,9 +18,6 @@ module Models.Apis.Anomalies (
   parseAnomalyTypes,
   detectService,
   getAnomaliesVM,
-  acknowlegeCascade,
-  acknowledgeAnomalies,
-  archiveAnomaliesAndIssues,
 )
 where
 
@@ -113,8 +118,7 @@ data AnomalyVM = AnomalyVM
   , endpointEnvironment :: Maybe Text
   , endpointHost :: Maybe Text
   , --
-    archivedAt :: Maybe ZonedTime
-  , eventsCount14d :: Int
+    eventsCount14d :: Int
   , lastSeen :: ZonedTime
   }
   deriving stock (Generic, Show)
@@ -174,7 +178,6 @@ SELECT
     endpoints.service_name endpoint_service_name,
     endpoints.environment endpoint_environment,
     COALESCE(an.host, endpoints.host) endpoint_host,
-    an.archived_at,
     COALESCE(iss.affected_requests, 0),#{now}::timestamptz
 from
     apis.anomalies an
@@ -184,111 +187,6 @@ from
 where
   an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]
-
-
--- | Acknowledge issues by id and cascade to anomalies referenced via @issue_data.anomaly_hashes@.
--- Returned target_hashes are passed to 'acknowlegeCascade' by the caller for an additional
--- LIKE-prefix sweep on the legacy hash space.
--- @until'@ is the end of the acknowledgement window (see @Issues.ackUntil@); it
--- is what actually silences notifications, so it must be stamped everywhere
--- @acknowledged_at@ is.
-acknowledgeAnomalies :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UTCTime -> V.Vector Text -> Eff es [Text]
-acknowledgeAnomalies pid uid until' issueIds
-  | V.null issueIds = pure []
-  | otherwise = do
-      now <- Time.currentTime
-      Hasql.interp
-        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}, acknowledged_until=#{until'}
-                 WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
-        -- Project-scoped for the same two reasons as 'acknowlegeCascade': an anomaly hash is
-        -- content-derived and not unique across projects, and (project_id, target_hash) is the
-        -- index this can actually use.
-        <* Hasql.interpExecute_
-          ( relatedAnomalyHashes pid issueIds
-              <> [HI.sql| UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
-                          WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
-          )
-
-
--- | Sweep every issue and anomaly whose @target_hash@ starts with one of @targets@.
---
--- Scoped to the project. It was not, and a @target_hash@ is derived from content — two
--- projects seeing the same endpoint or error shape can produce the same 8-character hash, and
--- acknowledging in one would then silence the other. Scoping is also what lets the sweep use
--- an index: every index on these tables leads with @project_id@, so without it both statements
--- were sequential scans of tables that are 1.7 GB (issues) and 2.4 GB / 6.3M rows (anomalies).
--- A @LIKE@ against a parameter array is not sargable on its own, so the sweep also narrows on
--- @LEFT(target_hash, 8)@ — the expression migration 0130 already built an index on for exactly
--- this shape, on both tables. The LIKE stays as the exact test; the prefix equality only picks
--- the pages to look at. Measured on prod with EXPLAIN, per statement:
---
--- @
---   issues     Seq Scan 11,438  ->  +project_id 375  ->  +prefix index    2.64
---   anomalies  Seq Scan 224,708 ->  +project_id ~170k -> +prefix index   41.66
--- @
---
--- The pre-filter is only a valid superset while every target is at least the 8 characters the
--- index is built on: for a shorter target, @LEFT(row, 8)@ is longer than the target itself and
--- the filter would drop rows the LIKE would have matched. Hence the guard rather than an
--- unconditional narrowing — an 8-char hash is what the schema produces, but this function also
--- sweeps legacy hashes and must not quietly stop finding them.
-acknowlegeCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> UTCTime -> V.Vector Text -> Eff es Int64
-acknowlegeCascade pid uid until' targets
-  | V.null targets = pure 0
-  | otherwise = do
-      now <- Time.currentTime
-      let hashes = (<> "%") <$> targets
-          prefixes = T.take hashPrefixWidth <$> targets
-          prefixNarrowing
-            | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
-            | otherwise = mempty
-      Hasql.interpExecute_
-        $ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE project_id = #{pid} |]
-        <> prefixNarrowing
-        <> [HI.sql| AND target_hash LIKE ANY(#{hashes}) |]
-      Hasql.interpExecute
-        $ [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE project_id = #{pid} |]
-        <> prefixNarrowing
-        <> [HI.sql| AND target_hash LIKE ANY(#{hashes}) |]
-
-
--- | Width of the endpoint hash that @idx_{issues,anomalies}_project_endpoint_prefix@ index.
--- Migration 0130: a @target_hash@ is an 8-char endpoint hash optionally followed by a
--- 16-char field/shape suffix.
-hashPrefixWidth :: Int
-hashPrefixWidth = 8
-
-
--- | The @anomaly_hashes@ carried by a set of issues, as a @related(h)@ CTE.
---
--- Project-scoped on the way in: the ids arrive from a bulk-action form, so without it any
--- issue id at all is archivable\/acknowledgeable by any tenant.
-relatedAnomalyHashes :: Projects.ProjectId -> V.Vector Text -> HI.Sql
-relatedAnomalyHashes pid issueIds =
-  [HI.sql| WITH related AS (
-             SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-             FROM apis.issues WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[])
-           ) |]
-
-
--- | Archive issues by id and cascade-archive their underlying anomalies via
--- the @issue_data.anomaly_hashes@ JSONB field. Returns the row count from the
--- issues update (the user-visible action target).
---
--- Project-scoped for the reasons spelled out on 'acknowlegeCascade': the ids come straight
--- off a bulk-action form, and a @target_hash@ is content-derived so it collides across
--- tenants. Unscoped, this archived another project's issues and anomalies.
-archiveAnomaliesAndIssues :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es Int64
-archiveAnomaliesAndIssues pid issueIds
-  | V.null issueIds = pure 0
-  | otherwise = do
-      now <- Time.currentTime
-      Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE project_id=#{pid} AND id=ANY(#{issueIds}::uuid[]) |]
-        <* Hasql.interpExecute_
-          ( relatedAnomalyHashes pid issueIds
-              <> [HI.sql| UPDATE apis.anomalies a SET archived_at=#{now}
-                          WHERE a.project_id = #{pid} AND a.target_hash IN (SELECT h FROM related) |]
-          )
 
 
 -- Orphans: postgresql-simple's Aeson wrapper provides neither.

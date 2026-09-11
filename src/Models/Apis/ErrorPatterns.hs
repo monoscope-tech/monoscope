@@ -58,6 +58,17 @@ newtype ErrorPatternId = ErrorPatternId {unErrorPatternId :: UUID.UUID}
   deriving anyclass (HI.DecodeRow)
 
 
+-- | How an error pattern is trending. This deliberately overlaps
+-- @Incidents.EpisodePhase@ (@active@\/@recovered@\/@resolved@) and the two are
+-- bridged by @Incidents.resolveErrorIncident@, which flips both in one
+-- transaction.
+--
+-- They are not merged, and that is a design decision rather than an oversight:
+-- this describes the /signal/ (is the error getting worse?) while a phase
+-- describes one /notification episode/ (is a Slack thread still open?). One
+-- pattern outlives many episodes, so collapsing them would need the escalation
+-- states to mean something per-episode. Revisit only with that answer in hand —
+-- the bridge is the contract, so any change has to keep the two in step.
 data ErrorState
   = ESNew
   | ESEscalating

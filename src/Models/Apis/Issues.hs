@@ -40,6 +40,7 @@ module Models.Apis.Issues (
   insertIssue,
   insertIssueReturningId,
   insertIssueReturningIdTx,
+  reopenOrInsertIssueTx,
   selectIssueById,
   selectIssues,
   IssueProjection (..),
@@ -55,6 +56,7 @@ module Models.Apis.Issues (
   indefiniteUntil,
   isSilenced,
   setAckState,
+  ackCascade,
   expireAcks,
   setArchiveState,
   autoArchiveStaleDiscoveryIssues,
@@ -102,6 +104,9 @@ module Models.Apis.Issues (
 
   -- * Activity Log
   IssueEvent (..),
+  EpisodeKind (..),
+  ActivityEvent (..),
+  parseActivityEvent,
   IssueActivity (..),
   logIssueActivity,
   selectLatestStateEvent,
@@ -149,13 +154,13 @@ import GHC.Records (HasField)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
-import Models.Apis.Anomalies (PayloadChange)
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges (PayloadChange)
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC, rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
@@ -403,6 +408,40 @@ insertIssueReturningIdTx :: Issue -> Tx.Transaction IssueId
 insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True . insertIssueSql
 
 
+-- | The issue a recurring signal belongs to: the existing one, reopened, or a
+-- fresh row if the signal has never fired.
+--
+-- 'insertIssueSql' already upserts while an issue is /open/ — its partial unique
+-- index covers only open rows — so a monitor that fired, was acknowledged, then
+-- fired again used to start a brand new issue and strand its history on the old
+-- one. A monitor's @target_hash@ is its id, so there is exactly one signal here
+-- and it deserves exactly one long-lived row carrying every episode.
+--
+-- An acknowledgement is a snooze, not a dismissal: while @acknowledged_until@ is
+-- still in the future the row keeps its ack and only its activity is bumped, so a
+-- firing inside the window cannot un-silence what someone deliberately quieted.
+-- Past that window the row is reopened and the upsert merges the fresh reading.
+reopenOrInsertIssueTx :: UTCTime -> Issue -> Tx.Transaction IssueId
+reopenOrInsertIssueTx now issue = do
+  prior <-
+    Hasql.queryTx
+      [HI.sql| SELECT id, COALESCE(acknowledged_until > #{now}, FALSE)
+               FROM apis.issues
+               WHERE project_id = #{issue.projectId} AND target_hash = #{issue.targetHash}
+                 AND issue_type = #{issue.issueType}::apis.issue_type
+               ORDER BY created_at DESC LIMIT 1 |]
+  case listToMaybe prior of
+    Just (iid, True) -> iid <$ Hasql.executeTx (touchIssueSqlWith mempty now iid)
+    -- Clearing ack/archive first is what lets the upsert below find the row: its
+    -- conflict target only matches open issues.
+    Just (iid, False) -> do
+      Hasql.executeTx
+        [HI.sql| UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_by = NULL,
+                   acknowledged_until = NULL, archived_at = NULL WHERE id = #{iid} |]
+      insertIssueReturningIdTx issue
+    Nothing -> insertIssueReturningIdTx issue
+
+
 insertIssueSql :: Issue -> HI.Sql
 insertIssueSql i =
   [HI.sql|
@@ -469,13 +508,15 @@ selectIssueByHash pid tgtHash scope =
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
 -- (each written with a leading comma).
 touchIssue :: (DB es, Time :> es) => HI.Sql -> IssueId -> Eff es ()
-touchIssue extra issueId = do
-  now <- Time.currentTime
-  Hasql.interpExecute_
-    [HI.sql| UPDATE apis.issues SET updated_at = #{now}^{extra},
-            issue_data = issue_data || jsonb_build_object('occurrence_count',
-              COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
-          WHERE id = #{issueId} |]
+touchIssue extra issueId = Time.currentTime >>= \now -> Hasql.interpExecute_ (touchIssueSqlWith extra now issueId)
+
+
+touchIssueSqlWith :: HI.Sql -> UTCTime -> IssueId -> HI.Sql
+touchIssueSqlWith extra now issueId =
+  [HI.sql| UPDATE apis.issues SET updated_at = #{now}^{extra},
+          issue_data = issue_data || jsonb_build_object('occurrence_count',
+            COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
+        WHERE id = #{issueId} |]
 
 
 -- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
@@ -759,6 +800,60 @@ setAckState pid iids ackM
           WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
+-- | Width of the endpoint hash that @idx_issues_project_endpoint_prefix@ indexes.
+-- Migration 0130: a @target_hash@ is an 8-char endpoint hash optionally followed
+-- by a 16-char field\/shape suffix.
+hashPrefixWidth :: Int
+hashPrefixWidth = 8
+
+
+-- | Acknowledge issues by id, then sweep every sibling sharing their endpoint
+-- prefix. Acking an endpoint's issue has to silence the field and shape issues
+-- underneath it, or the same change keeps notifying through a different row.
+--
+-- Project-scoped: a @target_hash@ is content-derived, so two tenants seeing the
+-- same endpoint shape produce the same 8-character hash and an unscoped sweep
+-- would silence the other tenant's issues. Scoping is also what lets the sweep
+-- use an index — every index on the table leads with @project_id@.
+--
+-- @LIKE@ against a parameter array is not sargable on its own, so the sweep also
+-- narrows on @LEFT(target_hash, 8)@, the expression migration 0130 indexed for
+-- exactly this shape. The LIKE stays as the exact test; the prefix equality only
+-- picks the pages to look at. Measured on prod with EXPLAIN:
+--
+-- @
+--   Seq Scan 11,438ms  ->  +project_id 375ms  ->  +prefix index 2.64ms
+-- @
+--
+-- That narrowing is only a valid superset while every target is at least the 8
+-- characters the index is built on: for a shorter target @LEFT(row, 8)@ is longer
+-- than the target itself and the filter would drop rows the LIKE would match.
+-- Hence the guard rather than an unconditional narrowing — an 8-char hash is what
+-- the schema produces, but this also sweeps legacy hashes and must keep finding them.
+ackCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> AckWindow -> [IssueId] -> Eff es Int64
+ackCascade pid uid window iids
+  | null iids = pure 0
+  | otherwise = do
+      now <- Time.currentTime
+      void $ setAckState pid iids $ Just AckSet{at = now, by = Just uid, window}
+      targets <-
+        Hasql.interp @[Text]
+          [HI.sql| SELECT target_hash FROM apis.issues WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+      if null targets
+        then pure 0
+        else do
+          let prefixes = T.take hashPrefixWidth <$> targets
+              prefixNarrowing
+                | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
+                | otherwise = mempty
+          Hasql.interpExecute
+            $ [HI.sql| UPDATE apis.issues
+                       SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{ackUntil now window}
+                       WHERE project_id = #{pid} |]
+            <> prefixNarrowing
+            <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) |]
+
+
 -- | Clear acknowledgements whose window has closed, returning the affected ids so
 -- the caller can log 'IEAckExpired'. Nothing else clears a timed ack, so this is
 -- what stops one from silently rotting out of sight forever.
@@ -859,7 +954,7 @@ autoArchiveStaleDiscoveryIssues pid now days =
 
 
 -- | Create API Change issue from anomalies
-createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty Anomalies.AnomalyVM -> Eff es Issue
+createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty ApiChanges.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
   let firstAnomaly = head anomalies
       apiChangeData =
@@ -882,11 +977,11 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , targetHash = endpointHash
       , parentHash = Nothing
       , isFramework = False
-      , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
+      , service = Just $ ApiChanges.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
       , severity = if isCritical then Critical else Warning
       , title =
-          if any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+          if any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
       , recommendedAction = defaultRecommendedAction
@@ -1380,16 +1475,46 @@ data IssueEvent
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
 
 
+-- | What one alert episode recorded, as stored in @apis.incident_events@.
+data EpisodeKind = EKAlert | EKObservation | EKReminder | EKDataUnavailable | EKRecovered | EKResolved
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
+
+
+-- | One thing that happened to an issue: a lifecycle transition someone (or the
+-- ack sweeper) caused, or an alert episode the delivery pipeline recorded.
+--
+-- These were two tables telling one story out of order — the audit log knew an
+-- issue was acknowledged at 09:12 and the episode ledger knew it fired again at
+-- 09:40, and neither could say so. Interleaved they read as a sequence.
+data ActivityEvent = Lifecycle IssueEvent | Episode EpisodeKind
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | The stored spelling of a timeline row. Episode kinds stay namespaced because
+-- the two vocabularies overlap — @resolved@ means both.
+--
+-- >>> parseActivityEvent "acknowledged"
+-- Just (Lifecycle IEAcknowledged)
+-- >>> parseActivityEvent "episode:data_unavailable"
+-- Just (Episode EKDataUnavailable)
+-- >>> (parseActivityEvent "episode:nonsense", parseActivityEvent "nonsense")
+-- (Nothing,Nothing)
+parseActivityEvent :: Text -> Maybe ActivityEvent
+parseActivityEvent raw = case T.stripPrefix "episode:" raw of
+  Just kind -> Episode <$> decodeEnumSC @"EK" (toString kind)
+  Nothing -> Lifecycle <$> rightToMaybe (parseUrlPiece raw)
+
+
 data IssueActivity = IssueActivity
-  { id :: Int64
-  , issueId :: IssueId
-  , event :: IssueEvent
+  { event :: ActivityEvent
   , createdBy :: Maybe Projects.UserId
-  , metadata :: Maybe (Aeson AE.Value)
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData)
+  deriving anyclass (NFData)
 
 
 -- | The issue's most recent state-changing event, for the detail page's badge.
@@ -1421,14 +1546,26 @@ logIssueActivity issueId event createdBy metadataM = do
     WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
 
 
+-- | An issue's whole timeline, newest first: its own lifecycle log plus every
+-- event of every alert episode that hung off it. The episodes are reachable from
+-- here and nowhere else, which is the point — an episode is a chapter of an
+-- issue, not a thing to go and look at separately.
 selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId =
-  Hasql.interp
-    [HI.sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
+  mapMaybe toActivity
+    <$> Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime)]
+      [HI.sql| SELECT a.event::text, a.created_by, a.created_at
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
         WHERE a.issue_id = #{issueId} AND i.project_id = #{pid}
-        ORDER BY a.created_at DESC LIMIT 200 |]
+        UNION ALL
+        SELECT 'episode:' || ev.event_kind, ev.actor_id, ev.observed_at
+        FROM apis.incident_events ev
+        JOIN apis.incident_episodes ep ON ep.id = ev.episode_id
+        WHERE ep.issue_id = #{issueId} AND ep.project_id = #{pid}
+        ORDER BY 3 DESC LIMIT 200 |]
+  where
+    toActivity (raw, by, at) = (\e -> IssueActivity e by at) <$> parseActivityEvent raw
 
 
 -- Reports

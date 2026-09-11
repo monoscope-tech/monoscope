@@ -34,7 +34,7 @@ import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, type (:>))
 import Effectful.Time qualified as Time
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB)
@@ -140,10 +140,10 @@ buildAnomalyRows priors dirty =
     ]
   where
     kindLabel = \case
-      Catalog.AKEndpoint -> Anomalies.ATEndpoint
-      Catalog.AKShape -> Anomalies.ATShape
-      Catalog.AKField -> Anomalies.ATField
-      Catalog.AKFormat -> Anomalies.ATFormat
+      Catalog.AKEndpoint -> ApiChanges.ATEndpoint
+      Catalog.AKShape -> ApiChanges.ATShape
+      Catalog.AKField -> ApiChanges.ATField
+      Catalog.AKFormat -> ApiChanges.ATFormat
 
 
 templateRowOf :: UTCTime -> CatalogEntry -> SC.TemplateRow

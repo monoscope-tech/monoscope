@@ -23,7 +23,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Anomalies qualified as Anomalies
+import Pages.Issues qualified as ApiChanges
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
 import Pkg.DeriveUtils (UUIDId (..))
@@ -106,13 +106,13 @@ spec = around withTestResources do
       advanceMinutes tr 1
       (silenced, _) <- captureNotifs tr $ notifyErrorSubscriptions testPid [sample.hash]
       messages silenced `shouldBe` []
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid notified.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid notified.id.unErrorPatternId
       (closed, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       length (messages closed) `shouldBe` 4
       for_ (messages closed) \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RESOLVED" . decodeUtf8 . toStrict)
 
     it "keeps one error episode across different issue records and resolves its original incident link" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       setupSlackData tr testPid "T1"
       let sample = def{Errors.when = frozenTime, Errors.hash = "stable-error-episode", Errors.errorType = "CheckoutError"}
       void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample] frozenTime
@@ -156,7 +156,7 @@ spec = around withTestResources do
       (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
       void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       advanceMinutes tr 1
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
       (resolution, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let messages = [sd | Notify.SlackNotification sd <- resolution]
@@ -183,7 +183,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
       advanceMinutes tr 1
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
       (orphaned, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let orphanedMessages = [sd | Notify.SlackNotification sd <- orphaned]
@@ -194,7 +194,7 @@ spec = around withTestResources do
         body `shouldSatisfy` not . T.isInfixOf nextIssue.id.toText
 
     it "records manual error resolution once and updates both incident threads without claiming recovery" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       setupSlackData tr testPid "T1"
       let sample = def{Errors.when = frozenTime, Errors.hash = "manual-resolution", Errors.errorType = "CheckoutError", Errors.message = "payment declined"}
           actor = (Servant.getResponse tr.trSessAndHeader).user
@@ -208,7 +208,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       advanceMinutes tr 1
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
       Just denied <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       denied.state `shouldBe` Errors.ESNew
       let resolve pid = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id (addUTCTime 60 frozenTime) (const update.rootPayload)
@@ -222,18 +222,18 @@ spec = around withTestResources do
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
         void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|]
-      testServant tr (Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
+      testServant tr (ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
       Just rolledBack <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       (rolledBack.state, rolledBack.resolvedAt, rolledBack.resolvedBy) `shouldBe` (Errors.ESNew, Nothing, Nothing)
       activityBefore <- runTestBgNoReset tr $ Issues.selectIssueActivity testPid issue.id
-      activityBefore `shouldSatisfy` all (\a -> a.event /= Issues.IEResolved && a.event /= Issues.IEAutoResolved)
+      activityBefore `shouldSatisfy` all (\a -> a.event `notElem` map Issues.Lifecycle [Issues.IEResolved, Issues.IEAutoResolved])
       void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|]
       void
         $ concurrently
-          (testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId)
-          (testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId)
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
       events <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
       events `shouldBe` [("resolved" :: Text, Just actor.id)]
       activity <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
@@ -278,13 +278,13 @@ spec = around withTestResources do
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
       let deliveryCount = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] :: IO [PGS.Only Int64]
       beforeLegacy <- deliveryCount
-      void $ testServant tr $ Anomalies.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
+      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
       deliveryCount `shouldReturn` beforeLegacy
       Just legacyResolved <- runTestBgNoReset tr $ Errors.getErrorPatternById legacyErr.id
       (legacyResolved.state, legacyResolved.resolvedBy) `shouldBe` (Errors.ESResolved, Just actor.id)
 
     it "marks missing monitor data in existing threads and waits for a measured recovery" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
       withResource tr.trPool \conn -> do
@@ -334,7 +334,7 @@ spec = around withTestResources do
       (roots :: [PGS.Only Int64]) `shouldBe` [PGS.Only 2]
 
     it "keeps warning, escalation, and recovery in two monitor threads and preserves the onset snapshot" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
       withResource tr.trPool \conn -> do
@@ -370,7 +370,7 @@ spec = around withTestResources do
       map (.threadTs) recurring `shouldBe` [Nothing, Nothing]
 
     it "records recovery while muted and refreshes the root when delivery resumes" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       I.MonitorIncident mid <- pure update.source
       setupSlackData tr testPid "T1"
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.teams SET slack_channels = ARRAY['C1'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (PGS.Only testPid)
@@ -409,7 +409,7 @@ spec = around withTestResources do
       committed.currentStatus `shouldBe` Monitors.MSAlerting
 
     it "delivers channel-specific roots, replies, and updates through the notification worker" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       setupSlackData tr testPid "T1"
       void $ runTestBgNoReset tr $ I.recordIncidentEvent update
       (rootNotifications, _) <- captureNotifs tr runSlackIncidentDeliveries
@@ -441,7 +441,7 @@ spec = around withTestResources do
       again `shouldBe` []
 
     it "deduplicates destinations and events, orders recovery behind roots, and starts a new episode on recurrence" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       let run :: ATBackgroundCtx a -> IO a
           run = runTestBgNoReset tr
           recoveredAt = addUTCTime 60 update.observedAt
@@ -473,7 +473,7 @@ spec = around withTestResources do
       fmap (.phase) <$> run (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeActive
 
     it "keeps ambiguous roots pending reconciliation and rejects an old worker after a scheduled retry" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       let run :: ATBackgroundCtx a -> IO a
           run = runTestBgNoReset tr
           now = update.observedAt
@@ -491,7 +491,7 @@ spec = around withTestResources do
       run (I.claimSlackDeliveries (addUTCTime 123 retryAt)) `shouldReturn` []
 
     it "rejects foreign sources, ignores stale transitions, and makes webhook acceptance wait for a root timestamp" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       let run :: ATBackgroundCtx a -> IO a
           run = runTestBgNoReset tr
           now = update.observedAt
@@ -506,7 +506,7 @@ spec = around withTestResources do
       run (I.getEpisode (UUIDId $ UUID.fromWords 0 0 0 999) episode.id) `shouldReturn` Nothing
 
     it "captures only this app's signed root in the original workspace and channel" \tr -> do
-      update <- setup tr
+      update <- setupWithIssue tr
       setupSlackData tr testPid "T1"
       let run :: ATBackgroundCtx a -> IO a
           run = runTestBgNoReset tr
@@ -525,7 +525,7 @@ spec = around withTestResources do
 
     for_ [I.WebhookAccepted, I.DeliveryUncertain "lost_ack"] $ \accepted ->
       it ("recovers an incident root through leased history pages after " <> show accepted) \tr -> do
-        update <- setup tr
+        update <- setupWithIssue tr
         setupSlackData tr testPid "T1"
         let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_TEST"}}}
             run :: ATBackgroundCtx a -> IO a
@@ -584,7 +584,7 @@ spec = around withTestResources do
 
     for_ [False, True] $ \lostAck ->
       it ("reconciles lifecycle replies and edits after " <> if lostAck then "lost acknowledgements" else "expired send leases") \tr -> do
-        update <- setup tr
+        update <- setupWithIssue tr
         setupSlackData tr testPid "T1"
         let resources = tr{trATCtx = tr.trATCtx{Config.env = tr.trATCtx.env{Config.slackAppId = "A_TEST"}}}
             run :: ATBackgroundCtx a -> IO a
@@ -675,6 +675,23 @@ setup tr = do
       , I.replyPayload = payload
       , I.destinations = [I.SlackDestination "T1" "C1", I.SlackDestination "T1" "C2", I.SlackDestination "T1" "C1"]
       }
+
+
+-- | The same update, carrying the monitor's issue.
+--
+-- An episode cannot open without an issue, so a fixture that records an alert
+-- directly has to commit the row 'commitQueryMonitorEvaluation' commits for it.
+-- 'setup' deliberately stops short of that: the rollback spec asserts the issue
+-- is created inside the outbox transaction and vanishes with it.
+setupWithIssue :: TestResources -> IO I.IncidentUpdate
+setupWithIssue tr = do
+  update <- setup tr
+  I.MonitorIncident mid <- pure update.source
+  issue <- runTestBgNoReset tr do
+    created <- Issues.createQueryAlertIssue testPid (show mid) "Measured threshold exceeded" "" 60 84 Issues.Above
+    Issues.insertIssue created
+    pure created
+  pure (update{I.issueId = Just issue.id} :: I.IncidentUpdate)
 
 
 timestamp :: Text -> IO I.SlackTimestamp

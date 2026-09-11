@@ -20,7 +20,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
-import Pages.Anomalies qualified
+import Pages.Issues qualified
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
@@ -144,14 +144,14 @@ spec = sequential $ aroundAll withTestResources do
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
-      (_, page) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherPage) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
+      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf issue.title
@@ -495,28 +495,28 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Test assign
           let sess = Servant.getResponse tr.trSessAndHeader
-          void $ testServant tr $ Pages.Anomalies.assignErrorPostH pid errUuid (Pages.Anomalies.AssignErrorForm (Just $ sess.user.id.toText))
+          void $ testServant tr $ Pages.Issues.assignErrorPostH pid errUuid (Pages.Issues.AssignErrorForm (Just $ sess.user.id.toText))
           assignedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.assigneeId) assignedPat `shouldBe` Just (Just sess.user.id)
 
           -- Resolve after the prior spike evaluations, not before their incident events.
           advanceMinutes tr 241
-          void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
+          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)
-          (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
+          (_, issueList) <- testServant tr $ Pages.Issues.issueListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
           let listHtml = TL.toStrict $ renderText $ toHtml issueList
           listHtml `shouldSatisfy` T.isInfixOf issue.title
           listHtml `shouldSatisfy` T.isInfixOf "RESOLVED"
 
           -- Test subscribe
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid errUuid (Pages.Issues.ErrorSubscriptionForm (Just 30))
           subscribedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) subscribedPat `shouldBe` Just True
 
           -- Test unsubscribe
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm Nothing)
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid errUuid (Pages.Issues.ErrorSubscriptionForm Nothing)
           unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) unsubPat `shouldBe` Just False
 
@@ -601,7 +601,7 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> expectationFailure "fresh notification pattern not created"
         Just pat -> do
           -- Ensure it's subscribed
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Issues.ErrorSubscriptionForm (Just 30))
           -- Ensure matching issue exists
           void $ runAllBackgroundJobs frozenTime tr.trATCtx
           let notifyAt time =

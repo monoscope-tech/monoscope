@@ -229,7 +229,7 @@ library
       Data.Effectful.Notify
       Data.Effectful.UUID
       Devel
-      Models.Apis.Anomalies
+      Models.Apis.ApiChanges
       Models.Apis.Endpoints
       Models.Apis.ErrorPatterns
       Models.Apis.Incidents
@@ -259,7 +259,6 @@ library
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
-      Pages.Anomalies
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -275,6 +274,7 @@ library
       Pages.Endpoints
       Pages.GitSync
       Pages.Infrastructure
+      Pages.Issues
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -685,7 +685,6 @@ test-suite integration-tests
       Opentelemetry.StandardOtelSpansSpec
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
-      Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
       Pages.Bots.BotFixtures
@@ -705,6 +704,7 @@ test-suite integration-tests
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
+      Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
       Pages.MonitorsSpec
@@ -851,7 +851,7 @@ test-suite test-dev
       Data.Effectful.Notify
       Data.Effectful.UUID
       Devel
-      Models.Apis.Anomalies
+      Models.Apis.ApiChanges
       Models.Apis.Endpoints
       Models.Apis.ErrorPatterns
       Models.Apis.Incidents
@@ -881,7 +881,6 @@ test-suite test-dev
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
-      Pages.Anomalies
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -897,6 +896,7 @@ test-suite test-dev
       Pages.Endpoints
       Pages.GitSync
       Pages.Infrastructure
+      Pages.Issues
       Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -988,7 +988,6 @@ test-suite test-dev
       Opentelemetry.StandardOtelSpansSpec
       Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
-      Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
       Pages.Bots.BotFixtures
@@ -1008,6 +1007,7 @@ test-suite test-dev
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
+      Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
       Pages.MonitorsSpec

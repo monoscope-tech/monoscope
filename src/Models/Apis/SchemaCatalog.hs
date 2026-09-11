@@ -48,7 +48,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Hasql.Interpolate qualified as HI
-import Models.Apis.Anomalies (AnomalyTypes)
+import Models.Apis.ApiChanges (AnomalyTypes)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog

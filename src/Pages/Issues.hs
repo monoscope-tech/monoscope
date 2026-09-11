@@ -1,16 +1,16 @@
-module Pages.Anomalies (
-  anomalyListGetH,
-  anomalyBulkActionsPostH,
+module Pages.Issues (
+  issueListGetH,
+  issueBulkActionsPostH,
   IssueBulkAction (..),
-  acknowledgeAnomalyGetH,
-  archiveAnomalyGetH,
-  anomalyDetailGetH,
-  AnomalyBulkForm (..),
-  AnomalyListGet (..),
-  anomalyAcknowledgeButton,
-  anomalyArchiveButton,
-  anomalyDetailHashGetH,
-  AnomalyAction (..),
+  acknowledgeIssueGetH,
+  archiveIssueGetH,
+  issueDetailGetH,
+  IssueBulkForm (..),
+  IssueListGet (..),
+  issueAcknowledgeButton,
+  issueArchiveButton,
+  issueDetailHashGetH,
+  IssueAction (..),
   IssueVM (..),
   AssignErrorForm (..),
   assignErrorPostH,
@@ -66,7 +66,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw), makeAttribute)
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
@@ -106,7 +106,7 @@ import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
 
-newtype AnomalyBulkForm = AnomalyBulk
+newtype IssueBulkForm = IssueBulk
   { itemId :: [Text]
   }
   deriving stock (Generic, Show)
@@ -116,26 +116,23 @@ newtype AnomalyBulkForm = AnomalyBulk
 -- | Acknowledge (on=True) or un-acknowledge (on=False) an issue. @durationM@ is
 -- the silence window in minutes; absent means indefinitely — until the issue
 -- regresses or someone un-acks it. Acknowledging is the *only* way to stop
--- notifications for an issue, so it cascades to the underlying anomaly rows too.
-acknowledgeAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> Maybe Int -> ATAuthCtx (RespHeaders AnomalyAction)
-acknowledgeAnomalyGetH pid enable aid durationM = do
+-- notifications for an issue, so it cascades to the sibling issues sharing the
+-- endpoint prefix.
+acknowledgeIssueGetH :: Projects.ProjectId -> Bool -> Issues.IssueId -> Maybe Int -> ATAuthCtx (RespHeaders IssueAction)
+acknowledgeIssueGetH pid enable issueId durationM = do
   (sess, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let issueId = UUIDId aid.unUUIDId
-      window = maybe Issues.AckIndefinite Issues.AckFor durationM
+  let window = maybe Issues.AckIndefinite Issues.AckFor durationM
       until' = Issues.ackUntil now window
   ackState <-
     if enable
       then do
-        void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = now, by = Just sess.user.id, window}
+        void $ Issues.ackCascade pid sess.user.id window [issueId]
         Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) (Just $ AE.object ["until" AE..= until'])
-        hashes <- Anomalies.acknowledgeAnomalies pid sess.user.id until' (V.singleton (UUID.toText aid.unUUIDId))
-        void $ Anomalies.acknowlegeCascade pid sess.user.id until' (V.fromList hashes)
         addSuccessToast (untilLabel "Acknowledged" now until' <> " \x2014 notifications paused") Nothing
         pure $ Just until'
       else do
         void $ Issues.setAckState pid [issueId] Nothing
-        void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where project_id=#{pid} and id=#{aid} |]
         Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
         addSuccessToast "Back in the Inbox \x2014 notifications resumed" Nothing
         pure Nothing
@@ -143,29 +140,28 @@ acknowledgeAnomalyGetH pid enable aid durationM = do
   addRespHeaders $ Acknowlege pid issueId now ackState
 
 
--- | Archive (on=True) or un-archive (on=False) an anomaly/issue.
-archiveAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-archiveAnomalyGetH pid enable aid = do
+-- | Archive (on=True) or un-archive (on=False) an issue.
+archiveIssueGetH :: Projects.ProjectId -> Bool -> Issues.IssueId -> ATAuthCtx (RespHeaders IssueAction)
+archiveIssueGetH pid enable issueId = do
   (sess, _) <- Projects.sessionAndProject pid
   archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
-  void $ Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where project_id=#{pid} and id=#{aid} |]
-  void $ Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where project_id=#{pid} and id=#{aid} |]
-  Issues.logIssueActivity (UUIDId aid.unUUIDId) (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
+  void $ Issues.setArchiveState pid [issueId] archivedAt
+  Issues.logIssueActivity issueId (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
   addSuccessToast (bool "Restored to the Inbox" "Archived \x2014 notifications stopped" enable) Nothing
   addTriggerEvent "issuesListChanged" AE.Null
-  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) enable
+  addRespHeaders $ Archive pid issueId enable
 
 
-data AnomalyAction
+data IssueAction
   = -- | @Just until@ when acknowledged, alongside the render clock.
     Acknowlege Projects.ProjectId Issues.IssueId UTCTime (Maybe UTCTime)
   | Archive Projects.ProjectId Issues.IssueId Bool
   | Bulk
 
 
-instance ToHtml AnomalyAction where
-  toHtml (Acknowlege pid aid now untilM) = toHtml $ anomalyAcknowledgeButton pid aid now untilM
-  toHtml (Archive pid aid is_arch) = toHtml $ anomalyArchiveButton pid aid is_arch
+instance ToHtml IssueAction where
+  toHtml (Acknowlege pid aid now untilM) = toHtml $ issueAcknowledgeButton pid aid now untilM
+  toHtml (Archive pid aid is_arch) = toHtml $ issueArchiveButton pid aid is_arch
   toHtml Bulk = ""
   toHtmlRaw = toHtml
 
@@ -181,8 +177,8 @@ data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction
 
 
-anomalyBulkActionsPostH :: Projects.ProjectId -> IssueBulkAction -> Maybe Int -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
-anomalyBulkActionsPostH pid action durationM items = do
+issueBulkActionsPostH :: Projects.ProjectId -> IssueBulkAction -> Maybe Int -> IssueBulkForm -> ATAuthCtx (RespHeaders IssueAction)
+issueBulkActionsPostH pid action durationM items = do
   (sess, _) <- Projects.sessionAndProject pid
   if null items.itemId
     then do
@@ -190,20 +186,18 @@ anomalyBulkActionsPostH pid action durationM items = do
       addRespHeaders Bulk
     else do
       now <- Time.currentTime
-      let vIds = V.fromList items.itemId
-          issueIds = UUIDId <$> mapMaybe UUID.fromText items.itemId
+      let issueIds = UUIDId <$> mapMaybe UUID.fromText items.itemId
           window = maybe Issues.AckIndefinite Issues.AckFor durationM
           until' = Issues.ackUntil now window
       (eventType, msg) <- case action of
         BAAcknowledge -> do
-          ths <- Anomalies.acknowledgeAnomalies pid sess.user.id until' vIds
-          void $ Anomalies.acknowlegeCascade pid sess.user.id until' (V.fromList ths)
+          void $ Issues.ackCascade pid sess.user.id window issueIds
           pure (Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
         BAUnacknowledge -> do
           void $ Issues.setAckState pid issueIds Nothing
           pure (Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         BAArchive -> do
-          void $ Anomalies.archiveAnomaliesAndIssues pid vIds
+          void $ Issues.setArchiveState pid issueIds (Just now)
           pure (Issues.IEArchived, "Archived \x2014 notifications stopped")
         BAUnarchive -> do
           void $ Issues.setArchiveState pid issueIds Nothing
@@ -214,16 +208,16 @@ anomalyBulkActionsPostH pid action durationM items = do
       addRespHeaders Bulk
 
 
-anomalyDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueById pid issueId
+issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailGetH pid issueId firstM sinceM fromM toM = issueDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueById pid issueId
 
 
-anomalyDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailHashGetH pid issueId firstM sinceM fromM toM = anomalyDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
+issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailHashGetH pid issueId firstM sinceM fromM toM = issueDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) \_ -> Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
-anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-anomalyDetailCore pid firstM requestedRange fetchIssue = do
+issueDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailCore pid firstM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue pid
   now <- Time.currentTime
@@ -282,8 +276,8 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
               , pageTitle = "#" <> show issue.seqNum
               , headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
-                  anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) now (zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt)
-                  anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
+                  issueAcknowledgeButton pid (UUIDId issue.id.unUUIDId) now (zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt)
+                  issueArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
                   when (issue.issueType == Issues.RuntimeException)
                     $ whenJust errorM \errL -> do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
@@ -337,7 +331,7 @@ anomalyDetailCore pid firstM requestedRange fetchIssue = do
       replaySession <- enriching "replay_recording" Nothing $ flip foldMapM (UUID.fromText =<< tracedSession) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue mTraceRef replaySession errorM now isFirst tp stateEvent
+      addRespHeaders $ PageCtx bwconf $ issueDetailPage pid issue mTraceRef replaySession errorM now isFirst tp stateEvent
 
 
 -- The snapshot is available immediately; telemetry never holds up the page shell.
@@ -491,7 +485,7 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 -- page; none of them is the page. A transient TF connection error used to
 -- propagate out of the session-id lookup and return a bare 500 for the whole
 -- issue — a failure that lands precisely when TF is degraded, which is when
--- someone is most likely reading about an incident. @anomalyDetailCore@ already
+-- someone is most likely reading about an incident. @issueDetailCore@ already
 -- states the principle in its own comments ("the trace is supporting evidence,
 -- not the page"); this makes it true of the queries as well as the rendering.
 enriching :: Text -> a -> ATAuthCtx a -> ATAuthCtx a
@@ -829,8 +823,8 @@ issueStatusStrip_ now issue = forM_ banners \(icon, cls, msg) ->
 -- its waterfall from — the panel fetches it itself, so a slow trace can't hold up
 -- this page. @replaySession@ is the one value the page still needs out of that
 -- trace, resolved by a scalar lookup rather than by reading every span.
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe Issues.IssueEvent -> Html ()
-anomalyDetailPage pid issue traceRef replaySession errM now isFirst tp stateEvent = do
+issueDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe (Text, UTCTime) -> Maybe Text -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe Issues.IssueEvent -> Html ()
+issueDetailPage pid issue traceRef replaySession errM now isFirst tp stateEvent = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
@@ -1479,8 +1473,8 @@ newtype AIChatForm = AIChatForm {query :: Text}
 
 
 -- | System prompt for anomaly investigation AI
-anomalySystemPrompt :: UTCTime -> Text
-anomalySystemPrompt now =
+issueSystemPrompt :: UTCTime -> Text
+issueSystemPrompt now =
   unlines
     [ "You are Monoscope's anomaly-investigation assistant — an expert debugger embedded in the issue detail page. The user is on-call and trying to understand a specific issue. You have access to its details, errors, stack traces, and trace data, plus tools that fetch live telemetry."
     , ""
@@ -1537,7 +1531,7 @@ aiChatPostH pid issueId form
 
     processIssue appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ anomalySystemPrompt now, AI.useTimefusion = appCtx.env.enableTimefusionReads}
+      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.useTimefusion = appCtx.env.enableTimefusionReads}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
@@ -1586,7 +1580,7 @@ buildSystemPromptForIssue pid issue now = do
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
   pure
     $ unlines
-      [ anomalySystemPrompt now
+      [ issueSystemPrompt now
       , ""
       , "--- FACET SUMMARY ---"
       , maybe "" formatFacetSummaryForAI facetSummaryM
@@ -1899,7 +1893,7 @@ anomalyAIChatBody_ pid issueId = do
         $ toHtml @Text txt
 
 
-anomalyListGetH
+issueListGetH
   :: Projects.ProjectId
   -> Maybe Text
   -> Maybe Text
@@ -1910,8 +1904,8 @@ anomalyListGetH
   -> Maybe Text
   -> [Text]
   -> [Text]
-  -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
+  -> ATAuthCtx (RespHeaders IssueListGet)
+issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (_, project, bw) <- mkPageCtx pid
   let tab = parseTab filterTM
       currentFilterTab = tabParam tab
@@ -2023,7 +2017,7 @@ anomalyListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM servi
 -- | Which issues tab is being viewed.
 --
 -- This was 'Text' matched against string literals in four separate places — the
--- filter/label pair in 'anomalyListGetH', 'tabBlurb', 'issueBulkActions' and
+-- filter/label pair in 'issueListGetH', 'tabBlurb', 'issueBulkActions' and
 -- 'issueZeroState' — each with its own silent fall-through to Inbox. A renamed or
 -- mistyped tab therefore degraded /one/ surface to Inbox behaviour while the others kept
 -- working, and nothing failed anywhere. Parsing once here makes all four exhaustive.
@@ -2093,12 +2087,12 @@ issueZeroState pid = \case
     inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabParam TabInbox
 
 
-data AnomalyListGet
+data IssueListGet
   = ALPage (PageCtx (Table IssueVM))
   | ALRows (TableRows IssueVM)
 
 
-instance ToHtml AnomalyListGet where
+instance ToHtml IssueListGet where
   toHtml (ALPage pg) = toHtml pg
   toHtml (ALRows rows) = toHtml rows
   toHtmlRaw = toHtml
@@ -2346,8 +2340,8 @@ ackBadge_ now b = whenJust (zonedTimeToUTC <$> b.acknowledgedUntil <* b.acknowle
 -- | Acknowledge control for the issue detail header. Unacknowledged: a primary
 -- button (silence until it regresses) joined to a caret opening the duration
 -- menu. Acknowledged: the remaining time, which un-acknowledges on click.
-anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> UTCTime -> Maybe UTCTime -> Html ()
-anomalyAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex"] case untilM of
+issueAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> UTCTime -> Maybe UTCTime -> Html ()
+issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex"] case untilM of
   Just until' ->
     button_
       ( [ type_ "button"
@@ -2380,8 +2374,8 @@ anomalyAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-fl
     req path = [term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> aid.toText <> path, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
 
 
-anomalyArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
-anomalyArchiveButton pid aid archived =
+issueArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
+issueArchiveButton pid aid archived =
   button_
     [ type_ "button"
     , class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost" <> bool "" " bg-fillWarning-weak text-textWarning border-strokeWarning-weak" archived
@@ -2473,7 +2467,7 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
     div_ [class_ "border-t border-strokeWeak"] do
       div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
         faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
-        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
+        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Timeline"
     issueActivityTimeline_ userMap now activities
     userJourneySection_ journeySpans
 
@@ -2492,8 +2486,25 @@ issueActivityTimeline_ userMap now activities
           span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now a.createdAt
 
 
-eventDisplay :: Issues.IssueEvent -> (Text, Text, Text)
-eventDisplay = \case
+eventDisplay :: Issues.ActivityEvent -> (Text, Text, Text)
+eventDisplay (Issues.Episode kind) = episodeDisplay kind
+eventDisplay (Issues.Lifecycle event) = lifecycleDisplay event
+
+
+-- | An episode event is what the alert pipeline did, so it reads as the alert a
+-- reader saw in Slack — "Alerted", not "alert".
+episodeDisplay :: Issues.EpisodeKind -> (Text, Text, Text)
+episodeDisplay = \case
+  Issues.EKAlert -> ("bell", "bg-fillError-weak text-fillError-strong", "Alerted")
+  Issues.EKObservation -> ("eye", "bg-fillWarning-weak text-fillWarning-strong", "Still firing")
+  Issues.EKReminder -> ("bell-on", "bg-fillWarning-weak text-fillWarning-strong", "Reminder sent")
+  Issues.EKDataUnavailable -> ("plug-circle-exclamation", "bg-fillWeaker text-textWeak", "No data to evaluate")
+  Issues.EKRecovered -> ("heart-pulse", "bg-fillSuccess-weak text-fillSuccess-strong", "Recovered")
+  Issues.EKResolved -> ("check-double", "bg-fillSuccess-weak text-fillSuccess-strong", "Resolved")
+
+
+lifecycleDisplay :: Issues.IssueEvent -> (Text, Text, Text)
+lifecycleDisplay = \case
   Issues.IECreated -> ("plus", "bg-fillSuccess-weak text-fillSuccess-strong", "Created")
   Issues.IEAcknowledged -> ("bell-slash", "bg-fillBrand-weak text-fillBrand-strong", "Acknowledged")
   Issues.IEUnacknowledged -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Unacknowledged")

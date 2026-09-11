@@ -1013,7 +1013,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                     faSprite_ "circle-info" "regular" "h-4 w-4 text-iconBrand shrink-0"
                     div_ [class_ "text-xs"] do
                       div_ [class_ "font-medium text-textStrong"] "Test your notification setup"
-                      div_ [class_ "text-textWeak mt-0.5"] "Sends a test incident to all configured channels"
+                      div_ [class_ "text-textWeak mt-0.5"] "Sends a test alert to all configured channels"
                   form_ [hxPost_ ("/p/" <> pid.toText <> "/settings/integrations/test"), hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
                     input_ [type_ "hidden", name_ "teamId", value_ team.id.toText]

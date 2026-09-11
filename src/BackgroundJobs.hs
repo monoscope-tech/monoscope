@@ -71,7 +71,7 @@ import Langchain.Embeddings.OpenAI qualified
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Lucid (Html)
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
@@ -1922,6 +1922,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors) do
                       Incidents.UnknownIncidentSource -> conflict
                       Incidents.InactiveIncidentSource -> conflict
                       Incidents.IncidentIssueMismatch -> conflict
+                      Incidents.EpisodeWithoutIssue -> conflict
           decision <- either (throwIO . IncidentCommitError) pure committed
           case decision of
             NotificationSkipped -> pass
@@ -3046,11 +3047,10 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           else do
             previous <- Incidents.latestEpisodeTx monitor.projectId source
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
-            persistedId <-
-              if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
-                then traverse Issues.insertIssueReturningIdTx issue
-                else pure Nothing
-            let issueId = (active >>= (.issueId)) <|> persistedId
+            -- One long-lived issue per monitor: a firing reopens it rather than
+            -- starting a new row, so every episode hangs off the same history.
+            persistedId <- traverse (Issues.reopenOrInsertIssueTx observedAt) issue
+            let issueId = persistedId <|> (active >>= (.issueId))
                 alertUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
                 (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active alertUrl monitorUrl chartUrlM
                 change
@@ -3072,6 +3072,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
               Incidents.UnknownIncidentSource -> conflict
               Incidents.InactiveIncidentSource -> conflict
               Incidents.IncidentIssueMismatch -> conflict
+              Incidents.EpisodeWithoutIssue -> conflict
       case committed of
         Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
@@ -3230,14 +3231,14 @@ sendReportForProject pid rType = do
 -- 4. Notifications are sent based on project settings
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes =
-  case Anomalies.parseAnomalyTypes anomalyTypesT of
+  case ApiChanges.parseAnomalyTypes anomalyTypesT of
     Nothing -> Log.logAttention "newAnomalyJob: unrecognized anomaly type, skipping" anomalyTypesT
     Just anomalyType -> do
       Log.logTrace "Processing new anomalies" ()
       -- API changes (endpoint, shape, format) group into a single issue per
       -- endpoint, so multiple related changes don't spam notifications.
       -- Runtime exceptions get individual issues; unknown types are ignored.
-      when (anomalyType `elem` [Anomalies.ATEndpoint, Anomalies.ATShape, Anomalies.ATFormat])
+      when (anomalyType `elem` [ApiChanges.ATEndpoint, ApiChanges.ATShape, ApiChanges.ATFormat])
         $ processAPIChangeAnomalies pid targetHashes
 
 
@@ -3255,7 +3256,7 @@ processAPIChangeAnomalies pid targetHashes = do
   authCtx <- ask @Config.AuthContext
 
   -- Group by endpoint hash to consolidate related changes
-  anomaliesByEndpoint <- groupAnomaliesByEndpointHash . V.fromList <$> Anomalies.getAnomaliesVM pid targetHashes
+  anomaliesByEndpoint <- groupAnomaliesByEndpointHash . V.fromList <$> ApiChanges.getAnomaliesVM pid targetHashes
 
   -- Process each endpoint group, collecting info for newly created issues only
   newEndpointInfos <-
@@ -3268,7 +3269,7 @@ processAPIChangeAnomalies pid targetHashes = do
           allNewFields = foldMap (.shapeNewUniqueFields) anomalies
           allDeletedFields = foldMap (.shapeDeletedFields) anomalies
           allModifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
-          hasNewEndpoint = any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+          hasNewEndpoint = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
           hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
       case existingIssueM of
         Just existingIssue -> do
@@ -3646,10 +3647,10 @@ autoAckProvenEndpoints pid = do
 -- | Group anomalies by endpoint hash
 -- | Groups are non-empty by construction ('groupBy' never yields an empty run),
 -- so the invariant travels in the type instead of a @V.head@ downstream.
-groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, NonEmpty Anomalies.AnomalyVM)]
+groupAnomaliesByEndpointHash :: V.Vector ApiChanges.AnomalyVM -> [(Text, NonEmpty ApiChanges.AnomalyVM)]
 groupAnomaliesByEndpointHash anomalies =
   let getEndpointHash a = case a.anomalyType of
-        Anomalies.ATEndpoint -> a.targetHash
+        ApiChanges.ATEndpoint -> a.targetHash
         _ -> T.take 8 a.targetHash
       grouped = groupBy ((==) `on` getEndpointHash) $ sortOn getEndpointHash $ V.toList anomalies
    in mapMaybe (viaNonEmpty (\grp -> (getEndpointHash (head grp), grp))) grouped
@@ -4900,6 +4901,7 @@ recordMonitorDataGap monitor at reason = do
           Incidents.UnknownIncidentSource -> conflict
           Incidents.InactiveIncidentSource -> conflict
           Incidents.IncidentIssueMismatch -> conflict
+          Incidents.EpisodeWithoutIssue -> conflict
   either (throwIO . IncidentCommitError) pure committed
 
 

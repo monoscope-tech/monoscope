@@ -1,4 +1,4 @@
-module Pages.AnomaliesSpec (spec) where
+module Pages.IssuesSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
@@ -17,11 +17,11 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
-import Pages.Anomalies qualified as AnomalyList
+import Pages.Issues qualified as IssuesPage
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
@@ -39,7 +39,7 @@ spec :: Spec
 -- keeps aroundAll and runs sequentially — opting out of the suite's per-test
 -- isolation + parallelism (same as GitSyncSpec).
 spec = sequential $ aroundAll withTestResources do
-  describe "Check Anomaly List" do
+  describe "Issues list and lifecycle" do
     it "should return an empty list" \tr -> do
       rows <- listAnomalies tr Nothing
       length rows `shouldBe` 0
@@ -49,8 +49,8 @@ spec = sequential $ aroundAll withTestResources do
     it "does not preload issue acknowledge or archive actions" \_ -> do
       issueId <- UUIDId <$> UUID.nextRandom
       let html = TL.toStrict $ renderText do
-            AnomalyList.anomalyAcknowledgeButton testPid issueId frozenTime Nothing
-            AnomalyList.anomalyArchiveButton testPid issueId False
+            IssuesPage.issueAcknowledgeButton testPid issueId frozenTime Nothing
+            IssuesPage.issueArchiveButton testPid issueId False
       T.count "hx-get=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
       T.count "preload=\"false\"" html `shouldBe` T.count "hx-get=" html
 
@@ -145,14 +145,14 @@ spec = sequential $ aroundAll withTestResources do
       -- Put the issues created above back in one customer-visible list. The bulk handler
       -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
       acknowledged <- listAnomalies tr (Just "Acknowledged")
-      let acknowledgedIds = [issue.base.id.toText | AnomalyList.IssueVM _ _ issue <- V.toList acknowledged]
+      let acknowledgedIds = [issue.base.id.toText | IssuesPage.IssueVM _ _ issue <- V.toList acknowledged]
       unless (null acknowledgedIds) do
-        void $ testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAUnacknowledge Nothing AnomalyList.AnomalyBulk{itemId = acknowledgedIds}
+        void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnacknowledge Nothing IssuesPage.IssueBulk{itemId = acknowledgedIds}
 
       let load page perPage services types = do
-            (_, response) <- testServant tr $ AnomalyList.anomalyListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
+            (_, response) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
             case response of
-              AnomalyList.ALPage (PageCtx _ table) -> pure (response, table)
+              IssuesPage.ALPage (PageCtx _ table) -> pure (response, table)
               _ -> fail "expected a full anomaly-list page"
 
       (_, allIssues) <- load 0 100 [] []
@@ -198,7 +198,7 @@ spec = sequential $ aroundAll withTestResources do
     -- the handler reported "No items selected". Subsequent attempt to read
     -- `anomaly_hashes` as a column returned 500. This test goes through the real
     -- handler so both bugs are caught together.
-    it "bulk acknowledge cascades from issues to underlying anomalies" \tr -> do
+    it "bulk acknowledge acknowledges the selected issue" \tr -> do
       issueId <- pickApiChangeIssue tr
 
       -- Reset state — earlier tests in this describe block may have acknowledged it.
@@ -206,20 +206,18 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAAcknowledge Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAAcknowledge Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
-      -- Cascade: every anomaly referenced via issue_data->'anomaly_hashes' must be acknowledged.
-      fst <$> cascadePending tr issueId >>= (`shouldBe` 0)
 
     -- Regression: archive path posted to apis.anomalies by issue id (which is
     -- never an anomaly id), so the cascade silently no-op'd and acknowledged_at
     -- never propagated. Now archives apis.issues by id and cascades through
     -- issue_data.anomaly_hashes; this test asserts both halves fire.
-    it "bulk archive cascades to anomalies referenced by issue_data.anomaly_hashes" \tr -> do
+    it "bulk archive removes the issue from the inbox" \tr -> do
       issueId <- pickApiChangeIssue tr
-      let containsIssue = V.any \(AnomalyList.IssueVM _ _ issue) -> issue.base.id == issueId
+      let containsIssue = V.any \(IssuesPage.IssueVM _ _ issue) -> issue.base.id == issueId
 
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
@@ -228,7 +226,7 @@ spec = sequential $ aroundAll withTestResources do
       inboxBefore <- listAnomalies tr Nothing
       containsIssue inboxBefore `shouldBe` True
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid AnomalyList.BAArchive Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAArchive Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       inboxAfter <- listAnomalies tr Nothing
       containsIssue inboxAfter `shouldBe` False
@@ -236,15 +234,16 @@ spec = sequential $ aroundAll withTestResources do
       containsIssue archived `shouldBe` True
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
-      snd <$> cascadePending tr issueId >>= (`shouldBe` 0)
 
-    -- Regression: the issues UPDATE in acknowlegeCascade used target_hash=ANY() with
+    -- Regression: the issues UPDATE in the cascade used target_hash=ANY() with
     -- %-suffixed prefixes, so the legacy-hash sweep never matched any issue row.
-    it "acknowlegeCascade prefix-sweeps issues as well as anomalies" \tr -> do
+    -- Acking the endpoint's issue has to silence the field/shape issues under it.
+    it "ackCascade prefix-sweeps sibling issues under the same endpoint" \tr -> do
       runTestBg frozenTime tr pass
       let sess = Servant.getResponse tr.trSessAndHeader
           prefix = "casc-legacy-001" :: Text
       iid <- UUIDId <$> UUID.nextRandom
+      parentIid <- UUIDId <$> UUID.nextRandom
       withResource tr.trPool \conn -> do
         void
           $ PGS.execute
@@ -259,9 +258,13 @@ spec = sequential $ aroundAll withTestResources do
         void
           $ PGS.execute
             conn
-            [sql| INSERT INTO apis.anomalies (project_id, target_hash)
-                VALUES (?, ?) ON CONFLICT DO NOTHING |]
-            (testPid, prefix <> ":anom")
+            [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+            (parentIid, testPid, prefix, prefix, frozenTime, frozenTime)
 
       -- A second project holding the SAME hash. The sweep is by content-derived hash, which is
       -- not unique across projects, so an unscoped sweep silences another tenant's issue —
@@ -282,24 +285,17 @@ spec = sequential $ aroundAll withTestResources do
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
             (otherIid, otherPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
 
-      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade testPid sess.user.id Issues.indefiniteUntil (V.singleton prefix)
+      void $ runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [parentIid]
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NULL |] (Only otherIid)
         >>= (`shouldBe` 1)
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
         >>= (`shouldBe` 1)
-      countQ
-        tr
-        [sql| SELECT COUNT(*)::INT FROM apis.anomalies
-              WHERE project_id=? AND target_hash=? AND acknowledged_at IS NOT NULL |]
-        (testPid, prefix <> ":anom")
-        >>= (`shouldBe` 1)
 
-    -- Regression: archiveAnomaliesAndIssues took no project at all. The issue ids come off a
-    -- bulk-action form, so any tenant could archive any issue by id; and the anomaly cascade
-    -- matched on a content-derived target_hash, which collides across tenants.
-    it "archiveAnomaliesAndIssues_crossTenant_archivesOnlyTheCallersProject" \tr -> do
+    -- Regression: the archive path took no project at all. The issue ids come off a
+    -- bulk-action form, so any tenant could archive any issue by id.
+    it "setArchiveState_crossTenant_archivesOnlyTheCallersProject" \tr -> do
       runTestBg frozenTime tr pass
       let sharedHash = "arch-shared-hash-01" :: Text
           insertIssue conn iid pid =
@@ -320,20 +316,13 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| INSERT INTO projects.projects (id, title, description, active) VALUES (?, 'other-arch', '', true) ON CONFLICT DO NOTHING |] (Only otherPid)
         insertIssue conn ownIid testPid
         insertIssue conn otherIid otherPid
-        forM_ [testPid, otherPid] \p ->
-          PGS.execute conn [sql| INSERT INTO apis.anomalies (project_id, target_hash) VALUES (?, ?) ON CONFLICT DO NOTHING |] (p, sharedHash)
 
       -- Both ids submitted together, exactly as a tampered bulk form would.
-      void
-        $ runTestBg frozenTime tr
-        $ Anomalies.archiveAnomaliesAndIssues testPid (V.fromList $ DataUUID.toText . (.unUUIDId) <$> [ownIid, otherIid])
+      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [ownIid, otherIid] (Just frozenTime)
 
       let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
-          archivedAnomaly p = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.anomalies WHERE project_id=? AND target_hash=? AND archived_at IS NOT NULL |] (p, sharedHash)
       archivedIssue ownIid >>= (`shouldBe` 1)
-      archivedAnomaly testPid >>= (`shouldBe` 1)
       archivedIssue otherIid >>= (`shouldBe` 0)
-      archivedAnomaly otherPid >>= (`shouldBe` 0)
 
     -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
     -- a valid superset while the target is at least that wide. A shorter one must fall back to
@@ -344,6 +333,7 @@ spec = sequential $ aroundAll withTestResources do
       let sess = Servant.getResponse tr.trSessAndHeader
           shortPrefix = "ab1" :: Text
       shortIid <- UUIDId <$> UUID.nextRandom
+      shortParentIid <- UUIDId <$> UUID.nextRandom
       withResource tr.trPool \conn -> do
         void
           $ PGS.execute
@@ -355,8 +345,18 @@ spec = sequential $ aroundAll withTestResources do
                 VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
             (shortIid, testPid, shortPrefix <> "cdef9999", shortPrefix <> "cdef9999", frozenTime, frozenTime)
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+            (shortParentIid, testPid, shortPrefix, shortPrefix, frozenTime, frozenTime)
 
-      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade testPid sess.user.id Issues.indefiniteUntil (V.singleton shortPrefix)
+      void $ runTestBg frozenTime tr $ Issues.ackCascade testPid sess.user.id Issues.AckIndefinite [shortParentIid]
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only shortIid)
         >>= (`shouldBe` 1)
@@ -408,13 +408,13 @@ spec = sequential $ aroundAll withTestResources do
                       'SERVER', '200', '{}') |]
             (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
-      (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing Nothing Nothing
+      (_, pageById) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
-      (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing
+      (_, pageByHash) <- testServant tr $ IssuesPage.issueDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing
       -- The reader's chosen range still drives the page: it seeds the URL the charts
       -- read and it is the time picker's selected value. It is deliberately no longer
       -- in the Logs tab's own URL — a trace-scoped query is about the trace's instant,
@@ -428,8 +428,8 @@ spec = sequential $ aroundAll withTestResources do
       let from = "2026-09-02T06:04:43Z"
           to = "2026-09-02T10:04:43Z"
       forM_
-        [ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing (Just from) (Just to)
-        , AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to)
+        [ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing (Just from) (Just to)
+        , IssuesPage.issueDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to)
         ]
         \handler -> do
           (_, absolutePage) <- testServant tr handler
@@ -463,25 +463,25 @@ spec = sequential $ aroundAll withTestResources do
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
                   VALUES (?, 'log_pattern', 'payment pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
             (testPid, patternHash, AE.encode payload, selectedAt, frozenTime)
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to)
       let html = renderPage page
       html `shouldSatisfy` not . T.isInfixOf "selected occurrence"
       html `shouldSatisfy` T.isInfixOf "id=\"issue-sample\""
       html `shouldSatisfy` T.isInfixOf "saved occurrence"
-      (_, sample) <- testServant tr $ AnomalyList.issueSampleGetH testPid (UUIDId issueId) Nothing (Just from) (Just to)
+      (_, sample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just from) (Just to)
       let sampleHtml = TL.toStrict $ renderText sample
       sampleHtml `shouldSatisfy` T.isInfixOf "selected occurrence"
       sampleHtml `shouldSatisfy` not . T.isInfixOf "outside occurrence"
       sampleHtml `shouldSatisfy` not . T.isInfixOf "saved occurrence"
       sampleHtml `shouldSatisfy` T.isInfixOf "Latest event in range"
       sampleHtml `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText <> "?timestamp=")
-      (_, emptySample) <- testServant tr $ AnomalyList.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
+      (_, emptySample) <- testServant tr $ IssuesPage.issueSampleGetH testPid (UUIDId issueId) Nothing (Just $ iso $ addUTCTime 3600 frozenTime) (Just $ iso $ addUTCTime 3660 frozenTime)
       let emptyHtml = TL.toStrict $ renderText emptySample
       emptyHtml `shouldSatisfy` T.isInfixOf "No matching event"
       emptyHtml `shouldSatisfy` T.isInfixOf "Stored sample"
       emptyHtml `shouldSatisfy` T.isInfixOf "saved occurrence"
       let otherPid = UUIDId $ DataUUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherProjectSample) <- testServant tr $ AnomalyList.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
+      (_, otherProjectSample) <- testServant tr $ IssuesPage.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
       TL.toStrict (renderText otherProjectSample) `shouldSatisfy` not . T.isInfixOf "occurrence"
       html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
       html `shouldSatisfy` not . T.isInfixOf "class=\"sr-only err-tab-trace\""
@@ -503,7 +503,7 @@ spec = sequential $ aroundAll withTestResources do
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
                   VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
             (testPid, noTraceHash, frozenTime, frozenTime)
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
       -- must be clipped by the drawer, or it creates a page-level horizontal scroll range.
@@ -537,7 +537,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
           headings = [T.toLower t | t <- ["H1", "H2", "H3"], ("<" <> t) `T.isInfixOf` T.toUpper html]
       -- Exactly one h1, and it is not the issue title (the page shell owns it).
@@ -594,7 +594,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- Your frame is shown by function and file:line.
       html `shouldSatisfy` T.isInfixOf "doWork"
@@ -644,7 +644,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The two numbers that were compared, and the direction, are all on the page.
       html `shouldSatisfy` T.isInfixOf ">checkout throughput</h2>"
@@ -664,7 +664,7 @@ spec = sequential $ aroundAll withTestResources do
       for_ ([(Issues.Below, 5, False), (Issues.Below, 10, True), (Issues.Above, 5, False), (Issues.Above, 3, True)] :: [(Issues.ThresholdDirection, Double, Bool)]) \(direction, value :: Double, mismatch) -> do
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE apis.issues SET issue_data = issue_data || jsonb_build_object('actual_value', ?::float8, 'threshold_type', ?::text) WHERE id = ?|] (value, display direction, issueId)
-        (_, evaluated) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+        (_, evaluated) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
         T.isInfixOf "does not meet the recorded threshold" (renderPage evaluated) `shouldBe` mismatch
 
     -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
@@ -714,7 +714,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- The page ships a shell that fetches the waterfall itself — no span read
       -- inline, so a slow trace can no longer delay (or 504) the issue.
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
@@ -786,7 +786,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
       html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."
@@ -917,7 +917,7 @@ spec = sequential $ aroundAll withTestResources do
             (memberId, otherPid.unwrap, atErrorJson, canonicalId)
 
       -- Acting as testPid, ask for the other project's group members.
-      (_, html) <- testServant tr $ AnomalyList.errorGroupMembersGetH testPid canonicalId
+      (_, html) <- testServant tr $ IssuesPage.errorGroupMembersGetH testPid canonicalId
       let rendered = TL.toStrict $ renderText $ toHtml html
       rendered `shouldSatisfy` not . T.isInfixOf "victim-only-message"
       rendered `shouldSatisfy` not . T.isInfixOf "SecretTypeError"
@@ -957,7 +957,7 @@ spec = sequential $ aroundAll withTestResources do
             (otherErrId, otherPid.unwrap, canonicalId)
 
       -- Acting as testPid, aim the unmerge at the other project's pattern.
-      _ <- testServant tr $ AnomalyList.errorUnmergePostH testPid otherErrId
+      _ <- testServant tr $ IssuesPage.errorUnmergePostH testPid otherErrId
 
       rows <-
         withResource tr.trPool \conn ->
@@ -967,19 +967,19 @@ spec = sequential $ aroundAll withTestResources do
       map PGS.fromOnly rows `shouldBe` [False]
 
 
-isApiChange :: AnomalyList.IssueVM -> Bool
-isApiChange (AnomalyList.IssueVM _ _ c) = c.base.issueType == Issues.ApiChange
+isApiChange :: IssuesPage.IssueVM -> Bool
+isApiChange (IssuesPage.IssueVM _ _ c) = c.base.issueType == Issues.ApiChange
 
 
-issueOf :: AnomalyList.IssueVM -> Issues.IssueL
-issueOf (AnomalyList.IssueVM _ _ issue) = issue
+issueOf :: IssuesPage.IssueVM -> Issues.IssueL
+issueOf (IssuesPage.IssueVM _ _ issue) = issue
 
 
-issueIdOf :: AnomalyList.IssueVM -> Issues.IssueId
+issueIdOf :: IssuesPage.IssueVM -> Issues.IssueId
 issueIdOf = (.base.id) . issueOf
 
 
-onlyIssue :: V.Vector AnomalyList.IssueVM -> IO AnomalyList.IssueVM
+onlyIssue :: V.Vector IssuesPage.IssueVM -> IO IssuesPage.IssueVM
 onlyIssue rows = case V.toList rows of
   [row] -> pure row
   _ -> fail $ "expected exactly one paginated issue, got " <> show (V.length rows)
@@ -993,11 +993,11 @@ encMsg :: AE.Value -> ByteString
 encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
 
 
-listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector AnomalyList.IssueVM)
+listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector IssuesPage.IssueVM)
 listAnomalies tr filterT = do
-  (_, pg) <- testServant tr $ AnomalyList.anomalyListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
+  (_, pg) <- testServant tr $ IssuesPage.issueListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
   case pg of
-    AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
+    IssuesPage.ALPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"
 
 
@@ -1012,21 +1012,6 @@ countQ tr q args = withResource tr.trPool \conn ->
 
 -- | Anomalies referenced by the issue's @issue_data.anomaly_hashes@ that are still
 -- (un-acknowledged, un-archived) — both cascade halves in one round trip.
-cascadePending :: TestResources -> Issues.IssueId -> IO (Int, Int)
-cascadePending tr issueId = withResource tr.trPool \conn ->
-  maybe (fail "cascade count returned no row") pure
-    . listToMaybe
-    =<< PGS.query
-      conn
-      [sql| WITH related AS (
-              SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-              FROM apis.issues WHERE id=?
-            )
-            SELECT (COUNT(*) FILTER (WHERE a.acknowledged_at IS NULL))::INT
-                 , (COUNT(*) FILTER (WHERE a.archived_at IS NULL))::INT
-            FROM apis.anomalies a
-            WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related) |]
-      (issueId, testPid)
 
 
 apiChangeIssueIds :: TestResources -> IO [Issues.IssueId]

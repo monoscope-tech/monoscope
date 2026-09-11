@@ -661,7 +661,7 @@ apiCatalogBulkActionH
   :: Projects.ProjectId -> HostBulkAction -> Maybe Text -> HostBulkActionForm -> ATAuthCtx (RespHeaders CatalogBulkAction)
 apiCatalogBulkActionH pid action currentTabM items = do
   -- TODO: emit a host-activity log entry per item once the activity feed
-  -- accepts non-issue events (mirrors anomalyBulkActionsPostH's per-item
+  -- accepts non-issue events (mirrors issueBulkActionsPostH's per-item
   -- Issues.logIssueActivity). Keeps archive/unarchive auditable.
   (sess, _project) <- Projects.sessionAndProject pid
   -- request_type=Incoming/Outgoing scopes the action; absent (e.g. on the

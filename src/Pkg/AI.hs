@@ -736,7 +736,8 @@ runAgenticChatWithHistory config userQuery model apiKey = do
       run turn checkpoint = withInvestigationJournal config userQuery model $ \journal -> runAgenticLoopRaw turn journal config apiKey checkpoint
   case (config.access, config.conversationId) of
     (SlackInvestigationAccess investigation, Just convId) -> do
-      unless (convId == Issues.slackScopedConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs) $ throwIO AgentAccessDenied
+      expected <- Incidents.threadConversationId config.projectId investigation.teamId investigation.channelId investigation.threadTs
+      unless (convId == expected) $ throwIO AgentAccessDenied
       let turn = Investigations.Turn config.projectId convId investigation.userId investigation.messageTs
       Investigations.loadAnswer turn >>= \case
         Just answer -> requireAgentAccess config.access config.projectId $> Right answer
