@@ -426,22 +426,31 @@ insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True 
 reopenOrInsertIssueTx :: UTCTime -> Issue -> Tx.Transaction IssueId
 reopenOrInsertIssueTx now issue = do
   prior <-
-    Hasql.queryTx
-      [HI.sql| SELECT id, COALESCE(acknowledged_until > #{now}, FALSE)
-               FROM apis.issues
+    Hasql.queryTx @[IssueId]
+      [HI.sql| SELECT id FROM apis.issues
                WHERE project_id = #{issue.projectId} AND target_hash = #{issue.targetHash}
                  AND issue_type = #{issue.issueType}::apis.issue_type
                ORDER BY created_at DESC LIMIT 1 |]
   case listToMaybe prior of
-    Just (iid, True) -> iid <$ Hasql.executeTx (touchIssueSqlWith mempty now iid)
-    -- Clearing ack/archive first is what lets the upsert below find the row: its
-    -- conflict target only matches open issues.
-    Just (iid, False) -> do
-      Hasql.executeTx
-        [HI.sql| UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_by = NULL,
-                   acknowledged_until = NULL, archived_at = NULL WHERE id = #{iid} |]
-      insertIssueReturningIdTx issue
     Nothing -> insertIssueReturningIdTx issue
+    Just iid -> do
+      -- The window is re-checked inside the UPDATE rather than read first and
+      -- acted on after: a user can acknowledge between the two, and clearing then
+      -- would silently revert the snooze they had just asked for. No rows updated
+      -- therefore means "still snoozed", which is also the honest answer when the
+      -- ack landed a millisecond ago.
+      --
+      -- Clearing ack/archive is what lets the upsert below find the row at all:
+      -- 'insertIssueSql's conflict target only covers open issues.
+      reopened <-
+        Hasql.queryTx @[IssueId]
+          [HI.sql| UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_by = NULL,
+                     acknowledged_until = NULL, archived_at = NULL
+                   WHERE id = #{iid} AND (acknowledged_until IS NULL OR acknowledged_until <= #{now})
+                   RETURNING id |]
+      if null reopened
+        then iid <$ Hasql.executeTx (touchIssueSqlWith mempty now iid)
+        else insertIssueReturningIdTx issue
 
 
 insertIssueSql :: Issue -> HI.Sql

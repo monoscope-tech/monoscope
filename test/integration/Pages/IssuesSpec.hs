@@ -1010,10 +1010,6 @@ countQ tr q args = withResource tr.trPool \conn ->
   maybe (fail "count query returned no row") (pure . fromOnly) . listToMaybe =<< PGS.query conn q args
 
 
--- | Anomalies referenced by the issue's @issue_data.anomaly_hashes@ that are still
--- (un-acknowledged, un-archived) — both cascade halves in one round trip.
-
-
 apiChangeIssueIds :: TestResources -> IO [Issues.IssueId]
 apiChangeIssueIds tr =
   map fromOnly <$> withResource tr.trPool \conn ->

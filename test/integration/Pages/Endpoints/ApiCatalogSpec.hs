@@ -335,47 +335,6 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       html `shouldSatisfy` T.isInfixOf (toUriStr "attributes.server.address==\"api.test.com\"")
       html `shouldSatisfy` (not . T.isInfixOf "net.host.name")
 
-    -- it "handles anomaly bulk actions correctly" \(tr, testPid) -> do
-    --   -- First ensure endpoints are created and all background jobs are processed
-    --   msgs <- prepareTestMessages testPid
-    --   processMessagesAndBackgroundJobs tr msgs
-    --   createTestSpans tr testPid 10
-    --
-    --   -- Process all background jobs multiple times to ensure anomalies are created
-    --   _ <- runAllBackgroundJobs tr.trATCtx
-    --   _ <- runAllBackgroundJobs tr.trATCtx
-    --   _ <- runAllBackgroundJobs tr.trATCtx
-    --
-    --   -- Check what anomalies were created as issues (not endpoint type)
-    --   nonEndpointIssues <- withPool tr.trPool $ DBT.query [sql|
-    --     SELECT id, anomaly_type, target_hash
-    --     FROM apis.issues
-    --     WHERE project_id = ? AND anomaly_type != 'endpoint'
-    --   |] (Only testPid) :: IO (V.Vector (AnomalyId, Text, Text))
-    --
-    --   -- If we have non-endpoint issues, test the anomaly list API
-    --   if V.length nonEndpointIssues > 0 then do
-    --     -- Get anomalies through the API
-    --     pg <- testServant tr $
-    --       IssuesPage.issueListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-    --
-    --     case pg of
-    --       IssuesPage.ALItemsPage (PageCtx _ (ItemsList.ItemsPage _ anomalies)) -> do
-    --         -- We should have anomalies (shape, field, or format)
-    --         V.length anomalies `shouldSatisfy` (> 0)
-    --
-    --         -- Test bulk acknowledge with first anomaly
-    --         case V.headM anomalies of
-    --           Just (IssuesPage.IssueVM _ _ _ firstAnomaly) -> do
-    --             let bulkFrm = IssuesPage.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
-    --             _ <- testServant tr $
-    --               IssuesPage.issueBulkActionsPostH testPid "acknowlege" bulkFrm
-    --             pass
-    --           Nothing -> error "Expected at least one anomaly"
-    --       _ -> error "Unexpected response from anomaly list"
-    --   else
-    --     -- Skip test if no non-endpoint issues were created
-    --     pendingWith "No non-endpoint issues were created in this test run"
 
     it "creates shape and field anomalies alongside endpoint anomalies" \(tr, testPid) -> do
       -- First ensure endpoints are created and anomalies are generated

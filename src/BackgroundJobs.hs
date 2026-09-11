@@ -3049,7 +3049,16 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
             -- One long-lived issue per monitor: a firing reopens it rather than
             -- starting a new row, so every episode hangs off the same history.
-            persistedId <- traverse (Issues.reopenOrInsertIssueTx observedAt) issue
+            --
+            -- Still gated on a transition, not run every tick: the write bumps
+            -- occurrence_count and affected_requests, so an unconditional call
+            -- would count evaluation ticks rather than firings — a monitor that
+            -- alerts once and stays alerting on a 1-minute interval would report
+            -- 1440 occurrences a day on the issue page and in every alert body.
+            persistedId <-
+              if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
+                then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
+                else pure Nothing
             let issueId = persistedId <|> (active >>= (.issueId))
                 alertUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
                 (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active alertUrl monitorUrl chartUrlM

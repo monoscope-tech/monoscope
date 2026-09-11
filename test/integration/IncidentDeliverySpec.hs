@@ -536,6 +536,26 @@ spec = around withTestResources do
       void $ evaluateMonitor tr mid 84
       issueRows >>= \rows -> map (\(i, u, _) -> (i, isJust u)) rows `shouldBe` [(firstIssue, True)]
 
+    -- The issue write bumps occurrence_count and affected_requests, so it must
+    -- happen on a transition and not on every evaluation tick. Unguarded, a
+    -- monitor alerting once on a 1-minute interval reported one "occurrence" per
+    -- minute on its issue page and in every alert body it fed.
+    it "counts firings, not evaluation ticks" \tr -> do
+      update <- setup tr
+      I.MonitorIncident mid <- pure update.source
+      setupSlackData tr testPid "T1"
+      let affected :: IO [PGS.Only Int64]
+          affected = withResource tr.trPool \conn ->
+            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+      void $ evaluateMonitor tr mid 84
+      firstCount <- affected
+      -- Three more ticks, all still alerting: the status never changes, so none
+      -- of them is a new firing.
+      for_ [1 :: Int, 2, 3] \_ -> do
+        advanceMinutes tr 1
+        void $ evaluateMonitor tr mid 84
+      affected >>= (`shouldBe` firstCount)
+
     -- An episode is only ever read from its issue's page, so one without an issue
     -- is unreachable: it must be refused rather than written and lost.
     it "refuses to open an episode with no issue behind it" \tr -> do
