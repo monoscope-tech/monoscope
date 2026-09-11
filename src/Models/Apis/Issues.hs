@@ -44,7 +44,6 @@ module Models.Apis.Issues (
   -- * Database Operations
   insertIssue,
   insertIssueReturningId,
-  insertIssueReturningIdTx,
   reopenOrInsertIssueTx,
   selectIssueById,
   selectIssues,
@@ -447,13 +446,13 @@ reopenOrInsertIssueTx now issue = do
       --
       -- Clearing ack/archive is what lets the upsert below find the row at all:
       -- 'insertIssueSql's conflict target only covers open issues.
-      reopened <-
+      cleared <-
         Hasql.queryTx @[IssueId]
           [HI.sql| UPDATE apis.issues SET acknowledged_at = NULL, acknowledged_by = NULL,
                      acknowledged_until = NULL, archived_at = NULL
                    WHERE id = #{iid} AND (acknowledged_until IS NULL OR acknowledged_until <= #{now})
                    RETURNING id |]
-      if null reopened
+      if null cleared
         then iid <$ Hasql.executeTx (touchIssueSqlWith mempty now iid)
         else insertIssueReturningIdTx issue
 
