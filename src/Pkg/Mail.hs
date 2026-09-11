@@ -356,8 +356,8 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         <> "\nObserved "
         <> atUtc now
         <> foldMap (" · " <>) occurrence
-        <> foldMap (" · " <>) (slackEscape <$> err.serviceName)
-        <> foldMap (" · " <>) (slackEscape <$> err.environment)
+        <> foldMap ((" · " <>) . slackEscape) err.serviceName
+        <> foldMap ((" · " <>) . slackEscape) err.environment
     current = slackSection text
     onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
     chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Occurrences of " <> title) Nothing) chart

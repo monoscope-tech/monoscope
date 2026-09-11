@@ -1273,7 +1273,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
             [ "echarts"
                 AE..= either
                   (const $ AE.object ["graphic" AE..= AE.object ["type" AE..= ("text" :: Text), "left" AE..= ("center" :: Text), "top" AE..= ("middle" :: Text), "style" AE..= AE.object ["text" AE..= ("Chart unavailable\nOpen the incident or monitor for details." :: Text), "fontSize" AE..= (18 :: Int), "fill" AE..= (bool "#334155" "#cbd5e1" darkMode :: Text), "textAlign" AE..= ("center" :: Text)]]])
-                  (Widget.widgetToECharts . (& #_staticRender ?~ True))
+                  (Widget.widgetToECharts . (#_staticRender ?~ True))
                   chart
             , "profile" AE..= fromMaybe Widget.PngStandard widget.pngProfile
             , "width" AE..= width

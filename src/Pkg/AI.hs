@@ -408,7 +408,7 @@ data AgentAccessDenied = AgentAccessDenied
 -- | ServiceAccess leaves authorization to its caller. Slack investigations
 -- retain the requesting identity and revalidate it at each data-use boundary.
 requireAgentAccess :: DB es => AgentAccess -> Projects.ProjectId -> Eff es ()
-requireAgentAccess ServiceAccess _ = pure ()
+requireAgentAccess ServiceAccess _ = pass
 requireAgentAccess (SlackAccess teamId slackUserId userId) projectId = do
   principal <- Integrations.resolveSlackPrincipal teamId slackUserId (Just projectId)
   unless (maybe False (\p -> p.userId == userId && p.projectId == projectId) principal) $ throwIO AgentAccessDenied
@@ -843,7 +843,7 @@ runAgenticLoopRaw turn journal config apiKey checkpoint = do
       _ -> pure Nothing
     record event = for_ journal (`Investigations.recordEvent` event)
     continue updated = runAgenticLoopRaw updated journal config apiKey
-    advance next = Investigations.commitProgress turn journal next Nothing >>= (\updated -> continue updated next)
+    advance next = Investigations.commitProgress turn journal next Nothing >>= (`continue` next)
 
 
 -- | Create ToolCallInfo from a tool call and its result
@@ -903,11 +903,12 @@ executeToolCall config tc = do
         _ -> pure "Repository evidence requires an authorized Slack investigation."
     "get_deployments" ->
       noRaw <$> case (config.access, config.sourceConfig) of
-        (SlackInvestigationAccess{}, Just cfg) -> withArg "get_deployments" "mapping_id" args \mapping ->
-          maybe
-            (pure "Invalid repository mapping ID.")
-            (\mappingId -> decodeUtf8 . AE.encode <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
-            (idFromText mapping)
+        (SlackInvestigationAccess{}, Just cfg) ->
+          withArg "get_deployments" "mapping_id" args
+            $ maybe
+              (pure "Invalid repository mapping ID.")
+              (\mappingId -> decodeUtf8 . AE.encode <$> CodeContext.fetchDeployments cfg config.projectId mappingId (getTextArg "environment" args))
+            . idFromText
         _ -> pure "Deployment evidence is unavailable for this conversation."
     "list_runbooks" ->
       noRaw <$> case (config.access, config.sourceConfig, parseMaybe AE.parseJSON $ AE.toJSON args) of

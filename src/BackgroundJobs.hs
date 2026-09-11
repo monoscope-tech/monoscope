@@ -1841,8 +1841,8 @@ dispatchDueErrorNotifications
   -> UTCTime
   -> [ErrorSubscriptionDue]
   -> ATBackgroundCtx ()
-dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors) do
-  whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
+dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
+  $ whenJustM (Projects.projectById pid) \project -> when project.errorAlerts do
     teamM <- ProjectMembers.getEveryoneTeam pid
     case teamM of
       Just team | ProjectMembers.teamHasAnyEnabledChannel team -> do
@@ -3093,7 +3093,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           pure True
 
 
-data IncidentCommitError = IncidentCommitError Incidents.RecordResult
+newtype IncidentCommitError = IncidentCommitError Incidents.RecordResult
   deriving stock (Show)
   deriving anyclass (CE.Exception)
 

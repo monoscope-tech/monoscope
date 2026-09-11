@@ -278,7 +278,7 @@ readRunbook cfg pid query = runExceptT do
   (mapping, credential, connection) <- runbookRepository cfg pid query.mappingId query.revision
   blob <- ExceptT $ first RunbookProviderFailed <$> Git.fetchFile connection (Git.RepoRef mapping.owner mapping.repo query.revision) query.path
   when (BS.length blob > 1_048_576) $ throwE RunbookTooLarge
-  document <- hoistEither $ first (const RunbookNotText) $ TE.decodeUtf8' blob
+  document <- hoistEither $ first (const RunbookNotText) $ decodeUtf8' blob
   when (T.any (== '\0') document) $ throwE RunbookNotText
   let documentLines = lines document
       total = length documentLines

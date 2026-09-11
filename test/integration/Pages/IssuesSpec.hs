@@ -204,24 +204,21 @@ spec = sequential $ aroundAll withTestResources do
       -- Reset state — earlier tests in this describe block may have acknowledged it.
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
-        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
       _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAAcknowledge Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
 
-    -- Regression: archive path posted to apis.anomalies by issue id (which is
-    -- never an anomaly id), so the cascade silently no-op'd and acknowledged_at
-    -- never propagated. Now archives apis.issues by id and cascades through
-    -- issue_data.anomaly_hashes; this test asserts both halves fire.
+    -- Regression: the archive path posted to apis.anomalies by *issue* id, which
+    -- is never an anomaly id, so it silently no-op'd. The mirror is gone now and
+    -- the issue row is the only state; this asserts it leaves the inbox.
     it "bulk archive removes the issue from the inbox" \tr -> do
       issueId <- pickApiChangeIssue tr
       let containsIssue = V.any \(IssuesPage.IssueVM _ _ issue) -> issue.base.id == issueId
 
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
-        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL, acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
       inboxBefore <- listAnomalies tr Nothing
       containsIssue inboxBefore `shouldBe` True

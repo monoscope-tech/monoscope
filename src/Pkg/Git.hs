@@ -574,7 +574,7 @@ data DeploymentEvidence = DeploymentEvidence
 
 
 getJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)
-getJson conn endpoint = fmap (first DeploymentRequestFailed >=> first (InvalidDeploymentResponse . toText) . AE.eitherDecode) $ get_ conn endpoint
+getJson conn endpoint = (first DeploymentRequestFailed >=> first (InvalidDeploymentResponse . toText) . AE.eitherDecode) <$> get_ conn endpoint
 
 
 -- | GitHub deployment requests plus reported execution states. A status lookup

@@ -313,7 +313,7 @@ processAIQuery sourceConfig useTf access pid userQuery conversationId model apiK
   whenRight_ rawResult \answer -> whenJust conversationId \convId -> do
     AI.requireAgentAccess access pid
     case access of
-      AI.SlackInvestigationAccess{} -> pure () -- Saved atomically with the replayable answer.
+      AI.SlackInvestigationAccess{} -> pass -- Saved atomically with the replayable answer.
       _ -> Issues.insertChatMessage pid convId Issues.ChatAssistant answer.response Nothing Nothing
   let result = rawResult >>= AI.parseLLMResponse . (.response)
   whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]

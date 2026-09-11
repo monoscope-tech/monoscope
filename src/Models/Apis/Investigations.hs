@@ -478,7 +478,7 @@ commitProgress cursor scope checkpoint event
                   SELECT #{turnCursor.turn.projectId}, #{turnCursor.turn.conversationId}, 'user', #{followup.text}, #{followup.messageTs}, clock_timestamp()
                   WHERE EXISTS (SELECT 1 FROM accepted)
                   ON CONFLICT (project_id, conversation_id, slack_message_ts, role) WHERE slack_message_ts IS NOT NULL DO NOTHING|]
-            _ -> pure ()
+            _ -> pass
         pure updated
       either throwIO pure result
 

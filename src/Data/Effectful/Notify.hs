@@ -463,7 +463,7 @@ runNotifyTest ref = interpret \_ -> \case
           PagerdutyNotification pagerdutyData -> ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
     Log.logTrace "Notification" notifInfo
     Log.logTrace "Notification payload" notification
-    liftIO $ atomicModifyIORef' ref (\notifications -> (notification : notifications, ()))
+    liftIO $ atomicModifyIORef'_ ref (notification :)
   SendNotificationWithReply notification -> do
     idx <- liftIO $ atomicModifyIORef' ref (\notifications -> (notification : notifications, length notifications + 1))
     pure $ case notification of

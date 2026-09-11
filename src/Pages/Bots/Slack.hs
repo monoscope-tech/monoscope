@@ -37,6 +37,7 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..))
 import Control.Monad.Extra (whileM)
+import Data.Char (isDigit)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
@@ -392,7 +393,7 @@ slackActionsH action = do
         selected <- maybe (throwError err400) (pure . (.value)) a.selected_option
         withWidget selected \_ dashboard title chartUrl ->
           updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ imageBlock chartUrl title
-      _ -> pure ()
+      _ -> pass
     "view_submission" -> do
       selected <- maybe (throwError err400) pure $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
       withWidget selected \did _ title chartUrl -> do
@@ -409,7 +410,7 @@ slackActionsH action = do
                       ]
                   )
             ]
-    _ -> pure ()
+    _ -> pass
   pure $ AE.object []
 
 
@@ -743,7 +744,7 @@ verifySlackSignature :: Text -> UTCTime -> Maybe Text -> Maybe Text -> ByteStrin
 verifySlackSignature secret now timestamp signature body = fromMaybe False do
   guard $ not $ T.null secret
   ts <- timestamp
-  guard $ not (T.null ts) && T.all (\c -> c >= '0' && c <= '9') ts
+  guard $ not (T.null ts) && T.all isDigit ts
   seconds <- readMaybe @Integer $ toString ts
   guard $ abs (utcTimeToPOSIXSeconds now - fromInteger seconds) <= 300
   digest <- signature >>= T.stripPrefix "v0=" >>= rightToMaybe . B16.decode . encodeUtf8
@@ -785,7 +786,7 @@ slackEventsPostH body timestamp signature = do
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
         AgentSessionStopped _ -> Integrations.recordSlackSessionEvent team_id event_id
-        _ -> pure ()
+        _ -> pass
       pure $ AE.object []
 
 
@@ -828,7 +829,7 @@ processSlackEvent receiptId =
           case kind of
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
-            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (toStrict $ AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
+            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
             _ -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
@@ -951,7 +952,7 @@ processSlackEvent receiptId =
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (toStrict $ AE.encode ([workspace, channel, thread] :: [Text]))
+withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (AE.encode ([workspace, channel, thread] :: [Text]))
 
 
 -- | Keep the transaction-scoped lock on one checked-out connection and interrupt
@@ -1095,7 +1096,7 @@ reconcileProgressHistory target publicationId = do
     outcome <- searchPublicationHistory appId slackData "monoscope_investigation_progress" search
     AI.requireAgentAccess access target.projectId
     settlePublicationSearch (Investigations.confirmProgress publicationId) (Investigations.saveProgressSearchCursor search) outcome
-  join . fmap (.timestamp) <$> Investigations.loadProgress target
+  ((.timestamp) =<<) <$> Investigations.loadProgress target
 
 
 data PublicationHistory = PublicationFound Incidents.SlackTimestamp | PublicationCursor (Maybe Text)
