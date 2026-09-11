@@ -23,7 +23,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Issues qualified as ApiChanges
+import Pages.Issues qualified as IssuesPage
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
 import Pkg.DeriveUtils (UUIDId (..))
@@ -106,7 +106,7 @@ spec = around withTestResources do
       advanceMinutes tr 1
       (silenced, _) <- captureNotifs tr $ notifyErrorSubscriptions testPid [sample.hash]
       messages silenced `shouldBe` []
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid notified.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId
       (closed, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       length (messages closed) `shouldBe` 4
       for_ (messages closed) \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RESOLVED" . decodeUtf8 . toStrict)
@@ -156,7 +156,7 @@ spec = around withTestResources do
       (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
       void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       advanceMinutes tr 1
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
       (resolution, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let messages = [sd | Notify.SlackNotification sd <- resolution]
@@ -183,7 +183,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
       advanceMinutes tr 1
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
       (orphaned, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let orphanedMessages = [sd | Notify.SlackNotification sd <- orphaned]
@@ -208,7 +208,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       advanceMinutes tr 1
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
       Just denied <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       denied.state `shouldBe` Errors.ESNew
       let resolve pid = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id (addUTCTime 60 frozenTime) (const update.rootPayload)
@@ -222,7 +222,7 @@ spec = around withTestResources do
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
         void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|]
-      testServant tr (ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
+      testServant tr (IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
       Just rolledBack <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       (rolledBack.state, rolledBack.resolvedAt, rolledBack.resolvedBy) `shouldBe` (Errors.ESNew, Nothing, Nothing)
       activityBefore <- runTestBgNoReset tr $ Issues.selectIssueActivity testPid issue.id
@@ -230,10 +230,10 @@ spec = around withTestResources do
       void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|]
       void
         $ concurrently
-          (testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId)
-          (testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId)
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
       events <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
       events `shouldBe` [("resolved" :: Text, Just actor.id)]
       activity <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
@@ -278,7 +278,7 @@ spec = around withTestResources do
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
       let deliveryCount = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] :: IO [PGS.Only Int64]
       beforeLegacy <- deliveryCount
-      void $ testServant tr $ ApiChanges.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
       deliveryCount `shouldReturn` beforeLegacy
       Just legacyResolved <- runTestBgNoReset tr $ Errors.getErrorPatternById legacyErr.id
       (legacyResolved.state, legacyResolved.resolvedBy) `shouldBe` (Errors.ESResolved, Just actor.id)
@@ -504,6 +504,63 @@ spec = around withTestResources do
       void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 now, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
       run (I.claimSlackDeliveries (addUTCTime 300 now)) `shouldReturn` []
       run (I.getEpisode (UUIDId $ UUID.fromWords 0 0 0 999) episode.id) `shouldReturn` Nothing
+
+    -- A monitor's issue is its history. Before, a firing that arrived after the
+    -- previous one had been acknowledged or archived started a fresh row, so
+    -- "how often has this fired" was scattered across issues nobody joined up.
+    it "reuses one long-lived issue across firings, and an unexpired ack stays a snooze" \tr -> do
+      update <- setup tr
+      I.MonitorIncident mid <- pure update.source
+      setupSlackData tr testPid "T1"
+      let issueRows :: IO [(Issues.IssueId, Maybe UTCTime, Maybe UTCTime)]
+          issueRows = withResource tr.trPool \conn ->
+            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+      void $ evaluateMonitor tr mid 84
+      [(firstIssue, _, _)] <- issueRows
+      -- Archived, then firing again: the same row comes back rather than a second one.
+      advanceMinutes tr 1
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET archived_at = ? WHERE id = ?|] (frozenTime, firstIssue)
+      void $ evaluateMonitor tr mid 18
+      advanceMinutes tr 1
+      void $ evaluateMonitor tr mid 84
+      issueRows >>= \rows -> map (\(i, _, _) -> i) rows `shouldBe` [firstIssue]
+      issueRows >>= \rows -> map (\(_, _, arch) -> arch) rows `shouldBe` [Nothing]
+      -- Acknowledged with a live window: a firing inside it must not un-silence
+      -- the issue, or "snooze for an hour" would mean nothing to a noisy monitor.
+      advanceMinutes tr 1
+      let ackUntil = addUTCTime 86400 frozenTime
+      void $ withResource tr.trPool \conn ->
+        PGS.execute conn [sql|UPDATE apis.issues SET acknowledged_at = ?, acknowledged_until = ? WHERE id = ?|] (frozenTime, ackUntil, firstIssue)
+      void $ evaluateMonitor tr mid 18
+      advanceMinutes tr 1
+      void $ evaluateMonitor tr mid 84
+      issueRows >>= \rows -> map (\(i, u, _) -> (i, isJust u)) rows `shouldBe` [(firstIssue, True)]
+
+    -- An episode is only ever read from its issue's page, so one without an issue
+    -- is unreachable: it must be refused rather than written and lost.
+    it "refuses to open an episode with no issue behind it" \tr -> do
+      update <- setup tr
+      setupSlackData tr testPid "T1"
+      runTestBgNoReset tr (I.recordIncidentEvent update) `shouldReturn` I.EpisodeWithoutIssue
+      episodes <- withResource tr.trPool \conn ->
+        PGS.query conn [sql|SELECT count(*) FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, case update.source of I.MonitorIncident m -> m; _ -> error "monitor source")
+      (episodes :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
+
+    -- Ask the bot in an alert thread and the answer belongs to that alert's issue,
+    -- so the issue page's chat and the Slack thread are one conversation.
+    it "resolves an alert thread to its issue's conversation, and a loose thread to the thread's own" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      Just issueId <- pure update.issueId
+      void $ runTestBgNoReset tr $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+      [root] <- runTestBgNoReset tr $ I.claimSlackDeliveries update.observedAt
+      ts <- timestamp "1788900000.000009"
+      void $ runTestBgNoReset tr $ I.finishSlackDelivery update.observedAt root (I.DeliveryConfirmed ts)
+      runTestBgNoReset tr (I.threadConversationId testPid "T1" "C1" "1788900000.000009")
+        `shouldReturn` UUIDId issueId.unUUIDId
+      -- No alert root behind it: there is no issue to belong to.
+      runTestBgNoReset tr (I.threadConversationId testPid "T1" "C1" "1788900000.000099")
+        `shouldReturn` Issues.slackScopedConversationId testPid "T1" "C1" "1788900000.000099"
 
     it "captures only this app's signed root in the original workspace and channel" \tr -> do
       update <- setupWithIssue tr

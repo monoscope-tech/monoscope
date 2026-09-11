@@ -148,6 +148,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
@@ -163,6 +164,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC, rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
+import System.Logging (logAttention)
 import System.Types (DB)
 
 
@@ -835,23 +837,22 @@ ackCascade pid uid window iids
   | null iids = pure 0
   | otherwise = do
       now <- Time.currentTime
-      void $ setAckState pid iids $ Just AckSet{at = now, by = Just uid, window}
+      -- The selected issues need no separate UPDATE: a target hash always matches
+      -- its own prefix, so the sweep below already covers every row it was given.
       targets <-
         Hasql.interp @[Text]
           [HI.sql| SELECT target_hash FROM apis.issues WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
-      if null targets
-        then pure 0
-        else do
-          let prefixes = T.take hashPrefixWidth <$> targets
-              prefixNarrowing
-                | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
-                | otherwise = mempty
-          Hasql.interpExecute
-            $ [HI.sql| UPDATE apis.issues
-                       SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{ackUntil now window}
-                       WHERE project_id = #{pid} |]
-            <> prefixNarrowing
-            <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) |]
+      let prefixes = T.take hashPrefixWidth <$> targets
+          prefixNarrowing
+            | all ((>= hashPrefixWidth) . T.length) targets = [HI.sql| AND LEFT(target_hash, 8) = ANY(#{prefixes}) |]
+            | otherwise = mempty
+      Hasql.interpExecute
+        $ [HI.sql| UPDATE apis.issues
+                   SET acknowledged_by = #{uid}, acknowledged_at = #{now},
+                       acknowledged_until = #{ackUntil now window}, updated_at = #{now}
+                   WHERE project_id = #{pid} |]
+        <> prefixNarrowing
+        <> [HI.sql| AND target_hash LIKE ANY(#{(<> "%") <$> targets}) |]
 
 
 -- | Clear acknowledgements whose window has closed, returning the affected ids so
@@ -1550,10 +1551,10 @@ logIssueActivity issueId event createdBy metadataM = do
 -- event of every alert episode that hung off it. The episodes are reachable from
 -- here and nowhere else, which is the point — an episode is a chapter of an
 -- issue, not a thing to go and look at separately.
-selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
-selectIssueActivity pid issueId =
-  mapMaybe toActivity
-    <$> Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime)]
+selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
+selectIssueActivity pid issueId = do
+  rows <-
+    Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime)]
       [HI.sql| SELECT a.event::text, a.created_by, a.created_at
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
@@ -1564,8 +1565,14 @@ selectIssueActivity pid issueId =
         JOIN apis.incident_episodes ep ON ep.id = ev.episode_id
         WHERE ep.issue_id = #{issueId} AND ep.project_id = #{pid}
         ORDER BY 3 DESC LIMIT 200 |]
+  -- A spelling neither vocabulary knows means the DB grew an event kind that
+  -- 'ActivityEvent' has not; say so rather than dropping it off the timeline.
+  let (unparsable, activities) = partitionEithers $ map toActivity rows
+  unless (null unparsable)
+    $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])
+  pure activities
   where
-    toActivity (raw, by, at) = (\e -> IssueActivity e by at) <$> parseActivityEvent raw
+    toActivity (raw, by, at) = maybe (Left raw) (\e -> Right $ IssueActivity e by at) (parseActivityEvent raw)
 
 
 -- Reports
