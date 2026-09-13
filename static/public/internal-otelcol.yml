@@ -176,14 +176,7 @@ processors:
         from_attribute: container.label.com.docker.swarm.node.id
         action: upsert
 
-connectors:
-  datadog/connector:
-
 exporters:
-  datadog/exporter:
-    api:
-      site: datadoghq.eu
-      key: ${env:DD_API_KEY}
   otlp:
     endpoint: ${env:OTLP_ENDPOINT}
     tls:
@@ -194,14 +187,14 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [hostmetrics, prometheus, otlp, datadog/connector, docker_stats]
+      receivers: [hostmetrics, prometheus, otlp, docker_stats]
       processors: [batch, resourcedetection/system, attributes, resource]
-      exporters: [datadog/exporter, otlp]
+      exporters: [otlp]
     traces:
       receivers: [otlp]
       processors: [batch, resource]
-      exporters: [datadog/connector, datadog/exporter, otlp]
+      exporters: [otlp]
     logs:
       receivers: [otlp, filelog]
       processors: [batch, resourcedetection/docker, resourcedetection/system, attributes, attributes/swarm, resource, transform]
-      exporters: [datadog/exporter, otlp]
+      exporters: [otlp]
