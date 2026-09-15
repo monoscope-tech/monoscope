@@ -581,6 +581,19 @@ spec = around withTestResources do
       void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentRecovered}
       followups <- run $ I.claimSlackDeliveries now
       map (.operation) followups `shouldContain` [I.PostRoot]
+      -- Nothing may be left queued that can never be claimed. `shouldContain`
+      -- alone passed while an unclaimable update_root sat pending behind the
+      -- reply — and because noEarlierUnsettledDelivery blocks on the earliest
+      -- unsettled row, that one row silences the whole root from then on. Assert
+      -- on the queue itself, not just on what came back.
+      stranded <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
+               JOIN apis.slack_incident_roots r ON r.id = d.root_id
+               WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
+          ()
+      (stranded :: [(Text, Text)]) `shouldBe` []
 
     it "refuses to open an episode with no issue behind it" \tr -> do
       update <- setup tr

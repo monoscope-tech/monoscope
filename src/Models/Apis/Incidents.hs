@@ -563,7 +563,16 @@ recordIncidentEventTx update = do
                             [HI.sql|INSERT INTO apis.slack_incident_deliveries
                                 (root_id, episode_id, event_id, operation, available_at)
                                 SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
-                                FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
+                                FROM apis.slack_incident_roots
+                                WHERE id = #{rootId} AND first_event_id <> #{eventId}
+                                  -- Never queue an edit to a message that cannot be
+                                  -- edited. A threadless root has no timestamp and never
+                                  -- will, so an update_root against it could never be
+                                  -- claimed — and because noEarlierUnsettledDelivery
+                                  -- blocks on the earliest unsettled row, one stuck edit
+                                  -- silences every later reply on that root. That is the
+                                  -- precise failure this whole change exists to remove.
+                                  AND NOT (threadless AND #{operation} = 'update_root')
                                 ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                       pure $ Recorded current eventId
 
@@ -716,7 +725,7 @@ finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted T
     -- Record on the root, not just this delivery: every follow-up queued behind
     -- it has to know there is no thread to join.
     (Just rid, PostRoot, WebhookAccepted Threadless) -> do
-      executeTx [HI.sql|UPDATE apis.slack_incident_roots SET threadless = TRUE WHERE id = #{rid} AND message_ts IS NULL|]
+      executeTx [HI.sql|UPDATE apis.slack_incident_roots SET threadless = TRUE WHERE id = #{rid} AND message_ts IS NULL AND NOT threadless|]
       pure True
     (Just rid, PostRoot, DeliveryConfirmed ts) -> do
       roots <-

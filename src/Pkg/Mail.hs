@@ -505,6 +505,7 @@ renderSlackAlert a =
 -- colour alone is below the accessibility floor, and several Slack surfaces
 -- (notifications, some mobile views) drop the rail entirely.
 data IncidentTone = ToneAlert | ToneWarn | ToneRecovered | ToneNeutral
+  deriving stock (Eq, Show)
 
 
 toneColor :: IncidentTone -> Text
