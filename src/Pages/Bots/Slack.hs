@@ -609,6 +609,40 @@ sendSlackWelcomeMessage token channelId projectTitle =
 -- rejected semantically (invalid_payload, channel_is_archived, no_service).
 -- Throws on either HTTP error or body≠ok so tryAny-wrapping callers surface
 -- the failure as a welcome-message-failed log with context.
+-- | Deliver a notice that tells the user how to fix a broken install.
+--
+-- Such a notice cannot depend on the credential that is broken. 34 of 43
+-- production installs have no bot token, so the "Reconnect Slack to grant Agent
+-- permissions" prompt — posted through @chat.postEphemeral@ with that very
+-- token — threw before it reached anyone: the bot looked dead rather than
+-- misconfigured, and the one message explaining the fix was the one message that
+-- could not be sent.
+--
+-- Falls back to the incoming webhook, the only transport a token-less install
+-- still has. It cannot post ephemerally, so the notice becomes a channel message
+-- — visible beats invisible. If neither transport works this logs and returns:
+-- an undeliverable prompt must not also abort the event being handled.
+-- Returns whether the notice actually went out. A caller that records a
+-- delivery receipt must not write one on 'False': an identity link marked
+-- delivered but never sent strands the user with no link and no retry.
+sendRecoveryNotice :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Text -> Text -> Eff es Bool
+sendRecoveryNotice context slackData channel user noticeText = do
+  delivered <-
+    if T.null slackData.botToken
+      then pure $ Left "no_bot_token"
+      else slackApi slackData.botToken "chat.postEphemeral" $ AE.object ["channel" AE..= channel, "user" AE..= user, "text" AE..= noticeText]
+  case delivered of
+    Right _ -> pure True
+    Left apiErr -> do
+      fallback <- case guarded (not . T.null) =<< slackData.webhookUrl of
+        Nothing -> pure $ Left "no_webhook_url"
+        Just url -> first (show @Text) <$> tryAny (void $ postWith (defaults & contentTypeHeader "application/json") (toString url) (AE.object ["text" AE..= noticeText]))
+      whenLeft_ fallback \hookErr ->
+        Log.logAttention "Slack recovery notice undeliverable"
+          $ AE.object ["context" AE..= context, "team_id" AE..= slackData.teamId, "channel_id" AE..= channel, "api_error" AE..= apiErr, "webhook_error" AE..= hookErr]
+      pure $ isRight fallback
+
+
 sendSlackWelcomeViaWebhook :: (HTTP :> es, IOE :> es) => Text -> Text -> Eff es ()
 sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
   rs <- postWith (defaults & contentTypeHeader "application/json") (toString webhookUrl) (AE.Object $ welcomeBlocks projectTitle)
@@ -855,6 +889,12 @@ processSlackEvent receiptId =
       slackData <- getSlackDataByTeamId workspaceId >>= maybe (throwError err403) pure
       linkId <- UUIDId <$> UUID.genUUID
       request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
+      -- Ephemeral only, and deliberately no webhook fallback: this is a one-shot
+      -- account-linking URL for one user, and an incoming webhook posts to the
+      -- whole channel. Failing to deliver is far better than leaking it, so an
+      -- install without a usable bot token gets an error here rather than a
+      -- private link in public. ('sendRecoveryNotice' may fall back only because
+      -- a "reconnect Slack" prompt carries nothing secret.)
       slackApiOrThrow "Slack identity link" slackData.botToken "chat.postEphemeral"
         $ AE.object
           [ "channel" AE..= request.channelId
@@ -878,12 +918,13 @@ processSlackEvent receiptId =
                   then processThreadedEvent principal envCfg slackData event workspaceId threadTs
                   else do
                     AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
-                    slackApiOrThrow "Slack reconnect notice" slackData.botToken "chat.postEphemeral"
-                      $ AE.object
-                        [ "channel" AE..= event.channel
-                        , "user" AE..= event.user
-                        , "text" AE..= ("Reconnect Slack from <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect.")
-                        ]
+                    void
+                      $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
+                      $ "Reconnect Slack from <"
+                      <> envCfg.hostUrl
+                      <> "p/"
+                      <> principal.projectId.toText
+                      <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do

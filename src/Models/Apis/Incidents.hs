@@ -34,6 +34,7 @@ module Models.Apis.Incidents (
   SlackDelivery,
   SlackDeliveryF (..),
   DeliveryOutcome (..),
+  RootThreading (..),
   claimSlackDeliveries,
   finishSlackDelivery,
   captureSlackRoot,
@@ -200,10 +201,12 @@ episodeSelect = [HI.sql|SELECT |] <> episodeColumns <> [HI.sql| FROM apis.incide
 -- | Rebuild 'DeliveryOperation' from the stored operation and its root timestamp.
 deliveryOperation :: HI.Sql
 deliveryOperation =
-  [HI.sql|CASE d.operation
-    WHEN 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-    WHEN 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
-    WHEN 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
+  [HI.sql|CASE
+    WHEN d.operation = 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
+    -- A reply with no thread to join is a standalone post, not a lost message.
+    WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostRoot')
+    WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
+    WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
   END|]
 
 
@@ -613,9 +616,17 @@ data SlackDeliveryF timestamp = SlackDelivery
   deriving anyclass (HI.DecodeRow)
 
 
+-- | Whether a root posted by this transport can still acquire a timestamp.
+-- Recovery needs @conversations.history@ or a Slack event carrying the root,
+-- and both need a bot token — so a webhook-only install can never confirm one
+-- and must not wait for it.
+data RootThreading = ThreadCapable | Threadless
+  deriving stock (Eq, Show)
+
+
 data DeliveryOutcome
   = DeliveryConfirmed SlackTimestamp
-  | WebhookAccepted
+  | WebhookAccepted RootThreading
   | DeliveryRetry UTCTime Text
   | DeliveryRejected Text
   | DeliveryUncertain Text
@@ -661,7 +672,8 @@ claimSlackDeliveriesTx now = do
       WHERE d.state = 'pending' AND d.available_at <= #{now}
         AND NOT EXISTS (SELECT 1 FROM monitors.query_monitors monitor
           WHERE episode.source_kind = 'monitor' AND monitor.id = episode.source_id AND monitor.muted_until > #{now})
-        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
+        AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL
+             OR (r.threadless AND d.operation = 'post_reply')) AND |]
     <> noEarlierUnsettledDelivery
     <> [HI.sql|ORDER BY d.sequence LIMIT 50 FOR UPDATE OF d SKIP LOCKED
     ), claimed AS (
@@ -686,7 +698,10 @@ finishSlackDelivery :: DB es => UTCTime -> SlackDelivery -> DeliveryOutcome -> E
 finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let (deliveryState, availableAt, messageTs, err) = case outcome of
         DeliveryConfirmed ts -> ("delivered", now, Just ts, Nothing)
-        WebhookAccepted -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
+        -- Only a thread-capable root waits: 'Threadless' means nothing can ever
+        -- confirm it, and parking it would block every follow-up for good.
+        WebhookAccepted ThreadCapable -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
+        WebhookAccepted Threadless -> ("delivered", now, Nothing, Nothing)
         DeliveryRetry retryAt reason -> ("pending", max now retryAt, Nothing, Just reason)
         DeliveryRejected reason -> ("failed", now, Nothing, Just reason)
         DeliveryUncertain reason -> ("uncertain", now, Nothing, Just reason)
@@ -698,6 +713,11 @@ finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted T
     WHERE id = #{delivery.id} AND lease_token = #{delivery.leaseToken} AND state IN ('sending', 'uncertain')
     RETURNING root_id|]
   case (listToMaybe completed, delivery.operation, outcome) of
+    -- Record on the root, not just this delivery: every follow-up queued behind
+    -- it has to know there is no thread to join.
+    (Just rid, PostRoot, WebhookAccepted Threadless) -> do
+      executeTx [HI.sql|UPDATE apis.slack_incident_roots SET threadless = TRUE WHERE id = #{rid} AND message_ts IS NULL|]
+      pure True
     (Just rid, PostRoot, DeliveryConfirmed ts) -> do
       roots <-
         queryTx @[SlackRootId]
@@ -794,6 +814,9 @@ claimIncidentSearches now =
           JOIN apis.slack s ON s.project_id = e.project_id AND s.team_id = r.team_id
           WHERE d.attempts > 0 AND d.history_retry_at <= #{now} AND p.active AND p.deleted_at IS NULL
             AND (d.state IN ('uncertain', 'waiting_root') OR (d.state = 'sending' AND d.lease_until < #{now}))
+            -- Never search history for a threadless root: recovery reads
+            -- conversations.history, which is exactly the call its install cannot make.
+            AND NOT r.threadless
             AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
     <> noEarlierUnsettledDelivery
     <> [HI.sql|ORDER BY d.history_retry_at, d.sequence LIMIT 20 FOR UPDATE OF d SKIP LOCKED

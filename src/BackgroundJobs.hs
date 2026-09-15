@@ -4851,7 +4851,11 @@ runSlackIncidentDeliveries = do
                   }
           Notify.deliverSlack operation message <&> \case
             Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-            Notify.SlackAccepted -> Incidents.WebhookAccepted
+            -- Webhook acceptance yields no timestamp. With a bot token the
+            -- reconciler can still recover one; without, nothing ever will, so
+            -- say so rather than queue follow-ups behind a wait that never ends.
+            Notify.SlackAccepted ->
+              Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
             Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
             Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
             Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
