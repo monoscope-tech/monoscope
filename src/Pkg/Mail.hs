@@ -479,7 +479,7 @@ renderSlackAlert :: SlackAlert -> [AE.Value]
 renderSlackAlert a =
   [headline]
     <> maybeToList (slackSection . fence <$> a.detail)
-    <> [slackFields a.facts | any (not . T.null . T.strip . snd) a.facts]
+    <> [slackFields a.facts | not (all (T.null . T.strip . snd) a.facts)]
     <> maybeToList (tagged "incident_onset" . slackContext . one <$> a.onsetNote)
     <> chartBlocks
     <> [tagged "incident_actions" (slackActions [slackButton l st u | (l, st, u) <- a.actions]) | not (null a.actions)]
