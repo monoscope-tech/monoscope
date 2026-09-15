@@ -324,14 +324,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     div_ [class_ "dashboard-grid-wrapper relative min-h-[400px]"] do
       case dash.tabs of
         Just tabs ->
-          -- Tab system with htmx lazy loading - only render active tab content
-          -- Re-init grids after htmx settles new tab content. The id guard stays: swaps
-          -- inside individual widgets bubble up to this element too. htmx 4's native
-          -- event detail carries no `elt` (see ApiChanges.hs), so branch on event.target.
+          -- Tab system with htmx lazy loading - only render active tab content.
+          -- Re-initialising grids after a swap is the document-level listener's job (see
+          -- this page's script). The element-local hx-on::after:swap that used to live
+          -- here never fired: a tab switch morphs this element, and an outerMorph emits
+          -- after:settle without after:swap.
           div_
             [ class_ "dashboard-tabs-container"
             , id_ "dashboard-tabs-content"
-            , term "hx-on::after:swap" "if (event.target.id === 'dashboard-tabs-content') { window.initializeGrids(); window.interpolateVarTemplates(); }"
             ]
             $ whenJust (tabs !!? activeTabIdx) \activeTab ->
               -- An unanswered required variable IS the tab's content, not a modal over
@@ -527,6 +527,35 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         // Reachable from #dashboard-tabs-content's element-local hx-on::after-swap,
         // which evaluates in global scope and can't see this closure.
         window.initializeGrids = initializeGrids;
+
+        // …and from anywhere else dashboard markup can arrive. Two things make a
+        // document-level listener the only one that sees every case:
+        //
+        //  * The event fires on the swap *target* and bubbles upward, so a handler on
+        //    the tab container never sees a swap aimed at an ancestor — which is what
+        //    picking a required variable is (it targets #main-content).
+        //  * An `outerMorph` emits after:settle for the morphed element but no
+        //    after:swap, so a tab switch fired neither of the events the tab
+        //    container's own hx-on::after:swap was listening for.
+        //
+        // Either way the grids came back laid out by their server-rendered gs-*
+        // attributes but with no GridStack instance — no drag, no resize, no
+        // responsive relayout. Re-running is cheap: initializeGrids skips anything
+        // already marked .grid-stack-initialized, so the widget-level swaps that also
+        // bubble through here cost one querySelector and nothing more.
+        if (!window.__dashboardSwapHooked) {
+          window.__dashboardSwapHooked = true;
+          ['htmx:after:swap', 'htmx:after:settle'].forEach(function(name) {
+            document.addEventListener(name, function(event) {
+              const el = event.target;
+              if (!(el instanceof Element) || !(el.matches('.grid-stack') || el.querySelector('.grid-stack'))) return;
+              window.gridStackReady.then(function() {
+                window.initializeGrids();
+                window.interpolateVarTemplates();
+              });
+            });
+          });
+        }
       });
 
       // Listen for widget-remove-requested custom events
