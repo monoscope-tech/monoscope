@@ -609,6 +609,40 @@ sendSlackWelcomeMessage token channelId projectTitle =
 -- rejected semantically (invalid_payload, channel_is_archived, no_service).
 -- Throws on either HTTP error or body≠ok so tryAny-wrapping callers surface
 -- the failure as a welcome-message-failed log with context.
+-- | Deliver a notice that tells the user how to fix a broken install.
+--
+-- Such a notice cannot depend on the credential that is broken. 34 of 43
+-- production installs have no bot token, so the "Reconnect Slack to grant Agent
+-- permissions" prompt — posted through @chat.postEphemeral@ with that very
+-- token — threw before it reached anyone: the bot looked dead rather than
+-- misconfigured, and the one message explaining the fix was the one message that
+-- could not be sent.
+--
+-- Falls back to the incoming webhook, the only transport a token-less install
+-- still has. It cannot post ephemerally, so the notice becomes a channel message
+-- — visible beats invisible. If neither transport works this logs and returns:
+-- an undeliverable prompt must not also abort the event being handled.
+-- Returns whether the notice actually went out. A caller that records a
+-- delivery receipt must not write one on 'False': an identity link marked
+-- delivered but never sent strands the user with no link and no retry.
+sendRecoveryNotice :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Text -> Text -> Eff es Bool
+sendRecoveryNotice context slackData channel user noticeText = do
+  delivered <-
+    if T.null slackData.botToken
+      then pure $ Left "no_bot_token"
+      else slackApi slackData.botToken "chat.postEphemeral" $ AE.object ["channel" AE..= channel, "user" AE..= user, "text" AE..= noticeText]
+  case delivered of
+    Right _ -> pure True
+    Left apiErr -> do
+      fallback <- case guarded (not . T.null) =<< slackData.webhookUrl of
+        Nothing -> pure $ Left "no_webhook_url"
+        Just url -> first (show @Text) <$> tryAny (void $ postWith (defaults & contentTypeHeader "application/json") (toString url) (AE.object ["text" AE..= noticeText]))
+      whenLeft_ fallback \hookErr ->
+        Log.logAttention "Slack recovery notice undeliverable"
+          $ AE.object ["context" AE..= context, "team_id" AE..= slackData.teamId, "channel_id" AE..= channel, "api_error" AE..= apiErr, "webhook_error" AE..= hookErr]
+      pure $ isRight fallback
+
+
 sendSlackWelcomeViaWebhook :: (HTTP :> es, IOE :> es) => Text -> Text -> Eff es ()
 sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
   rs <- postWith (defaults & contentTypeHeader "application/json") (toString webhookUrl) (AE.Object $ welcomeBlocks projectTitle)
@@ -845,7 +879,11 @@ processSlackEvent receiptId =
           | otherwise -> Log.logTrace "Slack App Home visit outside Messages retained" (AE.object [])
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
-        AssistantStarted session -> saveAssistantContext workspaceId session
+        -- Only a *started* thread is greeted; a context change is the user
+        -- switching channels in an open thread and must not re-prompt them.
+        AssistantStarted session -> do
+          saveAssistantContext workspaceId session
+          whenJustM (getSlackDataByTeamId workspaceId) (`greetAssistantThread` session)
         AssistantContextChanged session -> saveAssistantContext workspaceId session
         BotMessage -> Log.logTrace "Slack bot message retained without starting an investigation" (AE.object [])
         MessageEdit -> Log.logTrace "Slack message edit retained without starting an investigation" (AE.object [])
@@ -855,6 +893,12 @@ processSlackEvent receiptId =
       slackData <- getSlackDataByTeamId workspaceId >>= maybe (throwError err403) pure
       linkId <- UUIDId <$> UUID.genUUID
       request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
+      -- Ephemeral only, and deliberately no webhook fallback: this is a one-shot
+      -- account-linking URL for one user, and an incoming webhook posts to the
+      -- whole channel. Failing to deliver is far better than leaking it, so an
+      -- install without a usable bot token gets an error here rather than a
+      -- private link in public. ('sendRecoveryNotice' may fall back only because
+      -- a "reconnect Slack" prompt carries nothing secret.)
       slackApiOrThrow "Slack identity link" slackData.botToken "chat.postEphemeral"
         $ AE.object
           [ "channel" AE..= request.channelId
@@ -878,12 +922,13 @@ processSlackEvent receiptId =
                   then processThreadedEvent principal envCfg slackData event workspaceId threadTs
                   else do
                     AI.requireAgentAccess (AI.SlackAccess workspaceId event.user principal.userId) principal.projectId
-                    slackApiOrThrow "Slack reconnect notice" slackData.botToken "chat.postEphemeral"
-                      $ AE.object
-                        [ "channel" AE..= event.channel
-                        , "user" AE..= event.user
-                        , "text" AE..= ("Reconnect Slack from <" <> envCfg.hostUrl <> "p/" <> principal.projectId.toText <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect.")
-                        ]
+                    void
+                      $ sendRecoveryNotice "Slack reconnect notice" slackData event.channel event.user
+                      $ "Reconnect Slack from <"
+                      <> envCfg.hostUrl
+                      <> "p/"
+                      <> principal.projectId.toText
+                      <> "/settings/integrations|project integrations> to grant Agent permissions before investigating. A project admin must complete the reconnect."
         else Log.logTrace "Slack message is outside an active investigation" (AE.object ["team_id" AE..= workspaceId, "channel_id" AE..= event.channel])
 
     processThreadedEvent principal envCfg slackData event workspaceId threadTs = do
@@ -1362,6 +1407,10 @@ data SlackSessionUpdate = SlackSessionUpdate
   deriving anyclass (AE.ToJSON)
 
 
+-- | The agent's "working" indicator. This is @agents.sessions.setStatus@ from
+-- Slack's Agents & AI Apps surface, not the older @assistant.threads.setStatus@
+-- — Monoscope is built on the newer one, and there must not be a second way to
+-- say the same thing.
 setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Eff es ()
 setSessionStatus token channel thread status =
   slackApiOrThrow "Slack session status" token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status
@@ -1378,6 +1427,40 @@ saveAppContext workspaceId event =
 
 
 -- | Slack navigation context is untrusted input, not project authorization.
+-- | The starters Slack shows in an otherwise empty assistant thread.
+--
+-- An assistant that opens blank reads as unfinished — there is nothing to tell a
+-- first-time user what it can answer, which is the difference between the
+-- Monoscope panel and the agents people compare it to. @title@ is what the user
+-- sees; @message@ is what gets sent if they click it.
+assistantPrompts :: [(Text, Text)]
+assistantPrompts =
+  [ ("What is broken right now?", "What is broken right now?")
+  , ("Summarise today's errors", "Summarise the errors from the last 24 hours, grouped by service.")
+  , ("Why is latency up?", "Which endpoints got slower in the last 24 hours, and what changed?")
+  ]
+
+
+-- | Greet a newly opened assistant thread and offer starters.
+--
+-- Best-effort on purpose: these are presentation, and a workspace whose install
+-- predates the Agent scopes will refuse them. Failing the event over a missing
+-- greeting would take the whole conversation down with it, so this logs and
+-- carries on — the thread still works, it just opens bare.
+greetAssistantThread :: (HTTP :> es, Log.Log :> es) => SlackData -> SlackAssistantEvent -> Eff es ()
+greetAssistantThread slackData event = unless (T.null slackData.botToken) do
+  let session = event.assistant_thread
+      target = ["channel_id" AE..= session.channel_id, "thread_ts" AE..= session.thread_ts]
+      call method extra =
+        whenLeftM_ (slackApi slackData.botToken method (AE.object (target <> extra)))
+          $ \err -> Log.logAttention "Slack assistant setup rejected" (AE.object ["method" AE..= method, "team_id" AE..= slackData.teamId, "error" AE..= err])
+  call
+    "assistant.threads.setSuggestedPrompts"
+    [ "title" AE..= ("Ask about your telemetry" :: Text)
+    , "prompts" AE..= [AE.object ["title" AE..= t, "message" AE..= m] | (t, m) <- assistantPrompts]
+    ]
+
+
 -- Compare event timestamps so a delayed start cannot overwrite newer context.
 saveAssistantContext :: DB es => Text -> SlackAssistantEvent -> Eff es ()
 saveAssistantContext workspaceId event = do

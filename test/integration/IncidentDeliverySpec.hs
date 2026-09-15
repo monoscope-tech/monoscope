@@ -500,7 +500,7 @@ spec = around withTestResources do
       I.Recorded episode _ <- run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
       run (I.recordIncidentEvent update{I.observedAt = addUTCTime (-1) now, I.change = I.IncidentRecovered}) `shouldReturn` I.OlderThanCurrentEpisode
       [root] <- run $ I.claimSlackDeliveries now
-      run (I.finishSlackDelivery now root I.WebhookAccepted) `shouldReturn` True
+      run (I.finishSlackDelivery now root (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
       void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 now, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
       run (I.claimSlackDeliveries (addUTCTime 300 now)) `shouldReturn` []
       run (I.getEpisode (UUIDId $ UUID.fromWords 0 0 0 999) episode.id) `shouldReturn` Nothing
@@ -558,6 +558,43 @@ spec = around withTestResources do
 
     -- An episode is only ever read from its issue's page, so one without an issue
     -- is unreachable: it must be refused rather than written and lost.
+    -- 104 roots sat in waiting_root in production, and the 49 follow-ups queued
+    -- behind them were never claimed at all: an incident posted once and then
+    -- went quiet. A webhook install cannot return a timestamp and cannot call
+    -- conversations.history to recover one, so the wait never ends.
+    it "keeps sending when the destination cannot be threaded" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      let run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset tr
+      void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+      [root] <- run $ I.claimSlackDeliveries update.observedAt
+      -- Accepted by a transport that can never produce a timestamp.
+      run (I.finishSlackDelivery update.observedAt root (I.WebhookAccepted I.Threadless)) `shouldReturn` True
+      rootState <- withResource tr.trPool \conn ->
+        PGS.query conn [sql|SELECT d.state, r.threadless, r.message_ts IS NULL FROM apis.slack_incident_deliveries d JOIN apis.slack_incident_roots r ON r.id = d.root_id WHERE d.id = ?|] (PGS.Only root.id)
+      (rootState :: [(Text, Bool, Bool)]) `shouldBe` [("delivered", True, True)]
+      -- The follow-up is claimable, and goes out as a standalone post rather
+      -- than a reply to a thread that does not exist.
+      advanceMinutes tr 1
+      now <- getTestTime tr.trTestClock
+      void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentRecovered}
+      followups <- run $ I.claimSlackDeliveries now
+      map (.operation) followups `shouldContain` [I.PostRoot]
+      -- Nothing may be left queued that can never be claimed. `shouldContain`
+      -- alone passed while an unclaimable update_root sat pending behind the
+      -- reply — and because noEarlierUnsettledDelivery blocks on the earliest
+      -- unsettled row, that one row silences the whole root from then on. Assert
+      -- on the queue itself, not just on what came back.
+      stranded <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
+               JOIN apis.slack_incident_roots r ON r.id = d.root_id
+               WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
+          ()
+      (stranded :: [(Text, Text)]) `shouldBe` []
+
     it "refuses to open an episode with no issue behind it" \tr -> do
       update <- setup tr
       setupSlackData tr testPid "T1"
@@ -589,7 +626,7 @@ spec = around withTestResources do
           run = runTestBgNoReset tr
       void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
       [root] <- run $ I.claimSlackDeliveries update.observedAt
-      run (I.finishSlackDelivery update.observedAt root I.WebhookAccepted) `shouldReturn` True
+      run (I.finishSlackDelivery update.observedAt root (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
       for_ ([("EvOtherApp", "T1", "C1", "1788900000.000001", "A_OTHER"), ("EvOtherTeam", "T2", "C1", "1788900000.000001", "A_TEST"), ("EvOtherChannel", "T1", "C2", "1788900000.000001", "A_TEST"), ("EvBadTs", "T1", "C1", "invalid", "A_TEST")] :: [(Text, Text, Text, Text, Text)]) \(eid, workspace, channel, ts, author) -> do
         receipt <- receiveSlackEvent tr $ slackRootEvent eid workspace channel root.rootId ts author
         run (I.captureSlackRoot "A_TEST" receipt) `shouldReturn` False
@@ -600,7 +637,7 @@ spec = around withTestResources do
       conflict <- receiveSlackEvent tr $ slackRootEvent "EvConflict" "T1" "C1" root.rootId "1788900000.000002" "A_TEST"
       run (I.captureSlackRoot "A_TEST" conflict) `shouldReturn` False
 
-    for_ [I.WebhookAccepted, I.DeliveryUncertain "lost_ack"] $ \accepted ->
+    for_ [I.WebhookAccepted I.ThreadCapable, I.DeliveryUncertain "lost_ack"] $ \accepted ->
       it ("recovers an incident root through leased history pages after " <> show accepted) \tr -> do
         update <- setupWithIssue tr
         setupSlackData tr testPid "T1"
