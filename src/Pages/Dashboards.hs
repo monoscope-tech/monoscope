@@ -62,6 +62,7 @@ import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.List (lookup)
 import Data.Map qualified as Map
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -2339,11 +2340,14 @@ processConstantsAndExtendParams
   -> Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
 processConstantsAndExtendParams pid now timeParams allParams haystack constants =
   pooledForConcurrently constants processOne <&> \pc ->
-    ( pc
-    , allParams
-        <> [("const-" <> c.key, Just $ constantToSQLList $ fold c.result) | c <- pc]
-        <> [("const-" <> c.key <> "-kql", Just $ constantToKQLList $ fold c.result) | c <- pc]
-    )
+    let resolved =
+          [("const-" <> c.key, Just $ constantToSQLList $ fold c.result) | c <- pc]
+            <> [("const-" <> c.key <> "-kql", Just $ constantToKQLList $ fold c.result) | c <- pc]
+        -- The incoming params may already carry a const-* pair the browser forwarded from
+        -- the page URL. Appending blindly kept both copies, and each round-trip re-forwarded
+        -- the doubled set — padding every widget request line for no gain.
+        keys = fromList @(Set Text) (fst <$> resolved)
+     in (pc, filter (not . (`S.member` keys) . fst) allParams <> resolved)
   where
     processOne c
       -- A blown budget leaves the constant result-less, which renders as the same

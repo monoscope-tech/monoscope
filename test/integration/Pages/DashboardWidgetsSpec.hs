@@ -18,6 +18,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
+import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
@@ -26,6 +27,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
+import Utils qualified
+import Web.Routes qualified as Routes
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -451,3 +454,61 @@ spec = sequential $ aroundAll withTestResources do
       frames `shouldSatisfy` \case
         Right [AE.Object obj] -> KM.lookup "type" obj == Just (AE.String "error")
         _ -> False
+
+  -- Every /widget request carries its whole widget definition on the request line. For a
+  -- table widget that is multi-KB of SQL, and past ~9.6KB nginx tears down the entire
+  -- HTTP/2 connection rather than just that stream — so Cloudflare answered 520 for the
+  -- oversized request *and* for every unrelated request multiplexed onto the same
+  -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
+  -- ("Couldn't load this chart") with no query ever reaching the database.
+  describe "Widget fetch URL size" do
+    let bigSqlWidget =
+          (def :: Widget.Widget)
+            { Widget.wType = Widget.WTTable
+            , Widget.title = Just "Query Optimization Targets"
+            , Widget.sql = Just $ "SELECT " <> T.intercalate ", " [T.replicate 4 "attributes___db___system___name" <> " AS c" <> show n | n <- [1 :: Int .. 100]] <> " FROM otel_logs_and_spans"
+            , Widget._projectId = Just testPid
+            }
+
+    it "keeps a table widget's URL far below the proxy's header limit" \_ -> do
+      let raw = "/p/" <> testPid.toText <> "/widget?widgetJSON=" <> Utils.toUriStr (Utils.encodeText bigSqlWidget)
+      -- The shape that broke: uncompressed, this widget alone overruns the limit.
+      T.length raw `shouldSatisfy` (> 9600)
+      T.length (Widget.widgetFetchUrl bigSqlWidget) `shouldSatisfy` (< 4000)
+
+    it "round-trips the widget through the compressed parameter the URL now uses" \tr -> do
+      let widgetZ = snd $ T.breakOnEnd "widgetZ=" $ Widget.widgetFetchUrl bigSqlWidget
+      (_, got) <- testServant tr $ Routes.widgetGetH testPid Nothing (Just widgetZ) (Just "24H") Nothing Nothing []
+      got.sql `shouldBe` bigSqlWidget.sql
+      got.title `shouldBe` bigSqlWidget.title
+
+    it "rejects a corrupt blob instead of decompressing something arbitrary" \_ ->
+      Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
+
+  -- Endpoint Analytics filters by endpoint hash, which already identifies one endpoint.
+  -- Every widget *also* pinned kind=="server", so the ~56% of a project's endpoints that
+  -- are outgoing calls (apis.endpoints.outgoing, discovered from client spans) rendered an
+  -- entirely empty dashboard: "0 reqs", "No data in this time range", while the log
+  -- explorer showed the traffic. Reported by a customer for dellyman.com/api/v3.0/GetQuotes.
+  describe "Endpoint Analytics covers outgoing endpoints" do
+    let outgoingHash = "ba3431d5"
+        seedClientSpan tr = withResource tr.trPool \conn ->
+          PG.execute
+            conn
+            [SqlQQ.sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary)
+                  VALUES (gen_random_uuid(), ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY[?], ARRAY['POST']) |]
+            (testPid.toText, frozenTime, frozenTime, frozenTime, outgoingHash)
+
+    it "returns the endpoint's spans when they are client spans" \tr -> do
+      void $ seedClientSpan tr
+      md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      md.error `shouldBe` Nothing
+      V.length md.dataset `shouldSatisfy` (> 0)
+      -- The filter that caused the blank dashboard: it matches nothing for this endpoint.
+      excluded <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "kind==\"server\" AND hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      V.length excluded.dataset `shouldBe` 0
+
+    it "ships a template that does not filter the endpoint's widgets by span kind" \_ -> do
+      template <- decodeUtf8 <$> readFileBS "static/public/dashboards/endpoint-stats.yaml"
+      template `shouldSatisfy` T.isInfixOf "hashes[*]==\"{{var-endpointHash}}\""
+      template `shouldNotSatisfy` T.isInfixOf "kind"

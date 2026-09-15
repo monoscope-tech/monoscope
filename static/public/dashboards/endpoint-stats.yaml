@@ -39,7 +39,7 @@ tabs:
             title: 'Requests'
             icon: activity
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              hashes[*]=="{{var-endpointHash}}"
               | summarize count() by bin_auto(timestamp)
             unit: reqs
             eager: true
@@ -50,7 +50,7 @@ tabs:
             description: 'Percentage of 5xx server errors. Lower is better.'
             icon: alert-triangle
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              hashes[*]=="{{var-endpointHash}}"
               | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
             unit: '%'
             alert_threshold: 5
@@ -62,7 +62,7 @@ tabs:
             description: '95th percentile response time. 95% of requests are faster than this.'
             icon: clock
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             layout: { w: 3, h: 2 }
@@ -71,7 +71,7 @@ tabs:
             title: 'Apdex'
             description: 'Application Performance Index (0-1). >0.9 excellent, <0.5 poor. Threshold: 500ms satisfied, 2s tolerating.'
             icon: smile
-            sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND kind = 'server' AND hashes @> ARRAY['{{var-endpointHash}}'] AND duration IS NOT NULL {{time_filter}}"
+            sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] AND duration IS NOT NULL {{time_filter}}"
             unit: '/1.0'
             layout: { w: 3, h: 2 }
 
@@ -79,7 +79,7 @@ tabs:
       - type: 'timeseries'
         title: 'Requests by Status Code'
         query: |
-          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null
+          hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null
           | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
           | order by timestamp desc
           | limit 10000
@@ -92,7 +92,7 @@ tabs:
         hide_subtitle: true
         summarize_by: max
         query: |
-          hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND duration != null
+          hashes[*]=="{{var-endpointHash}}" AND duration != null
           | summarize percentiles(duration / 1e6, 50, 75, 90, 95) by bin_auto(timestamp)
           | order by timestamp desc
         layout: { w: 6, h: 4 }
@@ -102,7 +102,7 @@ tabs:
         title: 'Errors (4xx & 5xx)'
         theme: 'roma'
         query: |
-          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
+          hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
           | extend error_category = case(attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", tostring(attributes.http.response.status_code))
           | summarize count() by bin_auto(timestamp), error_category
           | order by timestamp desc
@@ -121,7 +121,6 @@ tabs:
               context___trace_id as trace_id
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
-              AND kind = 'server'
               AND hashes @> ARRAY['{{var-endpointHash}}']
               {{time_filter}}
           ),
@@ -173,7 +172,6 @@ tabs:
             ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
-            AND kind = 'server'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             {{time_filter}}
           GROUP BY attributes___http___response___status_code
@@ -207,7 +205,6 @@ tabs:
             SELECT context___span_id as span_id, context___trace_id as trace_id
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
-              AND kind = 'server'
               AND hashes @> ARRAY['{{var-endpointHash}}']
               {{time_filter}}
           )
@@ -253,7 +250,6 @@ tabs:
             context___trace_id AS trace_id
           FROM otel_logs_and_spans o
           WHERE project_id='{{project_id}}'
-            AND kind = 'server'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             AND duration IS NOT NULL
             {{time_filter}}
@@ -271,7 +267,7 @@ tabs:
             title: 'Server Errors (5xx)'
             icon: alert-triangle
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 500
+              hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 500
               | summarize count() by bin_auto(timestamp)
             unit: errors
             alert_threshold: 1
@@ -281,7 +277,7 @@ tabs:
             title: 'Client Errors (4xx)'
             icon: circle-x
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 400 AND attributes.http.response.status_code < 500
+              hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 400 AND attributes.http.response.status_code < 500
               | summarize count() by bin_auto(timestamp)
             unit: errors
             layout: { w: 4, h: 2 }
@@ -290,7 +286,7 @@ tabs:
             title: 'Error Rate'
             icon: percent
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              hashes[*]=="{{var-endpointHash}}"
               | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 400) * 100.0 / count(), 2)
             unit: '%'
             layout: { w: 4, h: 2 }
@@ -299,7 +295,7 @@ tabs:
         title: 'Errors by Status Code'
         theme: 'roma'
         query: |
-          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
+          hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
           | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
           | order by timestamp desc
           | limit 10000
@@ -310,7 +306,7 @@ tabs:
         title: 'Errors by Exception Type'
         theme: 'roma'
         query: |
-          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400)
+          hashes[*]=="{{var-endpointHash}}" AND (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400)
           | summarize count() by bin_auto(timestamp), coalesce(attributes.exception.type, attributes.error.type, "unknown")
           | order by timestamp desc
           | limit 10000
@@ -343,7 +339,6 @@ tabs:
             context___trace_id AS trace_id
           FROM otel_logs_and_spans o
           WHERE project_id='{{project_id}}'
-            AND kind = 'server'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
             AND duration IS NOT NULL
@@ -362,7 +357,7 @@ tabs:
             title: 'P50 Latency'
             icon: clock
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p50(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             layout: { w: 3, h: 2 }
@@ -371,7 +366,7 @@ tabs:
             title: 'P75 Latency'
             icon: clock
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p75(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             layout: { w: 3, h: 2 }
@@ -380,7 +375,7 @@ tabs:
             title: 'P95 Latency'
             icon: clock
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             layout: { w: 3, h: 2 }
@@ -389,7 +384,7 @@ tabs:
             title: 'P99 Latency'
             icon: clock
             query: |
-              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p99(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
             layout: { w: 3, h: 2 }
@@ -399,7 +394,7 @@ tabs:
         hide_subtitle: true
         summarize_by: max
         query: |
-          hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND duration != null
+          hashes[*]=="{{var-endpointHash}}" AND duration != null
           | summarize percentiles(duration / 1e6, 50, 75, 90, 95, 99) by bin_auto(timestamp)
           | order by timestamp desc
         layout: { w: 12, h: 5 }
@@ -415,7 +410,6 @@ tabs:
               context___trace_id as trace_id
             FROM otel_logs_and_spans
             WHERE project_id='{{project_id}}'
-              AND kind = 'server'
               AND hashes @> ARRAY['{{var-endpointHash}}']
               {{time_filter}}
           ),
@@ -466,7 +460,6 @@ tabs:
             context___trace_id AS trace_id
           FROM otel_logs_and_spans o
           WHERE project_id='{{project_id}}'
-            AND kind = 'server'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             AND duration IS NOT NULL
             {{time_filter}}

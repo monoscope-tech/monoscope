@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, widgetGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 -- Standard library imports
 import Control.Lens
@@ -59,7 +59,6 @@ import Web.MCP qualified as MCP
 
 -- Model imports
 
-import Codec.Compression.GZip qualified as GZip
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
@@ -77,7 +76,6 @@ import Pkg.Parser (PageDirection)
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
-import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
@@ -515,7 +513,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
-  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
+  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
@@ -1213,10 +1211,13 @@ avatarGetH userId =
 
 
 -- Widget GET handler that accepts dashboard parameters
-widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
-widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
+widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
+widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
+  -- widgetZ is what we render now (see 'Widget.widgetFetchUrl'); widgetJSON stays readable
+  -- for hand-built URLs and for pages still open from before the change.
+  widgetJson <- maybe (pure widgetJsonM) (fmap (<|> widgetJsonM) . Widget.decodeWidgetZ) widgetZM
   widget <-
-    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJsonM)
+    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
   let widgetWithPid = widget & #_projectId ?~ pid
@@ -1235,11 +1236,7 @@ widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- ask @AuthContext
   let fallback = fromMaybe "" widgetJsonM
-  v <- case widgetZM of
-    Just z
-      | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
-          handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
-    _ -> pure fallback
+  v <- maybe (pure fallback) (fmap (fromMaybe fallback) . Widget.decodeWidgetZ) widgetZM
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 

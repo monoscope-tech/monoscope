@@ -1,6 +1,7 @@
-module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception.Safe qualified as Safe
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
@@ -371,9 +372,29 @@ isTrue = (== Just True)
 
 
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
--- /widget endpoint with the widget JSON url-encoded as a query param.
+-- /widget endpoint carrying the widget as a compressed @widgetZ@ blob.
+--
+-- Url-encoding the raw JSON put a table widget's multi-KB SQL on the request line;
+-- past ~9.6KB nginx drops the whole HTTP/2 connection rather than just that stream, so
+-- Cloudflare answered 520 for the oversized request *and* every sibling multiplexed
+-- onto the same connection — which is what made dashboard charts fail in scattered,
+-- retry-able subsets. Compression keeps these an order of magnitude under the limit.
 widgetFetchUrl :: Widget -> Text
-widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetJSON=" <> toUriStr (encodeText w)
+widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetZ=" <> encodeWidgetZ (encodeText w)
+
+
+-- | gzip + base64url, the wire form of a widget on a request line. 'decodeWidgetZ' inverts it.
+encodeWidgetZ :: Text -> Text
+encodeWidgetZ = B64.extractBase64 . B64URL.encodeBase64 . toStrict . GZip.compress . encodeUtf8
+
+
+-- | Inverse of 'encodeWidgetZ'; 'Nothing' for anything that isn't a well-formed blob.
+-- Forced here so a corrupt payload fails as a decode miss rather than as a lazy
+-- 'GZip.decompress' bomb detonating deep inside the handler.
+decodeWidgetZ :: MonadIO m => Text -> m (Maybe Text)
+decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
+  Left _ -> pure Nothing
+  Right bs -> liftIO $ Safe.handleAny (const $ pure Nothing) $ Just <$> evaluateWHNF (decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs)
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
@@ -393,7 +414,7 @@ widgetPostH pid sinceM fromM toM widget = do
 widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = encodeText widget
-      compressed = B64.extractBase64 $ B64URL.encodeBase64 $ toStrict $ GZip.compress $ encodeUtf8 widgetJson
+      compressed = encodeWidgetZ widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetZ=" <> compressed <> timeParams <> "&sig=" <> sig
