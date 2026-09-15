@@ -252,7 +252,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           a_
             [ role_ "tab"
             , href_ tabUrl
-            , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
+            , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
             , hxGet_ tabUrl
             , hxTarget_ "#dashboard-tabs-content"
             , hxSelect_ "#dashboard-tabs-content"
@@ -262,7 +262,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             , [__|on click set my.preloadState to 'DONE'|]
             ]
             do
-              whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
+              -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
+              whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
+              span_ [class_ "hidden group-[.htmx-request]/tab:inline loading loading-spinner loading-xs", role_ "status", Aria.label_ "Loading"] ""
               toHtml tab.name
 
     -- Variables section (pushed to the right, collapsible on mobile)
@@ -672,6 +674,15 @@ processVariablesConcurrently pid now timeParams allParams dash =
 
 -- | Find variable that needs to be prompted (from tab.requires or variable.required,
 -- the latter only once its @dependsOn@ parent has a value).
+--
+-- Both handlers ask this /before/ the widget phase, because a prompted variable means
+-- 'variablePickerModal_' becomes the tab's whole content and every widget result is
+-- discarded. Running them anyway was the single slowest thing about these dashboards:
+-- the unset variable interpolates to @''@, so Endpoint Analytics' @hashes[*]==""@
+-- scanned until 'renderQueryBudgetMicros' killed each one, and the picker — the first
+-- screen a user ever sees — took as long as the full dashboard (5.4s vs 5.5s measured
+-- on a customer project) to render a list of links. Keep the call sites answering the
+-- same question: the view re-asks it at 'dashboardPage_' to choose what to render.
 findVarToPrompt :: Maybe Dashboards.Tab -> [Dashboards.Variable] -> Maybe Dashboards.Variable
 findVarToPrompt activeTab variables =
   (activeTab >>= (.requires) >>= \reqKey -> find (\v -> v.key == reqKey && isNothing v.value) variables)
@@ -755,20 +766,30 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 end
               |]
               ]
-          div_ [class_ "max-h-80 overflow-y-auto p-1"] do
+          -- Once a choice is in flight further clicks would only queue another slow render,
+          -- and fading the rest leaves the chosen row as the only lit thing on screen.
+          div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
             forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
               let optVal = maybeToMonoid (opt !!? 0)
                   optLbl = fromMaybe optVal (opt !!? 1)
                   isCurrent = var.value == Just optVal
+              -- Boosted rather than a plain href: picking a value re-renders a dashboard
+              -- that can take seconds, and a full navigation shows the user nothing at all
+              -- until it lands. As an htmx request the click paints immediately —
+              -- '.htmx-request' lands on this anchor, which is what drives the row spinner
+              -- and the dimmed list below.
               a_
-                [ class_
-                    $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                    <> bool "" " active" (idx == 0)
-                    <> bool "" " var-opt-current" isCurrent
-                , href_ $ urlPrefix <> optVal
-                ]
+                ( [ class_
+                      $ "var-opt group/opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                      <> bool "" " active" (idx == 0)
+                      <> bool "" " var-opt-current" isCurrent
+                  , href_ $ urlPrefix <> optVal
+                  ]
+                    <> navTabAttrs
+                )
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
+                  span_ [class_ "hidden group-[.htmx-request]/opt:inline loading loading-spinner loading-xs shrink-0", role_ "status", Aria.label_ "Loading"] ""
                   when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
             div_ [class_ "var-picker-empty px-3 py-8 text-center", style_ "display:none"] $ emptyState_ def{size = ESCompact} "No matching results" ""
       -- Keyboard hints
@@ -1168,7 +1189,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
       let timeParams = (sinceStr, fromDStr, toDStr)
       (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams allParams dash
-      dash'' <- (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants dash'.widgets
+      dash'' <-
+        if isJust $ findVarToPrompt Nothing (fold dash'.variables)
+          then pure dash'
+          else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants dash'.widgets
 
       bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
       addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
@@ -2403,11 +2427,14 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
 
   -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx).
   -- Note: We don't process dash.widgets here since this is a tab-based dashboard
-  dash'' <- forOf (#tabs . _Just) dash' \tabs ->
-    forM (zip [0 ..] tabs) \(idx, tab) ->
-      if idx == activeTabIdx
-        then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
-        else pure tab
+  dash'' <-
+    if isJust $ findVarToPrompt (snd <$> activeTabInfo) (fold dash'.variables)
+      then pure dash'
+      else forOf (#tabs . _Just) dash' \tabs ->
+        forM (zip [0 ..] tabs) \(idx, tab) ->
+          if idx == activeTabIdx
+            then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
+            else pure tab
 
   bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
   -- Pass the active tab slug and computed constants in params for rendering

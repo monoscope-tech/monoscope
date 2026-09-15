@@ -54,14 +54,14 @@ noFilters = Dashboards.DashboardFilters{tag = []}
 -- restarts per request, so the id minted here is the same in every example and a second
 -- create would collide on the primary key. This spec's database is created fresh from a
 -- template and is private to the file, so clearing is safe.
-newDashboard :: TestResources -> Text -> IO DashboardModel.DashboardId
-newDashboard tr title = do
+newDashboard :: TestResources -> Text -> Text -> IO DashboardModel.DashboardId
+newDashboard tr file title = do
   (_, existing) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case existing of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
       for_ dashboards \d -> void $ testServant tr $ Dashboards.dashboardDeleteH testPid d.id
     _ -> pass
-  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing}
   (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case pg of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
@@ -128,7 +128,7 @@ spec = sequential $ aroundAll withTestResources do
 
   describe "Adding widgets to a dashboard" do
     it "widthless widgets default to four per row" \tr -> do
-      dashId <- newDashboard tr "Widget Default Width"
+      dashId <- newDashboard tr "overview.yaml" "Widget Default Width"
       addWidgets tr dashId [w{Widget.layout = Nothing} | w <- numberedWidgets 5]
 
       stored <- storedWidgets tr dashId
@@ -138,7 +138,7 @@ spec = sequential $ aroundAll withTestResources do
         `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
 
     it "edits a widget in place and retains an omitted query" \tr -> do
-      dashId <- newDashboard tr "Widget Edit"
+      dashId <- newDashboard tr "overview.yaml" "Widget Edit"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")
       wid <- firstWidgetId =<< storedWidgets tr dashId
 
@@ -158,7 +158,7 @@ spec = sequential $ aroundAll withTestResources do
       for_ ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"] \fragment ->
         html `shouldSatisfy` T.isInfixOf fragment
 
-      _ <- newDashboard tr "Widget destination"
+      _ <- newDashboard tr "overview.yaml" "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
       toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "successToast"
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
@@ -178,7 +178,7 @@ spec = sequential $ aroundAll withTestResources do
   -- cheap to assert — and a type that silently fails to persist shows up as its own line in
   -- the diff rather than as one opaque failure.
   it "every widget type survives add, move, resize and reload" \tr -> do
-    dashId <- newDashboard tr "Widget Lifecycle"
+    dashId <- newDashboard tr "overview.yaml" "Widget Lifecycle"
     addWidgets tr dashId [widgetOf wt (show @Text wt) | wt <- allWidgetTypes]
     added <- storedWidgets tr dashId
     map (show @Text . (.wType)) added `shouldBe` map (show @Text) allWidgetTypes
@@ -200,7 +200,7 @@ spec = sequential $ aroundAll withTestResources do
 
   describe "Moving and resizing on the canvas" do
     it "moving a widget to the origin is not mistaken for an absent coordinate" \tr -> do
-      dashId <- newDashboard tr "Widget Origin"
+      dashId <- newDashboard tr "overview.yaml" "Widget Origin"
       let atSix = (widgetOf Widget.WTTimeseries "origin"){Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing atSix
       wid <- firstWidgetId =<< storedWidgets tr dashId
@@ -211,7 +211,7 @@ spec = sequential $ aroundAll withTestResources do
       (only.layout >>= (.x), only.layout >>= (.y)) `shouldBe` (Just 0, Just 0)
 
     it "a widget dropped from the patch is removed from the dashboard" \tr -> do
-      dashId <- newDashboard tr "Widget Delete"
+      dashId <- newDashboard tr "overview.yaml" "Widget Delete"
       addWidgets tr dashId (numberedWidgets 3)
       wids <- mapMaybe (.id) <$> storedWidgets tr dashId
       let kept = take 1 wids <> drop 2 wids
@@ -225,7 +225,7 @@ spec = sequential $ aroundAll withTestResources do
     -- A patch built before an HTMX swap can name only stale ids. Applying it would wipe
     -- the dashboard, since reorderWidgets rebuilds the list purely from the patch.
     it "a patch naming only unknown widgets is ignored rather than emptying the canvas" \tr -> do
-      dashId <- newDashboard tr "Widget Stale Patch"
+      dashId <- newDashboard tr "overview.yaml" "Widget Stale Patch"
       addWidgets tr dashId (numberedWidgets 2)
       priorWidgets <- storedWidgets tr dashId
 
@@ -247,7 +247,7 @@ spec = sequential $ aroundAll withTestResources do
           (_, dash) <- testServant tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd)
           pure $ maybe [] (.widgets) $ find (\t -> slugify t.name == slug) (fold dash.tabs)
         newTabbedDashboard tr = do
-          dashId <- newDashboard tr "Tabbed"
+          dashId <- newDashboard tr "overview.yaml" "Tabbed"
           _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid dashId tabbedYaml
           pure dashId
 
@@ -316,7 +316,7 @@ spec = sequential $ aroundAll withTestResources do
   -- app listened for either.
   describe "Saving the canvas layout" do
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
-      dashId <- newDashboard tr "Save Failure Signal"
+      dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
       (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing []
       let rendered = case pg of PageCtx _ d -> toStrict $ renderText $ toHtml d
           formTag = T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" rendered
@@ -334,7 +334,7 @@ spec = sequential $ aroundAll withTestResources do
     -- table: it is the wrong thing to drop on a dashboard by default, and it is the
     -- most expensive one to render.
     it "defaults to a timeseries chart, not the logs table" \tr -> do
-      dashId <- newDashboard tr "Add Widget Default"
+      dashId <- newDashboard tr "overview.yaml" "Add Widget Default"
       (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       -- Assert on the seeded `widgetJSON` rather than on which radio carries `checked`:
       -- that object is what the save actually posts, and every tab's inline hyperscript
@@ -348,7 +348,7 @@ spec = sequential $ aroundAll withTestResources do
     -- widgetJSON.type to a string with no WidgetType constructor, so the widget could
     -- not be decoded on save — the tab looked available and simply did not work.
     it "offers only visualizations the API can actually store as a widget" \tr -> do
-      dashId <- newDashboard tr "Add Widget Tabs"
+      dashId <- newDashboard tr "overview.yaml" "Add Widget Tabs"
       (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let rendered = toStrict $ renderText html
           offered = [T.takeWhile (/= '"') seg | seg <- drop 1 (T.splitOn "id=\"viz-" rendered)]
@@ -512,3 +512,31 @@ spec = sequential $ aroundAll withTestResources do
       template <- decodeUtf8 <$> readFileBS "static/public/dashboards/endpoint-stats.yaml"
       template `shouldSatisfy` T.isInfixOf "hashes[*]==\"{{var-endpointHash}}\""
       template `shouldNotSatisfy` T.isInfixOf "kind"
+
+  -- The variable picker replaces the tab's content, so every widget the render produced
+  -- was thrown away. The gate lived in the view, so the handler ran the whole widget
+  -- phase first — with the required variable interpolated to '', which for Endpoint
+  -- Analytics means hashes[*]=="" scanning until the render budget kills it. The picker,
+  -- the first screen a user of such a dashboard ever sees, cost as much as the fully
+  -- populated dashboard (5.4s vs 5.5s measured against a customer project).
+  describe "Dashboards prompting for a required variable" do
+    let tabWidgets :: Dashboards.DashboardGet -> [Widget.Widget]
+        -- Flattened: the eager widgets on these templates are children of a group.
+        tabWidgets (Dashboards.DashboardGet _ _ dash _ _) = foldMap (foldMap (concatMap flatten . (.widgets))) dash.tabs
+        flatten w = w : concatMap flatten (fold w.children)
+        -- `eager` alone proves nothing: the template declares it. Server work shows up as
+        -- rendered html or a fetched dataset.
+        prefilled w = isJust w.html || isJust w.dataset
+        openTab tr dashId params = do
+          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") params
+          pure dg
+
+    it "skips the widget phase whose results the picker would discard" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
+      -- host is set, endpointHash is not: the picker is what renders.
+      gated <- openTab tr dashId [("var-host", Just "dellyman.com")]
+      let ws = tabWidgets gated
+      -- Not vacuous: the tab really does carry widgets, and the picker is what renders.
+      ws `shouldSatisfy` not . null
+      map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
+      toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"
