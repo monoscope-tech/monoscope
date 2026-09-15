@@ -350,8 +350,10 @@
     top: 0;
     left: 0;
     width: 100%;
-    height: 2px;
-    background: var(--color-strokeWeak);
+    /* Brand, not strokeWeak: a 2px weak-grey line on a dark page is invisible, which
+       is most of why a multi-second dashboard render read as "nothing is happening". */
+    height: 3px;
+    background: var(--color-fillBrand-strong);
     z-index: 99999;
     opacity: 0;
     transform: scaleX(0);

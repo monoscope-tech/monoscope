@@ -746,11 +746,11 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
               def{size = ESCompact}
               ("No " <> T.toLower varTitle <> " to choose from yet")
               "This dashboard reports on one at a time, so it has nothing to show until data arrives."
-        else div_ [class_ "var-picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
-          div_ [class_ "px-3 border-b border-base-300"] do
+        else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
+          div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
             input_
               [ type_ "text"
-              , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
+              , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
               , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
               , autofocus_
               , [__|on input
@@ -795,6 +795,10 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 end
               |]
               ]
+            -- Sits at the end of the search field, where the reader's eye already is —
+            -- the global progress bar is pinned to the top of the page, too far from the
+            -- card they just clicked in to register during a multi-second render.
+            span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-block loading loading-spinner loading-sm text-textBrand shrink-0", role_ "status", Aria.label_ "Loading"] ""
           -- Once a choice is in flight further clicks would only queue another slow render,
           -- and fading the rest leaves the chosen row as the only lit thing on screen.
           div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
@@ -809,7 +813,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
               -- and the dimmed list below.
               a_
                 ( [ class_
-                      $ "var-opt group/opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                      $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                       <> bool "" " active" (idx == 0)
                       <> bool "" " var-opt-current" isCurrent
                   , href_ $ urlPrefix <> optVal
@@ -818,7 +822,6 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 )
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
-                  span_ [class_ "hidden group-[.htmx-request]/opt:inline loading loading-spinner loading-xs shrink-0", role_ "status", Aria.label_ "Loading"] ""
                   when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
             div_ [class_ "var-picker-empty px-3 py-8 text-center", style_ "display:none"] $ emptyState_ def{size = ESCompact} "No matching results" ""
       -- Keyboard hints
