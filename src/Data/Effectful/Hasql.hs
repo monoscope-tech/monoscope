@@ -40,6 +40,7 @@ import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -128,6 +129,12 @@ instance Exception HasqlException where
 --
 -- >>> isTransientUsageError AcquisitionTimeoutUsageError
 -- True
+--
+-- >>> let tfPoolExhausted msg = SessionUsageError (ScriptSessionError "q" (ServerError "XX000" msg Nothing Nothing Nothing))
+-- >>> isTransientUsageError (tfPoolExhausted "Resources exhausted: Additional allocation failed for ExternalSorter[0]")
+-- True
+-- >>> isTransientUsageError (tfPoolExhausted "Arrow error: invalid UTF-8")
+-- False
 isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
@@ -142,9 +149,19 @@ isTransientUsageError = \case
     -- retry treats the reset as poison and dead-letters writable data (the
     -- 2026-06-21 DLQ flood). Same incident class as ConnectionUsageError above.
     emptySqlState = \case
-      StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _)) -> code == ""
-      ScriptSessionError _ (ServerError code _ _ _ _) -> code == ""
+      StatementSessionError _ _ _ _ _ (ServerStatementError err) -> transientServerError err
+      ScriptSessionError _ err -> transientServerError err
       _ -> False
+    -- An empty code is infra (see above). TimeFusion's momentary query-pool
+    -- exhaustion arrives as XX000 with a distinctive message: the pool is
+    -- shared process-wide and its sort reservations are unspillable, so a
+    -- burst of concurrent widgets can starve one query that succeeds seconds
+    -- later — the siblings holding the pool are themselves short-lived, which
+    -- is what makes waiting the whole fix (same predicate as the chart path's
+    -- retryOnPoolExhaustion; here it reaches the log explorer's
+    -- retryTransientEff site).
+    transientServerError (ServerError code message _ _ _) =
+      code == "" || (code == "XX000" && any (`T.isInfixOf` message) ["Resources exhausted", "Not enough memory to continue external sort"])
 
 
 isTransientHasqlError :: HasqlException -> Bool
