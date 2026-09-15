@@ -456,6 +456,25 @@ instance Default SlackAlert where
 -- | The block list for an alert. @incident_onset@\/@incident_chart@ keep their
 -- ids because 'retainSlackSnapshot' carries exactly those forward onto a root
 -- update — they are wire identity, not decoration.
+--
+-- The order is the reading order: what happened, the evidence, the facts, when
+-- it started, the chart, what to do about it.
+--
+-- >>> let kinds = map (\b -> AE.Object b ^. key "type" . _String) . mapMaybe (\case AE.Object o -> Just o; _ -> Nothing)
+-- >>> let full = def{state = "ALERTING", title = "TypeError", titleUrl = Just "u", detail = Just "boom", facts = [("Service","api")], onsetNote = Just "Started now", chartUrl = Just "c", actions = [("Open issue", Just "primary", "u")]}
+-- >>> kinds (renderSlackAlert full)
+-- ["section","section","section","context","image","actions"]
+--
+-- Empty facts contribute no grid rather than an empty one, and a chartless alert
+-- with no fallback simply omits the block:
+--
+-- >>> kinds (renderSlackAlert def{state = "RESOLVED", title = "t", facts = [("Service","")]})
+-- ["section"]
+--
+-- The state leads whether or not there is a link to hang the title on:
+--
+-- >>> renderSlackAlert def{state = "RECOVERED", title = "Checkout"} ^.. traverse . key "text" . key "text" . _String
+-- ["*RECOVERED* \183 Checkout"]
 renderSlackAlert :: SlackAlert -> [AE.Value]
 renderSlackAlert a =
   [headline]
@@ -560,7 +579,7 @@ slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;
 -- >>> :set -XOverloadedStrings -XTypeApplications
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.Aeson.Lens (key, nth, values, _String)
--- >>> import Control.Lens ((^..))
+-- >>> import Control.Lens ((^..), (^.))
 -- >>> import Data.Maybe (fromJust)
 
 
