@@ -1101,14 +1101,14 @@ tabs:
         layout: { w: 6, h: 5 }
         sql: |
           SELECT
-            time_bucket('1 minute', timestamp) as timestamp,
+            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
             COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
             ROUND(AVG(value::numeric * 100), 2) as value
           FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('container.cpu.utilization', 'jvm.cpu.recent_utilization', 'process.cpu.utilization')
             {{time_filter}}
-          GROUP BY time_bucket('1 minute', timestamp), series
+          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
           LIMIT 2000
         unit: '%'
@@ -1119,14 +1119,14 @@ tabs:
         layout: { w: 6, h: 5 }
         sql: |
           SELECT
-            time_bucket('1 minute', timestamp) as timestamp,
+            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
             COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
             ROUND(AVG(value::numeric), 2) as value
           FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name = 'container.memory.percent'
             {{time_filter}}
-          GROUP BY time_bucket('1 minute', timestamp), series
+          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
           LIMIT 2000
         unit: '%'
@@ -1197,14 +1197,14 @@ tabs:
         layout: { w: 6, h: 4 }
         sql: |
           SELECT
-            time_bucket('1 minute', timestamp) as timestamp,
+            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
             COALESCE(resource___service___name, 'kafka') as series,
             AVG(value) as value
           FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name = 'kafka.consumer.assigned_partitions'
             {{time_filter}}
-          GROUP BY time_bucket('1 minute', timestamp), series
+          GROUP BY time_bucket('{{rollup_interval}}', timestamp), series
           ORDER BY timestamp DESC
           LIMIT 1000
         unit: partitions
@@ -1215,7 +1215,7 @@ tabs:
         layout: { w: 6, h: 4 }
         sql: |
           SELECT
-            time_bucket('1 minute', timestamp) as timestamp,
+            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
             CASE
               WHEN metric_name = 'system.cpu.load_average.1m' THEN '1 min'
               WHEN metric_name = 'system.cpu.load_average.5m' THEN '5 min'
@@ -1226,7 +1226,7 @@ tabs:
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('system.cpu.load_average.1m', 'system.cpu.load_average.5m', 'system.cpu.load_average.15m')
             {{time_filter}}
-          GROUP BY time_bucket('1 minute', timestamp), metric_name
+          GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
           ORDER BY timestamp DESC
           LIMIT 3000
 
@@ -1236,14 +1236,14 @@ tabs:
         layout: { w: 6, h: 4 }
         sql: |
           SELECT
-            time_bucket('1 minute', timestamp) as timestamp,
+            time_bucket('{{rollup_interval}}', timestamp) as timestamp,
             metric_name as series,
             AVG(value) / 1048576 as value
           FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('redis.memory.used', 'redis.memory.rss', 'redis.memory.peak')
             {{time_filter}}
-          GROUP BY time_bucket('1 minute', timestamp), metric_name
+          GROUP BY time_bucket('{{rollup_interval}}', timestamp), metric_name
           ORDER BY timestamp DESC
           LIMIT 3000
         unit: MB
