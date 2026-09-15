@@ -65,6 +65,34 @@ spec :: Spec
 spec = around withTestResources do
   describe "Complete Bot Workflows" do
     describe "Slack personal linking" do
+      -- The docstring promises this never reports True when nothing was sent, and
+      -- that invariant already bit once here, as a false delivery receipt on the
+      -- identity link. Pin the transports rather than trusting the docstring.
+      it "reports a recovery notice as sent only when a transport actually took it" \tr -> do
+        let install tokenT hookT =
+              Slack.SlackData
+                { Slack.projectId = testPid
+                , Slack.teamId = "T_NOTICE"
+                , Slack.teamName = Just "Notice"
+                , Slack.botToken = tokenT
+                , Slack.channelId = "C_NOTICE"
+                , Slack.channelName = Just "notice"
+                , Slack.webhookUrl = hookT
+                , Slack.scopes = Nothing
+                }
+            notice sd =
+              runTestBgRecordingHTTP frozenTime tr
+                $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true}")
+                $ SlackPage.sendRecoveryNotice "test" sd "C_NOTICE" "U_NOTICE" "reconnect please"
+        (apiCalls, viaApi) <- notice (install "x-bot-token" (Just "https://hooks.slack.test/a"))
+        viaApi `shouldBe` True
+        map fst apiCalls `shouldBe` ["https://slack.com/api/chat.postEphemeral"]
+        (hookCalls, viaHook) <- notice (install "" (Just "https://hooks.slack.test/a"))
+        viaHook `shouldBe` True
+        map fst hookCalls `shouldBe` ["https://hooks.slack.test/a"]
+        (_, viaNothing) <- notice (install "" Nothing)
+        viaNothing `shouldBe` False
+
       it "onboards Messages-tab visits once per live link and never starts an investigation" \tr -> do
         setupSlackData tr testPid "T_HOME"
         let visit tab eventId = slackCallbackEnvelope "T_HOME" eventId $ AE.object ["type" AE..= ("app_home_opened" :: Text), "user" AE..= ("U_HOME" :: Text), "channel" AE..= ("D_HOME" :: Text), "tab" AE..= (tab :: Text), "event_ts" AE..= ("1515449522000016" :: Text)]
