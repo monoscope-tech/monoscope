@@ -672,6 +672,18 @@ claimSlackDeliveriesTx now = do
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
+  -- `recordIncidentEventTx` declines to queue an edit against a root already
+  -- known threadless, but a root only becomes threadless when its post_root
+  -- settles — so an event arriving before that (a fast alert/recover flap) can
+  -- still queue one. Settling them here as well closes that window: an edit to a
+  -- message that cannot be edited is inapplicable, and left pending it would
+  -- block every later delivery on the root. Migration 0183 does this once for
+  -- the backlog; this is the same rule applied continuously.
+  executeTx
+    [HI.sql|UPDATE apis.slack_incident_deliveries d
+    SET state = 'failed', last_error = 'threadless_root_cannot_be_edited', lease_token = NULL, lease_until = NULL
+    FROM apis.slack_incident_roots r
+    WHERE r.id = d.root_id AND r.threadless AND d.operation = 'update_root' AND d.state = 'pending'|]
   let leaseUntil = addUTCTime 120 now
   queryTx
     $ [HI.sql|WITH candidates AS (

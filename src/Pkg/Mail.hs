@@ -404,9 +404,12 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         , -- An exception line is code. Rendered as prose it ran into the
           -- surrounding sentence and the reader had to find where it began.
           detail = Just $ slackEscape $ T.take 300 err.message
-        , facts =
-            [ ("Service", fromMaybe "" err.serviceName)
-            , ("Environment", fromMaybe "" err.environment)
+        , -- Escaped like the text fallback beside it: these are telemetry
+          -- resource attributes set by the instrumented app, so an unescaped
+          -- `<https://evil|Click here>` would render as a live link in the alert.
+          facts =
+            [ ("Service", foldMap slackEscape err.serviceName)
+            , ("Environment", foldMap slackEscape err.environment)
             , ("Rate", fromMaybe "" occurrence)
             , ("Observed", atUtc now)
             ]

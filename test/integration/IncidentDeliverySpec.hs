@@ -556,6 +556,34 @@ spec = around withTestResources do
         void $ evaluateMonitor tr mid 84
       affected >>= (`shouldBe` firstCount)
 
+    -- The insert-time guard cannot cover a root that is not threadless *yet*: a
+    -- root only becomes threadless when its post_root settles, so an event
+    -- arriving before that queues an edit that is unclaimable a moment later —
+    -- and one unclaimable row blocks every delivery sequenced behind it.
+    it "settles an edit queued before its root turned out to be threadless" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      let run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset tr
+      void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+      [root] <- run $ I.claimSlackDeliveries update.observedAt
+      -- A second event lands while the root is still unsettled, so its edit is
+      -- queued against a root that does not know yet that it cannot be edited.
+      advanceMinutes tr 1
+      now <- getTestTime tr.trTestClock
+      void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentReminder}
+      run (I.finishSlackDelivery now root (I.WebhookAccepted I.Threadless)) `shouldReturn` True
+      -- Claiming settles the stray edit rather than leaving it to block the root.
+      void $ run $ I.claimSlackDeliveries now
+      stuck <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
+               JOIN apis.slack_incident_roots r ON r.id = d.root_id
+               WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
+          ()
+      (stuck :: [(Text, Text)]) `shouldBe` []
+
     -- An episode is only ever read from its issue's page, so one without an issue
     -- is unreachable: it must be refused rather than written and lost.
     -- 104 roots sat in waiting_root in production, and the 49 follow-ups queued
