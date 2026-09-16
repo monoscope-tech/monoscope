@@ -1920,26 +1920,23 @@ dashboardsPostH pid form = do
           dir = fromMaybe "" form.fileDir
           filePath = if T.null dir then Nothing else Just $ dashFilePath dir form.title
           dbd =
-            Dashboards.DashboardVM
-              { id = did
-              , projectId = pid
-              , createdAt = now
-              , updatedAt = now
-              , createdBy = sess.user.id
-              , baseTemplate = if form.file == "" then Nothing else Just form.file
-              , schema = Nothing
-              , starredSince = Nothing
-              , homepageSince = Nothing
-              , tags = V.fromList $ fold $ dashM >>= (.tags)
-              , title = form.title
-              , teams = V.fromList form.teams
-              , filePath = filePath
-              , fileSha = Nothing
+            (mkDashboardVM did pid now sess.user.id)
+              { Dashboards.baseTemplate = if form.file == "" then Nothing else Just form.file
+              , Dashboards.tags = V.fromList $ fold $ dashM >>= (.tags)
+              , Dashboards.title = form.title
+              , Dashboards.teams = V.fromList form.teams
+              , Dashboards.filePath = filePath
               }
       _ <- Dashboards.insert dbd
       syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
+
+
+-- | A blank dashboard row; call sites override the fields they actually set.
+mkDashboardVM :: Dashboards.DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> Dashboards.DashboardVM
+mkDashboardVM did pid now uid =
+  Dashboards.DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing}
 
 
 -- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
@@ -1959,21 +1956,11 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
         did <- UUIDId <$> UUID.genUUID
         _ <-
           Dashboards.insert
-            Dashboards.DashboardVM
-              { id = did
-              , projectId = pid
-              , createdAt = now
-              , updatedAt = now
-              , createdBy = sess.user.id
-              , baseTemplate = Just baseTemplate
-              , schema = Nothing
-              , starredSince = if shouldBeStarred then Just now else Nothing
-              , homepageSince = Nothing
-              , tags = V.fromList tags
-              , title = title
-              , teams = V.empty
-              , filePath = Nothing
-              , fileSha = Nothing
+            (mkDashboardVM did pid now sess.user.id)
+              { Dashboards.baseTemplate = Just baseTemplate
+              , Dashboards.starredSince = if shouldBeStarred then Just now else Nothing
+              , Dashboards.tags = V.fromList tags
+              , Dashboards.title = title
               }
         syncDashboardAndQueuePush pid did
         pure did.toText

@@ -69,7 +69,6 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -728,25 +727,22 @@ unifiedMonitorOverviewH pid monitorId = do
           deactLabel = bool "Deactivate" "Activate" isInactive
           deactIcon = bool "pause" "circle-play" isInactive
           needsResolve = alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]
+          actionBtn_ icon label tip path =
+            button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ label, data_ "tip" tip, hxPost_ $ muteBase <> path] do
+              faSprite_ icon "regular" "h-4 w-4"
+              toHtml label
           bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
-                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
-                        faSprite_ "bell" "regular" "h-4 w-4"
-                        "Unmute"
+                      Just _ -> actionBtn_ "bell" "Unmute" "Resume notifications for this monitor" "/unmute"
                       Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
                         button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
-                    when needsResolve
-                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Resolve", data_ "tip" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
-                        faSprite_ "check" "regular" "h-4 w-4"
-                        "Resolve"
-                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ deactLabel, data_ "tip" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
-                      faSprite_ deactIcon "regular" "h-4 w-4"
-                      toHtml deactLabel
+                    when needsResolve $ actionBtn_ "check" "Resolve" "Mark as resolved and reset status to normal" "/resolve"
+                    actionBtn_ deactIcon deactLabel (bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive) "/toggle_active"
                     div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
                   let mobilePopId = "monitor-actions-" <> alert.id.toText
                       mobItem_ :: Text -> Text -> Text -> Html ()

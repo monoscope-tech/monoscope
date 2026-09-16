@@ -31,7 +31,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -549,17 +549,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
               <> [checked_ | idx == 0]
             span_ [class_ "font-medium text-textStrong truncate"] $ toHtml repo.fullName
             when repo.private $ span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "private"
-        -- The list is exactly what the installation was granted, so a repository that is not in it
-        -- is a narrower grant rather than a missing row — and this is the only page that widens it.
-        a_
-          [ href_ (GitSync.installationSettingsUrl instId)
-          , target_ "_blank"
-          , rel_ "noopener"
-          , class_ "text-xs text-textBrand underline inline-flex items-center gap-1"
-          ]
-          do
-            "Repository missing? Add it to the installation on GitHub"
-            faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
+        installationSettingsLink_ (GitSync.installationSettingsUrl instId)
         div_ [class_ "grid grid-cols-2 gap-4"] do
           formField_ FieldSm def{value = maybe "main" (.defaultBranch) (viaNonEmpty head repos), placeholder = "main"} "Branch" "branch" False Nothing
           formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo (optional)" "pathPrefix" False Nothing

@@ -1076,41 +1076,41 @@ lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
 lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
 
 
--- Widget definitions for log explorer charts
+-- Widget definitions for log explorer charts, sharing one base
+logWidgetBase :: Projects.ProjectId -> Widget.Widget
+logWidgetBase pid =
+  (def :: Widget.Widget)
+    { Widget.standalone = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    }
+
+
 logChartWidget :: Projects.ProjectId -> Widget.Widget
 logChartWidget pid =
-  (def :: Widget.Widget)
+  (logWidgetBase pid)
     { Widget.id = Just "log-explorer-all-traces"
     , Widget.wType = WTTimeseries
     , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
-    , Widget._projectId = Just pid
-    , Widget.standalone = Just True
-    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.allowZoom = Just True
     , Widget.showMarkArea = Just True
-    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     }
 
 
 logLatencyWidget :: Projects.ProjectId -> Widget.Widget
 logLatencyWidget pid =
-  (def :: Widget.Widget)
+  (logWidgetBase pid)
     { Widget.wType = WTTimeseriesLine
-    , Widget.standalone = Just True
     , Widget.title = Just "Latency percentiles"
     , Widget.hideSubtitle = Just True
-    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.summarizeBy = Just Widget.SBMax
-    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
     , Widget.unit = Just "ns"
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
-    , Widget._projectId = Just pid
     }
 
 
