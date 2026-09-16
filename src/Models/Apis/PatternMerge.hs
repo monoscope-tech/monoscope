@@ -76,8 +76,7 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
--- | Unbox an embedding at the decode boundary: hasql only decodes @float4[]@ into a
--- boxed vector, and every consumer wants the unboxed one.
+-- | hasql decodes @float4[]@ boxed; every consumer wants it unboxed.
 unboxEmbedding :: V.Vector Float -> VU.Vector Float
 unboxEmbedding = V.convert
 

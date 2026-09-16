@@ -90,7 +90,8 @@ ambiguousThreshold = 0.75
 -- | Assign new patterns to existing centroids based on cosine similarity.
 -- Returns (auto-merge assignments, ambiguous pairs needing LLM judge).
 -- Patterns below ambiguousThreshold remain standalone (not returned).
--- Pre-computes centroid norms and uses unboxed vectors for O(n*m) with low constant factor.
+-- Centroids arrive unboxed from the decode boundary; only their norms are pre-computed here,
+-- giving O(n*m) with a low constant factor.
 --
 -- >>> assignToCentroids [("c1", VU.fromList [1,0,0])] [("n1", [1,0,0])]
 -- ([("n1","c1")],[])
@@ -110,24 +111,23 @@ ambiguousThreshold = 0.75
 assignToCentroids :: [(a, VU.Vector Float)] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
 assignToCentroids centroids = foldl' classify ([], [])
   where
-    centroidsU = map (\(cid, v) -> (cid, v, vecNorm v)) centroids
+    withNorm v = (v, vecNorm v)
+    normedCentroids = map (second withNorm) centroids
     classify (merges, ambiguous) (newId, newEmb) =
-      let v = VU.fromList newEmb
-          newNormed = (v, vecNorm v)
-       in case bestMatch newNormed centroidsU of
-            Just (centId, sim)
-              | sim >= autoMergeThreshold -> ((newId, centId) : merges, ambiguous)
-              | sim >= ambiguousThreshold -> (merges, (newId, centId) : ambiguous)
-            _ -> (merges, ambiguous)
+      case bestMatch (withNorm $ VU.fromList newEmb) normedCentroids of
+        Just (centId, sim)
+          | sim >= autoMergeThreshold -> ((newId, centId) : merges, ambiguous)
+          | sim >= ambiguousThreshold -> (merges, (newId, centId) : ambiguous)
+        _ -> (merges, ambiguous)
     bestMatch newNormed = foldl' choose Nothing
       where
-        choose best (cid, cemb, cnorm)
+        choose best (cid, cn)
           | sim >= ambiguousThreshold = case best of
               Just (_, bestSim) | sim < bestSim -> best
               _ -> Just (cid, sim)
           | otherwise = best
           where
-            sim = cosineSimWithNorms newNormed (cemb, cnorm)
+            sim = cosineSimWithNorms newNormed cn
 
 
 -- | Indices of the input pairs the judge answered @MERGE@ for. Pairs it declined,
