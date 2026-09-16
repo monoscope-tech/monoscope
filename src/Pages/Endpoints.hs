@@ -568,11 +568,7 @@ data ApiDocsVM = ApiDocsVM
 
 
 newtype ApiDocsPage = ApiDocsPage (PageCtx ApiDocsVM)
-
-
-instance ToHtml ApiDocsPage where
-  toHtml (ApiDocsPage pg) = toHtml pg
-  toHtmlRaw = toHtml
+  deriving newtype (ToHtml)
 
 
 instance ToHtml ApiDocsVM where
