@@ -135,13 +135,16 @@ describe('time-window transport', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=15M&provider=aws');
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2024-01-01T01:00:00Z'));
+    let updates = 0;
+    const onUpdate = () => { updates += 1; };
+    window.addEventListener('update-query', onUpdate);
 
     window.shiftTimeRange(-1);
 
-    expect(setParams).toHaveBeenCalledWith(
-      { since: '', from: '2024-01-01T00:30:00.000Z', to: '2024-01-01T00:45:00.000Z' },
-      true
-    );
+    // The range is applied in place: params updated, widgets told to refetch, no reload.
+    expect(setParams).toHaveBeenCalledWith({ since: '', from: '2024-01-01T00:30:00.000Z', to: '2024-01-01T00:45:00.000Z' });
+    expect(updates).toBe(1);
+    window.removeEventListener('update-query', onUpdate);
     setParams.mockRestore();
     now.mockRestore();
   });
@@ -155,10 +158,15 @@ describe('time-window transport', () => {
     document.body.append(scope);
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2024-01-01T01:15:00Z'));
+    let updates = 0;
+    const onUpdate = () => { updates += 1; };
+    window.addEventListener('update-query', onUpdate);
 
     window.shiftTimeRange(1, transport);
 
-    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' }, true);
+    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' });
+    expect(updates).toBe(1);
+    window.removeEventListener('update-query', onUpdate);
     setParams.mockRestore();
     now.mockRestore();
   });

@@ -67,7 +67,7 @@ import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimes
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
-import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), pSortSection, parseQueryDiagnosed)
+import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), parseQueryDiagnosed)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -76,7 +76,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
 import Web.HttpApiData (parseUrlPiece)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -85,7 +85,6 @@ import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resizer_)
-import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
@@ -907,28 +906,10 @@ logDataEnv pid sinceM fromM toM = do
   pure (authCtx, now, fromD, toD, sess.environment)
 
 
--- | A column header the reader clicked, folded into the query as the very
--- @sort by@ the KQL grammar already takes — so the table's sort and a widget's
--- @| sort by duration desc@ are one mechanism, not two. Appended last, so an
--- explicit click wins over a sort the query text carries.
---
--- Unparseable input sorts by nothing rather than failing the page: the value
--- rides in a URL anyone can edit.
---
--- >>> map toQText $ withSortSection (Just "duration desc") []
--- ["sort by duration desc"]
--- >>> map toQText $ withSortSection (Just "; drop table") []
--- []
--- >>> map toQText $ withSortSection Nothing []
--- []
-withSortSection :: Maybe Text -> [Section] -> [Section]
-withSortSection sortM ast = ast <> maybeToList (parseMaybe pSortSection . ("sort by " <>) =<< nonEmptyT sortM)
-
-
 -- | Log-row data endpoint. The log-list web component fetches this; the shell
 -- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
-logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
-logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM targetSpansM sortM = withSpan_ "log-explorer.data" [] do
+logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
+logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM targetSpansM = withSpan_ "log-explorer.data" [] do
   (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
@@ -939,7 +920,7 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
   -- can show an error state instead of a misleading "no events" list.
   (errM, tableData) <- case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
-    Right (withSortSection sortM -> queryAST) -> do
+    Right queryAST -> do
       resultE <-
         LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM
       case resultE of
@@ -1808,7 +1789,54 @@ apiLogsPage page = do
               on change[#create-alert-toggle.checked] from #create-alert-toggle trigger loadAlertForm on me|]
         ]
 
-    detailsPanel = LogItem.detailsPanel_ page.pid page.targetEvent True
+    detailsPanel =
+      div_
+        [ class_ "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
+        , id_ "log_details_container"
+        , -- Detail loads are last-click-wins. htmx's default sync strategy is "queue first",
+          -- which drops a click made while another detail request is in flight: the new row
+          -- never loads and the overlay indicator (added on click) is never cleared, so the
+          -- panel sits on a frozen three-dot loader until a page reload. "replace" aborts the
+          -- in-flight request and issues the new one instead.
+          term "hx-sync" "this:replace"
+        , term "data-has-target" (if isJust page.targetEvent then "1" else "0")
+        , [__|on checkMobileOpen[window.innerWidth < 768] add .details-open to me
+        init
+          if my @data-has-target is '1'
+            send checkMobileOpen to me
+            set queryWidth to params().details_width
+            set storedWidth to localStorage.getItem('resizer-details_width')
+            if queryWidth set my *width to queryWidth + 'px'
+            else if storedWidth and not storedWidth.endsWith('px') set my *width to storedWidth + 'px'
+            else if storedWidth set my *width to storedWidth
+            else set my *width to '30%'
+            end
+          end
+        end
+        on htmx:after:swap send checkMobileOpen to me end
+        on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
+          -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
+          -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
+          if the first <#trace_details_container.open/> exists send closeDetailPanel to #trace_details_container
+          otherwise if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
+          otherwise send closeDetailPanel to me end
+        end
+        on closeDetailPanel
+          add .hidden to #trace_expanded_view
+          send toggleFullscreen(mode: 'details', active: false) to #apiLogsPage
+          remove .details-open from me
+          set my *width to '0px'
+          set the *width of #logs_list_container to '100%'
+          remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+          add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
+          call updateUrlState(['details_width', 'target_event', 'showTrace'], '', 'delete')
+        end|]
+        ]
+        do
+          htmxOverlayIndicator_ "details_indicator"
+          whenJust page.targetEvent \te -> do
+            let url = "/p/" <> pidTxt <> "/log_explorer/" <> te
+            lazyLoad_ "log_details_container" url "intersect once" [hxIndicator_ "#details_indicator"]
 
 
 -- | Inline-expand endpoint for the Sessions and Patterns visualizations. Returns

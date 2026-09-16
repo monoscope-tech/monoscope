@@ -689,7 +689,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     widgetValueSlot_ "max-md:hidden " wId (bool valueM Nothing (isTrue widget.hideValue))
     span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
-    span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
+    span_ [class_ "hidden", id_ $ wId <> "_loader"] Utils.reloadSpinner_
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
     -- Alert status indicator (visible on hover, always visible when alerting/warning)
     when (isJust widget.alertId)

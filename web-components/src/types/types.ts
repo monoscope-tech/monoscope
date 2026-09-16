@@ -28,6 +28,8 @@ declare global {
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
     tagifyTemplateFunc: (this: TagifyTemplateContext, tagData: TagifyTagData) => string;
     getTagValues: (selector: string) => string[];
+    dispatchQueryUpdate: () => void;
+    applyTimeRange: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string }) => void;
     updateTimePicker: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }) => string;
     // Server-rendered <head> script starts the first log_explorer request before this
     // bundle evaluates; the list adopts the in-flight promise and clears the slot.

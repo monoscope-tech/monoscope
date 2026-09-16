@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, widgetGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 -- Standard library imports
 import Control.Lens
@@ -76,14 +76,12 @@ import Pkg.Parser (PageDirection)
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
-import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -512,8 +510,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
-    chartsDataGet :: mode :- "chart_data" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+    chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
@@ -581,7 +579,7 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
-  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPD "direction" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "sort" :> Get '[JSON] (RespHeaders Log.LogResult)
+  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPD "direction" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> Get '[JSON] (RespHeaders Log.LogResult)
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
   , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
@@ -965,8 +963,8 @@ cookieProtectedServer =
     , apiPatch = Settings.apiActivateH
     , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
-      chartsDataGet = chartsDataGetH
-    , chartsDataStreamGet = chartsDataStreamGetH
+      chartsDataGet = Charts.queryMetrics Nothing
+    , chartsDataStreamGet = Charts.queryMetricsStream Nothing
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
@@ -1210,49 +1208,6 @@ avatarGetH userId =
     -- broken-image fallback when both the configured avatar and Gravatar fail.
     avatarFallback =
       "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" rx=\"64\" fill=\"#e5e7eb\"/><circle cx=\"64\" cy=\"48\" r=\"23\" fill=\"#9ca3af\"/><path d=\"M23 116c5-25 19-38 41-38s36 13 41 38\" fill=\"#9ca3af\"/></svg>"
-
-
--- | @/chart_data@ is the one query path whose SQL text arrives from the browser
--- (a dashboard variable re-running its statement, see @reloadVarWhitelist@), and
--- @db_source=postgres@ points it at the pool holding the application's own tables
--- rather than telemetry. So it has to clear the same gates dashboard SQL clears
--- server-side in 'LogQueries.executeSecuredQuery': SELECT-only, and scoped to the
--- project being asked about. Statements defined server-side (widget YAML, the PNG
--- export) never come through here and keep their existing freedom.
--- The statement still carries @{{project_id}}@ here, so substitute it the way
--- 'Charts.queryMetrics' is about to and ask the question of the result.
---
--- >>> let pid = UUIDId UUID.nil :: Projects.ProjectId
--- >>> clientPostgresSqlRejection (Just "timefusion") (Just pid) (Just "select 1 from otel_logs_and_spans")
--- Nothing
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints limit 5")
--- Just "Query must filter by project_id"
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
--- Nothing
-clientPostgresSqlRejection :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
-clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
-  (Just "postgres", Just pid, Just sql)
-    | let resolved = T.replace "{{project_id}}" pid.toText sql ->
-        if
-          | not (LogQueries.validateSqlQuery resolved) -> Just "Query contains disallowed operations"
-          | not (LogQueries.hasProjectIdFilter resolved pid) -> Just "Query must filter by project_id"
-          | otherwise -> Nothing
-  _ -> Nothing
-
-
-guardClientPostgresSql :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
-guardClientPostgresSql dbSource pidM querySqlM =
-  whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
-
-
-chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
-chartsDataGetH dbSource dt pid q qSql since fromD toD src density params =
-  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density params
-
-
-chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params =
-  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density params
 
 
 -- Widget GET handler that accepts dashboard parameters

@@ -176,10 +176,16 @@ describe('auto-refresh interval', () => {
   test('return to live replaces the absolute range without dropping other URL state', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?from=2024-01-01T00:00:00Z&to=2024-01-01T01:00:00Z&provider=aws&cols=cpu,memory');
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);
+    let updates = 0;
+    const onUpdate = () => { updates += 1; };
+    window.addEventListener('update-query', onUpdate);
 
     window.toggleLiveRefresh(mountTransport(false, '5M'));
 
-    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' }, true);
+    // Applied in place rather than reloaded; the widgets pick the new range up themselves.
+    expect(setParams).toHaveBeenCalledWith({ since: '5M', from: '', to: '' });
+    expect(updates).toBe(1);
+    window.removeEventListener('update-query', onUpdate);
     setParams.mockRestore();
   });
 });
