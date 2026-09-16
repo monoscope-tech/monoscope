@@ -23,9 +23,9 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Issues qualified as IssuesPage
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
+import Pages.Issues qualified as IssuesPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -623,6 +623,36 @@ spec = around withTestResources do
           ()
       (stranded :: [(Text, Text)]) `shouldBe` []
 
+    -- A bot token is not proof the timestamp is recoverable. Both installs behind
+    -- the 110 roots stranded in production had a token and *zero* scopes, so
+    -- chat.postMessage fell back to the webhook and conversations.history failed
+    -- forever — the root waited, and every follow-up behind it went unclaimed.
+    it "stops waiting for a timestamp recovery that never arrives" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      let run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset tr
+      void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+      [root] <- run $ I.claimSlackDeliveries update.observedAt
+      run (I.finishSlackDelivery update.observedAt root (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
+      advanceMinutes tr 1
+      early <- getTestTime tr.trTestClock
+      void $ run $ I.recordIncidentEvent update{I.observedAt = early, I.change = I.IncidentRecovered}
+      -- Inside the window the root is still worth waiting for, so nothing moves.
+      run (I.claimSlackDeliveries early) `shouldReturn` []
+      advanceMinutes tr 60
+      late <- getTestTime tr.trTestClock
+      followups <- run $ I.claimSlackDeliveries late
+      map (.operation) followups `shouldContain` [I.PostRoot]
+      stranded <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
+               JOIN apis.slack_incident_roots r ON r.id = d.root_id
+               WHERE d.state NOT IN ('delivered','failed','sending')|]
+          ()
+      (stranded :: [(Text, Text)]) `shouldBe` []
+
     it "refuses to open an episode with no issue behind it" \tr -> do
       update <- setup tr
       setupSlackData tr testPid "T1"
@@ -710,7 +740,7 @@ spec = around withTestResources do
         advanceMinutes tr 3
         (searched, _) <- work
         map fst searched `shouldBe` ["https://slack.com/api/conversations.history"]
-        run $ I.saveIncidentSearchCursor abandoned (Just "stale") frozenTime
+        run $ I.saveIncidentSearchCursor abandoned (Just "stale") Nothing frozenTime
         cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only root.id)
         cursors `shouldBe` [PGS.Only (Just "next" :: Maybe Text)]
         advanceMinutes tr 1

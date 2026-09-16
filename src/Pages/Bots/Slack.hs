@@ -1226,10 +1226,11 @@ reconcileIncidentDeliveries = do
           PublicationFound timestamp -> do
             confirmed <- Incidents.confirmIncidentSearch search timestamp
             unless confirmed $ throwIO SlackPublicationPending
-          PublicationCursor next -> retry next $ addUTCTime 60 now
+          PublicationCursor next -> retry next Nothing $ addUTCTime 60 now
       for_ (leftToMaybe outcome) $ \err -> do
-        Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id]
-        retry search.cursor $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
+        let reason = toText $ displayException err
+        Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id, "reason" AE..= reason]
+        retry search.cursor (Just reason) $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
 
 
 newtype SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}

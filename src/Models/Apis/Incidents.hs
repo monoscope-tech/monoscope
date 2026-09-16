@@ -53,7 +53,7 @@ import Data.Char (isDigit)
 import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
@@ -614,6 +614,14 @@ data RootThreading = ThreadCapable | Threadless
   deriving stock (Eq, Show)
 
 
+-- | How long a webhook-accepted root may wait for @conversations.history@ to
+-- recover its timestamp. A token whose scopes were never granted fails that call
+-- forever, so an unbounded wait silences the root — 110 in production, waiting
+-- since 2026-09-10 behind a token that cannot read its own channel.
+timestampRecoveryWindow :: NominalDiffTime
+timestampRecoveryWindow = 1800
+
+
 data DeliveryOutcome
   = DeliveryConfirmed SlackTimestamp
   | WebhookAccepted RootThreading
@@ -653,6 +661,19 @@ claimSlackDeliveriesTx now = do
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
+  -- Recovery that has run out of time leaves a root that will never be threaded,
+  -- so treat it as one: the follow-ups behind it are what matter.
+  let recoveryDeadline = addUTCTime (negate timestampRecoveryWindow) now
+  executeTx
+    [HI.sql|UPDATE apis.slack_incident_roots r SET threadless = TRUE
+    FROM apis.slack_incident_deliveries d
+    WHERE d.root_id = r.id AND d.operation = 'post_root' AND d.state = 'waiting_root'
+      AND d.available_at <= #{recoveryDeadline} AND r.message_ts IS NULL AND NOT r.threadless|]
+  executeTx
+    [HI.sql|UPDATE apis.slack_incident_deliveries d
+    SET state = 'delivered', last_error = 'timestamp_recovery_exhausted', lease_token = NULL, lease_until = NULL, history_lease_token = NULL
+    FROM apis.slack_incident_roots r
+    WHERE r.id = d.root_id AND r.threadless AND d.operation = 'post_root' AND d.state = 'waiting_root'|]
   -- A root turns threadless only once its post_root settles, so an event
   -- arriving before that still queues an edit. Settle those here too.
   executeTx
@@ -824,10 +845,14 @@ claimIncidentSearches now =
           JOIN apis.incident_episodes e ON e.id = r.episode_id|]
 
 
-saveIncidentSearchCursor :: DB es => IncidentSearch -> Maybe Text -> UTCTime -> Eff es ()
-saveIncidentSearchCursor search next retryAt =
+-- | Record why a recovery has not finished. Without the reason a stuck root is
+-- indistinguishable from one still in progress, which is how 110 of them went
+-- unnoticed for six days.
+saveIncidentSearchCursor :: DB es => IncidentSearch -> Maybe Text -> Maybe Text -> UTCTime -> Eff es ()
+saveIncidentSearchCursor search next reason retryAt =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{next}, history_retry_at = #{retryAt}, history_lease_token = NULL
+    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{next}, history_retry_at = #{retryAt}, history_lease_token = NULL,
+        last_error = #{reason}
     WHERE id = #{search.id} AND state IN ('uncertain', 'waiting_root', 'sending') AND history_lease_token = #{search.leaseToken}|]
 
 
