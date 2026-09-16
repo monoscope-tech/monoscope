@@ -16,7 +16,40 @@ beforeAll(() => {
   htmx = new Function(`${source}; return htmx;`)();
   (window as any).htmx = htmx;
   new Function(readFileSync(join(__dirname, '../../static/public/assets/deps/htmx/htmx-2-compat.js'), 'utf8'))();
+  new Function(readFileSync(join(__dirname, '../../static/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js'), 'utf8')).call(window);
 
+});
+
+test('table sorting refetches with element-local hyperscript state and survives refresh', async () => {
+  const sortBehavior = `on click
+      set fetcher to the closest <[data-table-fetch]/>
+      if not fetcher halt end
+      set sort to '+' + my @data-sort-field
+      if my @data-sort-direction is 'asc' set sort to '-' + my @data-sort-field end
+      set fetcher.dataset.tableSort to sort
+      trigger 'table-sort' on fetcher
+    `;
+  document.body.innerHTML = `<div data-table-fetch hx-get="/table" hx-trigger="table-sort, update-query from:window" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-vals="js:{'table-sort': this.dataset.tableSort || ''}">
+    <table id="results"><thead><tr><th><button data-sort-field="duration" data-sort-direction="none" _="${sortBehavior}">Duration</button></th></tr></thead><tbody><tr><td>1.2k</td></tr><tr><td>9</td></tr></tbody></table>
+  </div><div data-table-fetch id="other"></div>`;
+  const calls: URL[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input) => {
+    calls.push(new URL(String(input), location.origin));
+    return new Response(`<table id="results"><thead><tr><th><button data-sort-field="duration" data-sort-direction="asc" _="${sortBehavior}">Duration</button></th></tr></thead><tbody><tr><td>server result</td></tr></tbody></table>`, {headers: {'Content-Type': 'text/html'}});
+  }));
+  htmx.process(document.body);
+  (window as any)._hyperscript.processNode(document.body);
+  (document.querySelector('button') as HTMLButtonElement).click();
+  await vi.waitFor(() => expect(document.querySelector('tbody')?.textContent).toBe('server result'));
+  expect(calls[0].searchParams.get('table-sort')).toBe('+duration');
+  expect(document.querySelector('#other')?.hasAttribute('hx-vals')).toBe(false);
+  window.dispatchEvent(new CustomEvent('update-query'));
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  expect(calls[1].searchParams.get('table-sort')).toBe('+duration');
+  (window as any)._hyperscript.processNode(document.body);
+  (document.querySelector('button') as HTMLButtonElement).click();
+  await vi.waitFor(() => expect(calls).toHaveLength(3));
+  expect(calls[2].searchParams.get('table-sort')).toBe('-duration');
 });
 afterEach(() => {
   initController.abort();

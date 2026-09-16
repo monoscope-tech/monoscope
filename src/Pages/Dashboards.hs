@@ -69,7 +69,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
+import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled qualified
 import Effectful.Log (Log)
@@ -953,9 +953,10 @@ widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text,
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
   -- Bin at the density the widget renders at, so a server-prefilled chart and the
   -- browser's later /chart_data refetch agree on bucket width (and on cache key).
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
-    (query, dataType) = Widget.chartQuery widget
+    (chartQuery, dataType) = Widget.chartQuery widget
+    (query, sql) = if widget.wType == Widget.WTTable then Widget.tableQuery widget (find ((== "table-sort") . fst) allParams >>= snd) else (chartQuery, widget.sql)
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)

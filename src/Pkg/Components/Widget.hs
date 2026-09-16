@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -44,7 +44,7 @@ import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData (..))
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -170,6 +170,23 @@ pngExportSize profile = case fromMaybe PngStandard profile of
   PngSlack -> (960, 320)
 
 
+-- | A trusted SQL ORDER BY expression from dashboard configuration.
+-- User-provided table sorts never inhabit this type; they are represented by
+-- a declared column plus a closed direction.
+newtype SqlOrder = SqlOrder {unSqlOrder :: Text}
+  deriving stock (Eq, Generic, Show, THS.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
+
+
+mkSqlOrder :: Text -> Maybe SqlOrder
+mkSqlOrder = fmap SqlOrder . nonEmptyT . Just . T.strip
+
+
+instance FromHttpApiData SqlOrder where
+  parseQueryParam = maybe (Left "SQL order must not be empty") Right . mkSqlOrder
+
+
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
@@ -183,7 +200,7 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
-  , defaultSort :: Maybe Text -- Default ORDER BY for the {{table_sort}} SQL slot
+  , defaultSort :: Maybe SqlOrder -- Trusted default ORDER BY for the {{table_sort}} SQL slot
   , rawQuery :: Maybe Text -- Original KQL query with {{const-...}} placeholders (for editor display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
@@ -882,26 +899,35 @@ renderLogsWidget widget = do
 
 -- | Sorting is opt-in; handwritten SQL must place the ordering slot before LIMIT.
 sortableColumn :: Widget -> TableColumn -> Bool
-sortableColumn widget col = col.sortable == Just True && maybe True (T.isInfixOf "{{table_sort}}") widget.sql
+sortableColumn widget col = maybe (col.sortable /= Just False) (\sql -> col.sortable == Just True && isJust widget.defaultSort && "{{table_sort}}" `T.isInfixOf` sql) widget.sql
 
 
 -- | Resolve only a declared field; quote it as an identifier, never as SQL syntax.
 --
--- >>> tableQuery def{query = Just "foo"} (Just "-unknown")
+-- >>> tableQuery (def & #query ?~ "foo") (Just "-unknown")
 -- (Just "foo",Nothing)
+-- >>> tableQuery (def & #sql ?~ "SELECT 1 ORDER BY {{table_sort}}") Nothing
+-- (Nothing,Nothing)
 tableQuery :: Widget -> Maybe Text -> (Maybe Text, Maybe Text)
 tableQuery widget sortParam = (query, sql)
   where
+    renderTableSort (name, descending) =
+      "\"" <> T.replace "\"" "\"\"" name <> "\" " <> if descending then "DESC NULLS LAST" else "ASC NULLS LAST"
+    renderKqlSort (name, descending) = name <> if descending then " desc" else " asc"
     selected = do
       raw <- sortParam
       (sign, name) <- T.uncons raw
       guard (sign == '+' || sign == '-')
       col <- find (\c -> c.field == name && sortableColumn widget c) (fold widget.columns)
-      pure (col.field, if sign == '-' then " DESC" else " ASC")
-    order = maybe (fromMaybe "1" widget.defaultSort) (\(name, direction) -> "\"" <> T.replace "\"" "\"\"" name <> "\"" <> direction <> " NULLS LAST") selected
-    sql = T.replace "{{table_sort}}" order <$> widget.sql
+      pure (col.field, sign == '-')
+    order = renderTableSort <$> selected <|> ((.unSqlOrder) <$> widget.defaultSort)
+    sql =
+      widget.sql >>= \rawSql ->
+        if "{{table_sort}}" `T.isInfixOf` rawSql
+          then (\resolvedOrder -> T.replace "{{table_sort}}" resolvedOrder rawSql) <$> order
+          else Just rawSql
     query = case (widget.sql, selected) of
-      (Nothing, Just (name, direction)) -> Just $ fromMaybe "" widget.query <> " | sort by " <> name <> T.toLower direction
+      (Nothing, Just tableSort) -> Just $ fromMaybe "" widget.query <> " | sort by " <> renderKqlSort tableSort
       _ -> widget.query
 
 
@@ -912,11 +938,25 @@ sortableTableHead_ widget selected =
     $ forM_ (fold widget.columns) \col -> do
       let direction = if selected == Just ("+" <> col.field) then "asc" else if selected == Just ("-" <> col.field) then "desc" else "none"
           sortable = sortableColumn widget col
-      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")] $
-        if sortable
-          then button_ [type_ "button", class_ "w-full text-left cursor-pointer hover:bg-fillWeak group", data_ "sort-field" col.field, data_ "sort-direction" direction, onclick_ "window.sortTable(this)"] $ headerRow_ [] do
-            toHtml col.title
-            span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml (if direction == "asc" then "↑" else if direction == "desc" then "↓" else "↕" :: Text)
+      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")]
+        $ if sortable
+          then button_
+            [ type_ "button"
+            , class_ "w-full text-left cursor-pointer hover:bg-fillWeak group"
+            , data_ "sort-field" col.field
+            , data_ "sort-direction" direction
+            , [__|on click
+                  set fetcher to the closest <[data-table-fetch]/>
+                  if not fetcher halt end
+                  set sort to '+' + my @data-sort-field
+                  if my @data-sort-direction is 'asc' set sort to '-' + my @data-sort-field end
+                  set fetcher.dataset.tableSort to sort
+                  trigger 'table-sort' on fetcher
+                |]
+            ]
+            $ headerRow_ [] do
+              toHtml col.title
+              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml (if direction == "asc" then "↑" else if direction == "desc" then "↓" else "↕" :: Text)
           else headerRow_ [] $ toHtml col.title
 
 
@@ -936,12 +976,13 @@ renderTableShell widget tableAttrs = do
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ "intersect once, update-query from:window, table-sort"
+      , hxTrigger_ $ bool "intersect once, update-query from:window, table-sort" "update-query from:window, table-sort" (isJust widget.html)
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
       , hxExt_ "forward-page-params"
       , term "hx-sync" "this:replace"
+      , term "hx-vals" "js:{'table-sort': this.dataset.tableSort || ''}"
       , data_ "table-fetch" ""
       ]
     $ case widget.html of

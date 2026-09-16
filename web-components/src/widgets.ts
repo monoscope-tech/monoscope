@@ -1127,16 +1127,6 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
 }
 window.bindFunctionsToObjects = bindFunctionsToObjects;
 
-// Sorting refetches the server's full result set before its LIMIT is applied.
-(window as any).sortTable = (header: HTMLElement) => {
-  const fetcher = header.closest('[data-table-fetch]');
-  const field = header.dataset.sortField;
-  if (!fetcher || !field) return;
-  const sort = (header.dataset.sortDirection === 'asc' ? '-' : '+') + field;
-  fetcher.setAttribute('hx-vals', JSON.stringify({ 'table-sort': sort }));
-  fetcher.dispatchEvent(new CustomEvent('table-sort', { bubbles: true }));
-};
-
 // Global delegated click handler for table rows with on_row_click
 document.addEventListener('click', (e) => {
   const tr = (e.target as HTMLElement).closest('tr[data-row]') as HTMLElement | null;

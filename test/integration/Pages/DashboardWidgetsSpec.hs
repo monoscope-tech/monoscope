@@ -27,8 +27,6 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
-import Utils qualified
-import Web.Routes qualified as Routes
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -38,6 +36,8 @@ import System.Timeout (timeout)
 import System.Types (addRespHeaders)
 import Test.Hspec
 import Text.Slugify (slugify)
+import Utils qualified
+import Web.Routes qualified as Routes
 
 
 -- Flattened: the eager widgets on these templates are children of a group.
@@ -482,6 +482,28 @@ spec = sequential $ aroundAll withTestResources do
   -- oversized request *and* for every unrelated request multiplexed onto the same
   -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
   -- ("Couldn't load this chart") with no query ever reaching the database.
+  describe "Table sorting before the server limit" do
+    it "returns rows outside the original top twenty and keeps numbers numeric" \tr -> do
+      let widget =
+            (def :: Widget.Widget)
+              { Widget.wType = Widget.WTTable
+              , Widget.dbSource = Just "postgres"
+              , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
+              , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
+              , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"
+              }
+          fetch sortParam = runQueryEffect tr do
+            let (query, sql) = Widget.tableQuery widget sortParam
+            Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just testPid) query sql Nothing Nothing Nothing Nothing Nothing []
+      original <- fetch Nothing
+      sorted <- fetch (Just "-duration")
+      rejected <- fetch (Just "-duration; DROP TABLE users")
+      V.head original.dataText `shouldBe` V.singleton "1"
+      V.last original.dataText `shouldBe` V.singleton "20"
+      V.head sorted.dataText `shouldBe` V.singleton "25"
+      V.last sorted.dataText `shouldBe` V.singleton "6"
+      rejected.dataText `shouldBe` original.dataText
+
   describe "Widget fetch URL size" do
     let bigSqlWidget =
           (def :: Widget.Widget)
@@ -547,12 +569,14 @@ spec = sequential $ aroundAll withTestResources do
   -- the first screen a user of such a dashboard ever sees, cost as much as the fully
   -- populated dashboard (5.4s vs 5.5s measured against a customer project).
   describe "Dashboards prompting for a required variable" do
-    let -- `eager` alone proves nothing: the template declares it. Server work shows up as
-        -- rendered html or a fetched dataset.
-        prefilled w = isJust w.html || isJust w.dataset
-        openTab tr dashId params = do
-          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params
-          pure dg
+    let
+      -- `eager` alone proves nothing: the template declares it. Server work shows up as
+      -- rendered html or a fetched dataset.
+      prefilled :: Widget.Widget -> Bool
+      prefilled w = isJust w.html || isJust w.dataset
+      openTab tr dashId params = do
+        (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params
+        pure dg
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"

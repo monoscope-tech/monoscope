@@ -35,7 +35,7 @@ render = toText . TL.toStrict . renderText . toHtml
 
 -- | Deferred widgets fetch only after entering the viewport.
 selfFetches :: Widget.Widget -> Bool
-selfFetches = T.isInfixOf "\"intersect once, update-query from:window\"" . render
+selfFetches = T.isInfixOf "\"intersect once, update-query from:window" . render
 
 
 spec :: Spec
@@ -57,6 +57,7 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
     -- once it is visible, without competing with above-fold TimeFusion queries.
     selfFetches (lazyWidget (statWidget & #eager ?~ True)) `shouldBe` True
     selfFetches (def & #wType .~ Widget.WTTable & #id ?~ "w2") `shouldBe` True
+    selfFetches (def & #wType .~ Widget.WTTable & #id ?~ "w2" & #html ?~ "<table></table>") `shouldBe` False
 
   -- The trap this guards. renderStatContent reads `eager` as "data is present" and
   -- drops `load` from the trigger, so clearing html/dataset but LEAVING the flag
