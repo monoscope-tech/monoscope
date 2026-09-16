@@ -5,6 +5,7 @@ module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
   SqlSource (..),
+  sqlSourceParam,
   SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
@@ -69,6 +70,17 @@ data SqlSource = SqlPostgres | SqlTimefusion
   deriving stock (Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "Sql", DAE.CamelToSnake]] SqlSource
+
+
+-- | The wire spelling of a source, shared by its JSON tag and the @db_source@
+-- query parameter the client sends back when it re-runs a dashboard statement.
+--
+-- >>> map sqlSourceParam [SqlPostgres, SqlTimefusion]
+-- ["postgres","timefusion"]
+sqlSourceParam :: SqlSource -> Text
+sqlSourceParam = \case
+  SqlPostgres -> "postgres"
+  SqlTimefusion -> "timefusion"
 
 
 data SecuredSql = SecuredSql

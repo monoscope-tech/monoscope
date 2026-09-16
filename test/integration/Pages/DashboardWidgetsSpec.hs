@@ -434,6 +434,20 @@ spec = sequential $ aroundAll withTestResources do
       wrong <- plotSql "SELECT 'not a bucket'::text, 'value'::text, 7::double precision"
       wrong.error `shouldSatisfy` isJust
 
+  -- A dashboard variable declares the store its statement belongs to (`source: postgres`
+  -- for apis.endpoints). The page render honoured it, but the client re-runs the same
+  -- statement through /chart_data on every refresh and that carried no source — so it was
+  -- planned against TimeFusion, which answers "table 'datafusion.apis.endpoints' not
+  -- found", and the Endpoint Analytics picker silently stopped updating.
+  describe "Client-supplied SQL routing" do
+    let endpointsSql = "select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 5"
+    -- Through the route, not queryMetrics directly: the route is where the source was
+    -- being dropped. (The guard the same route applies to client SQL is doctested on
+    -- 'Web.Routes.clientPostgresSqlRejection'.)
+    it "routes the statement at the store the variable declared" \tr -> do
+      (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      md.error `shouldBe` Nothing
+
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
     it "emits partial data and the same final chart as the JSON endpoint" \tr -> do

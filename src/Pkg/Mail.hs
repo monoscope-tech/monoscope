@@ -4,7 +4,7 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
-import Data.Default (Default (def))
+import Data.Default (def)
 import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.Wreq (HTTP, defaults, header, postWith)
 import Data.Text qualified as T
@@ -303,12 +303,9 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
 -- The root retains onset evidence; thread replies contain only the new observation.
 monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
-  ( incidentMessage tone text $ renderSlackAlert root
-  , incidentMessage tone text $ renderSlackAlert def{tone, state = label, title, titleUrl = Just issueUrl, facts = root.facts}
-  )
+  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open issue>"]])
   where
     label = case status of Monitors.MSNormal -> "RECOVERED"; Monitors.MSWarning -> "WARNING"; Monitors.MSAlerting -> "ALERTING"
-    tone = case status of Monitors.MSNormal -> ToneRecovered; Monitors.MSWarning -> ToneWarn; Monitors.MSAlerting -> ToneAlert
     threshold = case status of
       Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold
       Monitors.MSAlerting -> monitor.alertThreshold
@@ -318,52 +315,22 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
     reading number = show number <> foldMap ((" " <>) . slackEscape) monitor.alertConfig.unit
     title = incidentHeadline monitor.alertConfig.title
     started = maybe observedAt (.startedAt) episode
+    detail = "Value: " <> reading value <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ") <> reading threshold <> " · Observed " <> atUtc observedAt
     seconds = max 0 $ floor (diffUTCTime observedAt started) :: Int
-    duration = if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min"
-    -- The notification preview falls back to this, so it carries the whole line.
-    text =
-      label
-        <> " · "
-        <> title
-        <> "\nValue: "
-        <> reading value
-        <> (if status == Monitors.MSNormal then " · Recovery threshold: " else " · Threshold: ")
-        <> reading threshold
-        <> " · Observed "
-        <> atUtc observedAt
-    root =
-      def
-        { tone
-        , state = label
-        , title
-        , titleUrl = Just issueUrl
-        , facts =
-            [ ("Value", reading value)
-            , (if status == Monitors.MSNormal then "Recovery threshold" else "Threshold", reading threshold)
-            , ("Observed", atUtc observedAt)
-            , ("Duration", duration)
-            ]
-        , onsetNote = Just $ "Started " <> atUtc started <> " · Initial value: " <> reading value
-        , chartUrl = chart
-        , chartAlt = "Recorded values for " <> title
-        , chartFallback = Just $ "Chart unavailable. <" <> monitorUrl <> "|Open monitor>"
-        , actions = [("Open issue", Just "primary", issueUrl), ("Open monitor", Nothing, monitorUrl)]
-        }
+    recovery = ["Recovery condition passed · Duration: " <> (if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min") | status == Monitors.MSNormal]
+    text = label <> " · " <> title <> "\n" <> detail <> foldMap ("\n" <>) recovery
+    current = slackSection text
+    snapshot =
+      [ tagged "incident_onset" $ slackContext ["Started " <> atUtc started <> " · Initial value: " <> reading value]
+      , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
+      ]
+    actions = incidentActions issueUrl monitorUrl
 
 
 -- | A missing evaluation preserves the last verified reading, never a synthetic zero.
 monitorDataUnavailableMessage :: Monitors.QueryMonitor -> Monitors.MeasurementFailure -> UTCTime -> Maybe (UTCTime, Double) -> Text -> Text -> Incidents.SlackPayload
 monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl =
-  incidentMessage ToneNeutral text
-    $ renderSlackAlert
-      def
-        { tone = ToneNeutral
-        , state = "DATA UNAVAILABLE"
-        , title = incidentHeadline monitor.alertConfig.title
-        , titleUrl = Just incidentUrl
-        , facts = [("Why", explanation), ("Recovery", "Unconfirmed"), ("Last reading", previous), ("Observed", atUtc now)]
-        , actions = [("Open issue", Just "primary", incidentUrl), ("Open monitor", Nothing, monitorUrl)]
-        }
+  incidentMessage text [slackSection text, incidentActions incidentUrl monitorUrl]
   where
     explanation = case reason of
       Monitors.NoMeasurements -> "No measurements in the evaluation window."
@@ -376,12 +343,9 @@ monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl 
 -- | Error episodes retain the onset/chart while reminders carry current evidence.
 errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence =
-  ( incidentMessage tone text $ renderSlackAlert root
-  , incidentMessage tone text $ renderSlackAlert def{tone, state = label, title, titleUrl = Just incidentUrl, facts = root.facts, actions = root.actions}
-  )
+  (incidentMessage text [current, onset, chartBlock, actions], incidentMessage text [current, actions])
   where
     label = case alertType of NewRuntimeError -> "ALERTING"; RegressedErrors -> "REGRESSED"; EscalatingErrors -> "ESCALATING"; ErrorSpike -> "ESCALATING"
-    tone = case alertType of NewRuntimeError -> ToneAlert; RegressedErrors -> ToneAlert; EscalatingErrors -> ToneWarn; ErrorSpike -> ToneWarn
     title = incidentHeadline err.errorType
     text =
       label
@@ -394,29 +358,16 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         <> foldMap (" · " <>) occurrence
         <> foldMap ((" · " <>) . slackEscape) err.serviceName
         <> foldMap ((" · " <>) . slackEscape) err.environment
-    root =
-      def
-        { tone
-        , state = label
-        , title
-        , titleUrl = Just incidentUrl
-        , detail = Just $ slackEscape $ T.take 300 err.message
-        , -- Escaped: these are app-set resource attributes, and mrkdwn would
-          -- render a link in them.
-          facts =
-            [ ("Service", foldMap slackEscape err.serviceName)
-            , ("Environment", foldMap slackEscape err.environment)
-            , ("Rate", fromMaybe "" occurrence)
-            , ("Observed", atUtc now)
-            ]
-        , onsetNote = Just $ "Started " <> atUtc (maybe now (.startedAt) episode)
-        , chartUrl = chart
-        , chartAlt = "Occurrences of " <> title
-        , chartFallback = Just $ "Chart unavailable. <" <> incidentUrl <> "|Open issue>"
-        , actions =
-            ("Open issue", Just "primary", incidentUrl)
-              : maybeToList ((err.traceId >>= guarded (not . T.null)) <&> \tid -> ("View trace", Nothing, traceExplorerUrl projectUrl tid err.when))
-        }
+    current = slackSection text
+    onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
+    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
+    actions =
+      tagged "incident_actions"
+        $ slackActions
+          ( slackButton "Open issue" (Just "primary") incidentUrl
+              : maybeToList
+                ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
+          )
 
 
 tagged :: Text -> AE.Value -> AE.Value
@@ -424,88 +375,9 @@ tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.Stri
 tagged _ block = block
 
 
--- | Every Slack alert, in one shape — the only renderer, so two paths cannot
--- drift into two designs again.
-data SlackAlert = SlackAlert
-  { tone :: IncidentTone
-  , state :: Text
-  , title :: Text
-  , titleUrl :: Maybe Text
-  , detail :: Maybe Text
-  , facts :: [(Text, Text)]
-  , onsetNote :: Maybe Text
-  , chartUrl :: Maybe Text
-  , chartAlt :: Text
-  , chartFallback :: Maybe Text
-  , actions :: [(Text, Maybe Text, Text)]
-  }
-
-
-instance Default SlackAlert where
-  def = SlackAlert ToneNeutral "" "" Nothing Nothing [] Nothing Nothing "Chart" Nothing []
-
-
--- | An alert's blocks, in reading order. The @incident_*@ block ids are wire
--- identity: 'retainSlackSnapshot' carries exactly those onto a root update.
---
--- >>> let kinds = map (\b -> AE.Object b ^. key "type" . _String) . mapMaybe (\case AE.Object o -> Just o; _ -> Nothing)
--- >>> let full = def{state = "ALERTING", title = "TypeError", titleUrl = Just "u", detail = Just "boom", facts = [("Service","api")], onsetNote = Just "Started now", chartUrl = Just "c", actions = [("Open issue", Just "primary", "u")]}
--- >>> kinds (renderSlackAlert full)
--- ["section","section","section","context","image","actions"]
---
--- Empty facts contribute no grid rather than an empty one, and a chartless alert
--- with no fallback simply omits the block:
---
--- >>> kinds (renderSlackAlert def{state = "RESOLVED", title = "t", facts = [("Service","")]})
--- ["section"]
---
--- The state leads whether or not there is a link to hang the title on:
---
--- >>> renderSlackAlert def{state = "RECOVERED", title = "Checkout"} ^.. traverse . key "text" . key "text" . _String
--- ["*RECOVERED* \183 Checkout"]
-renderSlackAlert :: SlackAlert -> [AE.Value]
-renderSlackAlert a =
-  [headline]
-    <> maybeToList (slackSection . fence <$> a.detail)
-    <> [slackFields a.facts | not (all (T.null . T.strip . snd) a.facts)]
-    <> maybeToList (tagged "incident_onset" . slackContext . one <$> a.onsetNote)
-    <> chartBlocks
-    <> [tagged "incident_actions" (slackActions [slackButton l st u | (l, st, u) <- a.actions]) | not (null a.actions)]
-  where
-    -- The state word carries severity on every surface that drops the rail, so
-    -- it leads whether or not the title is a link.
-    headline = slackSection $ "*" <> a.state <> "*" <> foldMap (" · " <>) linked
-    linked = case a.titleUrl of
-      Just u | not (T.null a.title) -> Just $ "<" <> u <> "|" <> a.title <> ">"
-      _ -> guarded (not . T.null) a.title
-    -- A stray fence in app-controlled text would close ours early.
-    fence t = "```" <> T.replace "```" "\8216\8216\8216" t <> "```"
-    chartBlocks = case (a.chartUrl, a.chartFallback) of
-      (Just url, _) -> [tagged "incident_chart" $ slackImage a.chartAlt Nothing url]
-      (Nothing, Just note) -> [tagged "incident_chart" $ slackContext [note]]
-      _ -> []
-
-
--- | Severity as a colour rail. Block Kit has no colour of its own, so this needs
--- an attachment; the state word stays in the body because surfaces drop the rail.
-data IncidentTone = ToneAlert | ToneWarn | ToneRecovered | ToneInfo | ToneNeutral
-  deriving stock (Eq, Show)
-
-
--- | The one severity palette; every Slack surface reads its colour from here.
-toneColor :: IncidentTone -> Text
-toneColor = \case
-  ToneAlert -> "#ef4444"
-  ToneWarn -> "#eab308"
-  ToneRecovered -> "#22c55e"
-  ToneInfo -> "#3b82f6"
-  ToneNeutral -> "#64748b"
-
-
--- | One text fallback plus its blocks, in an attachment so the rail renders.
-incidentMessage :: IncidentTone -> Text -> [AE.Value] -> Incidents.SlackPayload
-incidentMessage tone text blocks =
-  Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "attachments" AE..= arr [colouredAttachment (toneColor tone) text blocks]]
+-- | Every incident message is one text fallback plus its Block Kit list.
+incidentMessage :: Text -> [AE.Value] -> Incidents.SlackPayload
+incidentMessage text blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "blocks" AE..= blocks]
 
 
 atUtc :: UTCTime -> Text
@@ -530,16 +402,7 @@ incidentSnapshotBlocks = ["incident_onset", "incident_chart"]
 
 resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Maybe Text -> Incidents.SlackPayload
 resolvedErrorMessage err actor now projectUrl issueUrl =
-  incidentMessage ToneRecovered text
-    $ renderSlackAlert
-      def
-        { tone = ToneRecovered
-        , state = "RESOLVED"
-        , title = incidentHeadline err.errorType
-        , titleUrl = Just url
-        , facts = [("Resolved by", slackEscape (if T.null name then actor.id.toText else name)), ("At", atUtc now), ("Measured recovery", "Not verified")]
-        , actions = [(label, Just "primary", url)]
-        }
+  incidentMessage text [slackSection text, slackContext ["<" <> url <> "|" <> label <> ">"]]
   where
     (url, label) = maybe (projectUrl <> "/issues", "Open project issues") (,"Open issue") issueUrl
     name = T.strip $ actor.firstName <> " " <> actor.lastName
@@ -557,48 +420,12 @@ slackEscape :: Text -> Text
 slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"
 
 
--- $setup
--- >>> :set -XOverloadedStrings -XTypeApplications
--- >>> import Data.Aeson qualified as AE
--- >>> import Data.Aeson.Lens (key, nth, values, _String)
--- >>> import Control.Lens ((^..), (^.))
--- >>> import Data.Maybe (fromJust)
-
-
 -- | Updating status must not replace the original onset and chart snapshot.
--- @initial@ comes from a row written days earlier, so both payload shapes —
--- blocks at the top level, and blocks inside the attachment — must be read.
---
--- >>> let p = fromJust . AE.decode @Incidents.SlackPayload
--- >>> let ids = \(Incidents.SlackPayload o) -> AE.Object o ^.. key "attachments" . nth 0 . key "blocks" . values . key "block_id" . _String
--- >>> let flat = \(Incidents.SlackPayload o) -> AE.Object o ^.. key "blocks" . values . key "block_id" . _String
---
--- A pre-rail @initial@ still hands its snapshot to a railed @current@:
---
--- >>> ids (retainSlackSnapshot (p "{\"blocks\":[{\"block_id\":\"incident_chart\"}]}") (p "{\"attachments\":[{\"blocks\":[{\"block_id\":\"incident_actions\"}]}]}"))
--- ["incident_actions","incident_chart"]
---
--- Both railed, and the snapshot replaces the current one rather than doubling:
---
--- >>> ids (retainSlackSnapshot (p "{\"attachments\":[{\"blocks\":[{\"block_id\":\"incident_onset\"}]}]}") (p "{\"attachments\":[{\"blocks\":[{\"block_id\":\"incident_onset\"},{\"block_id\":\"incident_actions\"}]}]}"))
--- ["incident_actions","incident_onset"]
---
--- A pre-rail @current@ keeps its blocks where it had them:
---
--- >>> flat (retainSlackSnapshot (p "{\"blocks\":[{\"block_id\":\"incident_onset\"}]}") (p "{\"blocks\":[{\"block_id\":\"incident_actions\"}]}"))
--- ["incident_actions","incident_onset"]
 retainSlackSnapshot :: Incidents.SlackPayload -> Incidents.SlackPayload -> Incidents.SlackPayload
 retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload current) =
-  Incidents.SlackPayload $ putBlocks current (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))
+  Incidents.SlackPayload $ KEM.insert "blocks" (AE.toJSON (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))) current
   where
-    attachmentBlocks obj = case KEM.lookup "attachments" obj of
-      Just (AE.Array as) | Just (AE.Object a) <- viaNonEmpty head (toList as) -> Just (a, blockList a)
-      _ -> Nothing
-    blockList obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
-    blocks obj = maybe (blockList obj) snd (attachmentBlocks obj)
-    putBlocks obj new' = case attachmentBlocks obj of
-      Just (a, _) -> KEM.insert "attachments" (AE.toJSON ([AE.Object (KEM.insert "blocks" (AE.toJSON new') a)] :: [AE.Value])) obj
-      Nothing -> KEM.insert "blocks" (AE.toJSON new') obj
+    blocks obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
     snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) incidentSnapshotBlocks
     snapshot _ = False
 
@@ -661,10 +488,10 @@ newEndpointsExplorerUrl projectUrl endpoints =
 -- @logLevel@ only gates the "warning" branch since drain-derived rows don't set it.
 logPatternSeverity :: Bool -> Maybe Text -> (Text, Text, Int, Text)
 logPatternSeverity isError logLevel
-  | isError = ("🚨", "New error log pattern", 15278902, toneColor ToneAlert)
+  | isError = ("🚨", "New error log pattern", 15278902, "#ef4444")
   | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel =
-      ("⚠️", "New warning log pattern", 15909152, toneColor ToneWarn)
-  | otherwise = ("🔍", "New log pattern", 3901174, toneColor ToneInfo)
+      ("⚠️", "New warning log pattern", 15909152, "#eab308")
+  | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
 
 
 -- | Rate-change presentation: (Slack shortcode, Discord emoji, hex color, Discord int color).
@@ -943,13 +770,10 @@ runtimeAlertMessages = \case
 -- so the same payload works on both chat.postMessage and the webhook transport.
 slackAttachment :: Text -> Text -> [AE.Value] -> AE.Value
 slackAttachment channelId color blocks =
-  AE.object ["channel" AE..= channelId, "attachments" AE..= arr [colouredAttachment color "Monoscope alert" blocks]]
-
-
--- | One coloured rail around a block list, shared by both payload shapes.
-colouredAttachment :: Text -> Text -> [AE.Value] -> AE.Value
-colouredAttachment color fallback blocks =
-  AE.object ["color" AE..= color, "fallback" AE..= fallback, "blocks" AE..= arr blocks]
+  AE.object
+    [ "channel" AE..= channelId
+    , "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= ("Monoscope alert" :: Text), "blocks" AE..= arr blocks]]
+    ]
 
 
 arr :: [AE.Value] -> AE.Value
@@ -967,12 +791,6 @@ mrkdwn t = AE.object ["type" AE..= "mrkdwn", "text" AE..= t]
 
 slackSection :: Text -> AE.Value
 slackSection t = AE.object ["type" AE..= "section", "text" AE..= mrkdwn t]
-
-
--- | Slack renders a section's @fields@ as a two-column grid.
-slackFields :: [(Text, Text)] -> AE.Value
-slackFields entries =
-  AE.object ["type" AE..= "section", "fields" AE..= arr [mrkdwn ("*" <> k <> "*\n" <> v) | (k, v) <- entries, not (T.null (T.strip v))]]
 
 
 slackContext :: [Text] -> AE.Value

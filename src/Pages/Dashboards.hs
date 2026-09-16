@@ -100,6 +100,7 @@ import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem (getServiceName)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Table (BulkAction (..), Table (..))
@@ -107,7 +108,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -302,6 +303,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
               , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
+              , -- Which store the statement belongs to. Without it the client-side
+                -- refresh below re-runs a postgres-only statement (apis.endpoints)
+                -- against TimeFusion and the variable silently stops updating.
+                data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
               , data_ "tagify-query" $ maybeToMonoid var.query
               , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
@@ -351,6 +356,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
     widgetOrderTriggerForm_ widgetOrderUrl False
+
+    -- Where a logs widget's row click loads its details. A dashboard has no third
+    -- pane to give it, so it is always the drawer.
+    LogItem.detailsPanel_ pid Nothing False
 
     -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
@@ -884,7 +893,16 @@ prefillFor hxRequest = if isJust hxRequest then WidgetsFetchThemselves else Pref
 
 processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget prefill pid now timeRange allParams widgetBase = do
-  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
+  let (sinceStr, fromDStr, toDStr) = timeRange
+      (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      -- A logs widget bakes its query into <log-list>'s fetch URL, and
+      -- /log_explorer/data substitutes nothing — so a dashboard variable has to be
+      -- resolved here or the list searches for the literal "{{var-endpointHash}}".
+      -- Every other type reaches /chart_data, which interpolates at fetch time.
+      resolveLogsQuery
+        | widgetBase.wType == Widget.WTLogs = fmap (replacePlaceholders (variablePresetsKQL def pid.toText fromD toD allParams now))
+        | otherwise = Relude.id
+      widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
@@ -2072,9 +2090,8 @@ dashboardDeleteH pid dashId = do
 
 data DashboardBulkActionForm = DashboardBulkActionForm
   { itemId :: [Dashboards.DashboardId]
-  , -- Always empty: `Table.BulkAction` posts only the table's `itemId`
-    -- checkboxes and no team picker exists, so "Add teams" always reports "No
-    -- dashboards were updated". Needs a picker before the POST, not a refactor.
+  , -- Named for what it carries: these are team ids, not handles. The form never
+    -- reaches the handle-based path — see the "Add teams" note in QUALITY-SWEEP-NOTES.
     teamIds :: [ManageMembers.TeamId]
   }
   deriving stock (Generic, Show)

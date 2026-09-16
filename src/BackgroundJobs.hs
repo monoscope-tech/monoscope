@@ -42,7 +42,6 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -3049,8 +3048,14 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           else do
             previous <- Incidents.latestEpisodeTx monitor.projectId source
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
-            -- One long-lived issue per monitor, written on a transition only:
-            -- the write bumps occurrence_count, so every tick would inflate it.
+            -- One long-lived issue per monitor: a firing reopens it rather than
+            -- starting a new row, so every episode hangs off the same history.
+            --
+            -- Still gated on a transition, not run every tick: the write bumps
+            -- occurrence_count and affected_requests, so an unconditional call
+            -- would count evaluation ticks rather than firings — a monitor that
+            -- alerts once and stays alerting on a 1-minute interval would report
+            -- 1440 occurrences a day on the issue page and in every alert body.
             persistedId <-
               if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
                 then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
@@ -3818,7 +3823,7 @@ data MergeConfig k a = MergeConfig
   , normalizeEmb :: Text -> Text -- normalize text before embedding (e.g. unify placeholders)
   , toId :: a -> k
   , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
-  , getCentroids :: ATBackgroundCtx [(k, VU.Vector Float)]
+  , getCentroids :: ATBackgroundCtx [(k, [Float])]
   , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
   , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
   , canMerge :: Text -> Text -> Bool
@@ -4830,7 +4835,6 @@ runSlackIncidentDeliveries = do
         Just sd | sd.teamId == delivery.teamId -> do
           let (operation, parent) = case delivery.operation of
                 Incidents.PostRoot -> (Notify.SlackPost, Nothing)
-                Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
               message =
@@ -4840,7 +4844,6 @@ runSlackIncidentDeliveries = do
                   , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
                       Incidents.PostReply _ -> delivery.payload
                       Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
-                      Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                       Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
@@ -4849,9 +4852,7 @@ runSlackIncidentDeliveries = do
                   }
           Notify.deliverSlack operation message <&> \case
             Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-            -- Without a bot token nothing can ever recover the timestamp.
-            Notify.SlackAccepted ->
-              Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
+            Notify.SlackAccepted -> Incidents.WebhookAccepted
             Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
             Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
             Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"

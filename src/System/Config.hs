@@ -504,8 +504,12 @@ configToEnv config = do
   -- PGWire proxy's five-minute timeout. Thirty minutes retained closed sockets;
   -- thirty seconds previously caused excessive connection churn.
   let timefusionIdleSeconds = 240 :: Int
-  -- This pool size IS our concurrency limit against TimeFusion — resource-pool
+  -- This pool bounds the *postgresql-simple* reads against TimeFusion — resource-pool
   -- blocks once it is exhausted, so it staggers a dashboard's widgets for free.
+  -- It is NOT the whole concurrency limit: `hasqlTimefusionPool` below opens 30
+  -- more, and the log explorer's `selectLogTable` goes through that one. Fleet-wide
+  -- the ceiling is (8 + 30) x 3 replicas, and TF's `CLIENT_PGWIRE_POOL` /
+  -- `CLIENT_HASQL_POOL` size its sort budget off these two numbers — keep them in step.
   -- It has to be this low, because TF's sort machinery reserves
   -- `sort_spill_reservation_bytes` per partition UP FRONT and unspillably:
   -- the pool must fit N x partitions x that reservation. 8 x 24 x 64 MiB =

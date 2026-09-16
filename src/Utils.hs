@@ -987,6 +987,8 @@ prettyPrintCount n
 -- "Database temporarily unavailable \8212 retrying may help"
 -- >>> sanitizeBackendError "Hasql: pool acquisition timeout"
 -- "Database temporarily unavailable \8212 retrying may help"
+-- >>> sanitizeBackendError "Not enough memory to continue external sort.\ncaused by\nResources exhausted: Additional allocation failed for ExternalSorter[0]"
+-- "Database temporarily unavailable \8212 retrying may help"
 -- >>> sanitizeBackendError "ERROR: column \"foo\" does not exist"
 -- "Column not found"
 -- >>> sanitizeBackendError "Schema error: No field named bar"
@@ -1006,7 +1008,12 @@ sanitizeBackendError raw
     has = (`T.isInfixOf` msg)
     colNotFound = (has "does not exist" && has "column") || any has ["no field named", "unknown column"]
     tableNotFound = (has "does not exist" && has "relation") || has "unknown table" || (has "table" && has "not found")
-    dbUnavailable = any has ["pool acquisition timeout", "starting up"] || (has "connection" && any has ["refused", "closed"])
+    -- TF's FairSpillPool divides its query pool by the number of *registered*
+    -- spillable consumers, so a sort can be refused while the pool is nearly
+    -- empty. It clears as soon as the fleet quiets down — a retry genuinely helps.
+    dbUnavailable =
+      any has ["pool acquisition timeout", "starting up", "resources exhausted", "not enough memory"]
+        || (has "connection" && any has ["refused", "closed"])
 
 
 -- | Format a Double with thousand separators
