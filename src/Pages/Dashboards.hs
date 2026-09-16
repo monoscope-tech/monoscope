@@ -868,6 +868,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 
 -- Process a single widget recursively. Keeps sql/query with {{var-*}} templates intact
 -- so they can be interpolated at data fetch time with current URL params.
+
 -- | Whether a render prefills widget data server-side. An htmx swap skips it: the shell
 -- reaches the browser in about a second with skeletons that fetch themselves, instead of
 -- blocking on the widget phase that dominates a dashboard render.
@@ -899,7 +900,8 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       -- built-in templates.
       | widget.wType == Widget.WTAnomalies -> processEagerWidget pid now timeRange allParams widget
       -- Label by id, not title: untitled widgets would all log the same string.
-      | widget.eager == Just True, prefill == PrefillWidgets ->
+      | widget.eager == Just True
+      , prefill == PrefillWidgets ->
           withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
             $ processEagerWidget pid now timeRange allParams widget
       | widget.eager == Just True -> pure $ lazyWidget widget
