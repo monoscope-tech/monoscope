@@ -13,14 +13,12 @@ module Pages.Telemetry (
   metricExemplarsGetH,
   MetricExemplarsGet (..),
   relatedMetricsGetH,
-  traceOverlayUrl,
   -- Trace
   traceH,
   traceFragmentUrl,
   TraceDetailsGet (..),
   TraceUnavailableReason (..),
   tracePage,
-  spanDetailAttrs_,
   DetailLoading (..),
 ) where
 

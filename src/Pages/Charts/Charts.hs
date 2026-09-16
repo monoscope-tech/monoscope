@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
+module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Concurrent (threadDelay, threadWaitRead)
 import Control.Concurrent.STM qualified as STM

@@ -2,7 +2,6 @@ module Pages.Settings (
   -- S3
   bringS3GetH,
   brings3PostH,
-  getMinioConnectInfo,
   brings3RemoveH,
   -- Api
   apiGetH,
@@ -51,7 +50,6 @@ module Pages.Settings (
   createStripePortalSession,
   cancelProjectSubscription,
   lemonSqueezyOpts,
-  verifyStripeSignature,
   verifyLemonSqueezySignature,
 ) where
 

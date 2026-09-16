@@ -28,7 +28,6 @@ module Pages.Dashboards (
   visTypes,
   processEagerWidget,
   lazyWidget,
-  fetchWidgetData,
   widgetMetrics,
   getDashAndVM,
   findTabBySlug,

@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)

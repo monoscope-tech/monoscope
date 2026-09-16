@@ -1,4 +1,4 @@
-module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH, docsHref) where
+module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
