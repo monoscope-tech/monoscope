@@ -521,11 +521,8 @@ function initTagifyElement(el: HTMLElement) {
     // Dashboard variable: sync tagify changes to URL params and fire update-query
     if (el.classList.contains('dash-variable-input')) {
       tagify.on('change', (e: any) => {
-        const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-        const url = new URL(window.location.href);
-        url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value || '');
-        history.pushState({}, '', url.toString());
-        window.dispatchEvent(new Event('update-query'));
+        if (suppressVarChange.has(el)) return;
+        publishVarValue(el, e.detail?.tagify?.value[0]?.value || '');
       });
     }
   } catch (e) {
@@ -561,6 +558,20 @@ let _cachedSearch = '',
 // like Resource-by-Service stay correct). Server-side rendering skips computing
 // these to keep the multi-second DISTINCT scan off the page critical path, so we
 // load them client-side: lazily on first dropdown open, and again on update-query.
+// Writing a variable's value to the URL is what makes every widget refetch, so a
+// programmatic reconcile must publish once (the final value) rather than once per
+// tagify mutation — removeAllTags + addTags would otherwise send every widget on a
+// round trip for the empty value first.
+const suppressVarChange = new WeakSet<HTMLElement>();
+function publishVarValue(input: HTMLElement, value: string) {
+  const url = new URL(window.location.href);
+  const key = 'var-' + input.getAttribute('name');
+  if (url.searchParams.get(key) === value) return;
+  url.searchParams.set(key, value);
+  history.pushState({}, '', url.toString());
+  window.dispatchEvent(new Event('update-query'));
+}
+
 const variableRefreshes = new WeakMap<HTMLElement, { url: string; request: Promise<void> }>();
 const variableLastRefresh = new WeakMap<HTMLElement, { url: string; startedAt: number }>();
 const VARIABLE_REFRESH_INTERVAL = 5 * 60_000;
@@ -599,21 +610,39 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
       if (error) throw new Error(error);
       if (!Array.isArray(data_text)) throw new Error('Variable options response is missing data');
       if (variableRefreshes.get(input) !== refresh || (input as any)._tagifyInstance !== tgfy || !input.isConnected) return;
-      // Keep the picker usable, including its open menu, search text and selected tags.
-      // A quiet time window must not remove values the user may still need to select.
-      const existing = tgfy.settings.whitelist ?? [];
       const valueOf = (option: any) => String(typeof option === 'object' ? option.value : option);
-      const seen = new Set(existing.map(valueOf));
-      const additions = data_text
-        .filter((row: unknown) => Array.isArray(row) && row.length > 0)
-        .map((row: any[]) => (row.length === 1 ? row[0] : { value: row[0], name: row[1] }))
-        .filter((option: any) => {
-          const value = valueOf(option);
-          if (seen.has(value)) return false;
-          seen.add(value);
-          return true;
-        });
-      if (additions.length) tgfy.settings.whitelist = [...existing, ...additions];
+      const dedupe = (options: any[]) => {
+        const seen = new Set<string>();
+        return options.filter((o) => !seen.has(valueOf(o)) && (seen.add(valueOf(o)), true));
+      };
+      const fetched = data_text.filter((row: unknown) => Array.isArray(row) && row.length > 0).map((row: any[]) => (row.length === 1 ? row[0] : { value: row[0], name: row[1] }));
+      if (background) {
+        // Keep the picker usable, including its open menu, search text and selected tags.
+        // A quiet time window must not remove values the user may still need to select.
+        const existing = tgfy.settings.whitelist ?? [];
+        tgfy.settings.whitelist = dedupe([...existing, ...fetched]);
+      } else {
+        // An explicit change (a parent variable, the time range) rescopes the list: the
+        // previous options belong to the value the user just replaced, so merging them in
+        // left e.g. the Endpoint picker offering the *old* domain's endpoints.
+        const options = dedupe(fetched);
+        tgfy.settings.whitelist = options;
+        // The held selection belongs to the old scope too. Leaving it makes every widget
+        // query an endpoint that isn't on this domain; clearing it alone makes them all
+        // query '' and report "no data" — a lie about the data. Fall to the first option.
+        const held = tgfy.value?.[0]?.value;
+        if (held !== undefined && !options.some((o: any) => valueOf(o) === String(held))) {
+          suppressVarChange.add(input);
+          try {
+            tgfy.removeAllTags();
+            if (options.length) tgfy.addTags([options[0]]);
+          } finally {
+            suppressVarChange.delete(input);
+          }
+          publishVarValue(input, options.length ? valueOf(options[0]) : '');
+        }
+        if (tgfy.state?.dropdown?.visible) tgfy.dropdown.show(tgfy.state.inputText || '');
+      }
     } catch (e) {
       console.error(`Error fetching data for ${(input as any).name}:`, e);
     } finally {

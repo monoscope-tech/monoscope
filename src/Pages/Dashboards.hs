@@ -657,6 +657,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       paramsMap = Map.fromList allParams
       variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
+      withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
   -- live DISTINCT scan of the day partition — the latter blocks page render for
@@ -666,7 +667,12 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       docM <- SchemaCatalog.getSummary pid
       pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map (one . fst) $ sortWith (Down . snd) $ HM.toList tk.top
     Nothing -> pure Nothing
-  case facetOpts of
+  -- The rendered input carries its statement so the client can re-fetch options when a
+  -- parent variable changes. Handing it the *substituted* statement froze the parent's
+  -- value into it ("host='frontend-proxy'"), so picking another domain re-fetched the
+  -- old domain's endpoints forever. Only this function's own queries want the
+  -- substitution; put the template back before the variable reaches the view.
+  fmap withTemplateStatement case facetOpts of
     Just opts | not (null opts) -> pure variable{Dashboards.options = Just opts}
     -- Dependent variables (depends_on) are lazy: their options are scoped to the
     -- parent's value and can't be facet-served, so we skip the (multi-second)

@@ -534,6 +534,12 @@ spec = sequential $ aroundAll withTestResources do
       template `shouldSatisfy` T.isInfixOf "hashes[*]==\"{{var-endpointHash}}\""
       template `shouldNotSatisfy` T.isInfixOf "kind"
 
+    it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
+      let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}
+          widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid}
+          html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
+      html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/rum?tab=sessions&amp;session=session%20%2F%20id")
+
   -- The variable picker replaces the tab's content, so every widget the render produced
   -- was thrown away. The gate lived in the view, so the handler ran the whole widget
   -- phase first — with the required variable interpolated to '', which for Endpoint
@@ -557,6 +563,18 @@ spec = sequential $ aroundAll withTestResources do
       ws `shouldSatisfy` not . null
       map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
       toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"
+
+  -- Picking a second domain left the Endpoint dropdown listing the first domain's
+  -- endpoints. The input carries its own statement so the client can re-fetch options
+  -- on change, but the server rendered it already substituted — the old host frozen in —
+  -- so every re-fetch asked for the old domain again.
+  describe "Dependent variable keeps a live template" do
+    it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
+      (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")]
+      let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
+      html `shouldSatisfy` T.isInfixOf "{{var-host}}"
+      html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
 
   -- A swap already has a painted page around it, so it ships skeletons that fetch
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).

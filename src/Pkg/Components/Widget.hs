@@ -1430,7 +1430,7 @@ renderTableWithDataAndParams widget dataRows params = do
               td_ [class_ $ cellClass col]
                 $ if isJust col.progress
                   then renderProgressCell col (getRowValue idx row) maxValues valueWidths
-                  else renderLongTextOr col (getRowValue idx row)
+                else renderLongTextOr widget col (getRowValue idx row)
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
@@ -1574,10 +1574,16 @@ formatTimestampValue (T.strip -> val)
 -- Long values get a truncated single-line view with a tippy tooltip (delegated
 -- body-wide in BodyWrapper) showing the full text on hover. Number/duration
 -- columns skip the wrapper since they're always short.
-renderLongTextOr :: TableColumn -> Text -> Html ()
-renderLongTextOr col value
+renderLongTextOr :: Widget -> TableColumn -> Text -> Html ()
+renderLongTextOr widget col value
   | not (isNumericCol col), T.length value > 60 = div_ [class_ "truncate max-w-2xl", term "data-tippy-content" value] cell
   | otherwise = cell
   where
     formatted = formatColumnValue col value
-    cell = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted
+    content = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted
+    cell = maybe content (\template -> a_ [href_ $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link
+    -- Link values are data, not markup. URL-encode the cell substitution before it
+    -- reaches the href, while project ids are UUIDs controlled by the server.
+    tableLink template =
+      T.replace "{{project_id}}" (projectIdText widget)
+        $ T.replace ("{{row." <> col.field <> "}}") (toUriStr value) template

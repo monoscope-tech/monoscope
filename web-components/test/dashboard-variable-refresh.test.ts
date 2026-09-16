@@ -4,7 +4,13 @@ import '../src/main';
 const mount = () => {
   document.body.innerHTML = '<input name="service" class="dash-variable-input" data-tagify-query="| distinct service" data-tagify-reload-on-change="true">';
   const input = document.querySelector('input')!;
-  const tagify = { settings: { whitelist: ['all', { value: 'checkout', name: 'Checkout' }] }, value: [{ value: 'checkout' }], loading: vi.fn() };
+  const tagify = {
+    settings: { whitelist: ['all', { value: 'checkout', name: 'Checkout' }] },
+    value: [{ value: 'checkout' }],
+    loading: vi.fn(),
+    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
+    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags.map(tag => typeof tag === 'object' ? tag : { value: tag }); }),
+  };
   (input as any)._tagifyInstance = tagify;
   return { input, tagify };
 };
@@ -38,7 +44,7 @@ test('ticks keep options and selection usable, coalesce requests and append only
 
   fetch.mockResolvedValue(response([]));
   const merged = tagify.settings.whitelist;
-  await reload(input);
+  await (window as any).reloadVarWhitelist(input, true);
   expect(tagify.settings.whitelist).toBe(merged);
 });
 
@@ -67,7 +73,7 @@ test.each(['offline', 'http', 'query'])('%s failure preserves options and permit
   expect(tagify.loading).not.toHaveBeenCalled();
   fetch.mockResolvedValue(response([['new-service']]));
   await reload(input);
-  expect(tagify.settings.whitelist).toEqual([...original, 'new-service']);
+  expect(tagify.settings.whitelist).toEqual(['new-service']);
 });
 
 test('a response for superseded variable parameters cannot append outdated suggestions', async () => {
@@ -79,17 +85,37 @@ test('a response for superseded variable parameters cannot append outdated sugge
   await reload(input);
   old.resolve(response([['obsolete']]));
   await stale;
-  expect(tagify.settings.whitelist).toEqual(['all', { value: 'checkout', name: 'Checkout' }, 'current']);
+  expect(tagify.settings.whitelist).toEqual(['current']);
+});
+
+test('a parent-variable change replaces stale dependent options and chooses a valid endpoint', async () => {
+  const { input, tagify } = mount();
+  input.name = 'endpointHash';
+  input.setAttribute('data-tagify-query-sql', "select hash from apis.endpoints where host='{{var-host}}'");
+  tagify.settings.whitelist = [{ value: 'frontend-endpoint', name: 'GET /old' }];
+  tagify.value = [{ value: 'frontend-endpoint' }];
+  history.replaceState({}, '', '/?var-host=api.example.com&var-endpointHash=frontend-endpoint');
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response([['api-endpoint', 'GET /v1/orders']]));
+  vi.stubGlobal('fetch', fetch);
+
+  const refreshed = reload(input);
+  await refreshed;
+
+  expect(tagify.settings.whitelist).toEqual([{ value: 'api-endpoint', name: 'GET /v1/orders' }]);
+  expect(tagify.removeAllTags).toHaveBeenCalledOnce();
+  expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]);
+  expect(new URL(location.href).searchParams.get('var-endpointHash')).toBe('api-endpoint');
+  expect(new URL(fetch.mock.calls[0][0], location.origin).searchParams.get('var-host')).toBe('api.example.com');
 });
 
 test.each([true, false])('paces background requests for five minutes after success=%s, while parameter changes stay immediate', async (ok) => {
   const { input } = mount();
   const now = vi.spyOn(Date, 'now').mockReturnValue(0);
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  const fetch = vi.fn().mockResolvedValue(ok ? response([]) : { ok: false, status: 503 });
+  const fetch = vi.fn().mockResolvedValue(ok ? response([['checkout']]) : { ok: false, status: 503 });
   vi.stubGlobal('fetch', fetch);
   const tick = () => window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
-  await reload(input);
+  await (window as any).reloadVarWhitelist(input, true);
   for (let seconds = 15; seconds < 300; seconds += 15) {
     now.mockReturnValue(seconds * 1000);
     tick();
@@ -103,7 +129,8 @@ test.each([true, false])('paces background requests for five minutes after succe
   now.mockReturnValue(315_000);
   history.replaceState({}, '', '/?var-environment=production');
   window.dispatchEvent(new Event('update-query'));
-  await reload(input);
+  await Promise.resolve();
+  await Promise.resolve();
   expect(fetch).toHaveBeenCalledTimes(3);
   tick();
   expect(fetch).toHaveBeenCalledTimes(3);
