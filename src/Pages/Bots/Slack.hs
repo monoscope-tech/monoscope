@@ -1202,6 +1202,7 @@ reconcileIncidentDeliveries = do
               _ -> throwIO AI.AgentAccessDenied
           (method, scope) = case search.operation of
             Incidents.PostRoot -> ("conversations.history", [("limit", "15")])
+            Incidents.PostStandalone -> ("conversations.history", [("limit", "15")])
             Incidents.PostReply root -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
             Incidents.UpdateRoot root -> ("conversations.history", [("oldest", Incidents.slackTimestampText root), ("latest", Incidents.slackTimestampText root), ("inclusive", "true"), ("limit", "1")])
           params = [("channel", search.channelId), ("include_all_metadata", "true")] <> scope <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
@@ -1211,6 +1212,10 @@ reconcileIncidentDeliveries = do
               Incidents.PostRoot -> do
                 guard $ fromMaybe message.ts message.thread_ts == message.ts
                 publicationTimestamp appId "monoscope_incident_root" "root_id" search.rootId message
+              -- Its root is threadless, so claimIncidentSearches never offers it.
+              Incidents.PostStandalone -> do
+                guard $ fromMaybe message.ts message.thread_ts == message.ts
+                publicationTimestamp appId "monoscope_incident_delivery" "delivery_id" search.id message
               Incidents.PostReply root -> do
                 guard $ message.thread_ts == Just (Incidents.slackTimestampText root) && message.ts /= Incidents.slackTimestampText root
                 publicationTimestamp appId "monoscope_incident_delivery" "delivery_id" search.id message
@@ -1226,10 +1231,11 @@ reconcileIncidentDeliveries = do
           PublicationFound timestamp -> do
             confirmed <- Incidents.confirmIncidentSearch search timestamp
             unless confirmed $ throwIO SlackPublicationPending
-          PublicationCursor next -> retry next $ addUTCTime 60 now
+          PublicationCursor next -> retry (Incidents.SearchAdvanced next) $ addUTCTime 60 now
       for_ (leftToMaybe outcome) $ \err -> do
-        Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id]
-        retry search.cursor $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
+        let reason = toText $ displayException err
+        Log.logAttention "Slack incident delivery history remains pending" $ AE.object ["root_id" AE..= search.rootId, "delivery_id" AE..= search.id, "reason" AE..= reason]
+        retry (Incidents.SearchStalled reason) $ maybe (addUTCTime 60 now) (\(RateLimit.SlackRateLimited at) -> at) $ fromException @RateLimit.SlackRateLimited err
 
 
 newtype SlackBotProfile = SlackBotProfile {app_id :: Maybe Text}

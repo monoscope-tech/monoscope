@@ -23,9 +23,9 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Issues qualified as IssuesPage
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
+import Pages.Issues qualified as IssuesPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -608,7 +608,7 @@ spec = around withTestResources do
       now <- getTestTime tr.trTestClock
       void $ run $ I.recordIncidentEvent update{I.observedAt = now, I.change = I.IncidentRecovered}
       followups <- run $ I.claimSlackDeliveries now
-      map (.operation) followups `shouldContain` [I.PostRoot]
+      map (.operation) followups `shouldContain` [I.PostStandalone]
       -- Nothing may be left queued that can never be claimed. `shouldContain`
       -- alone passed while an unclaimable update_root sat pending behind the
       -- reply — and because noEarlierUnsettledDelivery blocks on the earliest
@@ -622,6 +622,37 @@ spec = around withTestResources do
                WHERE r.threadless AND d.state NOT IN ('delivered','failed','sending')|]
           ()
       (stranded :: [(Text, Text)]) `shouldBe` []
+
+    -- A bot token is not proof the timestamp is recoverable: the installs behind
+    -- the 110 stranded roots had one, with zero scopes.
+    it "stops waiting for a timestamp recovery that never arrives" \tr -> do
+      update <- setupWithIssue tr
+      setupSlackData tr testPid "T1"
+      let run :: ATBackgroundCtx a -> IO a
+          run = runTestBgNoReset tr
+      void $ run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
+      [root] <- run $ I.claimSlackDeliveries update.observedAt
+      run (I.finishSlackDelivery update.observedAt root (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
+      advanceMinutes tr 1
+      early <- getTestTime tr.trTestClock
+      void $ run $ I.recordIncidentEvent update{I.observedAt = early, I.change = I.IncidentRecovered}
+      -- Inside the window the root is still worth waiting for, so nothing moves.
+      run (I.claimSlackDeliveries early) `shouldReturn` []
+      advanceMinutes tr 60
+      late <- getTestTime tr.trTestClock
+      followups <- run $ I.claimSlackDeliveries late
+      -- Standalone, not a root: the install still has a token, so settling it as
+      -- ThreadCapable used to park a post_reply row in waiting_root — which the
+      -- operation/state CHECK rejects, losing the completion and wedging the root.
+      map (.operation) followups `shouldContain` [I.PostStandalone]
+      for_ followups \followup -> run (I.finishSlackDelivery late followup (I.WebhookAccepted I.ThreadCapable)) `shouldReturn` True
+      unsettled <- withResource tr.trPool \conn ->
+        PGS.query
+          conn
+          [sql|SELECT d.operation, d.state FROM apis.slack_incident_deliveries d
+               WHERE d.state NOT IN ('delivered','failed')|]
+          ()
+      (unsettled :: [(Text, Text)]) `shouldBe` []
 
     it "refuses to open an episode with no issue behind it" \tr -> do
       update <- setup tr
@@ -710,7 +741,7 @@ spec = around withTestResources do
         advanceMinutes tr 3
         (searched, _) <- work
         map fst searched `shouldBe` ["https://slack.com/api/conversations.history"]
-        run $ I.saveIncidentSearchCursor abandoned (Just "stale") frozenTime
+        run $ I.saveIncidentSearchCursor abandoned (I.SearchAdvanced (Just "stale")) frozenTime
         cursors <- withResource tr.trPool $ \conn -> PGS.query conn [sql|SELECT history_cursor FROM apis.slack_incident_deliveries WHERE id = ?|] (PGS.Only root.id)
         cursors `shouldBe` [PGS.Only (Just "next" :: Maybe Text)]
         advanceMinutes tr 1
@@ -751,6 +782,7 @@ spec = around withTestResources do
             I.PostReply _ -> pure ("conversations.replies", "1788900000.000002", Just "next")
             I.UpdateRoot _ -> pure ("conversations.history", "1788900000.000001", Nothing)
             I.PostRoot -> fail "Expected a lifecycle delivery"
+            I.PostStandalone -> fail "Expected a lifecycle delivery"
           Just metadata <- pure $ AE.toJSON (I.correlateSlackDelivery delivery delivery.payload) ^? key "metadata"
           let message = AE.object ["ts" AE..= (expectedTs :: Text), "thread_ts" AE..= I.slackTimestampText parent, "app_id" AE..= ("A_TEST" :: Text), "bot_id" AE..= ("B_TEST" :: Text), "metadata" AE..= metadata]
               page messages cursor = AE.object ["ok" AE..= True, "messages" AE..= (messages :: [AE.Value]), "response_metadata" AE..= AE.object ["next_cursor" AE..= fromMaybe "" (cursor :: Maybe Text)]]
@@ -774,6 +806,7 @@ spec = around withTestResources do
                             opts ^. Wreq.param "latest" `shouldBe` [I.slackTimestampText parent]
                             opts ^. Wreq.param "inclusive" `shouldBe` ["true"]
                           I.PostRoot -> fail "Unexpected root search"
+                          I.PostStandalone -> fail "Unexpected root search"
                         next <- atomicModifyIORef' pages $ \case
                           [] -> ([], Nothing)
                           item : rest -> (rest, Just item)

@@ -42,6 +42,7 @@ module Models.Apis.Incidents (
   IncidentSearch,
   IncidentSearchF (..),
   claimIncidentSearches,
+  SearchProgress (..),
   saveIncidentSearchCursor,
   confirmIncidentSearch,
   correlateSlackDelivery,
@@ -53,7 +54,7 @@ import Data.Char (isDigit)
 import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
@@ -203,8 +204,7 @@ deliveryOperation :: HI.Sql
 deliveryOperation =
   [HI.sql|CASE
     WHEN d.operation = 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-    -- A reply with no thread to join posts standalone.
-    WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostRoot')
+    WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostStandalone')
     WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
     WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
   END|]
@@ -582,7 +582,10 @@ slackTimestampText :: SlackTimestamp -> Text
 slackTimestampText (SlackTimestamp value) = value
 
 
-data DeliveryOperation timestamp = PostRoot | PostReply timestamp | UpdateRoot timestamp
+-- | 'PostStandalone' is a reply with no thread to join. It posts like a root but
+-- is not one: it can never own the root's timestamp, and only 'PostRoot' may wait
+-- on one (@CHECK (operation = 'post_root' OR state <> 'waiting_root')@).
+data DeliveryOperation timestamp = PostRoot | PostStandalone | PostReply timestamp | UpdateRoot timestamp
   deriving stock (Eq, Foldable, Functor, Generic, Show, Traversable)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson (DeliveryOperation timestamp)
@@ -612,6 +615,12 @@ data SlackDeliveryF timestamp = SlackDelivery
 -- Recovery needs a bot token, so a webhook-only install never will.
 data RootThreading = ThreadCapable | Threadless
   deriving stock (Eq, Show)
+
+
+-- | How long a webhook-accepted root may wait for @conversations.history@ to
+-- recover its timestamp before it is treated as one that never will.
+timestampRecoveryWindow :: NominalDiffTime
+timestampRecoveryWindow = 30 * 60
 
 
 data DeliveryOutcome
@@ -653,6 +662,21 @@ claimSlackDeliveriesTx now = do
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
+  -- Recovery out of time leaves a root that will never be threaded, so treat it
+  -- as one — but never while a worker holds the search lease: it may be one page
+  -- away from the timestamp.
+  let recoveryDeadline = addUTCTime (negate timestampRecoveryWindow) now
+  executeTx
+    [HI.sql|WITH exhausted AS (
+      UPDATE apis.slack_incident_roots r SET threadless = TRUE
+      FROM apis.slack_incident_deliveries d
+      WHERE d.root_id = r.id AND d.operation = 'post_root' AND d.state = 'waiting_root'
+        AND d.available_at <= #{recoveryDeadline} AND d.history_lease_token IS NULL
+        AND r.message_ts IS NULL AND NOT r.threadless
+      RETURNING r.id
+    ) UPDATE apis.slack_incident_deliveries d
+    SET state = 'delivered', last_error = 'timestamp_recovery_exhausted', lease_token = NULL, lease_until = NULL
+    FROM exhausted WHERE d.root_id = exhausted.id AND d.operation = 'post_root' AND d.state = 'waiting_root'|]
   -- A root turns threadless only once its post_root settles, so an event
   -- arriving before that still queues an edit. Settle those here too.
   executeTx
@@ -717,7 +741,7 @@ finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted T
       roots <-
         queryTx @[SlackRootId]
           [HI.sql|UPDATE apis.slack_incident_roots SET message_ts = #{ts}
-        WHERE id = #{rid} AND (message_ts IS NULL OR message_ts = #{ts}) RETURNING id|]
+        WHERE id = #{rid} AND NOT threadless AND (message_ts IS NULL OR message_ts = #{ts}) RETURNING id|]
       when (null roots)
         $ executeTx
           [HI.sql|UPDATE apis.slack_incident_deliveries
@@ -731,6 +755,8 @@ correlateSlackDelivery :: SlackDelivery -> SlackPayload -> SlackPayload
 correlateSlackDelivery delivery (SlackPayload payload) =
   let eventType = case delivery.operation of
         PostRoot -> "monoscope_incident_root"
+        -- Not a root: a Slack event carrying it must not claim the root's timestamp.
+        PostStandalone -> "monoscope_incident_delivery"
         PostReply _ -> "monoscope_incident_delivery"
         UpdateRoot _ -> "monoscope_incident_root"
    in SlackPayload
@@ -824,16 +850,31 @@ claimIncidentSearches now =
           JOIN apis.incident_episodes e ON e.id = r.episode_id|]
 
 
-saveIncidentSearchCursor :: DB es => IncidentSearch -> Maybe Text -> UTCTime -> Eff es ()
-saveIncidentSearchCursor search next retryAt =
+-- | A search that paged is making progress; one that threw is not, and only the
+-- latter has a reason to record. Without it a stuck root looks identical to one
+-- still working — which is how 110 went unnoticed for six days.
+data SearchProgress = SearchAdvanced (Maybe Text) | SearchStalled Text
+  deriving stock (Eq, Show)
+
+
+saveIncidentSearchCursor :: DB es => IncidentSearch -> SearchProgress -> UTCTime -> Eff es ()
+saveIncidentSearchCursor search progress retryAt =
   Hasql.interpExecute_
-    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{next}, history_retry_at = #{retryAt}, history_lease_token = NULL
+    [HI.sql|UPDATE apis.slack_incident_deliveries SET history_cursor = #{cursor}, history_retry_at = #{retryAt}, history_lease_token = NULL,
+        last_error = COALESCE(#{reason}, last_error)
     WHERE id = #{search.id} AND state IN ('uncertain', 'waiting_root', 'sending') AND history_lease_token = #{search.leaseToken}|]
+  where
+    (cursor, reason) = case progress of
+      SearchAdvanced next -> (next, Nothing)
+      SearchStalled why -> (search.cursor, Just $ T.take 500 why)
 
 
 confirmIncidentSearch :: DB es => IncidentSearch -> SlackTimestamp -> Eff es Bool
 confirmIncidentSearch search timestamp = case search.operation of
   PostRoot -> observeSlackRoot search.projectId (SlackDestination search.teamId search.channelId) search.rootId timestamp
+  -- Its root is threadless, so claimIncidentSearches never offers one; confirming
+  -- it would need a root timestamp that by definition does not exist.
+  PostStandalone -> pure False
   PostReply root -> confirmAt root
   UpdateRoot root -> confirmAt root
   where
@@ -855,7 +896,7 @@ observeSlackRoot pid destination rootId timestamp = Hasql.transaction TxS.ReadCo
   roots <-
     queryTx @[SlackRootId]
       [HI.sql|UPDATE apis.slack_incident_roots r SET message_ts = #{timestamp}
-    FROM apis.incident_episodes e WHERE r.id = #{rootId} AND r.episode_id = e.id
+    FROM apis.incident_episodes e WHERE r.id = #{rootId} AND r.episode_id = e.id AND NOT r.threadless
       AND e.project_id = #{pid} AND r.team_id = #{destination.teamId} AND r.channel_id = #{destination.channelId}
       AND (r.message_ts IS NULL OR r.message_ts = #{timestamp})
       AND EXISTS (SELECT 1 FROM apis.slack_incident_deliveries d
