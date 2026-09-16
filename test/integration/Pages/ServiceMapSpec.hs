@@ -336,11 +336,12 @@ spec = around withTestResources do
     -- Regression (4615b0c): the filter used to `send "service-map-filter"(q: my value)`,
     -- but hyperscript parses an event name as an identifier path, so the dashed name was a
     -- parse error and the whole attribute was dropped — the filter silently did nothing in
-    -- prod. This asserted the dashed `send`, so after the fix it was guarding the bug.
+    -- prod. The input now calls the filter directly from hx-on:input; keep asserting no
+    -- dashed send can sneak back in.
     it "serviceMapFilter_wiresTheInputWithoutADashedSend" \tr -> do
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
-      html `shouldContainAll` ["call window.serviceMapFilter(me.value)", "aria-label=\"Filter services\""]
+      html `shouldContainAll` ["window.serviceMapFilter(this.value)", "aria-label=\"Filter services\""]
       T.isInfixOf "service-map-filter&quot;(" html `shouldBe` False
 
     -- The trace-level map: same grammar, scoped to one request. It is derived from spans
