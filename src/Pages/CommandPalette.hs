@@ -4,13 +4,11 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.UUID (UUID)
-import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB)
 import Relude
 import Servant (NoContent (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -37,38 +35,11 @@ data RecentForm = RecentForm {label :: Text, url :: Text, itemType :: Text}
 commandPaletteItemsH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 commandPaletteItemsH pid = do
   sess <- Projects.getSession
-  (recents, issues, monitors, dashboards) <- fetchPaletteData pid sess.user.id
-  addRespHeaders $ renderDynamicItems pid recents issues monitors dashboards
-
-
-commandPaletteRecentPostH :: Projects.ProjectId -> RecentForm -> ATAuthCtx (RespHeaders NoContent)
-commandPaletteRecentPostH pid form = do
-  sess <- Projects.getSession
-  let (userId, fType, fLabel, fUrl) = (sess.user.id, form.itemType, form.label, form.url)
-  void
-    $ Hasql.interpExecute
-      [HI.sql|
-    INSERT INTO apis.command_palette_recents (project_id, user_id, item_type, label, url)
-    VALUES (#{pid}, #{userId}, #{fType}, #{fLabel}, #{fUrl})
-    ON CONFLICT (project_id, user_id, url) DO UPDATE SET created_at = now(), label = EXCLUDED.label |]
-  void
-    $ Hasql.interpExecute
-      [HI.sql|
-    DELETE FROM apis.command_palette_recents
-    WHERE project_id = #{pid} AND user_id = #{userId} AND id = ANY(
-      SELECT id FROM apis.command_palette_recents
-      WHERE project_id = #{pid} AND user_id = #{userId} ORDER BY created_at DESC OFFSET 20
-    ) |]
-  addRespHeaders NoContent
-
-
-fetchPaletteData :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es ([PaletteRecent], [PaletteItem], [PaletteItem], [PaletteItem])
-fetchPaletteData pid userId = do
   recents <-
     Hasql.interp
       [HI.sql|
     SELECT item_type, label, url FROM apis.command_palette_recents
-    WHERE project_id = #{pid} AND user_id = #{userId} ORDER BY created_at DESC LIMIT 10 |]
+    WHERE project_id = #{pid} AND user_id = #{sess.user.id} ORDER BY created_at DESC LIMIT 10 |]
   issues <-
     Hasql.interp
       [HI.sql|
@@ -84,7 +55,27 @@ fetchPaletteData pid userId = do
       [HI.sql|
     SELECT id, title FROM projects.dashboards
     WHERE project_id = #{pid} ORDER BY title |]
-  pure (recents, issues, monitors, dashboards)
+  addRespHeaders $ renderDynamicItems pid recents issues monitors dashboards
+
+
+commandPaletteRecentPostH :: Projects.ProjectId -> RecentForm -> ATAuthCtx (RespHeaders NoContent)
+commandPaletteRecentPostH pid form = do
+  sess <- Projects.getSession
+  void
+    $ Hasql.interpExecute
+      [HI.sql|
+    INSERT INTO apis.command_palette_recents (project_id, user_id, item_type, label, url)
+    VALUES (#{pid}, #{sess.user.id}, #{form.itemType}, #{form.label}, #{form.url})
+    ON CONFLICT (project_id, user_id, url) DO UPDATE SET created_at = now(), label = EXCLUDED.label |]
+  void
+    $ Hasql.interpExecute
+      [HI.sql|
+    DELETE FROM apis.command_palette_recents
+    WHERE project_id = #{pid} AND user_id = #{sess.user.id} AND id = ANY(
+      SELECT id FROM apis.command_palette_recents
+      WHERE project_id = #{pid} AND user_id = #{sess.user.id} ORDER BY created_at DESC OFFSET 20
+    ) |]
+  addRespHeaders NoContent
 
 
 -- Rendering
@@ -93,7 +84,6 @@ fetchPaletteData pid userId = do
 paletteShell_ :: Projects.ProjectId -> Html ()
 paletteShell_ pid = do
   let pidTxt = pid.toText
-      directPages = [("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]
   -- Global palette functions + Cmd+K listener (must be on a visible element)
   span_ [id_ "cmd-palette-global", paletteGlobalScript] ""
   -- Backdrop (hidden by default, shown on Cmd+K / search click)
@@ -121,7 +111,7 @@ paletteShell_ pid = do
             , filterScript
             ]
         -- Back breadcrumb (hidden by default)
-        div_ [class_ "cmd-breadcrumb hidden items-center gap-1.5 px-3 py-1.5 border-b border-base-300 text-xs text-base-content/60 cursor-pointer hover:text-base-content/80", [__|on click call goBackToRoot(me.closest('.cmd-palette')) then set #cmd-palette-input.placeholder to 'Search pages, issues, actions…'|]] do
+        div_ [class_ "cmd-breadcrumb hidden items-center gap-1.5 px-3 py-1.5 border-b border-base-300 text-xs text-base-content/60 cursor-pointer hover:text-base-content/80", [__|on click call cmdPaletteNav(closest .cmd-palette, '')|]] do
           faSprite_ "chevron-left" "regular" "w-3 h-3"
           span_ [class_ "cmd-breadcrumb-label"] ""
         -- Results container
@@ -129,21 +119,22 @@ paletteShell_ pid = do
           -- Lazy-loaded dynamic items placeholder
           div_ [id_ "cmd-palette-dynamic", hxGet_ ("/p/" <> pidTxt <> "/command-palette"), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
-          forM_ directPages \(path, icon, label) -> cmdItem pidTxt "direct" path [] icon label "Page"
+          forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
+            cmdItem pidTxt "direct" path [] icon label "Page"
           -- Logs shortcut
           cmdLink_ "search logs" "direct" [href_ $ "/p/" <> pidTxt <> "/log_explorer", data_ "log-shortcut" "true"]
-            $ itemBody_ "explore" "cmd-log-label truncate flex-1" "Search logs for: \"\"" "Logs"
+            $ itemBody_ "explore" "cmd-log-label" "Search logs for: \"\"" "Logs"
           -- Actions
           cmdItem pidTxt "direct" "log_explorer#create-alert-toggle" [] "plus" "Create monitor" "Action"
           cmdItem pidTxt "direct" "dashboards?new=true" [] "plus" "Create dashboard" "Action"
-          cmdLink_ "switch project" "direct" [href_ "/"] $ itemBody_ "grid" "truncate flex-1" "Switch project" "Action"
+          cmdLink_ "switch project" "direct" [href_ "/"] $ itemBody_ "grid" "" "Switch project" "Action"
           cmdLink_
             "copy current url"
             "direct"
             [ data_ "action" "copy-url"
             , [__|on click js navigator.clipboard.writeText(window.location.href); end then add .hidden to #cmd-palette-backdrop|]
             ]
-            $ itemBody_ "copy" "truncate flex-1" "Copy current URL" "Action"
+            $ itemBody_ "copy" "" "Copy current URL" "Action"
           -- AI row (hidden initially)
           div_ [class_ "cmd-ai-row", style_ "display:none"]
             $ cmdLink_
@@ -157,28 +148,169 @@ paletteShell_ pid = do
                   then set window.location to `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(:r.query)}`
                |]
               ]
-            $ itemBody_ "sparkles" "cmd-ai-label truncate flex-1" "Ask AI: \"\"" "AI"
+            $ itemBody_ "sparkles" "cmd-ai-label" "Ask AI: \"\"" "AI"
           -- Empty state
           div_
             [class_ "cmd-palette-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"]
             "No matching results"
       -- Keyboard hints
-      div_ [class_ "cmd-palette-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] do
-        div_ [class_ "flex items-center gap-1.5"] $ "Navigate" >> kbd_ [class_ "kbd kbd-xs"] "\x2191" >> kbd_ [class_ "kbd kbd-xs"] "\x2193"
-        div_ [class_ "flex items-center gap-1.5"] $ "Open" >> kbd_ [class_ "kbd kbd-xs"] "\x21B5" >> kbd_ [class_ "kbd kbd-xs"] "\x2192"
-        div_ [class_ "flex items-center gap-1.5"] $ "Back" >> kbd_ [class_ "kbd kbd-xs"] "\x2190"
-        div_ [class_ "flex items-center gap-1.5"] $ "Close" >> kbd_ [class_ "kbd kbd-xs"] "esc"
+      div_ [class_ "cmd-palette-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"]
+        $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Open", ["\x21B5", "\x2192"]), ("Back", ["\x2190"]), ("Close", ["esc"])] :: [(Text, [Text])]) \(label, keys) ->
+          div_ [class_ "flex items-center gap-1.5"] $ toHtml label >> traverse_ (kbd_ [class_ "kbd kbd-xs"] . toHtml) keys
+  where
+    -- Global Cmd+K listener + drill helper — on a visible element so init runs
+    paletteGlobalScript =
+      [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
+          halt the event
+          send paletteToggle to me
+        end
+        on paletteToggle
+          if #cmd-palette-backdrop.classList.contains('hidden')
+            remove .hidden from #cmd-palette-backdrop
+            set #cmd-palette-input.value to ''
+            call #cmd-palette-input.focus()
+            send palette:open to <body/>
+          else
+            add .hidden to #cmd-palette-backdrop
+          end
+        end
+        init js
+          // category '' means the root view; anything else drills into that category
+          window.cmdPaletteNav = function(palette, category) {
+            var vis = ':not([style*="display: none"]):not([style*="display:none"])';
+            palette.dataset.currentCategory = category;
+            palette.querySelectorAll('[data-cmd-type="direct"], [data-cmd-type="category"], .cmd-palette-recents').forEach(function(el) { el.style.display = category ? 'none' : ''; });
+            palette.querySelectorAll('[data-cmd-type="child"]').forEach(function(el) { el.style.display = category && el.dataset.cmdCategory === category ? '' : 'none'; });
+            var bc = palette.querySelector('.cmd-breadcrumb');
+            if (bc) {
+              bc.classList.toggle('hidden', !category); bc.classList.toggle('flex', !!category);
+              var lbl = bc.querySelector('.cmd-breadcrumb-label');
+              if (lbl) lbl.textContent = category.charAt(0).toUpperCase() + category.slice(1);
+            }
+            var input = palette.querySelector('#cmd-palette-input');
+            if (input) { input.value = ''; input.placeholder = category ? 'Search ' + category + '…' : 'Search pages, issues, actions…'; input.focus(); }
+            palette.querySelectorAll('a.cmd-item').forEach(function(el) { el.classList.remove('active'); });
+            var first = palette.querySelector('a.cmd-item' + (category ? '[data-cmd-category="' + category + '"]' : '') + vis);
+            if (first) first.classList.add('active');
+          };
+        end
+      |]
+    -- Hyperscript for input filtering + keyboard nav
+    filterScript =
+      [__|on input
+          set :q to my value.toLowerCase()
+          set :palette to closest .cmd-palette
+          set :cat to :palette.dataset.currentCategory
+          -- Hide recents when typing, show when empty (only at root)
+          if :cat === '' then
+            if :q.length > 0 then hide <.cmd-palette-recents/> in :palette else show <.cmd-palette-recents/> in :palette end
+          end
+          -- Filter based on current view
+          if :cat !== '' then
+            -- Drilled in: filter only children of this category
+            for item in <a.cmd-item[data-cmd-type='child']/> in :palette
+              if item.dataset.cmdCategory === :cat then
+                set :t to item.dataset.search.toLowerCase()
+                if :q.length === 0 or :t.includes(:q) then show item else hide item end
+              end
+            end
+          else
+            -- Root: filter direct + category items
+            for item in <a.cmd-item/> in :palette
+              set :typ to item.dataset.cmdType
+              if :typ === 'child' then
+                -- Show matching children inline during global search
+                if :q.length > 0 then
+                  set :t to item.dataset.search.toLowerCase()
+                  if :t.includes(:q) then show item else hide item end
+                else
+                  hide item
+                end
+              else
+                set :t to item.dataset.search.toLowerCase()
+                set :fz to true
+                if :q.length > 0 and not :t.includes(:q) then
+                  set :qi to 0
+                  set :ti to 0
+                  repeat while :qi < :q.length and :ti < :t.length
+                    if :q.charAt(:qi) === :t.charAt(:ti) then increment :qi end
+                    increment :ti
+                  end
+                  if :qi < :q.length then set :fz to false end
+                end
+                if :q.length === 0 or :fz then show item else hide item end
+              end
+            end
+          end
+          -- Reset active and highlight best match
+          for item in <a.cmd-item/> in :palette remove .active from item end
+          set :visible to <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in :palette
+          if :visible.length > 0 then add .active to :visible[0] end
+          -- Update result count
+          set :counter to the first <.cmd-palette-count/>
+          set :total to :counter.dataset.total
+          if :q.length > 0 then put `${:visible.length} of ${:total} items` into :counter
+          else put `${:total} items` into :counter end
+          -- AI row: show when query > 10 chars (root only)
+          if :q.length > 10 and :cat === '' then show <.cmd-ai-row/> else hide <.cmd-ai-row/> end
+          set :aiLabel to the first <.cmd-ai-label/>
+          if :aiLabel then put `Ask AI: "${my value}"` into :aiLabel end
+          -- Log shortcut: label + href
+          for el in <.cmd-log-label/> put `Search logs for: "${my value}"` into el end
+          for el in <[data-log-shortcut]/> set el.href to `/p/${el.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(my value)}` end
+          -- Empty state
+          set :empty to the first <.cmd-palette-empty/> in :palette
+          if :visible.length === 0 and :q.length > 0 then show :empty else hide :empty end
+        end
+        on keydown[key=='Escape']
+          set :palette to closest .cmd-palette
+          if :palette.dataset.currentCategory !== '' then call cmdPaletteNav(:palette, '')
+          else add .hidden to #cmd-palette-backdrop end
+        end
+        on keydown[key=='Enter']
+          set :a to the first <a.active/> in closest .cmd-palette
+          if :a and :a.dataset.cmdType === 'category' then
+            call cmdPaletteNav(closest .cmd-palette, :a.dataset.cmdCategory)
+          else if :a then
+            call :a.click()
+          end
+        end
+        on keydown[key=='Backspace' or key=='ArrowLeft']
+          if my value === '' then
+            set :palette to closest .cmd-palette
+            if :palette.dataset.currentCategory !== '' then
+              halt the event
+              call cmdPaletteNav(:palette, '')
+            end
+          end
+        end
+        on keydown[key=='ArrowRight']
+          if my value === '' then
+            set :a to the first <a.active/> in closest .cmd-palette
+            if :a and :a.dataset.cmdType === 'category' then
+              halt the event
+              call cmdPaletteNav(closest .cmd-palette, :a.dataset.cmdCategory)
+            end
+          end
+        end
+        on keydown[key=='ArrowDown' or key=='ArrowUp'] halt the event
+          set :all to <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in closest .cmd-palette
+          set :a to the first <a.active/> in closest .cmd-palette
+          set :d to -1
+          if event.key === 'ArrowDown' then set :d to 1 end
+          set :next to :all.indexOf(:a) + :d
+          if :next >= 0 and :next < :all.length then
+            if :a then remove .active from :a end
+            add .active to :all[:next]
+            call :all[:next].scrollIntoView({block:'nearest'})
+          end
+        end
+      |]
 
 
 -- | Dynamic items fragment — loaded lazily into the shell
 renderDynamicItems :: Projects.ProjectId -> [PaletteRecent] -> [PaletteItem] -> [PaletteItem] -> [PaletteItem] -> Html ()
-renderDynamicItems pid recents issues monitors dashboards = do
-  let pidTxt = pid.toText
-      section category icon label badge extras items = do
-        categoryItem category icon label (length items + length extras)
-        sequence_ extras
-        forM_ items \(path, title) ->
-          cmdItem pidTxt "child" path [data_ "cmd-category" category, style_ "display:none"] icon title badge
+renderDynamicItems pid recents issues monitors dashboards =
   div_
     [ id_ "cmd-palette-dynamic"
     , [__|init
@@ -197,7 +329,7 @@ renderDynamicItems pid recents issues monitors dashboards = do
     do
       unless (null recents)
         $ div_ [class_ "cmd-palette-recents"]
-        $ forM_ recents (recentItem pidTxt)
+        $ forM_ recents recentItem
       section
         "dashboards"
         "dashboard"
@@ -207,179 +339,36 @@ renderDynamicItems pid recents issues monitors dashboards = do
         [("dashboards/" <> show d.id, if T.null d.title then "Untitled Dashboard" else d.title) | d <- dashboards]
       section "issues" "bug" "Issues" "Issue" [] [("issues/" <> show i.id, i.title) | i <- issues]
       section "monitors" "list-check" "Monitors" "Monitor" [] [("monitors?highlight=" <> show m.id, m.title) | m <- monitors]
+  where
+    pidTxt = pid.toText
 
+    section category icon label badge extras items = do
+      categoryItem category icon label (length items + length extras)
+      sequence_ extras
+      forM_ items \(path, title) ->
+        cmdItem pidTxt "child" path [data_ "cmd-category" category, style_ "display:none"] icon title badge
 
--- | Global Cmd+K listener + drill helpers — on a visible element so init runs
-paletteGlobalScript :: Attribute
-paletteGlobalScript =
-  [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
-      halt the event
-      send paletteToggle to me
-    end
-    on paletteToggle
-      if #cmd-palette-backdrop.classList.contains('hidden')
-        remove .hidden from #cmd-palette-backdrop
-        set #cmd-palette-input.value to ''
-        call #cmd-palette-input.focus()
-        send palette:open to <body/>
-      else
-        add .hidden to #cmd-palette-backdrop
-      end
-    end
-    init js
-      window.goBackToRoot = function(palette) {
-        palette.dataset.currentCategory = '';
-        palette.querySelectorAll('[data-cmd-type="direct"], [data-cmd-type="category"]').forEach(function(el) { el.style.display = ''; });
-        palette.querySelectorAll('[data-cmd-type="child"]').forEach(function(el) { el.style.display = 'none'; });
-        var recents = palette.querySelector('.cmd-palette-recents');
-        if (recents) recents.style.display = '';
-        var bc = palette.querySelector('.cmd-breadcrumb');
-        if (bc) { bc.classList.add('hidden'); bc.classList.remove('flex'); }
-        var input = palette.querySelector('#cmd-palette-input');
-        if (input) { input.value = ''; input.focus(); }
-        palette.querySelectorAll('a.cmd-item').forEach(function(el) { el.classList.remove('active'); });
-        var first = palette.querySelector('a.cmd-item:not([style*="display: none"]):not([style*="display:none"])');
-        if (first) first.classList.add('active');
-      };
-      window.drillIntoCategory = function(palette, category) {
-        palette.dataset.currentCategory = category;
-        palette.querySelectorAll('[data-cmd-type="direct"], [data-cmd-type="category"]').forEach(function(el) { el.style.display = 'none'; });
-        var recents = palette.querySelector('.cmd-palette-recents');
-        if (recents) recents.style.display = 'none';
-        palette.querySelectorAll('[data-cmd-type="child"][data-cmd-category="' + category + '"]').forEach(function(el) { el.style.display = ''; });
-        var bc = palette.querySelector('.cmd-breadcrumb');
-        if (bc) {
-          bc.classList.remove('hidden'); bc.classList.add('flex');
-          var lbl = bc.querySelector('.cmd-breadcrumb-label');
-          if (lbl) lbl.textContent = category.charAt(0).toUpperCase() + category.slice(1);
-        }
-        var input = palette.querySelector('#cmd-palette-input');
-        if (input) { input.value = ''; input.placeholder = 'Search ' + category + '…'; input.focus(); }
-        palette.querySelectorAll('a.cmd-item').forEach(function(el) { el.classList.remove('active'); });
-        var first = palette.querySelector('a.cmd-item[data-cmd-category="' + category + '"]:not([style*="display: none"]):not([style*="display:none"])');
-        if (first) first.classList.add('active');
-      };
-    end
-  |]
+    categoryItem :: Text -> Text -> Text -> Int -> Html ()
+    categoryItem category icon label count =
+      cmdLink_
+        (T.toLower label)
+        "category"
+        [ data_ "cmd-category" category
+        , href_ "#"
+        , [__|on click halt the event then call cmdPaletteNav(closest .cmd-palette, my.dataset.cmdCategory)|]
+        ]
+        do
+          faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
+          span_ [class_ "truncate flex-1"] $ toHtml label
+          span_ [class_ "badge badge-ghost badge-xs text-2xs tabular-nums"] $ toHtml (show count :: Text)
+          faSprite_ "chevron-right" "regular" "w-3 h-3 text-base-content/30 shrink-0"
 
-
--- Hyperscript for input filtering + keyboard nav
-filterScript :: Attribute
-filterScript =
-  [__|on input
-      set :q to my value.toLowerCase()
-      set :palette to closest .cmd-palette
-      set :cat to :palette.dataset.currentCategory
-      -- Hide recents when typing, show when empty (only at root)
-      if :cat === '' then
-        if :q.length > 0 then hide <.cmd-palette-recents/> in :palette else show <.cmd-palette-recents/> in :palette end
-      end
-      -- Filter based on current view
-      if :cat !== '' then
-        -- Drilled in: filter only children of this category
-        for item in <a.cmd-item[data-cmd-type='child']/> in :palette
-          if item.dataset.cmdCategory === :cat then
-            set :t to item.dataset.search.toLowerCase()
-            if :q.length === 0 or :t.includes(:q) then show item else hide item end
-          end
-        end
-      else
-        -- Root: filter direct + category items
-        for item in <a.cmd-item/> in :palette
-          set :typ to item.dataset.cmdType
-          if :typ === 'child' then
-            -- Show matching children inline during global search
-            if :q.length > 0 then
-              set :t to item.dataset.search.toLowerCase()
-              if :t.includes(:q) then show item else hide item end
-            else
-              hide item
-            end
-          else
-            set :t to item.dataset.search.toLowerCase()
-            set :fz to true
-            if :q.length > 0 and not :t.includes(:q) then
-              set :qi to 0
-              set :ti to 0
-              repeat while :qi < :q.length and :ti < :t.length
-                if :q.charAt(:qi) === :t.charAt(:ti) then increment :qi end
-                increment :ti
-              end
-              if :qi < :q.length then set :fz to false end
-            end
-            if :q.length === 0 or :fz then show item else hide item end
-          end
-        end
-      end
-      -- Reset active and highlight best match
-      for item in <a.cmd-item/> in :palette remove .active from item end
-      set :visible to <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in :palette
-      if :visible.length > 0 then add .active to :visible[0] end
-      -- Update result count
-      set :counter to the first <.cmd-palette-count/>
-      set :total to :counter.dataset.total
-      if :q.length > 0 then put `${:visible.length} of ${:total} items` into :counter
-      else put `${:total} items` into :counter end
-      -- AI row: show when query > 10 chars (root only)
-      if :q.length > 10 and :cat === '' then show <.cmd-ai-row/> else hide <.cmd-ai-row/> end
-      set :aiLabel to the first <.cmd-ai-label/>
-      if :aiLabel then put `Ask AI: "${my value}"` into :aiLabel end
-      -- Log shortcut: label + href
-      for el in <.cmd-log-label/> put `Search logs for: "${my value}"` into el end
-      for el in <[data-log-shortcut]/> set el.href to `/p/${el.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(my value)}` end
-      -- Empty state
-      set :empty to the first <.cmd-palette-empty/> in :palette
-      if :visible.length === 0 and :q.length > 0 then show :empty else hide :empty end
-    end
-    on keydown[key=='Escape']
-      set :palette to closest .cmd-palette
-      if :palette.dataset.currentCategory !== '' then
-        call goBackToRoot(:palette)
-        set me.placeholder to 'Search pages, issues, actions…'
-      else
-        add .hidden to #cmd-palette-backdrop
-      end
-    end
-    on keydown[key=='Enter']
-      set :a to the first <a.active/> in closest .cmd-palette
-      if :a and :a.dataset.cmdType === 'category' then
-        call drillIntoCategory(closest .cmd-palette, :a.dataset.cmdCategory)
-      else if :a then
-        call :a.click()
-      end
-    end
-    on keydown[key=='Backspace' or key=='ArrowLeft']
-      if my value === '' then
-        set :palette to closest .cmd-palette
-        if :palette.dataset.currentCategory !== '' then
-          halt the event
-          call goBackToRoot(:palette)
-          set me.placeholder to 'Search pages, issues, actions…'
-        end
-      end
-    end
-    on keydown[key=='ArrowRight']
-      if my value === '' then
-        set :a to the first <a.active/> in closest .cmd-palette
-        if :a and :a.dataset.cmdType === 'category' then
-          halt the event
-          call drillIntoCategory(closest .cmd-palette, :a.dataset.cmdCategory)
-        end
-      end
-    end
-    on keydown[key=='ArrowDown' or key=='ArrowUp'] halt the event
-      set :all to <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in closest .cmd-palette
-      set :a to the first <a.active/> in closest .cmd-palette
-      set :d to -1
-      if event.key === 'ArrowDown' then set :d to 1 end
-      set :next to :all.indexOf(:a) + :d
-      if :next >= 0 and :next < :all.length then
-        if :a then remove .active from :a end
-        add .active to :all[:next]
-        call :all[:next].scrollIntoView({block:'nearest'})
-      end
-    end
-  |]
+    recentItem :: PaletteRecent -> Html ()
+    recentItem r =
+      cmdLink_ (T.toLower r.label) "direct" (href_ r.url : recentAttrs pidTxt r.label r.itemType)
+        $ itemBody_ icon "" (toHtml r.label) (T.toTitle r.itemType)
+      where
+        icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
 
 
 -- Item helpers
@@ -391,10 +380,7 @@ recentAttrs pidTxt label itemType =
   , data_ "recent-label" label
   , data_ "recent-type" itemType
   , [__|on click
-          set :ru to my.dataset.recentUrl
-          js(me) var p = new URLSearchParams(); p.set('label', me.dataset.recentLabel); p.set('url', me.getAttribute('href')); p.set('itemType', me.dataset.recentType); return p.toString(); end
-          then set :rb to it
-          fetch `${:ru}` {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: :rb}
+          fetch `${my.dataset.recentUrl}` {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: `label=${encodeURIComponent(my.dataset.recentLabel)}&url=${encodeURIComponent(my.getAttribute('href'))}&itemType=${encodeURIComponent(my.dataset.recentType)}`}
        |]
   ]
 
@@ -404,43 +390,16 @@ cmdLink_ search cmdType attrs =
   a_ $ [class_ "cmd-item flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors", data_ "search" search, data_ "cmd-type" cmdType] <> attrs
 
 
+-- | @hook@ is a JS-only marker class (not a utility), appended to the literal label classes.
 itemBody_ :: Text -> Text -> Html () -> Text -> Html ()
-itemBody_ icon labelClass label badgeText = do
+itemBody_ icon hook label badgeText = do
   faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
-  span_ [class_ labelClass] label
-  badge_ badgeText
+  span_ [class_ $ "truncate flex-1 " <> hook] label
+  span_ [class_ "badge badge-ghost badge-xs text-2xs"] $ toHtml badgeText
 
 
 -- | Base item renderer — unifies direct, child, and action items
 cmdItem :: Text -> Text -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
 cmdItem pidTxt cmdType path extraAttrs icon label badgeText =
   cmdLink_ (T.toLower label) cmdType (href_ ("/p/" <> pidTxt <> "/" <> path) : recentAttrs pidTxt label (T.toLower badgeText) <> extraAttrs)
-    $ itemBody_ icon "truncate flex-1" (toHtml label) badgeText
-
-
-categoryItem :: Text -> Text -> Text -> Int -> Html ()
-categoryItem category icon label count =
-  cmdLink_
-    (T.toLower label)
-    "category"
-    [ data_ "cmd-category" category
-    , href_ "#"
-    , [__|on click halt the event then call drillIntoCategory(closest .cmd-palette, my.dataset.cmdCategory)|]
-    ]
-    do
-      faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
-      span_ [class_ "truncate flex-1"] $ toHtml label
-      span_ [class_ "badge badge-ghost badge-xs text-2xs tabular-nums"] $ toHtml (show count :: Text)
-      faSprite_ "chevron-right" "regular" "w-3 h-3 text-base-content/30 shrink-0"
-
-
-recentItem :: Text -> PaletteRecent -> Html ()
-recentItem pidTxt r =
-  cmdLink_ (T.toLower r.label) "direct" (href_ r.url : recentAttrs pidTxt r.label r.itemType)
-    $ itemBody_ icon "truncate flex-1" (toHtml r.label) (T.toTitle r.itemType)
-  where
-    icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
-
-
-badge_ :: Monad m => Text -> HtmlT m ()
-badge_ t = span_ [class_ "badge badge-ghost badge-xs text-2xs"] $ toHtml t
+    $ itemBody_ icon "" (toHtml label) badgeText

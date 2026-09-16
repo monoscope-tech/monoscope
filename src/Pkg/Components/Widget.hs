@@ -1180,7 +1180,7 @@ unitValueExprJS unitWord unitM
     durationUnit = guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM
     -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
     -- chart's axis read "1.0B" for a gigabyte -- B for "billion" -- directly above a table
-    -- reading "1 GiB". formatBytes mirrors 'Pages.Containers.formatBytes'.
+    -- reading "1 GiB". The client-side @formatBytes@ mirrors 'Utils.formatBytes'.
     isBytes = maybe False (`elem` ["By", "by", "bytes", "byte", "B"]) unitM
 
 

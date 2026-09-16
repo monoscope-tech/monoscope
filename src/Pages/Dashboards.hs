@@ -669,7 +669,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
     _ -> case variable._vType of
       Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
         -- SECURITY: Use secured query execution with project_id filtering
-        useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+        useTf <- useTfReads
         -- Budgeted for the same reason as the facet/dependent short-circuits above:
         -- an option list is never worth blocking the shell on.
         withRenderBudget ("variable:" <> variable.key) variable
@@ -854,7 +854,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\err -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, err, duration) $> constant)
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
-  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  useTf <- useTfReads
   case (constant.sql, constant.query) of
     -- SECURITY: Use secured query execution with project_id filtering
     (Just sqlQuery, _) -> runQuery "SQL" (LogQueries.executeSecuredQuery useTf pid sqlQuery 1000) queryRowsToText

@@ -36,6 +36,7 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful (Eff)
 import Effectful.Exception (trySync)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
@@ -66,7 +67,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
@@ -93,6 +94,18 @@ metricPageUrl pid tab filters =
 
 hasMetricFilters :: MetricFilters -> Bool
 hasMetricFilters filters = filters.source /= "all" || filters.prefix /= "all" || not (T.null filters.query)
+
+
+clearedFilters :: MetricFilters -> MetricFilters
+clearedFilters filters = filters{source = "all", prefix = "all", query = ""}
+
+
+-- | Fetch a metric's data plus its dashboard/monitor references and render the details drawer.
+metricDrawer :: DB es => Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Eff es (Maybe (Html ()))
+metricDrawer pid metricName sourceM labelM currentRange = do
+  dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+  monitors <- Monitors.queryMonitorsAll pid
+  fmap (metricsDetailsPage pid dashboards monitors (fromMaybe "all" sourceM) labelM currentRange) <$> Telemetry.getMetricData pid metricName
 
 
 data MetricsOverViewGet
@@ -327,6 +340,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           (T.strip $ fromMaybe "" queryM)
           [(k, v) | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)]]
           groups
+      cursor = max 0 $ fromMaybe 0 cursorM
   if dataPointsTab
     then do
       -- Catalogue only: a page load must not wait on a COUNT over otel_metrics. The counts
@@ -343,20 +357,14 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
               catalog
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
       monitors <- Monitors.queryMonitorsAll pid
-      drawerM <- forM expandM \metricName -> do
-        metricM <- Telemetry.getMetricData pid metricName
-        pure $ metricM <&> \metric ->
-          metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
+      drawerM <- forM expandM $ fmap (fmap (metricsDetailsPage pid dashboards monitors (fromMaybe "all" sourceM) labelM currentRange)) . Telemetry.getMetricData pid
       let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
-          page = max 0 $ fromMaybe 0 cursorM
-          countParams = T.intercalate "&" [k <> "=" <> v | (k, Just v) <- [("from", fromM), ("to", toM), ("since", sinceOrDefault)] :: [(Text, Maybe Text)]]
           pageUrl = metricPageUrl pid "datapoints" filters
-          countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> countParams
+          countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> T.intercalate "&" [k <> "=" <> v | (k, v) <- filters.timeParams]
           bwconf' = bwconf{globalDrawerContent = join drawerM}
-      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, page, pageUrl, filters)
+      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf' (pid, V.fromList dataPoints, refCounts, countsUrl, cursor, pageUrl, filters)
     else do
-      let cursor = max 0 $ fromMaybe 0 cursorM
-          cutoff = addUTCTime (-(7 * 24 * 3600)) now
+      let cutoff = addUTCTime (-(7 * 24 * 3600)) now
           pageSize = 12
       -- Only the requested page comes back, not the whole catalogue. The inactive tail rides
       -- along in the same result set because it falls out of the same aggregate.
@@ -365,16 +373,11 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           nextFetchUrl = do
             guard $ cursor + pageSize < page.activeTotal
             pure $ metricPageUrl pid "charts" filters <> "&cursor=" <> show (cursor + pageSize)
-      let labels = Map.fromList $ (\metric -> (metric.metricName, metric.metricLabels)) <$> V.toList metricList
+          labels = Map.fromList $ (\metric -> (metric.metricName, metric.metricLabels)) <$> V.toList metricList
       if appendM /= Just True
         then do
           -- References are only needed by the drawer, not the chart catalog.
-          drawerM <- forM expandM \metricName -> do
-            dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
-            monitors <- Monitors.queryMonitorsAll pid
-            metricM <- Telemetry.getMetricData pid metricName
-            pure $ metricM <&> \metric ->
-              metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
+          drawerM <- forM expandM \metricName -> metricDrawer pid metricName sourceM labelM currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, page.inactive, filters, page.activeTotal, nextFetchUrl)
         else do
@@ -383,7 +386,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
 
 dataPointCountsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 dataPointCountsGetH pid fromM toM sinceM = do
-  ctx <- Reader.ask @AuthContext
+  env <- (.env) <$> Reader.ask @AuthContext
   void $ Projects.sessionAndProject pid
   now <- Time.currentTime
   -- With no time parameters at all 'parseTime' yields no window, and an absolute range can
@@ -392,7 +395,7 @@ dataPointCountsGetH pid fromM toM sinceM = do
   -- counts, which is the safe way to be wrong here.
   let rangeSince = if all isNothing [fromM, toM, sinceM] then Just TimePicker.defaultSince else sinceM
       (from, to, _) = parseTime fromM toM rangeSince now
-  dataPoints <- Telemetry.getDataPointsData (Telemetry.CatalogWithCounts ctx.env.enableTimefusionReads (fromMaybe now from, fromMaybe now to)) pid
+  dataPoints <- Telemetry.getDataPointsData (Telemetry.CatalogWithCounts env.enableTimefusionReads (fromMaybe now from, fromMaybe now to)) pid
   addRespHeaders $ dataPointCountCells_ dataPoints
 
 
@@ -401,7 +404,7 @@ metricServicesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCt
 metricServicesGetH pid searchM currentM = do
   void $ Projects.sessionAndProject pid
   services <- Telemetry.getMetricServiceNames pid searchM serviceOptionsLimit
-  addRespHeaders $ div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ (fromMaybe "all" currentM) services
+  addRespHeaders $ serviceOptions_ (fromMaybe "all" currentM) services
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -409,17 +412,11 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   void $ Projects.sessionAndProject pid
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
-  metricM <- Telemetry.getMetricData pid metricName
-  dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
-  monitors <- Monitors.queryMonitorsAll pid
-  addRespHeaders
-    $ maybe
-      (Components.emptyState_ def{icon = Just "circle-xmark"} "Metric not found" "")
-      -- No related candidates passed in: ranking them needs the whole catalogue, so the
-      -- Related tab hx-gets 'metricRelatedGetH' when it is first opened instead of every
-      -- details render paying for it.
-      (\metric -> metricsDetailsPage pid metric.serviceNames metric (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange)
-      metricM
+  -- No related candidates passed in: ranking them needs the whole catalogue, so the
+  -- Related tab hx-gets 'metricRelatedGetH' when it is first opened instead of every
+  -- details render paying for it.
+  drawerM <- metricDrawer pid metricName source labelM currentRange
+  addRespHeaders $ fromMaybe (Components.emptyState_ def{icon = Just "circle-xmark"} "Metric not found" "") drawerM
 
 
 -- | The full catalogue is only needed to rank this opt-in tab; never make a drawer
@@ -596,14 +593,15 @@ metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Re
 metricBreakdownGetH pid metricName labelM = do
   metricM <- Telemetry.getMetricData pid metricName
   addRespHeaders $ flip foldMap metricM \metric ->
-    metricDetailChart pid metric "all" (mfilter (`elem` metric.metricLabels) labelM) ("details_" <> T.replace "." "_" metric.metricName)
+    metricDetailChart pid metric "all" (mfilter (`elem` metric.metricLabels) labelM)
 
 
 -- | The URL 'traceH' answers. Shared so an embedder's @hx-get@ and the failure
 -- state's Retry are the same request by construction. @timestamp@ is not
 -- optional in practice: without it the fetch widens from a +/-5min window to a
 -- 3-day scan, which is what OOM-killed TimeFusion on 2026-07-21.
--- | @spanIdM@ opens the fragment focused on one span. 'traceH' already resolves a
+--
+-- @spanIdM@ opens the fragment focused on one span. 'traceH' already resolves a
 -- span by id for nav — it looks past the render page to find it — so an issue whose
 -- error is buried deep in a large trace can point straight at the failing span
 -- instead of dropping the reader at the root to hunt for it.
@@ -704,7 +702,7 @@ metricsToolbar_ pid tab filters status =
           forM_ filters.groups \groupPrefix -> option_ ([value_ groupPrefix] <> [selected_ "selected" | filters.prefix == groupPrefix]) $ toHtml $ T.dropWhileEnd (`elem` ['.', '_']) groupPrefix
         input_ [type_ "search", name_ "q", id_ "search-input", value_ filters.query, placeholder_ "Search metrics", Aria.label_ "Search metrics", class_ "input input-sm grow min-w-32 bg-bgBase"]
         button_ [type_ "submit", class_ "btn btn-sm"] "Search"
-        when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab filters{source = "all", prefix = "all", query = ""}, class_ "text-sm link"] <> navTabAttrs) "Clear filters"
+        when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab (clearedFilters filters), class_ "text-sm link"] <> navTabAttrs) "Clear filters"
     status
 
 
@@ -734,20 +732,21 @@ servicePicker_ pid current =
         , hxPushUrl_ "false"
         , name_ "service_search"
         ]
-      div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] $ serviceOptions_ current ([current | current /= "all"])
+      serviceOptions_ current [current | current /= "all"]
       p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
 
 
 -- | Options for 'servicePicker_'. Rendered by the server so the picker ships no markup
--- until it is opened.
+-- until it is opened. The wrapper is part of the contract: it is what the picker's
+-- @hx-swap outerHTML@ replaces.
 serviceOptions_ :: Text -> [Text] -> Html ()
-serviceOptions_ current services = do
+serviceOptions_ current services = div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] do
   forM_ (ordNub $ "all" : [current | current /= "all"] <> services) \service ->
     label_ [class_ "flex items-center gap-2 px-2 py-2 text-sm cursor-pointer hover:bg-fillWeak"] do
       input_ ([type_ "radio", name_ "metric_source", value_ service, class_ "radio radio-xs"] <> [checked_ | service == current])
       span_ [class_ "truncate"] $ toHtml $ if service == "all" then "All Services" else service
   when (null services) $ p_ [class_ "text-xs text-textWeak p-2"] "No matching services."
-  when (length services >= serviceOptionsLimit) $ p_ [class_ "text-xs text-textWeak p-2"] "Showing the first 50 services — type to narrow."
+  when (length services >= serviceOptionsLimit) $ p_ [class_ "text-xs text-textWeak p-2"] $ toHtml $ "Showing the first " <> show @Text serviceOptionsLimit <> " services — type to narrow."
 
 
 serviceOptionsLimit :: Int
@@ -765,7 +764,7 @@ chartsPage pid metricList labels inactive filters activeCount nextUrl =
         if hasMetricFilters filters
           then div_ [class_ "py-12 text-center"] do
             p_ [class_ "font-medium"] "No metrics match these filters"
-            a_ ([class_ "link", href_ $ metricPageUrl pid "charts" filters{source = "all", prefix = "all", query = ""}] <> navTabAttrs) "Clear filters"
+            a_ ([class_ "link", href_ $ metricPageUrl pid "charts" (clearedFilters filters)] <> navTabAttrs) "Clear filters"
           else
             div_ [class_ "w-full flex items-center justify-center h-96"]
               $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
@@ -1005,7 +1004,7 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
             def
               { Table.search = Nothing
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" filters{source = "all", prefix = "all", query = ""}) "Clear filters" else Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters)) "Clear filters" else Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
               }
         }
     dataPointPager_ page pageUrl $ V.length allRows
@@ -1058,10 +1057,16 @@ metricDimensions = sortOn (labelPriority &&& id) . V.toList
       | otherwise = 3
 
 
-metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor]) -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-metricsDetailsPage pid sources metric (dashboards, monitors) source selected currentRange = do
+-- | The metric drawer. Takes the unfiltered dashboards/monitors and narrows them
+-- itself, so every entry point (page load with @?expand=@, the details endpoint)
+-- renders the same panel from the same references.
+metricsDetailsPage :: Projects.ProjectId -> [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> Text -> Maybe Text -> Maybe (Text, Text) -> Telemetry.MetricDataPoint -> Html ()
+metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metric = do
   let refreshId = "metric-details-chart-refresh"
-      chartId = "details_" <> T.replace "." "_" metric.metricName
+      sources = metric.serviceNames
+      (dashboards, monitors) = metricReferences metric.metricName allDashboards allMonitors
+      selected = mfilter (`elem` metric.metricLabels) labelM
+      detailsBase = "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
       sortedLabels = metricDimensions metric.metricLabels
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
@@ -1085,19 +1090,19 @@ metricsDetailsPage pid sources metric (dashboards, monitors) source selected cur
             select_
               ( [ class_ "select select-sm cursor-pointer bg-bgRaised text-textStrong border border-strokeStrong rounded-lg w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus max-md:h-11"
                 , Aria.label_ "Metric data source"
-                , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
+                , hxGet_ detailsBase
                 , name_ "metric_source"
                 ]
                   <> metricDetailSwap_
               )
               do
-                option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All sources"
-                forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+                option_ ([selected_ "all" | "all" == source] <> [value_ "all"]) "All sources"
+                forM_ sources $ \s -> option_ ([selected_ s | s == source] <> [value_ s]) $ toHtml s
             TimePicker.timepicker_ (Just refreshId) currentRange (Just "metric-details")
             TimePicker.refreshButton_
             label_ [class_ "btn btn-ghost btn-circle btn-sm cursor-pointer tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close metric detail", data_ "tippy-content" "Close metric detail", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
         div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
-      metricDetailChart pid metric source selected chartId
+      metricDetailChart pid metric source selected
 
       div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
         -- DaisyUI radio tabs: the checked input drives which `.tab-content`
@@ -1152,7 +1157,7 @@ metricsDetailsPage pid sources metric (dashboards, monitors) source selected cur
           div_
             [ class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal"
             , id_ "metric-related-content"
-            , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/related"
+            , hxGet_ $ detailsBase <> "related"
             , hxTrigger_ "change from:#metric-tab-related once"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
@@ -1169,7 +1174,7 @@ metricsDetailsPage pid sources metric (dashboards, monitors) source selected cur
           div_
             [ class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal"
             , id_ "ex-content"
-            , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/exemplars"
+            , hxGet_ $ detailsBase <> "exemplars"
             , hxTrigger_ "change from:#metric-tab-ex once"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
@@ -1233,12 +1238,11 @@ sharedLabelCount metric candidate = length $ S.intersection (S.fromList $ V.toLi
 
 relatedMetricContext :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Text
 relatedMetricContext metric candidate =
-  namespace <> sharedDimensions
+  (if null shared then "Similar dimensions" else "Same " <> T.intercalate "." shared <> " namespace")
+    <> (if labels == 0 then "" else " · " <> prettyPrintCount labels <> " shared dimensions")
   where
     shared = sharedNameSegments metric.metricName candidate.metricName
-    namespace = if null shared then "Similar dimensions" else "Same " <> T.intercalate "." shared <> " namespace"
-    sharedAttributesCount = sharedLabelCount metric candidate
-    sharedDimensions = if sharedAttributesCount == 0 then "" else " · " <> prettyPrintCount sharedAttributesCount <> " shared dimensions"
+    labels = sharedLabelCount metric candidate
 
 
 relatedMetricScore :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Int
@@ -1246,8 +1250,8 @@ relatedMetricScore metric candidate =
   100 * length (sharedNameSegments metric.metricName candidate.metricName) + sharedLabelCount metric candidate
 
 
-metricDetailChart :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Text -> Html ()
-metricDetailChart pid metric source selected chartId =
+metricDetailChart :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Html ()
+metricDetailChart pid metric source selected =
   -- The exemplar overlay is opt-in per chart and declared here, next to the chart it
   -- decorates: widgets.ts looks for this attribute on an ancestor and, finding it,
   -- draws a diamond per representative trace over the series.
@@ -1259,6 +1263,8 @@ metricDetailChart pid metric source selected chartId =
       , Widget.groupByUrl = Just $ metricDetailUrl pid metric.metricName source Nothing
       , Widget.groupByTarget = Just "#metric-details-content"
       }
+  where
+    chartId = "details_" <> T.replace "." "_" metric.metricName
 
 
 -- Metric reference counting: (dashboardCount, widgetCount, alertCount) per metric
@@ -1287,20 +1293,6 @@ widgetRefsMetric :: Text -> Widget.Widget -> Bool
 widgetRefsMetric metricName widget =
   any (T.isInfixOf ("\"" <> metricName <> "\"")) (maybeToList widget.query <> maybeToList widget.sql)
     || any (widgetRefsMetric metricName) (fold widget.children)
-
-
--- Trace UI components
-traceDetailsLoading_ :: Html ()
-traceDetailsLoading_ =
-  div_ [class_ "trace-details-loading hidden p-4", role_ "status", Aria.live_ "polite"] do
-    div_ [class_ "flex items-center gap-2 text-sm font-medium text-textStrong"] do
-      loadingIndicator_ LdSM LdSpinner
-      "Loading span details…"
-    div_ [class_ "mt-4 space-y-3"] do
-      div_ [class_ "h-20 rounded-lg skeleton-shimmer"] ""
-      div_ [class_ "h-8 w-full rounded skeleton-shimmer"] ""
-      div_ [class_ "h-4 w-3/4 rounded skeleton-shimmer"] ""
-      div_ [class_ "h-4 w-full rounded skeleton-shimmer"] ""
 
 
 -- | @moreUrl@ is present when the trace continues past the spans given here;
@@ -1504,7 +1496,15 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
         [__|on closeDetailPanel call window.closeTraceDetails(me)|]
       ]
       do
-        traceDetailsLoading_
+        div_ [class_ "trace-details-loading hidden p-4", role_ "status", Aria.live_ "polite"] do
+          div_ [class_ "flex items-center gap-2 text-sm font-medium text-textStrong"] do
+            loadingIndicator_ LdSM LdSpinner
+            "Loading span details…"
+          div_ [class_ "mt-4 space-y-3"] do
+            div_ [class_ "h-20 rounded-lg skeleton-shimmer"] ""
+            div_ [class_ "h-8 w-full rounded skeleton-shimmer"] ""
+            div_ [class_ "h-4 w-3/4 rounded skeleton-shimmer"] ""
+            div_ [class_ "h-4 w-full rounded skeleton-shimmer"] ""
         -- `after:settle`, not `after:swap`: htmx fires its swap events on the requesting
         -- element, and only the settle pair reaches the swap target — which is this element.
         div_ [id_ "trace_details_content", term "hx-on::after:settle" "window.traceDetailsLoaded(this)"] pass

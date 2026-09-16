@@ -1,7 +1,7 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
-import Data.List (lookup)
+import Data.List (elemIndex, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -15,6 +15,7 @@ import NeatInterpolation (text)
 import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
+import Text.Time.Pretty (prettyTimeAuto)
 import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, toUriStr)
 
 
@@ -250,8 +251,7 @@ localTimeFmt_ dfFmt ts =
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding provider = do
-  let gridCols = bool "grid-cols-1 md:grid-cols-2" "grid-cols-1 md:grid-cols-3" (freePricingEnabled && not basicAuthEnabled)
-      useStripe = provider /= Projects.LemonSqueezyProvider
+  let useStripe = provider /= Projects.LemonSqueezyProvider
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
@@ -259,7 +259,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
-      div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
+      div_ [class_ $ "grid gap-8 w-full " <> bool "grid-cols-1 md:grid-cols-2" "grid-cols-1 md:grid-cols-3" (freePricingEnabled && not basicAuthEnabled)] do
         let isCurrent p = not isOnboarding && currentPlan == p
         if basicAuthEnabled
           then openSourcePricing pid (isCurrent "Open Source") >> enterprisePricing
@@ -267,31 +267,9 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
             when freePricingEnabled $ freePricing pid (isCurrent "Free")
             popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
             systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
-    unless useStripe
-      $ script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-    -- Guarded: #price_range/#price only exist when the usage slider is rendered.
-    unless basicAuthEnabled
-      $ script_
-        [text|
-               const price_indicator = document.querySelector("#price_range");
-               const priceContainer = document.querySelector("#price")
-               const criticalContainer = document.querySelector("#critical_price")
-               const reqsContainer = document.querySelector("#num_requests")
-
-               function priceChange() {
-                 const value = price_indicator.value
-                 let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/1_000_000)
-                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/1_000_000)
-                 priceContainer.innerText = calculatedPrice
-                 criticalContainer.innerText = calculatedPriceCritical
-                 reqsContainer.innerText = num_reqs + " Million"
-               }
-
-               price_indicator.addEventListener('input', priceChange)
-            |]
-    unless useStripe
-      $ script_
+    unless useStripe do
+      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+      script_
         [text|
              window.payLemon = function(plan, url) {
              if (typeof LemonSqueezy === 'undefined') { window.open(url, '_blank'); return; }
@@ -316,6 +294,27 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
               LemonSqueezy.Url.Open(url);
              };
             |]
+    -- Guarded: #price_range/#price only exist when the usage slider is rendered.
+    unless basicAuthEnabled
+      $ script_
+        [text|
+               const price_indicator = document.querySelector("#price_range");
+               const priceContainer = document.querySelector("#price")
+               const criticalContainer = document.querySelector("#critical_price")
+               const reqsContainer = document.querySelector("#num_requests")
+
+               function priceChange() {
+                 const value = price_indicator.value
+                 let num_reqs = Math.floor(value/1000000)
+                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/1_000_000)
+                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/1_000_000)
+                 priceContainer.innerText = calculatedPrice
+                 criticalContainer.innerText = calculatedPriceCritical
+                 reqsContainer.innerText = num_reqs + " Million"
+               }
+
+               price_indicator.addEventListener('input', priceChange)
+            |]
 
 
 pricingContent_ :: Text -> Text -> Html () -> Html () -> [Text] -> Html () -> Html ()
@@ -325,7 +324,11 @@ pricingContent_ title subtitle priceEl ctaEl features featuresTitle = do
     div_ [class_ "text-textStrong text-sm"] $ toHtml subtitle
   div_ [class_ "flex items-center gap-1 mt-4"] priceEl
   ctaEl
-  included features featuresTitle
+  div_ [class_ "flex-col justify-start items-start gap-3 flex"] do
+    div_ [class_ "text-textStrong text-sm h-6 font-medium italic"] featuresTitle
+    forM_ features \feature -> div_ [class_ "flex items-center gap-3"] do
+      faSprite_ "feature-check" "regular" "h-4 text-iconBrand shrink-0"
+      p_ [class_ "text-sm text-textStrong leading-tight"] $ toHtml feature
 
 
 priceDisplay_ :: [Attribute] -> Text -> Text -> Html ()
@@ -450,15 +453,6 @@ enterprisePricing =
         (div_ $ a_ [class_ "btn btn-primary mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
         ["Premium features & integrations", "SSO & advanced auth", "Priority support & SLA", "Advanced security & compliance"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "open source" >> " plus...")
-
-
-included :: [Text] -> Html () -> Html ()
-included features title =
-  div_ [class_ "flex-col justify-start items-start gap-3 flex"] do
-    div_ [class_ "text-textStrong text-sm h-6 font-medium italic"] title
-    forM_ features \feature -> div_ [class_ "flex items-center gap-3"] do
-      faSprite_ "feature-check" "regular" "h-4 text-iconBrand shrink-0"
-      p_ [class_ "text-sm text-textStrong leading-tight"] $ toHtml feature
 
 
 navBar :: Html ()
@@ -608,7 +602,7 @@ chartSkeleton_ = div_ [class_ "h-64 w-full rounded-lg relative overflow-hidden b
   div_ [class_ "absolute left-0 top-4 bottom-8 w-px bg-strokeWeak"] ""
   div_ [class_ "absolute left-4 right-4 bottom-8 h-px bg-strokeWeak"] ""
   div_ [class_ "absolute left-8 right-4 top-8 bottom-12 flex items-end gap-2"]
-    $ forM_ (["h-3/5", "h-2/5", "h-4/5", "h-1/2", "h-3/4", "h-2/5"] `zip` ["0s", "0.1s", "0.2s", "0.3s", "0.4s", "0.5s"])
+    $ forM_ @[] @_ @(Text, Text) [("h-3/5", "0s"), ("h-2/5", "0.1s"), ("h-4/5", "0.2s"), ("h-1/2", "0.3s"), ("h-3/4", "0.4s"), ("h-2/5", "0.5s")]
     $ \(hCls, delay) -> div_ [class_ $ "flex-1 skeleton-shimmer rounded-t " <> hCls, style_ $ "animation-delay: " <> delay] ""
   div_ [class_ "absolute left-1 top-6 w-3 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute left-1 top-1/2 w-4 h-2 skeleton-shimmer rounded"] ""
@@ -1042,6 +1036,11 @@ compactTimeAgo :: Text -> Text
 compactTimeAgo = unwords . map abbreviateUnit . words
 
 
+-- | The compact form of "how long ago was this", relative to the render clock.
+agoText :: UTCTime -> UTCTime -> Text
+agoText now = compactTimeAgo . toText . prettyTimeAuto now
+
+
 -- | Popover offering silence durations plus an indefinite option — the shared
 -- vocabulary behind monitor mute and issue acknowledge, so "for how long?" is
 -- answered the same way everywhere. @req@ turns the chosen duration in minutes
@@ -1055,10 +1054,8 @@ durationMenu_ popId heading req trigger = div_ [class_ "inline-block"] do
   div_ [id_ popId, term "popover" "auto", role_ "group", Aria.label_ heading, class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
     span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak", Aria.hidden_ "true"] $ toHtml heading
     forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (4320, "3 days"), (10080, "1 week")] \(mins, label) ->
-      button_ ([type_ "button", class_ itemCls] <> req (show mins)) $ toHtml label
-    button_ ([type_ "button", class_ $ itemCls <> " border-t border-strokeWeak"] <> req "") "Indefinitely"
-  where
-    itemCls = "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"
+      button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"] <> req (show mins)) $ toHtml label
+    button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req "") "Indefinitely"
 
 
 -- | Query suffix for a 'durationMenu_' choice: @?param=minutes@, or nothing at
@@ -1131,7 +1128,7 @@ sparkline_ buckets
           topPad = h - barZone
           -- fall back to 0 when nothing matches peakVal (all-negative buckets,
           -- where the seed 1 wins) so the marker stays on-chart
-          peakIdx = maybe 0 fst $ find ((== peakVal) . snd) $ zip [0 ..] buckets
+          peakIdx = fromMaybe 0 $ elemIndex peakVal buckets
           lineX1 = peakIdx * (barW + gap) + barW
           lineX2 = barsEnd + 2
           w = lineX2 + labelW

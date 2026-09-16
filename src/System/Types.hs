@@ -24,6 +24,7 @@ module System.Types (
   effToHandler,
   atAuthToBase,
   atAuthToBaseTest,
+  useTfReads,
 )
 where
 
@@ -109,6 +110,11 @@ type ATAuthCtx =
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
         ': CommonWebEffects
     )
+
+
+-- | Whether reads go to TimeFusion rather than the legacy Postgres store.
+useTfReads :: Effectful.Reader.Static.Reader AuthContext :> es => Eff es Bool
+useTfReads = (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
 
 
 atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
