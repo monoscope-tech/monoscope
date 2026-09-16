@@ -910,7 +910,7 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-8"
       html `shouldSatisfy` T.isInfixOf "id=\"ai-search-submit\""
       html `shouldSatisfy` T.isInfixOf "aria-disabled=\"true\""
-      html `shouldSatisfy` T.isInfixOf "set #ai-search-submit&#39;s @aria-disabled"
+      html `shouldSatisfy` T.isInfixOf "hx-live:aria-disabled"
 
     it "timeTransport_disabledNextButton_hasSingleDivider" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

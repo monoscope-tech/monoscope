@@ -883,7 +883,7 @@ logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-c
   -- sr-only, not hidden: `display:none` drops the checkbox out of the tab order, so the
   -- label could advertise role=switch while being unreachable by keyboard. The ring on
   -- the label is what makes that focus visible, since the input itself has no box.
-  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData set @aria-checked to #streamLiveData.checked|], term "aria-checked" "false"] do
+  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong", role_ "switch", Aria.label_ "Stream live data", term "hx-live:aria-checked" "q('#streamLiveData').checked", term "aria-checked" "false"] do
     input_ [type_ "checkbox", id_ "streamLiveData", class_ "sr-only"]
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"

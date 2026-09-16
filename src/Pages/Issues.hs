@@ -674,17 +674,13 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             div_ [class_ "flex items-center gap-2 flex-wrap"] do
               span_ [class_ "text-xs tabular-nums text-textWeak shrink-0"] $ toHtml timeLabel
               span_ [class_ $ "text-xs font-medium " <> iconColor] $ toHtml bc.kind
-            -- Long messages clamp to 3 lines; clicking the row toggles a `expanded` class via hyperscript
-            -- to remove the clamp. Plain class toggle is more reliable than relying on `details[open]`
-            -- propagating through Tailwind's named-group `open` variant for a `display:-webkit-box` reset.
+            -- Long messages clamp to 3 lines; a hidden checkbox + `group-has` removes the
+            -- clamp, so expansion is pure CSS and survives htmx morphs with no re-init.
             let expandable cls val =
-                  div_
-                    [ class_ "group/bc cursor-pointer flex items-start gap-1"
-                    , [__|on click toggle .is-open on me|]
-                    ]
-                    do
-                      span_ [class_ $ cls <> " group-[.is-open]/bc:line-clamp-none group-[.is-open]/bc:!block min-w-0 flex-1"] $ toHtml val
-                      faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 mt-1 group-[.is-open]/bc:rotate-180 transition-transform"
+                  label_ [class_ "group/bc cursor-pointer flex items-start gap-1"] do
+                    input_ [type_ "checkbox", class_ "hidden"]
+                    span_ [class_ $ cls <> " group-has-[:checked]/bc:line-clamp-none group-has-[:checked]/bc:!block min-w-0 flex-1"] $ toHtml val
+                    faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 mt-1 group-has-[:checked]/bc:rotate-180 transition-transform"
             whenJust bc.message
               $ expandable "text-sm text-textStrong line-clamp-3 break-words whitespace-pre-wrap"
             whenJust (bc.payload >>= breadcrumbDataSummary)

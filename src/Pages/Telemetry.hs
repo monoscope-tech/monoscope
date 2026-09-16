@@ -1398,11 +1398,11 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-iconNeutral"
                 input_
                   [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
-                  , type_ "text"
+                  , type_ "search"
                   , Aria.label_ "Search spans"
                   , placeholder_ "Search spans"
                   , id_ "search-input"
-                  , [__| on input show .span-filterble in #trace_span_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+                  , Components.filterInputAttr_ ".span-filterble in #trace_span_container"
                   ]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords] do

@@ -16,7 +16,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (modal_, options_)
+import Pages.Components (filterInputAttr_, modal_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
@@ -126,10 +126,7 @@ logQueryBox_ config = do
               , -- The response fans out to three JS subsystems (time picker, query editor,
                 -- viz tabs), so the routing lives in one named function beside them rather
                 -- than as a branch tree here — see window.applyAiSearchResult.
-                [__|on input
-                     if my.value.trim().length > 0 then set #ai-search-submit's @aria-disabled to 'false'
-                     else set #ai-search-submit's @aria-disabled to 'true' end
-                   on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
+                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
                    on keydown[key=='Enter']
                      if my.value.trim().length > 0
                        then halt then trigger htmx:trigger
@@ -141,6 +138,9 @@ logQueryBox_ config = do
               [ type_ "button"
               , id_ "ai-search-submit"
               , Aria.disabled_ "true"
+              , -- Disabled follows the prompt box reactively (hx-live re-runs on every
+                -- input event), replacing hand-rolled attribute flipping in hyperscript.
+                term "hx-live:aria-disabled" "!q('#ai-search-input').value.trim()"
               , class_ "px-3 py-0.5 inline-flex gap-2 items-center border rounded-sm shadow-strokeBrand-weak aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-disabled:border-strokeWeak aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-textBrand aria-[disabled=false]:border-strokeBrand-strong aria-[disabled=false]:shadow-md"
               , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
@@ -404,13 +404,10 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
       label_ [class_ "input input-sm flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
         input_
-          [ type_ "text"
+          [ type_ "search"
           , class_ "grow"
           , placeholder_ "Search"
-          , data_ "filterParent" $ "dataLibContent" <> label
-          , [__|on keyup
-                 if the event's key is 'Escape' set my value to '' then trigger keyup
-                 else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          , filterInputAttr_ $ ".query-item in .dataLibContent" <> label
           ]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do

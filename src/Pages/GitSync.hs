@@ -31,7 +31,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -245,11 +245,7 @@ notConnectedView actionUrl = do
             def
               { placeholder = "https://gitlab.example.com"
               , extraAttrs =
-                  [ [__| on load or change from #host
-                                     set mode to #host.selectedOptions[0].dataset.origin
-                                     then if mode is 'no' then add .hidden to closest <fieldset/> else remove .hidden from closest <fieldset/> end
-                                     then set my required to (mode is 'required') |]
-                  ]
+                  [term "hx-live" "const m = host.selectedOptions[0].dataset.origin; this.required = m == 'required'; this.closest('fieldset').classList.toggle('hidden', m == 'no')"]
               }
             "Server URL"
             "apiBase"
@@ -263,7 +259,7 @@ notConnectedView actionUrl = do
             def
               { inputType = "password"
               , placeholder = "paste token"
-              , extraAttrs = [[__| on load or change from #host put #host.selectedOptions[0].dataset.tokenLabel into the previous <label/> |]]
+              , extraAttrs = [term "hx-live" "this.closest('fieldset').querySelector('label').textContent = host.selectedOptions[0].dataset.tokenLabel"]
               }
             "Access token"
             "accessToken"
@@ -274,7 +270,7 @@ notConnectedView actionUrl = do
           -- Required in the UI for every new connection: a webhook we cannot verify is a
           -- webhook anyone can forge into triggering a sync.
           formField_ FieldSm def{inputType = "password", placeholder = "shared secret for the webhook"} "Webhook secret" "webhookSecret" True Nothing
-        p_ [class_ "text-xs text-textWeak", id_ "token-help", [__| on load or change from #host put #host.selectedOptions[0].dataset.tokenHelp into me |]] ""
+        p_ [class_ "text-xs text-textWeak", id_ "token-help", term "hx-live:text" "host.selectedOptions[0].dataset.tokenHelp"] ""
         p_ [class_ "text-xs text-textWeak"] do
           "Dashboards are stored in "
           code_ [class_ "text-textBrand"] "dashboards/"
@@ -564,7 +560,7 @@ repoSelectionView pid instId repos = div_ [class_ "space-y-4"] do
     -- Each repo carries its own default branch, so choosing one fills the branch field in
     -- rather than leaving "main" to be wrong on every repo that renamed its trunk.
     div_ [class_ "space-y-2 max-h-80 overflow-y-auto c-scroll", id_ "repo-list"] $ forM_ (zip [0 :: Int ..] repos) \(idx, repo) ->
-      label_ [class_ "repo-row flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak", term "data-name" (T.toLower repo.fullName)] do
+      label_ [class_ "repo-row flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak", term "data-filter" (T.toLower repo.fullName)] do
         input_
           $ [ type_ "radio"
             , name_ "repoFullName"
@@ -604,10 +600,7 @@ repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-
     , class_ "grow"
     , placeholder_ ("Filter " <> show n <> " repositories")
     , Aria.label_ "Filter repositories"
-    , [__| on input
-             for row in <.repo-row/>
-               if row@data-name contains my value.toLowerCase() then remove .hidden from row else add .hidden to row end
-             end |]
+    , filterInputAttr_ ".repo-row"
     ]
 
 
