@@ -187,6 +187,15 @@ window.setParams = (newState: Record<string, unknown>, load = false) => {
   load ? window.location.assign(url) : history.replaceState(null, '', url);
 };
 
+// A time-range change refreshes the page's widgets in place; only the log explorer,
+// which passes a form to the picker, still submits.
+window.dispatchQueryUpdate = () => window.dispatchEvent(new CustomEvent('update-query'));
+
+window.applyTimeRange = (timeRange, opts) => {
+  window.updateTimePicker(timeRange, opts);
+  window.dispatchQueryUpdate();
+};
+
 window.updateTimePicker = function (
   timeRange: { since?: string; from?: string; to?: string },
   opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }
@@ -287,7 +296,7 @@ const defaultTimeWindow = (transport?: HTMLElement | null) =>
 window.toggleLiveRefresh = (transport) => {
   if (!transport) return;
   if (transport.dataset.live !== 'true') {
-    window.setParams({ since: defaultTimeWindow(transport), from: '', to: '' }, true);
+    window.applyTimeRange({ since: defaultTimeWindow(transport) });
     return;
   }
   window.setTimeRefreshInterval(transport, window.dashboardRefreshInterval > 0 ? 0 : 15000);
@@ -307,8 +316,8 @@ window.shiftTimeRange = (direction, transport) => {
   const duration = to - from;
   const shiftedFrom = from + direction * duration;
   const shiftedTo = to + direction * duration;
-  if (direction > 0 && shiftedTo >= now) window.setParams({ since, from: '', to: '' }, true);
-  else window.setParams({ since: '', from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() }, true);
+  if (direction > 0 && shiftedTo >= now) window.applyTimeRange({ since });
+  else window.applyTimeRange({ from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() });
 };
 
 // Carry the page's time range onto a nav link before it is followed. Delegated and rewritten
@@ -569,10 +578,6 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
     query_sql: querySql,
     data_type: 'text',
   });
-  // The statement belongs to one store. Omitting this routed postgres-only variable
-  // queries (apis.endpoints) at TimeFusion, which answers "table not found".
-  const dbSource = input.getAttribute('data-tagify-db-source');
-  if (dbSource) params.set('db_source', dbSource);
   const url = `/chart_data?${params}`;
   const active = variableRefreshes.get(input);
   if (active?.url === url) return active.request;

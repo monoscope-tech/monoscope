@@ -100,7 +100,6 @@ import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem (getServiceName)
-import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.Table (BulkAction (..), Table (..))
@@ -108,7 +107,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -265,7 +264,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             do
               -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
-              span_ [class_ "hidden group-[.htmx-request]/tab:inline loading loading-spinner loading-xs", role_ "status", Aria.label_ "Loading"] ""
+              span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
               toHtml tab.name
 
     -- Variables section (pushed to the right, collapsible on mobile)
@@ -303,10 +302,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
               , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
-              , -- Which store the statement belongs to. Without it the client-side
-                -- refresh below re-runs a postgres-only statement (apis.endpoints)
-                -- against TimeFusion and the variable silently stops updating.
-                data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
               , data_ "tagify-query" $ maybeToMonoid var.query
               , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
@@ -330,10 +325,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       case dash.tabs of
         Just tabs ->
           -- Tab system with htmx lazy loading - only render active tab content.
-          -- Re-initialising grids after a swap is the document-level listener's job (see
-          -- this page's script). The element-local hx-on::after:swap that used to live
-          -- here never fired: a tab switch morphs this element, and an outerMorph emits
-          -- after:settle without after:swap.
+          -- Grid re-init after a swap is the document-level listener's job (see this page's script).
           div_
             [ class_ "dashboard-tabs-container"
             , id_ "dashboard-tabs-content"
@@ -359,10 +351,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
     widgetOrderTriggerForm_ widgetOrderUrl False
-
-    -- Where a logs widget's row click loads its details. A dashboard has no third
-    -- pane to give it, so it is always the drawer.
-    LogItem.detailsPanel_ pid Nothing False
 
     -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
@@ -537,21 +525,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         // which evaluates in global scope and can't see this closure.
         window.initializeGrids = initializeGrids;
 
-        // …and from anywhere else dashboard markup can arrive. Two things make a
-        // document-level listener the only one that sees every case:
-        //
-        //  * The event fires on the swap *target* and bubbles upward, so a handler on
-        //    the tab container never sees a swap aimed at an ancestor — which is what
-        //    picking a required variable is (it targets #main-content).
-        //  * An `outerMorph` emits after:settle for the morphed element but no
-        //    after:swap, so a tab switch fired neither of the events the tab
-        //    container's own hx-on::after:swap was listening for.
-        //
-        // Either way the grids came back laid out by their server-rendered gs-*
-        // attributes but with no GridStack instance — no drag, no resize, no
-        // responsive relayout. Re-running is cheap: initializeGrids skips anything
-        // already marked .grid-stack-initialized, so the widget-level swaps that also
-        // bubble through here cost one querySelector and nothing more.
+        // Document level because swap events bubble up (a handler inside the tab container
+        // misses swaps aimed at #main-content) and an outerMorph emits settle, not swap.
+        // initializeGrids skips anything already .grid-stack-initialized, so re-running is cheap.
         if (!window.__dashboardSwapHooked) {
           window.__dashboardSwapHooked = true;
           ['htmx:after:swap', 'htmx:after:settle'].forEach(function(name) {
@@ -711,16 +687,8 @@ processVariablesConcurrently pid now timeParams allParams dash =
 
 
 -- | Find variable that needs to be prompted (from tab.requires or variable.required,
--- the latter only once its @dependsOn@ parent has a value).
---
--- Both handlers ask this /before/ the widget phase, because a prompted variable means
--- 'variablePickerModal_' becomes the tab's whole content and every widget result is
--- discarded. Running them anyway was the single slowest thing about these dashboards:
--- the unset variable interpolates to @''@, so Endpoint Analytics' @hashes[*]==""@
--- scanned until 'renderQueryBudgetMicros' killed each one, and the picker — the first
--- screen a user ever sees — took as long as the full dashboard (5.4s vs 5.5s measured
--- on a customer project) to render a list of links. Keep the call sites answering the
--- same question: the view re-asks it at 'dashboardPage_' to choose what to render.
+-- the latter only once its @dependsOn@ parent has a value). Both handlers ask this before
+-- the widget phase: a prompt means the picker replaces the tab, so those results are discarded.
 findVarToPrompt :: Maybe Dashboards.Tab -> [Dashboards.Variable] -> Maybe Dashboards.Variable
 findVarToPrompt activeTab variables =
   (activeTab >>= (.requires) >>= \reqKey -> find (\v -> v.key == reqKey && isNothing v.value) variables)
@@ -804,22 +772,16 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 end
               |]
               ]
-            -- Sits at the end of the search field, where the reader's eye already is —
-            -- the global progress bar is pinned to the top of the page, too far from the
-            -- card they just clicked in to register during a multi-second render.
-            span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-block loading loading-spinner loading-sm text-textBrand shrink-0", role_ "status", Aria.label_ "Loading"] ""
-          -- Once a choice is in flight further clicks would only queue another slow render,
-          -- and fading the rest leaves the chosen row as the only lit thing on screen.
+            -- At the end of the search field: the global progress bar is too far away to register.
+            span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
+          -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
           div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
             forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
               let optVal = maybeToMonoid (opt !!? 0)
                   optLbl = fromMaybe optVal (opt !!? 1)
                   isCurrent = var.value == Just optVal
-              -- Boosted rather than a plain href: picking a value re-renders a dashboard
-              -- that can take seconds, and a full navigation shows the user nothing at all
-              -- until it lands. As an htmx request the click paints immediately —
-              -- '.htmx-request' lands on this anchor, which is what drives the row spinner
-              -- and the dimmed list below.
+              -- Boosted, not a plain href: a full navigation paints nothing for the seconds
+              -- this render takes. '.htmx-request' on the anchor drives the states above.
               a_
                 ( [ class_
                       $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
@@ -908,16 +870,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 -- so they can be interpolated at data fetch time with current URL params.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now timeRange allParams widgetBase = do
-  let (sinceStr, fromDStr, toDStr) = timeRange
-      (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      -- A logs widget bakes its query into <log-list>'s fetch URL, and
-      -- /log_explorer/data substitutes nothing — so a dashboard variable has to be
-      -- resolved here or the list searches for the literal "{{var-endpointHash}}".
-      -- Every other type reaches /chart_data, which interpolates at fetch time.
-      resolveLogsQuery
-        | widgetBase.wType == Widget.WTLogs = fmap (replacePlaceholders (variablePresetsKQL def pid.toText fromD toD allParams now))
-        | otherwise = Relude.id
-      widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
+  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer

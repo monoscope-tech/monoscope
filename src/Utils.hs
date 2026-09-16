@@ -12,6 +12,7 @@ module Utils (
   LoadingSize (..),
   LoadingType (..),
   loadingIndicator_,
+  reloadSpinner_,
   loadingIndicatorWith_,
   htmxIndicator_,
   htmxOverlayIndicator_,
@@ -435,6 +436,12 @@ loadingTypeClass = \case LdDots -> "dots"; LdSpinner -> "spinner"; LdRing -> "ri
 -- Tailwind safelist: class_ "loading loading-dots loading-spinner loading-ring loading-xs loading-sm loading-md loading-lg"
 loadingIndicator_ :: Monad m => LoadingSize -> LoadingType -> HtmlT m ()
 loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
+
+
+-- | The app's reload/update mark: shown while existing content refreshes. Caller supplies
+-- the wrapper that reveals it. (@loading-*@ above stands in for content not there yet.)
+reloadSpinner_ :: Monad m => HtmlT m ()
+reloadSpinner_ = faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
 
 
 -- | Loading indicator with extra classes for custom styling

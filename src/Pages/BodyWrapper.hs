@@ -262,9 +262,6 @@ bodyWrapper bcfg child = do
             -- only load-bearing for third-party code (hyperscript binds the legacy load event).
             assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
           , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
-          , -- Reactive DOM bindings (`:checked="…"`, `:class`, …) so UI state that CSS
-            -- can't derive on its own stays declarative instead of scripted.
-            assetUrl "/public/assets/deps/htmx/hx-live-4.js"
           , assetUrl "/public/assets/js/main.js"
           , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
             -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph

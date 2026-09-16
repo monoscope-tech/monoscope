@@ -62,19 +62,13 @@ type Snippet = { file: string; line: number; body: string };
 const extractSnippets = (file: string): Snippet[] => {
   const text = readFileSync(file, 'utf8');
   const out: Snippet[] = [];
-  // Both spellings of the same attribute: the `[__|…|]` quasiquoter, and the `_=`
-  // attribute written by hand as `term "_" [text|…|]` — which is what every snippet
-  // carrying Haskell interpolation uses, and was unguarded until 2026-09-16.
-  for (const re of [/\[__\|([\s\S]*?)\|\]/g, /term\s+"_"\s*(?:\$\s*)?\[text\|([\s\S]*?)\|\]/g]) {
-    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
-      out.push({
-        file: relative(REPO, file),
-        line: text.slice(0, m.index).split('\n').length,
-        // Both NeatInterpolation spellings: `${x}` and the bare `$x` that `[text|…|]`
-        // snippets use inside selectors (`#$targetPr-sidebar`).
-        body: m[1].replace(/\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_']*/g, 'interpolated'),
-      });
-    }
+  const re = /\[__\|([\s\S]*?)\|\]/g;
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    out.push({
+      file: relative(REPO, file),
+      line: text.slice(0, m.index).split('\n').length,
+      body: m[1].replace(/\$\{[^}]*\}/g, 'interpolated'),
+    });
   }
   return out;
 };

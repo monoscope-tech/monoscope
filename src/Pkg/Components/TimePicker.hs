@@ -164,7 +164,7 @@ timepicker_ submitForm currentRange targetIdM = do
   let targetPr = fromMaybe "n" targetIdM
       isLive = maybe True (T.null . snd) currentRange
       displayRange = maybe "Last hour" (\(start, end) -> if T.null end then fromMaybe start (lookup start timePickerItems) else start <> " – " <> end) currentRange
-      -- with a form we submit it; without one the caller-supplied fallback reloads/updates params
+      -- with a form we submit it; without one the page's widgets refetch in place
       submitVia noForm = maybe noForm (\fm -> [text|htmx.trigger("#${fm}", "submit")|]) submitForm
   -- read/written by window.updateTimePicker + window.getTimeRange (main.ts)
   input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
@@ -204,7 +204,7 @@ timepicker_ submitForm currentRange targetIdM = do
           div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
-          let action = submitVia "window.setQueryParamAndReload('since', my @data-value)"
+          let action = submitVia "window.dispatchQueryUpdate()"
           forM_ timePickerItems \(val, title) ->
             li_ $ button_
               [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
@@ -224,8 +224,7 @@ timepicker_ submitForm currentRange targetIdM = do
               faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
               span_ "Custom date range"
 
-        -- updateTimePicker already set the params; the formless case just reloads
-        let submitAction = submitVia "window.setParams({}, true)"
+        let submitAction = submitVia "window.dispatchQueryUpdate()"
             -- Self-hosted: easepick injects this into the picker's shadow root, so a
             -- jsdelivr blip left the date picker unstyled on an otherwise-working page.
             easepickCss = assetUrl "/public/assets/css/thirdparty/easepick.min.css"
