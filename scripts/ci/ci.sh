@@ -56,6 +56,10 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -
 # into rendered pages, so a bundle change is a Haskell-visible change.
 PATHSET_hs='app src shared cli test tests config proto static/migrations package.yaml cabal.project cabal.project.freeze hpack-includes monoscope.cabal shared/monoscope-shared.cabal cli/monoscope-cli.cabal'
 PATHSET_fe='web-components/src web-components/test web-components/package.json web-components/package-lock.json web-components/vite.config.mjs web-components/tsconfig.json web-components/vitest.config.ts web-components/index.html package.json package-lock.json config/tailwind.config.js static/public/assets/css/tailwind.css'
+# What the frontend checks read outside web-components: the hyperscript guard parses every
+# [__|…|] in src/, tailwind scans src/**/*.hs, two specs load the vendored htmx builds.
+# Without these a Haskell-only change reuses a stale pass and those guards never run.
+PATHSET_uisrc='src static/public/assets/deps'
 # The CLI package links only monoscope-shared, so its tests cannot observe src/.
 PATHSET_cli='cli shared cabal.project cabal.project.freeze'
 # Prepended to every check: changing what a check DOES, or the environment it

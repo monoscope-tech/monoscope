@@ -16,7 +16,7 @@
 #
 # Narrow `inputs` only where it is provably sound. A too-wide set costs a rerun;
 # a too-narrow one ships an untested change.
-frontend	node	@fe
+frontend	node	@fe @uisrc
 build	ghc	@hs @fe
 doctests	ghc	@hs @fe
 unit-tests	ghc	@hs @fe
@@ -24,5 +24,5 @@ cli-tests	ghc	@cli
 integration-tests	ghc node bun pg minio tf-real	@hs @fe
 weeder	ghc	@hs @fe
 hlint	hlint	src .hlint.yaml
-ui-tests	node	@fe
+ui-tests	node	@fe @uisrc
 e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh
