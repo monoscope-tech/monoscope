@@ -224,37 +224,13 @@ tabs:
           ORDER BY COUNT(*) DESC
           LIMIT 20
 
-      # Traces
-      - type: traces
+      # Traces — the log explorer's own list, so rows expand into their span tree
+      # and click through to the full detail panel.
+      - type: logs
         title: 'Recent Traces'
-        layout: { w: 12, h: 5 }
-        columns:
-          - field: resource_name
-            title: Service
-          - field: span_name
-            title: Operation
-          - field: total_time
-            title: Duration
-            columnType: duration
-          - field: span_count
-            title: Spans
-            columnType: number
-          - field: latency_breakdown
-            title: Latency breakdown
-        sql: |
-          SELECT
-            COALESCE(resource___service___name, 'Unknown'),
-            name,
-            ROUND(duration / 1000000, 2)::text AS duration_ms,
-            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
-            context___trace_id AS trace_id
-          FROM otel_logs_and_spans o
-          WHERE project_id='{{project_id}}'
-            AND hashes @> ARRAY['{{var-endpointHash}}']
-            AND duration IS NOT NULL
-            {{time_filter}}
-          ORDER BY timestamp DESC
-          LIMIT 20
+        layout: { w: 12, h: 12 }
+        query: |
+          hashes[*]=="{{var-endpointHash}}"
 
   - name: Errors
     icon: alert-triangle
@@ -314,37 +290,11 @@ tabs:
         layout: { w: 6, h: 4 }
 
       # Error traces
-      - type: traces
+      - type: logs
         title: 'Error Traces'
-        layout: { w: 12, h: 6 }
-        columns:
-          - field: resource_name
-            title: Service
-          - field: span_name
-            title: Operation
-          - field: total_time
-            title: Duration
-            columnType: duration
-          - field: span_count
-            title: Spans
-            columnType: number
-          - field: latency_breakdown
-            title: Latency breakdown
-        sql: |
-          SELECT
-            COALESCE(resource___service___name, 'Unknown'),
-            name,
-            ROUND(duration / 1000000, 2)::text AS duration_ms,
-            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
-            context___trace_id AS trace_id
-          FROM otel_logs_and_spans o
-          WHERE project_id='{{project_id}}'
-            AND hashes @> ARRAY['{{var-endpointHash}}']
-            AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
-            AND duration IS NOT NULL
-            {{time_filter}}
-          ORDER BY timestamp DESC
-          LIMIT 20
+        layout: { w: 12, h: 12 }
+        query: |
+          hashes[*]=="{{var-endpointHash}}" AND (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400)
 
   - name: Latency
     icon: clock
@@ -435,33 +385,8 @@ tabs:
         layout: { w: 12, h: 5 }
 
       # Slowest traces
-      - type: traces
+      - type: logs
         title: 'Slowest Traces'
-        layout: { w: 12, h: 5 }
-        columns:
-          - field: resource_name
-            title: Service
-          - field: span_name
-            title: Operation
-          - field: total_time
-            title: Duration
-            columnType: duration
-          - field: span_count
-            title: Spans
-            columnType: number
-          - field: latency_breakdown
-            title: Latency breakdown
-        sql: |
-          SELECT
-            COALESCE(resource___service___name, 'Unknown'),
-            name,
-            ROUND(duration / 1000000, 2)::text AS duration_ms,
-            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
-            context___trace_id AS trace_id
-          FROM otel_logs_and_spans o
-          WHERE project_id='{{project_id}}'
-            AND hashes @> ARRAY['{{var-endpointHash}}']
-            AND duration IS NOT NULL
-            {{time_filter}}
-          ORDER BY duration DESC
-          LIMIT 20
+        layout: { w: 12, h: 12 }
+        query: |
+          hashes[*]=="{{var-endpointHash}}" AND duration != null | sort by duration desc

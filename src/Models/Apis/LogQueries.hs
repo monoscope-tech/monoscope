@@ -11,6 +11,8 @@ module Models.Apis.LogQueries (
   SecuredSql (..),
   selectLogTable,
   executeSecuredQuery,
+  validateSqlQuery,
+  hasProjectIdFilter,
   LogEndpoint (..),
   logExplorerUrlPath,
   getLastSevenDaysTotalRequest,

@@ -9,6 +9,7 @@ module Pages.LogExplorer.LogItem (
   getRequestDetails,
   spanHasErrors,
   spanBadge,
+  detailsPanel_,
 ) where
 
 import Control.Lens (filtered, has, (^..), (^?), _Just)
@@ -145,6 +146,132 @@ closeDetailAttrs :: [Attribute]
 closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-panel/>|]]
 
 
+-- | The panel a clicked log row's details load into. One element, one id: the
+-- @log-list@ component targets @#log_details_container@ from wherever it is
+-- mounted, so any page that renders this once gets working row details —
+-- including a dashboard with a logs widget on it.
+--
+-- Two states, two checkboxes, and CSS derives the rest:
+--
+-- * @#details-drawer-mode@ — inline pane (the explorer's resizable third column)
+--   vs. an overlay drawer. A @\<label>@ in the panel header flips it, @hx-live@
+--   seeds it from localStorage and @hx-on:change@ writes the choice back.
+-- * @#details-open@ — whether the drawer is showing. Server-checked for a deep
+--   link, set by the row click, and cleared by the backdrop label or by the
+--   @closeDetailPanel@ event every close control already sends.
+--
+-- Both are peers of the panel, so its geometry is @peer-checked\/…@; the header
+-- controls live /inside/ it and reach the same state through @group-has-@.
+--
+-- @canDock@ says the page has an inline layout to offer at all. Pages without
+-- one (a dashboard) pin the mode checkbox on and hide the toggle.
+detailsPanel_ :: Projects.ProjectId -> Maybe Text -> Bool -> Html ()
+detailsPanel_ pid targetEventM canDock = div_ [class_ $ "contents group/details " <> memptyIfFalse canDock "details-dockable", term "hx-ext" "hx-live"] do
+  input_
+    $ [type_ "checkbox", class_ "hidden peer/drawer", id_ "details-drawer-mode"]
+    <> if canDock
+      then
+        [ -- Seeded once, not bound: a standing `:checked` binding re-evaluates on the next
+          -- DOM mutation and would overwrite the reader's click before its change event
+          -- had written the new choice back.
+          term "hx-live" "if (!this.dataset.seeded) { this.dataset.seeded = '1'; this.checked = localStorage.getItem('log_details_mode') === 'drawer' }"
+        , -- Docking back in hands the pane's width back to the resizer, which is the one
+          -- thing CSS can't restore: the drawer's `!important` width is gone the moment
+          -- this unchecks, and the element's own inline width is still the 0px it was
+          -- left at.
+          term "hx-on:change"
+            $ "localStorage.setItem('log_details_mode', this.checked ? 'drawer' : 'inline');"
+            <> "if (!this.checked) { const w = localStorage.getItem('resizer-details_width') || '550';"
+            <> " document.getElementById('log_details_container').style.width = w.endsWith('px') ? w : w + 'px';"
+            <> " document.getElementById('resizer-details_width-wrapper')?.classList.remove('hidden', 'opacity-0', 'pointer-events-none'); }"
+        ]
+      else [checked_]
+  input_ $ [type_ "checkbox", class_ "hidden peer/open", id_ "details-open"] <> memptyIfFalse (isJust targetEventM) [checked_]
+  -- Click-anywhere-else dismissal, drawer mode only. Nested rather than stacked
+  -- variants: one element per condition, so each stays a single peer selector.
+  div_ [class_ "hidden peer-checked/drawer:contents"]
+    $ label_
+      [ Lucid.for_ "details-open"
+      , Aria.label_ "Close item details"
+      , class_ "fixed inset-0 z-40 bg-black/40 hidden group-has-[#details-open:checked]/details:block"
+      ]
+      ""
+  div_
+    [ class_
+        $ "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
+        <> "group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto "
+        <> "max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase "
+        -- Drawer geometry. `!` on width/max-width beats the inline style the
+        -- resizer leaves behind when the reader switches modes mid-session.
+        --
+        -- It slides on `right`, NOT on a transform: a transformed element becomes the
+        -- containing block for every `position: fixed` descendant, which is what put the
+        -- Share-link modal (fixed inset-0, meant to centre on the viewport) half off the
+        -- screen when it opened inside the drawer.
+        <> "peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-50 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] "
+        -- Open state. Inline mode never positions the panel, so this is inert there.
+        <> "peer-checked/open:right-0! peer-checked/open:block!"
+    , id_ "log_details_container"
+    , -- Detail loads are last-click-wins. htmx's default sync strategy is "queue first",
+      -- which drops a click made while another detail request is in flight: the new row
+      -- never loads and the overlay indicator (added on click) is never cleared, so the
+      -- panel sits on a frozen three-dot loader until a page reload. "replace" aborts the
+      -- in-flight request and issues the new one instead.
+      term "hx-sync" "this:replace"
+    , term "data-has-target" (if isJust targetEventM then "1" else "0")
+    , -- The inline pane's width/resizer/URL bookkeeping. Drawer mode reaches none of
+      -- it: its geometry is the CSS above and its dismissal is a label.
+      [__|on checkMobileOpen[window.innerWidth < 768] add .details-open to me
+        init
+          if my @data-has-target is '1' and no <#details-drawer-mode:checked/>
+            send checkMobileOpen to me
+            set queryWidth to params().details_width
+            set storedWidth to localStorage.getItem('resizer-details_width')
+            if queryWidth set my *width to queryWidth + 'px'
+            else if storedWidth and not storedWidth.endsWith('px') set my *width to storedWidth + 'px'
+            else if storedWidth set my *width to storedWidth
+            else set my *width to '30%'
+            end
+          end
+        end
+        on htmx:after:swap send checkMobileOpen to me end
+        -- The one thing neither HTML nor CSS can express: a key binding. Everything it
+        -- does afterwards is flipping the same checkbox the close label flips.
+        on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
+          -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
+          -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
+          if the first <#trace_details_container.open/> exists send closeDetailPanel to #trace_details_container
+          otherwise if the first <#trace_expanded_view:not(.hidden)/> exists send closeTraceView to #trace_expanded_view
+          otherwise send closeDetailPanel to me end
+        end
+        on closeDetailPanel
+          set #details-open's checked to false
+          -- Guarded: this panel also renders on pages (dashboards) that have none of
+          -- the log explorer's chrome.
+          if the first <#trace_expanded_view/> exists add .hidden to #trace_expanded_view end
+          if the first <#apiLogsPage/> exists send toggleFullscreen(mode: 'details', active: false) to #apiLogsPage end
+          remove .details-open from me
+          set my *width to '0px'
+          if the first <#logs_list_container/> exists set the *width of #logs_list_container to '100%' end
+          remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+          if the first <#resizer-details_width-wrapper/> exists add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper end
+          call updateUrlState(['details_width', 'target_event', 'showTrace'], '', 'delete')
+        end|]
+    ]
+    do
+      htmxOverlayIndicator_ "details_indicator"
+      whenJust targetEventM \te ->
+        div_
+          [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> te
+          , hxTarget_ "#log_details_container"
+          , hxSwap_ "innerHTML"
+          , hxTrigger_ "intersect once"
+          , term "hx-sync" "this:replace"
+          , hxIndicator_ "#details_indicator"
+          ]
+          pass
+
+
 instance ToHtml ApiItemDetailed where
   toHtml (SpanItemExpanded pid spn aptSpan tabM) = toHtml $ expandedItemView pid spn aptSpan tabM
   toHtml (LogItemExpanded pid req tabM) = toHtml $ expandedItemView pid req Nothing tabM
@@ -248,6 +375,23 @@ expandedItemView pid item aptSp selectedTabM = do
           do
             faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
             faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:block!"
+        -- Inline pane vs. overlay drawer, remembered per reader. A label over the mode
+        -- checkbox in 'detailsPanel_' — no script — and only shown where the page has an
+        -- inline layout to go back to (.details-dockable).
+        label_
+          [ Lucid.for_ "details-drawer-mode"
+          , class_ "hidden [.details-dockable_&]:md:block cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors tooltip tooltip-bottom"
+          , Aria.label_ "Toggle drawer mode"
+          , data_ "tip" "Dock / undock panel"
+          , term "data-share-hide" "1"
+          ]
+          do
+            faSprite_ "sidebar-flip" "regular" "w-3.5 h-3.5 text-iconNeutral group-has-[#details-drawer-mode:checked]/details:hidden!"
+            faSprite_ "table-columns" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral group-has-[#details-drawer-mode:checked]/details:block!"
+        -- A button, not a label over #details-open: this header also renders inside the
+        -- trace and issue shells, where toggling that checkbox would open the log
+        -- explorer's drawer over stale content. `closeDetailPanel` is the one close
+        -- channel every shell already listens on, and it unchecks the box itself.
         button_
           ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors tooltip tooltip-left"
             , Aria.label_ "Close item details"
@@ -343,15 +487,22 @@ expandedItemView pid item aptSp selectedTabM = do
         button_ [class_ "action-btn", [__|install Copy(content: next <pre/>)|]] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curlCommand
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
-        -- The trace overlay's loadTrace handler owns skeleton, fetch, and fullscreen
-        -- (see apiLogsPage.traceOverlay); this button only sends the event + URL state.
-        button_
+        -- A link first, so it works from every shell this view renders in: the details
+        -- panel now also opens on dashboards, where the log explorer's trace overlay
+        -- doesn't exist and the old button silently did nothing. Where the overlay IS
+        -- present the click is intercepted and the trace opens in place — the overlay's
+        -- loadTrace handler owns skeleton, fetch and fullscreen (Log.hs traceOverlay).
+        a_
           [ class_ "action-btn"
           , term "data-share-hide" "1"
+          , href_ $ "/p/" <> pidTxt <> "/log_explorer?showTrace=" <> trId <> "/%3Ftimestamp%3D" <> createdAt
           , term
               "_"
-              [text|on click send loadTrace(url: '/p/${pidTxt}/traces/${trId}/?timestamp=${createdAt}') to #trace_expanded_view
-                     then call updateUrlState('showTrace', "${trId}/?timestamp=${createdAt}")|]
+              [text|on click if the first <#trace_expanded_view/> exists
+                       halt the event
+                       send loadTrace(url: '/p/${pidTxt}/traces/${trId}/?timestamp=${createdAt}') to #trace_expanded_view
+                       then call updateUrlState('showTrace', "${trId}/?timestamp=${createdAt}")
+                     end|]
           ]
           (actionBtnBody "cross-hair" "View trace")
       when isAlert

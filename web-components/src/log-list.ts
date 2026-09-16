@@ -283,6 +283,10 @@ export class LogList extends LitElement {
     // Two frames: one for the keyed remount to render, one for the new virtualizer to lay out.
     requestAnimationFrame(() => requestAnimationFrame(() => this.scrollSettling--));
   }
+  // "<field> asc|desc", the exact spelling `| sort by` takes, so the table's sort and a
+  // widget's KQL sort are one mechanism. Seeded from the `sort` URL param and written
+  // back to it on the explorer, so a sorted view is shareable and survives a reload.
+  @state() private sortSpec: string | null = null;
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
@@ -383,7 +387,7 @@ export class LogList extends LitElement {
   private handleUpdateQuery = (e: Event) => {
     const source = (e as CustomEvent).detail?.source || 'default';
     if (source === 'expand-timerange') return;
-    if (source === 'auto-refresh' && !this.initialFetchUrl && !this.isAggregate) {
+    if (source === 'auto-refresh' && !this.initialFetchUrl && !this.isAggregate && this.canPage) {
       void this.fetchData(this.buildRecentFetchUrl(), false, true, false, false, 'auto-refresh');
       return;
     }
@@ -701,6 +705,7 @@ export class LogList extends LitElement {
       for (const key of ['since', 'from', 'to']) {
         if (pageParams.has(key)) url.searchParams.set(key, pageParams.get(key)!);
       }
+      if (this.sortSpec) url.searchParams.set('sort', this.sortSpec);
       return url.toString();
     } else {
       const p = new URLSearchParams(window.location.search);
@@ -984,6 +989,40 @@ export class LogList extends LitElement {
     window.history.replaceState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}${window.location.hash}`);
   };
 
+  // The one column the table composes client-side from a span's children rather than
+  // selecting: the server answers `Unknown field "latency_breakdown"`, so it offers no sort.
+  static UNSORTABLE = new Set(['latency_breakdown']);
+
+  // Paging is a timestamp cursor, so it cannot continue a list ordered by anything else:
+  // a sorted view is the top N, and a "load more" would splice in unrelated rows.
+  private get canPage() {
+    // A widget sorts through its query text rather than the header menu, so the query is
+    // part of the answer: `hashes[*]=="x" | sort by duration desc` must not page either.
+    const query = this.initialFetchUrl
+      ? new URL(this.initialFetchUrl, window.location.origin).searchParams.get('query')
+      : new URLSearchParams(window.location.search).get('query');
+    const sorted = this.sortSpec ?? (query ? /\|\s*(?:sort|order)\s+by\s+([\w.]+)/i.exec(query)?.[1] : null);
+    return !sorted || sorted.startsWith('timestamp');
+  }
+
+  sortDirFor = (column: string): 'asc' | 'desc' | null => {
+    const [field, dir] = (this.sortSpec ?? '').split(' ');
+    return field === column ? (dir === 'asc' ? 'asc' : 'desc') : null;
+  };
+
+  sortByColumn = (column: string, dir: 'asc' | 'desc' | null) => {
+    this.sortSpec = dir ? `${column} ${dir}` : null;
+    // An embedded list has no URL of its own — the dashboard's belongs to the dashboard.
+    if (!this.initialFetchUrl) {
+      const p = new URLSearchParams(window.location.search);
+      if (this.sortSpec) p.set('sort', this.sortSpec);
+      else p.delete('sort');
+      const qs = p.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}${window.location.hash}`);
+    }
+    this.fetchData(this.buildJsonUrl(), true);
+  };
+
   // Toggle a single column's visibility. Returns the column's new visibility.
   toggleColumnOnTable = (col: string): boolean => {
     const has = this.isColumnOnTable(col);
@@ -1038,6 +1077,9 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // A shared/reloaded explorer URL carries its sort; an embedded list gets one only
+    // from its own query text, so it starts unsorted here.
+    if (!this.initialFetchUrl) this.sortSpec = new URLSearchParams(window.location.search).get('sort');
     this.isNarrow = this.narrowQuery.matches;
     this.narrowQuery.addEventListener('change', this.onNarrowChange);
     window.addEventListener('chart-updated', this.handleChartCountUpdate);
@@ -1420,11 +1462,11 @@ export class LogList extends LitElement {
           virtualItems.push({ type: 'aggregateChildren', parentKey: key });
         }
       }
-      if (this.hasMore || items.length > 0) virtualItems.push({ type: 'loadMore' });
+      if (this.canPage && (this.hasMore || items.length > 0)) virtualItems.push({ type: 'loadMore' });
     } else {
       const isEmbedded = !!this.initialFetchUrl;
       // Add fetch recent button at the start (for non-flipped) or end (for flipped)
-      if (!isEmbedded && !this.flipDirection && items.length > 0) {
+      if (!isEmbedded && this.canPage && !this.flipDirection && items.length > 0) {
         virtualItems.push({ type: 'fetchRecent' });
       }
 
@@ -1432,14 +1474,14 @@ export class LogList extends LitElement {
       virtualItems.push(...items);
 
       // Add load more button at the end (for non-flipped) or start (for flipped)
-      if (!this.flipDirection && (this.hasMore || items.length > 0)) {
+      if (this.canPage && !this.flipDirection && (this.hasMore || items.length > 0)) {
         virtualItems.push({ type: 'loadMore' });
       } else if (this.flipDirection) {
         // For flipped direction, add buttons in reverse order
-        if (!isEmbedded && items.length > 0) {
+        if (!isEmbedded && this.canPage && items.length > 0) {
           virtualItems.push({ type: 'fetchRecent' });
         }
-        if (this.hasMore || items.length > 0) {
+        if (this.canPage && (this.hasMore || items.length > 0)) {
           virtualItems.unshift({ type: 'loadMore' });
         }
       }
@@ -2005,12 +2047,23 @@ export class LogList extends LitElement {
   };
   toggleLogRow = (_event: Event, targetInfo: [string, string, string], pid: string) => {
     // Use refs when available, fallback to querySelector
-    const sideView = this.logDetailsContainer || (document.querySelector('#log_details_container')! as HTMLElement);
+    const sideView = (this.logDetailsContainer || document.querySelector('#log_details_container')) as HTMLElement | null;
+    // Embedded lists (a dashboard's logs widget) only get details if the page rendered
+    // the panel; without one there is nothing to open, and a row click is a no-op.
+    if (!sideView) return;
     const resizerWrapper = this.resizerWrapper || document.querySelector('#resizer-details_width-wrapper');
     const listWasDeepScrolled = (this.logsContainer?.scrollTop ?? 0) > 0;
+    // Open state and inline/drawer mode are both checkboxes the page owns; CSS derives
+    // the geometry from them (Pages.LogExplorer.LogItem.detailsPanel_). The drawer
+    // overlays the page rather than splitting it, so none of the width/resizer
+    // bookkeeping below applies to it.
+    const openBox = document.querySelector<HTMLInputElement>('#details-open');
+    if (openBox) openBox.checked = true;
+    const isDrawer = document.querySelector<HTMLInputElement>('#details-drawer-mode')?.checked ?? false;
 
     // Batch DOM reads and writes
     requestAnimationFrame(() => {
+      if (isDrawer) return;
       const width = sideView.offsetWidth;
       // Newest-first never consumes this flag. Mutating it there caused a full host rerender
       // on row click after load-more, which is the direct trigger for the blank runway.
@@ -2056,7 +2109,9 @@ export class LogList extends LitElement {
     const [rdId, rdCreatedAt, source] = targetInfo;
     this.openRowId = rdId;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
-    updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
+    // Only the explorer deep-links the open row: on an embedded list the param would ride
+    // along on every widget fetch (forward-page-params) without anything ever reading it.
+    if (!this.initialFetchUrl) updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
     // Only the newest click owns the indicator: #log_details_container carries
     // hx-sync="this:replace", so clicking again aborts this request, and the loser settling
     // must not clear the loader out from under the winner still in flight.
@@ -3747,6 +3802,11 @@ export class LogList extends LitElement {
           style=${`anchor-name: --col-dropdown-${column}`}
         >
           ${title.split('•').reverse()[0]}
+          ${this.sortDirFor(column)
+            ? html`<span class="ml-1 text-textBrand" aria-label=${`sorted ${this.sortDirFor(column)}`}
+                >${faSprite(this.sortDirFor(column) === 'asc' ? 'arrow-up' : 'arrow-down', 'regular', 'w-3 h-3 inline-block')}</span
+              >`
+            : nothing}
           <span class="ml-1 p-0.5 border border-strokeWeak rounded-sm inline-flex">
             ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
           </span>
@@ -3757,6 +3817,20 @@ export class LogList extends LitElement {
           style=${`position-anchor: --col-dropdown-${column}`}
           class="dropdown menu flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
         >
+          ${LogList.UNSORTABLE.has(column)
+            ? nothing
+            : (['desc', 'asc'] as const).map(
+                (dir) =>
+                  html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
+                    <button
+                      class="cursor-pointer w-full text-left py-1 min-h-6"
+                      aria-pressed=${this.sortDirFor(column) === dir}
+                      @click=${() => this.sortByColumn(column, this.sortDirFor(column) === dir ? null : dir)}
+                    >
+                      ${this.sortDirFor(column) === dir ? '✓ ' : ''}Sort ${dir === 'desc' ? 'descending' : 'ascending'}
+                    </button>
+                  </li>`
+              )}
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
             <button class="cursor-pointer w-full text-left py-1 min-h-6" @click=${() => this.hideColumn(column)}>Hide column</button>
           </li>
