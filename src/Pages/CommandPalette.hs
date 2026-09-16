@@ -132,7 +132,7 @@ paletteShell_ pid = do
             "copy current url"
             "direct"
             [ data_ "action" "copy-url"
-            , term "hx-on:click" "navigator.clipboard.writeText(window.location.href); document.getElementById('cmd-palette-backdrop').classList.add('hidden')"
+            , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
             ]
             $ itemBody_ "copy" "" "Copy current URL" "Action"
           -- AI row (hidden initially)

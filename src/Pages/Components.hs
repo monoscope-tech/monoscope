@@ -949,7 +949,7 @@ copyButton_ cls iconCls src attrs =
   button_
     ( [ type_ "button"
       , class_ cls
-      , term "hx-on:click" $ "navigator.clipboard.writeText(" <> src <> "); const s = this.querySelector('span'); s.textContent = 'Copied!'; setTimeout(() => s.textContent = 'Copy', 2000)"
+      , term "_" $ "on click call navigator.clipboard.writeText(" <> src <> ") then put 'Copied!' into the first <span/> in me then wait 2s then put 'Copy' into the first <span/> in me"
       ]
         <> attrs
     )
@@ -1033,7 +1033,7 @@ detailsClosedBelowAttr_ px = term "hx-live" $ "if (!this.dataset.seeded) { this.
 -- | Enter/Space activates the element's click behavior, for label/row controls that
 -- cannot be a native @\<button\>@.
 keyboardActivateAttr_ :: Attribute
-keyboardActivateAttr_ = term "hx-on:keydown" "if (event.key == 'Enter' || event.key == ' ') { event.preventDefault(); this.click() }"
+keyboardActivateAttr_ = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
 
 
 -- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,
