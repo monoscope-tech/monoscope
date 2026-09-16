@@ -95,7 +95,7 @@ import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, formField_, primaryButton_, tagInput_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
@@ -669,7 +669,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
     _ -> case variable._vType of
       Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
         -- SECURITY: Use secured query execution with project_id filtering
-        useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+        useTf <- useTfReads
         -- Budgeted for the same reason as the facet/dependent short-circuits above:
         -- an option list is never worth blocking the shell on.
         withRenderBudget ("variable:" <> variable.key) variable
@@ -854,7 +854,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\err -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, err, duration) $> constant)
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
-  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  useTf <- useTfReads
   case (constant.sql, constant.query) of
     -- SECURITY: Use secured query execution with project_id filtering
     (Just sqlQuery, _) -> runQuery "SQL" (LogQueries.executeSecuredQuery useTf pid sqlQuery 1000) queryRowsToText
@@ -1654,13 +1654,10 @@ dashboardsGet_ dg = do
           label_ [class_ "input input-sm flex items-center "] do
             faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
             input_
-              [ type_ "text"
+              [ type_ "search"
               , class_ "grow pl-2"
               , placeholder_ "Search"
-              , [__|
-               on keyup
-                 if the event's key is 'Escape' set my value to '' then trigger keyup
-                 else show <.dashboardListItem/> in #dashListItemParent when its textContent.toLowerCase() contains my value.toLowerCase() |]
+              , filterInputAttr_ ".dashboardListItem in #dashListItemParent"
               ]
             kbd_ [class_ "kbd kbd-sm"] "/"
         div_ [class_ "space-y-1 h-auto overflow-auto", id_ "dashListItemParent"] do

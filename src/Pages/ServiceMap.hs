@@ -7,10 +7,8 @@
 -- has repeatedly OOM-killed TimeFusion in production. See @docs/service-map-spec.md@.
 module Pages.ServiceMap (serviceMapGetH, ServiceMapGet (..), ServiceMapPageData (..)) where
 
-import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.Vector qualified as V
-import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -21,7 +19,6 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.Components.ServiceMap (serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
-import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (explorerNavTabs_, faSprite_, getServiceColors, nonEmptyT, parseTime)
 
@@ -44,11 +41,11 @@ instance ToHtml ServiceMapGet where
 serviceMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ServiceMapGet)
 serviceMapGetH pid fromM toM sinceM envM = do
   (_, _, bw) <- mkPageCtx pid
-  _ <- Reader.ask @AuthContext
   now <- Time.currentTime
-  let (from, to, currentRange) = parseTime fromM toM sinceM now
   -- An empty ?env= is "all environments", so clearing the facet is a link like any other.
-  graph <- serviceGraphForRange pid (nonEmptyT envM) (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
+  let (from, to, currentRange) = parseTime fromM toM sinceM now
+      env = nonEmptyT envM
+  graph <- serviceGraphForRange pid env (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
   let bwconf =
         bw
           { prePageTitle = Just "Explorer"
@@ -59,7 +56,7 @@ serviceMapGetH pid fromM toM sinceM envM = do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
           }
-  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph (nonEmptyT envM)
+  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph env
 
 
 serviceMapPage_ :: ServiceMapPageData -> Html ()
@@ -85,4 +82,4 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 pt
   where
     -- Same hash-assigned colours as the trace waterfall, so a service looks the same
     -- wherever it appears.
-    serviceColors = getServiceColors $ V.fromList [n.label | n <- V.toList pd.graph.nodes, not n.inferred, not (T.null n.label)]
+    serviceColors = getServiceColors $ V.map (.label) $ V.filter (\n -> not n.inferred && n.label /= "") pd.graph.nodes

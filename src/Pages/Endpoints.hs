@@ -18,7 +18,7 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (RowAction (..), compactTimeAgo, copyButton_, detailTab_, periodToggle_, rowActions_, sparkline_, tabPanel_)
+import Pages.Components (RowAction (..), agoText, copyButton_, detailTab_, periodToggle_, rowActions_, sparkline_, tabPanel_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.OpenApi qualified as OpenApi
@@ -26,7 +26,6 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
-import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
@@ -425,7 +424,7 @@ lastSeenCell_ :: UTCTime -> Maybe ZonedTime -> Html ()
 lastSeenCell_ currTime = \case
   -- nowrap: the column is narrow enough that "50 secs ago" broke onto a second
   -- line and put back the ragged row heights the single-line row just removed.
-  Just t -> span_ [class_ "text-xs text-textWeak whitespace-nowrap"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC t
+  Just t -> span_ [class_ "text-xs text-textWeak whitespace-nowrap"] $ toHtml $ agoText currTime $ zonedTimeToUTC t
   Nothing -> span_ [class_ "text-textWeak text-xs"] "-"
 
 

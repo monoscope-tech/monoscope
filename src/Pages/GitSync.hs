@@ -31,7 +31,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -61,25 +61,9 @@ data GitSyncForm = GitSyncForm
   deriving anyclass (FromForm)
 
 
-statusResp :: Text -> AE.Value
-statusResp s = AE.object ["status" AE..= s]
-
-
-errResp :: Text -> AE.Value
-errResp msg = AE.object ["status" AE..= ("error" :: Text), "message" AE..= msg]
-
-
--- | An inbound push from any host.
---
--- The order below is the security-relevant part and is deliberate:
---
---   1. parse /only/ the repository name — enough to find the row that holds the secret;
---   2. check the row's host matches the route the delivery arrived on;
---   3. verify the signature;
---   4. only then decide it is a push and queue a job.
---
--- Doing (4) before (3) is how a forged body gets to enqueue work. Nothing here acts on the
--- payload beyond its name until 'Git.verifyWebhook' has returned.
+-- | An inbound push from any host. The order is security-relevant: parse /only/ the repository
+-- name, find its row, verify the signature, and only then queue a job. Queueing before
+-- 'Git.verifyWebhook' returns is how a forged body gets to enqueue work.
 gitWebhookPostH :: Git.GitHost -> Git.WebhookReq -> ATBaseCtx AE.Value
 gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
@@ -110,6 +94,18 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
                 void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
               statusResp "ok" <$ Log.logTrace "Triggered git sync from webhook" (sync.projectId, Git.hostSlug host, fullName)
             else AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= req.event] <$ Log.logTrace "Ignoring non-push git event" req.event
+  where
+    statusResp :: Text -> AE.Value
+    statusResp s = AE.object ["status" AE..= s]
+    errResp :: Text -> AE.Value
+    errResp msg = AE.object ["status" AE..= ("error" :: Text), "message" AE..= msg]
+    -- Collapse a verification failure into one of a handful of labels: this becomes a metric
+    -- dimension, and 'Git.verifyWebhook' can only fail in these ways.
+    rejectionReason :: Text -> Text
+    rejectionReason err
+      | "not provided" `T.isInfixOf` err = "missing"
+      | "base64" `T.isInfixOf` err = "malformed_secret"
+      | otherwise = "invalid"
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -127,11 +123,8 @@ gitSyncSettingsGetH pid = do
       " — the same installation covers it."
 
 
--- | Connect or update the config-sync repository.
---
--- The connection is built before anything is written: 'Git.mkGitConn' is what rejects a Gitea
--- row with no server URL, a Bitbucket row with one, an @http://@ origin, and a URL carrying
--- credentials. Storing first and discovering that on the next background job would leave a
+-- | Connect or update the config-sync repository. The connection is vetted before anything is
+-- written — storing first and discovering a bad origin on the next background job would leave a
 -- row that looks connected and never syncs.
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsPostH pid form = do
@@ -175,227 +168,210 @@ gitSyncSettingsDeleteH pid = do
 
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
 gitSyncSettingsView hostUrl pid syncM =
-  div_ [class_ "space-y-6"] $ maybe (notConnectedView actionUrl) (\sync -> connectedView sync actionUrl (webhookUrlFor hostUrl sync.host)) syncM
+  div_ [class_ "space-y-6"] $ maybe notConnectedView (\sync -> connectedView sync (webhookUrlFor sync.host)) syncM
   where
     actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
+    -- GitHub keeps the original path so hooks configured before this change keep working; every
+    -- other host gets the per-host route, which tells the handler whose signature scheme to check.
+    webhookUrlFor :: Git.GitHost -> Text
+    webhookUrlFor = \case
+      Git.GitHub -> hostUrl <> "webhook/github"
+      h -> hostUrl <> "webhook/git/" <> Git.hostSlug h
+    notConnectedView :: Html ()
+    notConnectedView = do
+      -- GitHub App (primary)
+      div_ [class_ "space-y-3"] do
+        p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
+        a_ [href_ (actionUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
+          faSprite_ "github" "regular" "w-3.5 h-3.5"
+          "Install GitHub App"
 
+      -- Token connection: the only option on GitLab, Gitea and Bitbucket, and still available on
+      -- GitHub for anyone who cannot install an App.
+      div_ [class_ "pt-6 border-t border-strokeWeak"] do
+        details_ [class_ "group/host"] do
+          summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
+            faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open/host:rotate-90"
+            toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token"
+          form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
+            div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+              -- Picking a host rewrites the token label and shows the server-URL field only for
+              -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
+              formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \h ->
+                let (tokenLabel, tokenHelp) = hostTokenHelp h
+                 in option_
+                      ( [value_ (Git.hostSlug h), term "data-token-label" tokenLabel, term "data-token-help" tokenHelp, term "data-origin" (originMode h)]
+                          <> [selected_ "" | h == Git.GitHub]
+                      )
+                      $ toHtml (Git.hostLabel h)
+              formField_
+                FieldSm
+                def
+                  { placeholder = "https://gitlab.example.com"
+                  , extraAttrs =
+                      [ term "hx-live:required" "host.selectedOptions[0].dataset.origin == 'required'"
+                      , term "hx-live" "closest('fieldset').class.hidden = host.selectedOptions[0].dataset.origin == 'no'"
+                      ]
+                  }
+                "Server URL"
+                "apiBase"
+                False
+                Nothing
+              formField_ FieldSm def{placeholder = "acme-corp"} "Repository owner" "owner" True Nothing
+              formField_ FieldSm def{placeholder = "observability-config"} "Repository name" "repo" True Nothing
+              formField_ FieldSm def{placeholder = "leave blank to detect"} "Branch" "branch" False Nothing
+              formField_
+                FieldSm
+                def
+                  { inputType = "password"
+                  , placeholder = "paste token"
+                  , extraAttrs = [term "hx-live" "closest('fieldset').q('label').textContent = host.selectedOptions[0].dataset.tokenLabel"]
+                  }
+                "Access token"
+                "accessToken"
+                True
+                Nothing
+            div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+              formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
+              -- Required in the UI for every new connection: a webhook we cannot verify is a
+              -- webhook anyone can forge into triggering a sync.
+              formField_ FieldSm def{inputType = "password", placeholder = "shared secret for the webhook"} "Webhook secret" "webhookSecret" True Nothing
+            p_ [class_ "text-xs text-textWeak", id_ "token-help", term "hx-live:text" "host.selectedOptions[0].dataset.tokenHelp"] ""
+            p_ [class_ "text-xs text-textWeak"] do
+              "Dashboards are stored in "
+              code_ [class_ "text-textBrand"] "dashboards/"
+            button_ [class_ "btn btn-sm gap-1", type_ "submit"] do
+              "Connect with token"
+              htmxIndicator_ "indicator" LdXS
 
--- | Collapse a verification failure into one of a handful of labels.
---
--- Bounded on purpose: this becomes a metric dimension, and 'Git.verifyWebhook' can only fail
--- in these ways.
-rejectionReason :: Text -> Text
-rejectionReason err
-  | "not provided" `T.isInfixOf` err = "missing"
-  | "base64" `T.isInfixOf` err = "malformed_secret"
-  | otherwise = "invalid"
-
-
--- | Where a host should send its pushes.
---
--- GitHub keeps the original path so hooks configured before this change keep working; every
--- other host gets the per-host route, which is what tells the handler whose signature scheme
--- to check.
-webhookUrlFor :: Text -> Git.GitHost -> Text
-webhookUrlFor hostUrl = \case
-  Git.GitHub -> hostUrl <> "webhook/github"
-  h -> hostUrl <> "webhook/git/" <> Git.hostSlug h
-
-
--- | What a host calls the credential you have to paste, and where to make one. Wrong-sounding
--- instructions are worse than none: a GitLab user told to "create a Personal Access Token with
--- Contents read/write" will look for a setting that does not exist.
-hostTokenHelp :: Git.GitHost -> (Text, Text)
-hostTokenHelp = \case
-  Git.GitHub -> ("Personal access token", "Fine-grained token with Contents: Read and write on the repository.")
-  Git.GitLab -> ("Project or personal access token", "Scope: api (or read_api plus write_repository).")
-  Git.Gitea -> ("Access token", "Settings → Applications → Generate token, with repository read and write.")
-  Git.Bitbucket -> ("Repository or workspace access token", "Scopes: repository, repository:write.")
-
-
-notConnectedView :: Text -> Html ()
-notConnectedView actionUrl = do
-  -- GitHub App (primary)
-  div_ [class_ "space-y-3"] do
-    p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
-    a_ [href_ (actionUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
-      faSprite_ "github" "regular" "w-3.5 h-3.5"
-      "Install GitHub App"
-
-  -- Token connection: the only option on GitLab, Gitea and Bitbucket, and still available on
-  -- GitHub for anyone who cannot install an App.
-  div_ [class_ "pt-6 border-t border-strokeWeak"] do
-    details_ [class_ "group/host"] do
-      summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
-        faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open/host:rotate-90"
-        toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token"
-      form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
-        div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
-          -- Picking a host rewrites the token label and shows the server-URL field only for
-          -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
-          formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \h ->
-            let (tokenLabel, tokenHelp) = hostTokenHelp h
-             in option_
-                  ( [value_ (Git.hostSlug h), term "data-token-label" tokenLabel, term "data-token-help" tokenHelp, term "data-origin" (originMode h)]
-                      <> [selected_ "" | h == Git.GitHub]
-                  )
-                  $ toHtml (Git.hostLabel h)
-          formField_
-            FieldSm
-            def
-              { placeholder = "https://gitlab.example.com"
-              , extraAttrs =
-                  [ [__| on load or change from #host
-                                     set mode to #host.selectedOptions[0].dataset.origin
-                                     then if mode is 'no' then add .hidden to closest <fieldset/> else remove .hidden from closest <fieldset/> end
-                                     then set my required to (mode is 'required') |]
-                  ]
-              }
-            "Server URL"
-            "apiBase"
-            False
-            Nothing
-          formField_ FieldSm def{placeholder = "acme-corp"} "Repository owner" "owner" True Nothing
-          formField_ FieldSm def{placeholder = "observability-config"} "Repository name" "repo" True Nothing
-          formField_ FieldSm def{placeholder = "leave blank to detect"} "Branch" "branch" False Nothing
-          formField_
-            FieldSm
-            def
-              { inputType = "password"
-              , placeholder = "paste token"
-              , extraAttrs = [[__| on load or change from #host put #host.selectedOptions[0].dataset.tokenLabel into the previous <label/> |]]
-              }
-            "Access token"
-            "accessToken"
-            True
-            Nothing
-        div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
-          formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
-          -- Required in the UI for every new connection: a webhook we cannot verify is a
-          -- webhook anyone can forge into triggering a sync.
-          formField_ FieldSm def{inputType = "password", placeholder = "shared secret for the webhook"} "Webhook secret" "webhookSecret" True Nothing
-        p_ [class_ "text-xs text-textWeak", id_ "token-help", [__| on load or change from #host put #host.selectedOptions[0].dataset.tokenHelp into me |]] ""
-        p_ [class_ "text-xs text-textWeak"] do
-          "Dashboards are stored in "
-          code_ [class_ "text-textBrand"] "dashboards/"
-        button_ [class_ "btn btn-sm gap-1", type_ "submit"] do
-          "Connect with token"
-          htmxIndicator_ "indicator" LdXS
-
-
-connectedView :: GitSync.GitHubSync -> Text -> Text -> Html ()
-connectedView sync actionUrl webhookUrl = do
-  let isViaApp = isJust sync.installationId
-  headerRow_ [] do
-    div_ [class_ "flex items-center gap-2 text-sm"] do
-      faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
-      span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
-      span_ [class_ "text-textWeak"] $ toHtml $ "(" <> Git.hostLabel sync.host <> ", " <> sync.branch <> ", " <> (if isViaApp then "App" else "token") <> ")"
-    connectionBadge_ "Connected"
-
-  -- Repository settings
-  form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
-    -- An App installation already knows which repositories it reaches, so changing one is
-    -- picking from that list — not retyping an owner and a name and finding out later that
-    -- one of them was wrong. A PAT reaches whatever it was scoped to and we cannot enumerate
-    -- it, so those keep the text boxes.
-    if isViaApp
-      then div_ [class_ "flex items-end gap-3"] do
-        formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
-        a_ [href_ (actionUrl <> "/repos"), class_ "btn btn-sm gap-1.5 shrink-0"] do
-          faSprite_ "code-branch" "regular" "w-3 h-3"
-          "Change repository"
-        input_ [type_ "hidden", name_ "owner", value_ sync.owner]
-        input_ [type_ "hidden", name_ "repo", value_ sync.repo]
-        input_ [type_ "hidden", name_ "accessToken", value_ ""]
-      else div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
-        formField_ FieldSm def{value = sync.owner, placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
-        formField_ FieldSm def{value = sync.repo, placeholder = "observability-config"} "Repository Name" "repo" True Nothing
-        formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
-        formField_ FieldSm def{inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
-    formField_ FieldSm def{value = sync.pathPrefix, placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
-    p_ [class_ "text-xs text-textWeak"] do
-      "Dashboards stored in "
-      code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "dashboards/" else sync.pathPrefix <> "/dashboards/"
-
-    -- Webhook URL
-    div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
+    connectedView :: GitSync.GitHubSync -> Text -> Html ()
+    connectedView sync webhookUrl = do
+      let isViaApp = isJust sync.installationId
       headerRow_ [] do
-        sectionLabel_ "Webhook URL"
-        copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-url" [term "data-url" webhookUrl]
-      div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
-      unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
+        div_ [class_ "flex items-center gap-2 text-sm"] do
+          faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
+          span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
+          span_ [class_ "text-textWeak"] $ toHtml $ "(" <> Git.hostLabel sync.host <> ", " <> sync.branch <> ", " <> (if isViaApp then "App" else "token") <> ")"
+        connectionBadge_ "Connected"
 
-    -- Actions
-    div_ [class_ "flex items-center justify-between pt-2"] do
-      button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
-        "Save"
-        htmxIndicator_ "indicator" LdXS
-      label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "disconnect-modal"] do
-        faSprite_ "link-slash" "regular" "w-3 h-3"
-        span_ "Disconnect"
+      -- Repository settings
+      form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
+        -- An App installation knows which repositories it reaches, so changing one is picking from
+        -- that list; a PAT's scope cannot be enumerated, so those keep the text boxes.
+        if isViaApp
+          then div_ [class_ "flex items-end gap-3"] do
+            formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
+            a_ [href_ (actionUrl <> "/repos"), class_ "btn btn-sm gap-1.5 shrink-0"] do
+              faSprite_ "code-branch" "regular" "w-3 h-3"
+              "Change repository"
+            input_ [type_ "hidden", name_ "owner", value_ sync.owner]
+            input_ [type_ "hidden", name_ "repo", value_ sync.repo]
+            input_ [type_ "hidden", name_ "accessToken", value_ ""]
+          else div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+            formField_ FieldSm def{value = sync.owner, placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
+            formField_ FieldSm def{value = sync.repo, placeholder = "observability-config"} "Repository Name" "repo" True Nothing
+            formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
+            formField_ FieldSm def{inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
+        formField_ FieldSm def{value = sync.pathPrefix, placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
+        p_ [class_ "text-xs text-textWeak"] do
+          "Dashboards stored in "
+          code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "dashboards/" else sync.pathPrefix <> "/dashboards/"
 
-  confirmModal_ "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
+        -- Webhook URL
+        div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
+          headerRow_ [] do
+            sectionLabel_ "Webhook URL"
+            copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-url" [term "data-url" webhookUrl]
+          div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
+          unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
-  unless isViaApp $ div_ [class_ "pt-6 border-t border-strokeWeak"] do
-    div_ [class_ "prose prose-sm max-w-none"] $ renderMarkdown $ setupInstructions sync.host webhookUrl
+        -- Actions
+        div_ [class_ "flex items-center justify-between pt-2"] do
+          button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
+            "Save"
+            htmxIndicator_ "indicator" LdXS
+          label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "disconnect-modal"] do
+            faSprite_ "link-slash" "regular" "w-3 h-3"
+            span_ "Disconnect"
 
+      confirmModal_ "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
 
--- | Setup notes for a token connection, in the host's own vocabulary — the GitHub-only
--- walkthrough this replaced sent GitLab, Gitea and Bitbucket users looking for settings that
--- do not exist on their host.
-setupInstructions :: Git.GitHost -> Text -> Text
-setupInstructions host webhookUrl =
-  let label = Git.hostLabel host
-      (tokenLabel, tokenHelp) = hostTokenHelp host
-   in [text|
-## Setup Instructions
+      unless isViaApp $ div_ [class_ "pt-6 border-t border-strokeWeak"] do
+        div_ [class_ "prose prose-sm max-w-none"] $ renderMarkdown $ setupInstructions sync.host webhookUrl
 
-### 1. Create a $label $tokenLabel
+    -- Setup notes for a token connection, in the host's own vocabulary — the GitHub-only
+    -- walkthrough this replaced sent GitLab, Gitea and Bitbucket users looking for settings that
+    -- do not exist on their host.
+    setupInstructions :: Git.GitHost -> Text -> Text
+    setupInstructions host webhookUrl =
+      let label = Git.hostLabel host
+          (tokenLabel, tokenHelp) = hostTokenHelp host
+       in [text|
+    ## Setup Instructions
 
-$tokenHelp
+    ### 1. Create a $label $tokenLabel
 
-### 2. Repository Structure
+    $tokenHelp
 
-Create a `dashboards/` folder in your repository with YAML files:
+    ### 2. Repository Structure
 
-```
-your-repo/
-├── dashboards/
-│   ├── api-overview.yaml
-│   ├── error-tracking.yaml
-│   └── performance.yaml
-└── README.md
-```
+    Create a `dashboards/` folder in your repository with YAML files:
 
-### 3. Dashboard YAML Format
+    ```
+    your-repo/
+    ├── dashboards/
+    │   ├── api-overview.yaml
+    │   ├── error-tracking.yaml
+    │   └── performance.yaml
+    └── README.md
+    ```
 
-Each dashboard file should have this structure:
+    ### 3. Dashboard YAML Format
 
-```yaml
-title: API Overview
-description: Monitor API health and performance
-tags:
-  - api
-  - monitoring
-widgets:
-  - type: chart
-    title: Request Count
-    query: "| summarize count() by bin(timestamp, 1h)"
-```
+    Each dashboard file should have this structure:
 
-### 4. Set Up Webhook (Required)
+    ```yaml
+    title: API Overview
+    description: Monitor API health and performance
+    tags:
+      - api
+      - monitoring
+    widgets:
+      - type: chart
+        title: Request Count
+        query: "| summarize count() by bin(timestamp, 1h)"
+    ```
 
-A push webhook is the only thing that pulls changes from your repository, so without one
-nothing you commit will reach Monoscope. Add it in your repository settings:
+    ### 4. Set Up Webhook (Required)
 
-1. Set the payload URL to: `${webhookUrl}`
-2. Set the content type to: `application/json`
-3. Send push events only, signed with the webhook secret you pasted above
+    A push webhook is the only thing that pulls changes from your repository, so without one
+    nothing you commit will reach Monoscope. Add it in your repository settings:
 
-*Pushing a dashboard from Monoscope to your repository works without the webhook — it is only
-the pull direction that depends on it.*
-|]
+    1. Set the payload URL to: `${webhookUrl}`
+    2. Set the content type to: `application/json`
+    3. Send push events only, signed with the webhook secret you pasted above
+
+    *Pushing a dashboard from Monoscope to your repository works without the webhook — it is only
+    the pull direction that depends on it.*
+    |]
+
+    -- Whether this host's server-URL field is required, optional, or meaningless — read by the
+    -- hx-live expression on the field so the form asks only for what the host can accept.
+    originMode :: Git.GitHost -> Text
+    originMode h = case Git.hostOriginRule h of
+      Git.OriginOptional _ _ -> "optional"
+      Git.OriginRequired _ -> "required"
+      Git.OriginRejected _ -> "no"
+
+    -- What a host calls the credential you have to paste, and where to make one. Wrong-sounding
+    -- instructions are worse than none: a GitLab user told to "create a Personal Access Token with
+    -- Contents read/write" will look for a setting that does not exist.
+    hostTokenHelp :: Git.GitHost -> (Text, Text)
+    hostTokenHelp = \case
+      Git.GitHub -> ("Personal access token", "Fine-grained token with Contents: Read and write on the repository.")
+      Git.GitLab -> ("Project or personal access token", "Scope: api (or read_api plus write_repository).")
+      Git.Gitea -> ("Access token", "Settings → Applications → Generate token, with repository read and write.")
+      Git.Bitbucket -> ("Repository or workspace access token", "Scopes: repository, repository:write.")
 
 
 -- | Queue a git sync push for a dashboard if git sync is configured
@@ -427,10 +403,9 @@ redirectPage msg url = div_ [class_ "p-8 text-center"] do
   a_ [href_ url, class_ "text-textBrand underline"] "Continue"
 
 
--- | Store the grant an installation is, keyed by the account it covers. Called on every path
--- an installation can arrive by, because it is what makes source-code reading work without
--- also configuring dashboard sync. Best-effort: failing to name the account must not lose the
--- installation the user just completed, so it logs and moves on.
+-- | Store the grant an installation is, keyed by the account it covers — this is what makes
+-- source-code reading work without also configuring dashboard sync. Best-effort: failing to name
+-- the account must not lose the installation the user just completed.
 recordInstallation :: Projects.ProjectId -> Int64 -> ATAuthCtx ()
 recordInstallation pid instId = do
   ctx <- ask @Config.AuthContext
@@ -457,7 +432,7 @@ githubAppInstallH pid toM = do
 -- | Which half of the installation the user started from: the same grant powers dashboard sync
 -- and source-code reading, and the callback has to land back where the flow began.
 data InstallDest = InstallSync | InstallCode
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
 
 
@@ -479,13 +454,6 @@ parseInstallState :: Text -> Maybe (Text, InstallDest)
 parseInstallState s = case T.breakOn ":" s of
   ("", _) -> Nothing
   (pid, dest) -> Just (pid, bool InstallSync InstallCode (T.drop 1 dest == "code"))
-
-
--- | Where an install lands once GitHub hands control back.
-installReturnUrl :: Projects.ProjectId -> Int64 -> InstallDest -> Text
-installReturnUrl pid instId = \case
-  InstallCode -> "/p/" <> pid.toText <> "/settings/code-mappings"
-  InstallSync -> "/p/" <> pid.toText <> "/settings/git-sync/repos?installationId=" <> show instId
 
 
 -- | Handle callback from GitHub after App installation
@@ -511,23 +479,28 @@ githubAppCallbackH instIdM _setupAction stateM = do
     _ -> do
       Log.logAttention "Invalid GitHub callback" (instIdM, stateM)
       addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "p-8 text-center text-textError"] "Invalid callback. Please try again."
+  where
+    -- Where an install lands once GitHub hands control back.
+    installReturnUrl :: Projects.ProjectId -> Int64 -> InstallDest -> Text
+    installReturnUrl pid instId = \case
+      InstallCode -> "/p/" <> pid.toText <> "/settings/code-mappings"
+      InstallSync -> "/p/" <> pid.toText <> "/settings/git-sync/repos?installationId=" <> show instId
 
-
--- | View for selecting a project when state is missing from callback
-projectSelectorView :: Int64 -> [Projects.ProjectListItem] -> Html ()
-projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex items-center justify-center p-8"] do
-  div_ [class_ "surface-raised rounded-2xl p-6 max-w-md w-full space-y-4"] do
-    div_ [class_ "flex items-center gap-3 mb-4"] do
-      iconBadgeLg_ SuccessBadge "circle-check"
-      div_ do
-        h3_ [class_ "text-lg font-semibold text-textStrong"] "GitHub App Installed!"
-        p_ [class_ "text-sm text-textWeak"] "Select a project to connect"
-    if null projects
-      then emptyState_ def{size = ESCompact, icon = Just "folder"} "No projects found" "Create a project first, then come back to connect it."
-      else div_ [class_ "space-y-2"] $ forM_ projects \proj ->
-        a_ [href_ ("/p/" <> proj.id.toText <> "/settings/git-sync/repos?installationId=" <> show instId), class_ "flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer block"] do
-          iconBadge_ NeutralBadge "folder"
-          span_ [class_ "font-medium text-textStrong"] $ toHtml proj.title
+    -- View for selecting a project when state is missing from callback
+    projectSelectorView :: Int64 -> [Projects.ProjectListItem] -> Html ()
+    projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex items-center justify-center p-8"] do
+      div_ [class_ "surface-raised rounded-2xl p-6 max-w-md w-full space-y-4"] do
+        div_ [class_ "flex items-center gap-3 mb-4"] do
+          iconBadgeLg_ SuccessBadge "circle-check"
+          div_ do
+            h3_ [class_ "text-lg font-semibold text-textStrong"] "GitHub App Installed!"
+            p_ [class_ "text-sm text-textWeak"] "Select a project to connect"
+        if null projects
+          then emptyState_ def{size = ESCompact, icon = Just "folder"} "No projects found" "Create a project first, then come back to connect it."
+          else div_ [class_ "space-y-2"] $ forM_ projects \proj ->
+            a_ [href_ ("/p/" <> proj.id.toText <> "/settings/git-sync/repos?installationId=" <> show instId), class_ "flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer block"] do
+              iconBadge_ NeutralBadge "folder"
+              span_ [class_ "font-medium text-textStrong"] $ toHtml proj.title
 
 
 -- | List repositories from GitHub App installation (full page with BodyWrapper)
@@ -543,7 +516,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
       -- Idempotent, and this is the first point at which grant and project are known together
       -- when the callback carried no project and the user picked one here.
       recordInstallation pid instId
-      W.runHTTPWreq $ either errBox (repoSelectionView pid instId) <$> runExceptT do
+      W.runHTTPWreq $ either errBox (repoSelectionView instId) <$> runExceptT do
         tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
         conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing tok.token
         ExceptT $ first ("Failed to list repos: " <>) <$> Git.listRepos conn
@@ -551,64 +524,59 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
     settingsH2_ "GitHub Sync"
     p_ [class_ "text-textWeak text-sm -mt-4"] "Select a repository to sync dashboards with."
     div_ [id_ "git-sync-content", class_ "surface-raised rounded-2xl p-4"] content
+  where
+    -- View for selecting a repository
+    repoSelectionView :: Int64 -> [Git.GitRepo] -> Html ()
+    repoSelectionView instId repos = div_ [class_ "space-y-4"] do
+      h3_ [class_ "text-lg font-medium text-textStrong"] "Select Repository"
+      p_ [class_ "text-sm text-textWeak"] "Choose which repository to sync dashboards with."
+      form_ [class_ "space-y-4", hxPost_ ("/p/" <> pid.toText <> "/settings/git-sync/select"), hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] do
+        input_ [type_ "hidden", name_ "installationId", value_ (show instId)]
+        repoFilter_ (length repos)
+        -- Each repo carries its own default branch, so choosing one fills the branch field in
+        -- rather than leaving "main" to be wrong on every repo that renamed its trunk.
+        div_ [class_ "space-y-2 max-h-80 overflow-y-auto c-scroll", id_ "repo-list"] $ forM_ (zip [0 :: Int ..] repos) \(idx, repo) ->
+          label_ [class_ "repo-row flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak", term "data-filter" (T.toLower repo.fullName)] do
+            input_
+              $ [ type_ "radio"
+                , name_ "repoFullName"
+                , value_ repo.fullName
+                , class_ "radio radio-sm"
+                , required_ ""
+                , term "data-branch" repo.defaultBranch
+                , [__| on change set #branch.value to my @data-branch |]
+                ]
+              <> [checked_ | idx == 0]
+            span_ [class_ "font-medium text-textStrong truncate"] $ toHtml repo.fullName
+            when repo.private $ span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "private"
+        -- The list is exactly what the installation was granted, so a repository that is not in it
+        -- is a narrower grant rather than a missing row — and this is the only page that widens it.
+        a_
+          [ href_ (GitSync.installationSettingsUrl instId)
+          , target_ "_blank"
+          , rel_ "noopener"
+          , class_ "text-xs text-textBrand underline inline-flex items-center gap-1"
+          ]
+          do
+            "Repository missing? Add it to the installation on GitHub"
+            faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
+        div_ [class_ "grid grid-cols-2 gap-4"] do
+          formField_ FieldSm def{value = maybe "main" (.defaultBranch) (viaNonEmpty head repos), placeholder = "main"} "Branch" "branch" False Nothing
+          formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo (optional)" "pathPrefix" False Nothing
+        primaryButton_ [type_ "submit"] "Connect Repository"
 
-
--- | View for selecting a repository
-repoSelectionView :: Projects.ProjectId -> Int64 -> [Git.GitRepo] -> Html ()
-repoSelectionView pid instId repos = div_ [class_ "space-y-4"] do
-  h3_ [class_ "text-lg font-medium text-textStrong"] "Select Repository"
-  p_ [class_ "text-sm text-textWeak"] "Choose which repository to sync dashboards with."
-  form_ [class_ "space-y-4", hxPost_ ("/p/" <> pid.toText <> "/settings/git-sync/select"), hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] do
-    input_ [type_ "hidden", name_ "installationId", value_ (show instId)]
-    repoFilter_ (length repos)
-    -- Each repo carries its own default branch, so choosing one fills the branch field in
-    -- rather than leaving "main" to be wrong on every repo that renamed its trunk.
-    div_ [class_ "space-y-2 max-h-80 overflow-y-auto c-scroll", id_ "repo-list"] $ forM_ (zip [0 :: Int ..] repos) \(idx, repo) ->
-      label_ [class_ "repo-row flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak", term "data-name" (T.toLower repo.fullName)] do
-        input_
-          $ [ type_ "radio"
-            , name_ "repoFullName"
-            , value_ repo.fullName
-            , class_ "radio radio-sm"
-            , required_ ""
-            , term "data-branch" repo.defaultBranch
-            , [__| on change set #branch.value to my @data-branch |]
-            ]
-          <> [checked_ | idx == 0]
-        span_ [class_ "font-medium text-textStrong truncate"] $ toHtml repo.fullName
-        when repo.private $ span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "private"
-    -- The list is exactly what the installation was granted, so a repository that is not in it
-    -- is a narrower grant rather than a missing row — and this is the only page that widens it.
-    a_
-      [ href_ (GitSync.installationSettingsUrl instId)
-      , target_ "_blank"
-      , rel_ "noopener"
-      , class_ "text-xs text-textBrand underline inline-flex items-center gap-1"
-      ]
-      do
-        "Repository missing? Add it to the installation on GitHub"
-        faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
-    div_ [class_ "grid grid-cols-2 gap-4"] do
-      formField_ FieldSm def{value = maybe "main" (.defaultBranch) (viaNonEmpty head repos), placeholder = "main"} "Branch" "branch" False Nothing
-      formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo (optional)" "pathPrefix" False Nothing
-    primaryButton_ [type_ "submit"] "Connect Repository"
-
-
--- | Type-to-filter over a repo list. Only rendered once the list is long enough that scanning
--- it is the slower option — an account with four repos does not need a search box.
-repoFilter_ :: Int -> Html ()
-repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-center gap-2"] do
-  faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
-  input_
-    [ type_ "search"
-    , class_ "grow"
-    , placeholder_ ("Filter " <> show n <> " repositories")
-    , Aria.label_ "Filter repositories"
-    , [__| on input
-             for row in <.repo-row/>
-               if row@data-name contains my value.toLowerCase() then remove .hidden from row else add .hidden to row end
-             end |]
-    ]
+    -- Type-to-filter over a repo list. Only rendered once the list is long enough that scanning
+    -- it is the slower option — an account with four repos does not need a search box.
+    repoFilter_ :: Int -> Html ()
+    repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-center gap-2"] do
+      faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
+      input_
+        [ type_ "search"
+        , class_ "grow"
+        , placeholder_ ("Filter " <> show n <> " repositories")
+        , Aria.label_ "Filter repositories"
+        , filterInputAttr_ ".repo-row"
+        ]
 
 
 -- | Handle repo selection from GitHub App
@@ -627,12 +595,3 @@ githubAppSelectRepoH pid form = do
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards pid
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid result
-
-
--- | Whether this host's server-URL field is required, optional, or meaningless — read by the
--- hyperscript on the field so the form asks only for what the host can accept.
-originMode :: Git.GitHost -> Text
-originMode h = case Git.hostOriginRule h of
-  Git.OriginOptional _ _ -> "optional"
-  Git.OriginRequired _ -> "required"
-  Git.OriginRejected _ -> "no"

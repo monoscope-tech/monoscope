@@ -104,7 +104,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -158,28 +158,6 @@ humanizeMinioErr = \case
   Minio.MErrService _ -> "S3 rejected the request. Check your credentials and bucket permissions."
   Minio.MErrHTTP _ -> "Couldn't reach the S3 endpoint. Check the Custom Endpoint URL, region and bucket name, then try again."
   Minio.MErrIO _ -> "Network error while reaching S3. Check your connection and endpoint, then try again."
-
-
--- | Common AWS region codes for the region combobox. Free text is still
--- allowed so S3-compatible providers (which ignore the region) can pass anything.
-awsRegions :: [(Text, Text)]
-awsRegions =
-  [ ("us-east-1", "US East (N. Virginia)")
-  , ("us-east-2", "US East (Ohio)")
-  , ("us-west-1", "US West (N. California)")
-  , ("us-west-2", "US West (Oregon)")
-  , ("ca-central-1", "Canada (Central)")
-  , ("eu-west-1", "Europe (Ireland)")
-  , ("eu-west-2", "Europe (London)")
-  , ("eu-west-3", "Europe (Paris)")
-  , ("eu-central-1", "Europe (Frankfurt)")
-  , ("eu-north-1", "Europe (Stockholm)")
-  , ("ap-south-1", "Asia Pacific (Mumbai)")
-  , ("ap-southeast-1", "Asia Pacific (Singapore)")
-  , ("ap-southeast-2", "Asia Pacific (Sydney)")
-  , ("ap-northeast-1", "Asia Pacific (Tokyo)")
-  , ("sa-east-1", "South America (São Paulo)")
-  ]
 
 
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
@@ -237,6 +215,27 @@ bringS3Page pid s3BucketM = settingsSection_ do
         span_ "Remove"
 
   confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
+  where
+    -- Suggestions only: free text stays allowed so S3-compatible providers (which
+    -- ignore the region) can pass anything.
+    awsRegions :: [(Text, Text)]
+    awsRegions =
+      [ ("us-east-1", "US East (N. Virginia)")
+      , ("us-east-2", "US East (Ohio)")
+      , ("us-west-1", "US West (N. California)")
+      , ("us-west-2", "US West (Oregon)")
+      , ("ca-central-1", "Canada (Central)")
+      , ("eu-west-1", "Europe (Ireland)")
+      , ("eu-west-2", "Europe (London)")
+      , ("eu-west-3", "Europe (Paris)")
+      , ("eu-central-1", "Europe (Frankfurt)")
+      , ("eu-north-1", "Europe (Stockholm)")
+      , ("ap-south-1", "Asia Pacific (Mumbai)")
+      , ("ap-southeast-1", "Asia Pacific (Singapore)")
+      , ("ap-southeast-2", "Asia Pacific (Sydney)")
+      , ("ap-northeast-1", "Asia Pacific (Tokyo)")
+      , ("sa-east-1", "South America (São Paulo)")
+      ]
 
 
 ----------------------------------------------------------------------
@@ -365,60 +364,59 @@ makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey 
 makeApiKeysTable pid apiKeys elemId =
   Table.Table
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
-    , columns = apiKeyColumns pid
+    , columns = apiKeyColumns
     , rows = apiKeys
     , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", action = Table.ESNone}}
     }
-
-
-apiKeyColumns :: Projects.ProjectId -> [Table.Column ProjectApiKeys.ProjectApiKey]
-apiKeyColumns pid =
-  [ Table.col "Title" \apiKey ->
-      span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
-  , Table.col "Key" \apiKey -> do
-      -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
-      -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
-      -- Keyed by key id, not row index — the active and archived tables both index from 0.
-      let revealId = "reveal-key-" <> apiKey.id.toText
-      div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
-        input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
-        span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-        span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
-        div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-          let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
-          label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
-            $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivate]
-            $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          button_
-            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
-            , type_ "button"
-            , Aria.label_ $ "Copy " <> apiKey.title
-            , -- Shared Copy behavior (BodyWrapper): copies the element's innerText and
-              -- adds the .copy-success flash. The hand-rolled version here had no flash,
-              -- so copy feedback differed from the log detail panel.
-              term "_" ("install Copy(content: #key-value-" <> apiKey.id.toText <> ")")
-            , data_ "tip" "Copy key"
-            ]
-            $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          let (hxMethod, tip, icon, iconCls) =
-                if apiKey.active
-                  then (hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
-                  else (hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
-              confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
-          button_
-            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
-            , type_ "button"
-            , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
-            , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-            , hxConfirm_ confirmMsg
-            , hxTarget_ settingsContentTarget
-            , data_ "tip" tip
-            ]
-            $ faSprite_ icon "regular"
-            $ "h-3.5 w-3.5 "
-            <> iconCls
-  ]
+  where
+    apiKeyColumns :: [Table.Column ProjectApiKeys.ProjectApiKey]
+    apiKeyColumns =
+      [ Table.col "Title" \apiKey ->
+          span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
+      , Table.col "Key" \apiKey -> do
+          -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
+          -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
+          -- Keyed by key id, not row index — the active and archived tables both index from 0.
+          let revealId = "reveal-key-" <> apiKey.id.toText
+          div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
+            input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
+            span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
+            span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
+            div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
+              let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
+              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
+                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivate]
+                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+              button_
+                [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
+                , type_ "button"
+                , Aria.label_ $ "Copy " <> apiKey.title
+                , -- Shared Copy behavior (BodyWrapper): copies the element's innerText and
+                  -- adds the .copy-success flash. The hand-rolled version here had no flash,
+                  -- so copy feedback differed from the log detail panel.
+                  term "_" ("install Copy(content: #key-value-" <> apiKey.id.toText <> ")")
+                , data_ "tip" "Copy key"
+                ]
+                $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
+              let (hxMethod, tip, icon, iconCls) =
+                    if apiKey.active
+                      then (hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
+                      else (hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
+                  confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
+              button_
+                [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
+                , type_ "button"
+                , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
+                , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                , hxConfirm_ confirmMsg
+                , hxTarget_ settingsContentTarget
+                , data_ "tip" tip
+                ]
+                $ faSprite_ icon "regular"
+                $ "h-3.5 w-3.5 "
+                <> iconCls
+      ]
 
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
@@ -492,25 +490,6 @@ data ScrapeTarget = ScrapeTarget
   , authHeader :: Maybe Text
   , labels :: AE.Value
   }
-
-
--- | Validate + normalise a target form. Name is required because it becomes the
--- @service.name@ the scraped metrics are grouped under — blank names would silently
--- collide multiple targets into one series namespace.
-validatePrometheusForm :: PrometheusForm -> Either Text ScrapeTarget
-validatePrometheusForm form = do
-  url <- validateScrapeUrl form.url
-  when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
-  Right
-    ScrapeTarget
-      { name
-      , url
-      , interval = max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
-      , authHeader = mfilter (not . T.null) (T.strip <$> form.authHeader)
-      , labels = parseLabelsText (fromMaybe "" form.extraLabels)
-      }
-  where
-    name = T.strip form.name
 
 
 -- | The URL guards shared by save-validation and the Test handler: non-empty + SSRF floor.
@@ -600,7 +579,7 @@ prometheusUpdateH pid cid form = promSave pid form "Updated" \t -> do
 promSave :: Projects.ProjectId -> PrometheusForm -> Text -> (ScrapeTarget -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
 promSave pid form verb persist = do
   _ <- Projects.sessionAndProject pid
-  case validatePrometheusForm form of
+  case validatePrometheusForm of
     Left err -> addErrorToast err Nothing
     Right target ->
       try (persist target) >>= \case
@@ -614,6 +593,24 @@ promSave pid form verb persist = do
           | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> target.name <> "” already exists") Nothing
           | otherwise -> throwIO e
   prometheusMut pid
+  where
+    -- Validate + normalise the form. Name is required because it becomes the
+    -- @service.name@ the scraped metrics are grouped under — blank names would silently
+    -- collide multiple targets into one series namespace.
+    validatePrometheusForm :: Either Text ScrapeTarget
+    validatePrometheusForm = do
+      url <- validateScrapeUrl form.url
+      when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
+      Right
+        ScrapeTarget
+          { name
+          , url
+          , interval = max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
+          , authHeader = mfilter (not . T.null) (T.strip <$> form.authHeader)
+          , labels = parseLabelsText (fromMaybe "" form.extraLabels)
+          }
+      where
+        name = T.strip form.name
 
 
 -- | One-shot scrape used by the form's Test button: fetch + parse, no DB write, no ingest.
@@ -679,112 +676,79 @@ parseLabelsText t =
     ]
 
 
--- | Inverse of 'parseLabelsText', to prefill the edit form.
-labelsToText :: AE.Value -> Text
-labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
-labelsToText _ = ""
-
-
--- | Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
--- on/off state so a target that's enabled-but-failing never shows a reassuring green.
-data ScrapeHealth = HealthOk | HealthError | HealthPending
-
-
-configHealth :: PromCfg.PrometheusScrapeConfig -> ScrapeHealth
-configHealth cfg = case T.toLower . T.strip <$> cfg.lastStatus of
-  Just s
-    | "ok" `T.isPrefixOf` s -> HealthOk
-    | "error" `T.isPrefixOf` s -> HealthError
-  _ -> HealthPending
-
-
-healthBadge_ :: ScrapeHealth -> Html ()
-healthBadge_ = \case
-  HealthOk -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> "healthy"
-  HealthError -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3" >> "failing"
-  HealthPending -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
-
-
 prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
 prometheusPage pid cfgs = settingsSection_ do
   div_ [class_ "flex justify-between items-center"] do
     settingsH2_ "Prometheus targets"
-    promTargetModal_
-      pid
-      "prometheus-modal"
-      (span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target")
-      "Scrape a Prometheus endpoint"
-      "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
-      ("/p/" <> pid.toText <> "/settings/prometheus")
-      "Add scrape target"
-      Nothing
+    promTargetModal_ pid (span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") Nothing
   prometheusTargetsList pid cfgs
 
 
--- | Add/edit target modal: same shell either way, differing only in trigger, copy,
--- POST target and the config it prefills from.
-promTargetModal_ :: Projects.ProjectId -> Text -> Html () -> Text -> Text -> Text -> Text -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
-promTargetModal_ pid modalId trigger heading desc action submitLabel mcfg =
+-- | Add/edit target modal: same shell either way — the prefilled config decides the
+-- modal id, copy and POST target, so callers only supply the trigger markup.
+promTargetModal_ :: Projects.ProjectId -> Html () -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+promTargetModal_ pid trigger mcfg =
   modalWith_ modalId def{boxClass = "p-8"} (Just trigger) $ div_ [class_ "flex flex-col gap-5"] do
     div_ do
       h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
       p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
-    form_ [hxPost_ action, class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-      $ prometheusFields_ pid modalId submitLabel mcfg
-
-
--- | Shared add/edit form body: prefilled from a config when editing. Carries its own
--- action row (Test / Cancel / submit) so callers just wrap it in a form. @submitLabel@
--- names the commit button and @modalId@ wires Cancel to close the enclosing modal.
-prometheusFields_ :: Projects.ProjectId -> Text -> Text -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusFields_ pid modalId submitLabel mcfg = do
-  field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
-  field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
-  label_ [class_ "flex flex-col gap-1 text-sm"] do
-    span_ [class_ "text-textWeak"] "Scrape interval"
-    -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
-    -- interval can't be honoured. Always include the config's current value (even if
-    -- off-list) so editing an unrelated field never silently rewrites the interval.
-    let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
-        presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
-        opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
-    select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-      $ forM_ opts \(v, l) ->
-        option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
-  -- Optional fields stay collapsed until needed; auto-expanded when editing a target
-  -- that already has them set, so existing values are never hidden behind the toggle.
-  let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
-  details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
-    summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
-      faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-      "Advanced"
-    div_ [class_ "flex flex-col gap-3 mt-3"] do
-      -- Never echo the saved token into the HTML (it would sit in the page source / proxy
-      -- caches): show an empty field, and on edit treat blank as "keep the saved token".
-      let hasToken = maybe False (isJust . (.authHeader)) mcfg
-          (authPh, authHelp) =
-            if hasToken
-              then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
-              else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
-      field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
-      when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
-        input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
-        "Clear saved token"
-      field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
-  div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
-    button_
-      [ type_ "button"
-      , class_ "btn btn-ghost gap-1.5"
-      , hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/test"
-      , term "hx-include" "closest form"
-      , hxTarget_ "next .prom-test-result"
-      , hxSwap_ "outerHTML"
-      ]
-      $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
-    label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
-    button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
-  prometheusTestResult Nothing
+    form_ [hxPost_ action, class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
+      field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
+      field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
+      label_ [class_ "flex flex-col gap-1 text-sm"] do
+        span_ [class_ "text-textWeak"] "Scrape interval"
+        -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
+        -- interval can't be honoured. Always include the config's current value (even if
+        -- off-list) so editing an unrelated field never silently rewrites the interval.
+        let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
+            presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
+            opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
+        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
+          $ forM_ opts \(v, l) ->
+            option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
+      -- Optional fields stay collapsed until needed; auto-expanded when editing a target
+      -- that already has them set, so existing values are never hidden behind the toggle.
+      let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
+      details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
+        summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
+          faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
+          "Advanced"
+        div_ [class_ "flex flex-col gap-3 mt-3"] do
+          -- Never echo the saved token into the HTML (it would sit in the page source / proxy
+          -- caches): show an empty field, and on edit treat blank as "keep the saved token".
+          let hasToken = maybe False (isJust . (.authHeader)) mcfg
+              (authPh, authHelp) =
+                if hasToken
+                  then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
+                  else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
+          field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
+          when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
+            input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
+            "Clear saved token"
+          field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
+      div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
+        button_
+          [ type_ "button"
+          , class_ "btn btn-ghost gap-1.5"
+          , hxPost_ (base <> "/test")
+          , term "hx-include" "closest form"
+          , hxTarget_ "next .prom-test-result"
+          , hxSwap_ "outerHTML"
+          ]
+          $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
+        label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
+        button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
+      prometheusTestResult Nothing
   where
+    base = "/p/" <> pid.toText <> "/settings/prometheus"
+    modalId, heading, desc, action, submitLabel :: Text
+    (modalId, heading, desc, action, submitLabel) = case mcfg of
+      Nothing -> ("prometheus-modal", "Scrape a Prometheus endpoint", "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on.", base, "Add scrape target")
+      Just cfg -> ("prom-edit-" <> cfg.id.toText, "Edit Prometheus target", "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape.", base <> "/" <> cfg.id.toText <> "/edit", "Save changes")
+    -- Inverse of 'parseLabelsText', to prefill the edit form.
+    labelsToText :: AE.Value -> Text
+    labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
+    labelsToText _ = ""
     field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
     field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textWeak"] (toHtml lbl)
@@ -802,26 +766,22 @@ prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust r
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
 prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] do
   if V.null cfgs
-    then prometheusEmptyState
+    then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
     else do
       input_
         [ class_ "input input-bordered input-sm w-full mb-3"
         , type_ "search"
         , placeholder_ "Filter targets…"
-        , [__|on input show .itemsListItem in #prometheus-targets when its textContent.toLowerCase() contains my value.toLowerCase()|]
+        , filterInputAttr_ ".itemsListItem in #prometheus-targets"
         ]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
-
-
-prometheusEmptyState :: Html ()
-prometheusEmptyState = emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
 
 
 prometheusTargetRow :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfig -> Html ()
 prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center justify-between gap-3 border border-strokeWeak rounded-md p-3"] do
   div_ [class_ "flex flex-col min-w-0 gap-1"] do
     div_ [class_ "flex items-center gap-2 flex-wrap"] do
-      healthBadge_ (configHealth cfg)
+      healthBadge_
       span_ [class_ "text-textStrong font-medium"] $ toHtml cfg.name
       unless cfg.enabled $ span_ [class_ "cbadge-sm badge-neutral"] "paused"
       when (isJust cfg.authHeader) $ faSprite_ "lock" "solid" "w-3 h-3 text-iconNeutral"
@@ -836,17 +796,17 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
     a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
     let cfgUrl = "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText
         swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-    promTargetModal_
-      pid
-      ("prom-edit-" <> cfg.id.toText)
-      (span_ [class_ "btn btn-xs btn-ghost"] "Edit")
-      "Edit Prometheus target"
-      "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
-      (cfgUrl <> "/edit")
-      "Save changes"
-      (Just cfg)
+    promTargetModal_ pid (span_ [class_ "btn btn-xs btn-ghost"] "Edit") (Just cfg)
     button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ cfgUrl] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
     button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ cfgUrl, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
+  where
+    -- Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
+    -- on/off state so a target that's enabled-but-failing never shows a reassuring green.
+    healthBadge_ = case T.toLower . T.strip <$> cfg.lastStatus of
+      Just s
+        | "ok" `T.isPrefixOf` s -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> "healthy"
+        | "error" `T.isPrefixOf` s -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3" >> "failing"
+      _ -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
 
 
 ----------------------------------------------------------------------
@@ -973,7 +933,7 @@ notificationsTestPostH pid TestForm{..} = do
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
   case status of
-    TSSent -> addSuccessToast (maybe "Test notification sent to all channels!" (const $ "Test " <> display channel <> " notification sent!") (senderFor channel)) Nothing
+    TSSent -> addSuccessToast (bool ("Test " <> display channel <> " notification sent!") "Test notification sent to all channels!" (channel == TCAll)) Nothing
     TSSkipped -> addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
   addRespHeaders mempty
 
@@ -1263,10 +1223,9 @@ manageBillingGetH pid = do
       -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
       provider = bool (Projects.projectProvider project) Projects.NoBillingProvider (Projects.isFreeTier project.paymentPlan)
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
-
-
-epochDay :: Int -> Day
-epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
+  where
+    epochDay :: Int -> Day
+    epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
 
 
 -- | Stripe's own view of a project's billing: the window it is currently billing
@@ -1408,15 +1367,15 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
           maxDay = foldr (max . (.requests)) 1 rows
           hasMetrics = any ((> 0) . (.metrics)) rows
           ascending = sortWith (.day) rows
-          -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
-          -- for context) don't inflate the included-tier counter and produce
-          -- incorrect "Est. cost" for current-cycle days.
+          -- Newest first, each row paired with the cumulative requests before/after it.
+          -- The cumulative resets at cycleStartDay so pre-cycle context rows can't
+          -- inflate the included-tier counter and skew "Est. cost".
           withRunning =
             fst
               $ foldl'
                 ( \(xs, acc) u ->
                     let acc' = bool acc 0 (u.day < cycleStartDay) + u.requests
-                     in ((u.day, u.requests, u.metrics, u.eventBytes, u.metricBytes, acc' - u.requests, acc') : xs, acc')
+                     in ((u, acc' - u.requests, acc') : xs, acc')
                 )
                 ([], 0 :: Int64)
                 ascending
@@ -1449,14 +1408,13 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                   $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
                   $ toHtml @Text (formatBytes bytes)
           tbody_ do
-            forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
-              let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
-                  events = max 0 (n - metrics)
-                  preCycle = day < cycleStartDay
+            forM_ withRunning \(u, prev, cur) -> do
+              let pct = max 1 $ min 100 $ (u.requests * 100) `div` maxDay
+                  preCycle = u.day < cycleStartDay
               tr_ [class_ $ "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
-                td_ [class_ $ "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle] $ toHtml $ fmtDate "%a %b %e" day
-                countCell eb events True
-                countCell mb metrics False
+                td_ [class_ $ "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle] $ toHtml $ fmtDate "%a %b %e" u.day
+                countCell u.eventBytes (max 0 (u.requests - u.metrics)) True
+                countCell u.metricBytes u.metrics False
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
@@ -1633,7 +1591,7 @@ cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
     Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
   where
     target = do
-      subId <- find (not . T.null) project.subId
+      subId <- mfilter (not . T.null) project.subId
       case Projects.projectProvider project of
         Projects.StripeProvider -> Just (stripeOpts envConfig.stripeSecretKey, "https://api.stripe.com/v1/subscriptions/" <> toString subId)
         Projects.LemonSqueezyProvider -> Just (lemonSqueezyOpts envConfig.lemonSqueezyApiKey, "https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
@@ -1649,13 +1607,12 @@ stripeWebhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 stripeWebhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
   now <- Time.currentTime
-  let secret = envConfig.stripeWebhookSecret
   case sigHeaderM of
     Nothing -> do
       Log.logAttention "Stripe webhook missing signature header" ()
       throwError err400{errBody = "missing signature"}
     Just sigHeader
-      | not (verifyStripeSignature now sigHeader rawBody (encodeUtf8 secret)) -> do
+      | not (verifyStripeSignature now sigHeader rawBody (encodeUtf8 envConfig.stripeWebhookSecret)) -> do
           Log.logAttention "Stripe webhook invalid signature" ()
           throwError err400{errBody = "invalid signature"}
     Just _ -> case AE.eitherDecodeStrict rawBody of
@@ -1665,14 +1622,17 @@ stripeWebhookPostH sigHeaderM rawBody = do
       Right event -> do
         let eventType = jsonField "type" event :: Maybe Text
             sessionObj = jsonField "data" event >>= jsonField "object" :: Maybe AE.Value
-        case (eventType, sessionObj) of
-          (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj
-          (Just "customer.subscription.deleted", Just obj) -> handleStripeDowngrade envConfig "subscription.deleted" "was cancelled" obj
-          (Just "customer.subscription.updated", Just obj) -> handleStripeSubUpdated obj
-          (Just "customer.subscription.paused", Just obj) -> handleStripeDowngrade envConfig "subscription.paused" "was paused" obj
-          (Just "customer.subscription.resumed", Just obj) -> handleStripeSubResumed envConfig obj
-          (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed envConfig obj
-          _ -> do
+            handlers =
+              [ ("checkout.session.completed", handleStripeCheckout envConfig)
+              , ("customer.subscription.deleted", handleStripeDowngrade envConfig "subscription.deleted" "was cancelled")
+              , ("customer.subscription.updated", handleStripeSubUpdated)
+              , ("customer.subscription.paused", handleStripeDowngrade envConfig "subscription.paused" "was paused")
+              , ("customer.subscription.resumed", handleStripeSubResumed envConfig)
+              , ("invoice.payment_failed", handleStripePaymentFailed envConfig)
+              ]
+        case (,) <$> (eventType >>= flip lookup handlers) <*> sessionObj of
+          Just (handle, obj) -> handle obj
+          Nothing -> do
             Log.logInfo "Stripe webhook unhandled event" (eventType, isJust sessionObj)
             pure ""
 

@@ -38,7 +38,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (TermRaw (termRaw), makeAttribute)
+import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalSample (..), VitalTrendPoint (..), rumPanelCacheGetStale, rumPanelCacheSet)
@@ -156,6 +156,12 @@ vitalDefinitions =
 -- sat in the store. Listed exactly rather than matched with LIKE, so the IN still routes.
 vitalMetricNames :: [Text]
 vitalMetricNames = [prefix <> v.name | v <- vitalDefinitions, prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
+
+
+-- | 'vitalMetricNames' as a literal IN-list. Literal rather than @= ANY(#{names})@ so the
+-- store can still route on it.
+vitalMetricNamesSql :: HI.Sql
+vitalMetricNamesSql = fromString $ toString $ " AND metric_name IN (" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")"
 
 
 -- | The vital a metric name refers to: everything after the last separator, lowercased.
@@ -353,10 +359,6 @@ argmaxPayload :: Text -> Text
 argmaxPayload = T.drop 1 . T.dropWhile (/= '|')
 
 
-otelSessions :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumSession]
-otelSessions scope = otelSessionRows scope (SessionText Nothing) AllSessionRows
-
-
 -- Text is matched against complete sessions before LIMIT, preserving their event totals.
 otelSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionRows scope match sessionFilter =
@@ -442,8 +444,7 @@ rumVitalsDetail scope bucket = do
           FROM otel_metrics
           WHERE |]
             <> scopePredicate scope
-            <> [HI.sql| AND metric_name IN |]
-            <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
+            <> vitalMetricNamesSql
             <> [HI.sql| AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
           GROUP BY GROUPING SETS ((|]
             <> bucketExpr
@@ -525,10 +526,6 @@ classifyUserAgent ua = (browser, os, device)
       | otherwise = "Desktop"
 
 
-replaySessions :: DB es => RumScope -> Eff es [ReplaySession]
-replaySessions scope = replaySessionRows scope (SessionText Nothing)
-
-
 replaySessionRows :: DB es => RumScope -> SessionMatch -> Eff es [ReplaySession]
 replaySessionRows scope match =
   let projectId = scope.pid
@@ -596,8 +593,7 @@ vitalSamples scope =
         FROM otel_metrics
         WHERE |]
           <> scopePredicate scope
-          <> [HI.sql| AND metric_name IN |]
-          <> fromString (toString $ "(" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")")
+          <> vitalMetricNamesSql
           <> [HI.sql|
           AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
         ORDER BY timestamp DESC LIMIT 2000|]
@@ -774,8 +770,8 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       pulseQ = ("experience" :: Text, cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
       pagesQ = ("pages" :: Text, cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
       errorsQ = ("errors" :: Text, cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
-      sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessions scope)
-      replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessions scope)
+      sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows)
+      replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing))
       sessionSearchQ = ("sessions" :: Text, cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
       sessionDetailQs = [("session" :: Text, cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
       vitalsQ = ("web vitals" :: Text, cacheKey VitalSamplesQuery, panelTtl, VitalSamplesResult <$> vitalSamples scope)
@@ -924,27 +920,14 @@ slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
 slot_ page panel skeleton content
   | page.panel == Just panel = div_ ([id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] <> liveAttrs) do
       content
-      when page.servedStale
-        $ div_
-          [ class_ "hidden"
-          , hxGet_ $ panelUrl panel <> "&refresh=1"
-          , hxTrigger_ "load delay:600ms"
-          , -- On the Sessions tab the panel also carries the replay workspace; swapping the
-            -- whole panel would restart a replay the viewer just opened. Only the list is
-            -- re-fetched there — a selection made while the refresh is in flight survives.
-            hxTarget_ refreshTarget
-          , hxSelect_ refreshTarget
-          , hxSwap_ "outerHTML"
-          , makeAttribute "hx-preload" "false"
-          ]
-          mempty
+      when page.servedStale $ div_ (class_ "hidden" : swapAttrs (panelUrl <> "&refresh=1") "load delay:600ms" []) mempty
   | otherwise =
       Components.deferredShell_
         (panelId panel)
         -- Search, session filter and selected session ride along so a deep link still
         -- renders as the page it addressed; without them the sessions panel came back
         -- unfiltered with nothing selected.
-        (panelUrl panel)
+        panelUrl
         -- Deliberately NOT serialised with @hx-sync ... queue@. The panels do contend in
         -- TimeFusion, but measured cold over 24h that is still the better trade: concurrent
         -- paints the first panel at 2.6s and finishes at 24.7s, queued paints the first at
@@ -960,21 +943,20 @@ slot_ page panel skeleton content
     -- viewer's selection with it.
     liveAttrs
       | panel == PanelServices = []
-      | otherwise =
-          [ hxGet_ $ panelUrl panel
-          , hxTrigger_ "update-query from:window"
-          , hxTarget_ refreshTarget
-          , hxSelect_ refreshTarget
-          , hxSwap_ "outerHTML"
-          , -- A tick arriving while the previous one is still in flight replaces it rather
-            -- than queueing behind it: the newer window is the one being looked at.
-            term "hx-sync" "this:replace"
-          , makeAttribute "hx-preload" "false"
-          ]
+      -- A tick arriving while the previous one is still in flight replaces it rather than
+      -- queueing behind it: the newer window is the one being looked at.
+      | otherwise = swapAttrs panelUrl "update-query from:window" [term "hx-sync" "this:replace"]
+    -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
+    -- panel would restart a replay the viewer just opened. Only the list is re-fetched
+    -- there — a selection made while the refresh is in flight survives.
+    swapAttrs url trigger extras =
+      [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ "outerHTML"]
+        <> extras
+        <> [term "hx-preload" "false"]
     refreshTarget = if page.tab == Sessions && panel == PanelSessions then "#rum-sessions-list" else "#" <> panelId panel
-    panelUrl p =
+    panelUrl =
       rumUrl page.links
-        $ [("tab", tabParam page.tab), ("panel", panelParam p), ("deferred", "1")]
+        $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
         <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
 
 
@@ -1249,6 +1231,7 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
       , features = def{Table.zeroState = Just $ tableZero_ "No page views in this time range"}
       }
   where
+    browserPageViewKql = browserKql <> " and " <> pageViewKql
     -- One row per route; views add up, the worst P75 wins (same worse-wins rule the
     -- vitals table applies across emitters), and the route replaces the raw URL.
     merge routePages@(newest :| _) =
@@ -1630,7 +1613,7 @@ replayPrompt_ title description action =
 
 performance_ :: RumData -> Html ()
 performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
-  slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page
+  slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page.vitals
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
     vitalTrendPanel_ page.vitalTrend
     div_ [class_ "mt-4"] $ pageVitalsTable_ page.links page.pageVitals
@@ -1726,7 +1709,8 @@ pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`
 -- prefix match on the static part before the first mask.
 routeKql :: Text -> Text
 routeKql route
-  | prefix == route = pagePathKql route
+  -- Both spellings, matching 'pagePath': our SDK sets url.path, the browser SDK only url.full.
+  | prefix == route = "(attributes.url.path == " <> kqlValue route <> " or attributes.url.full == " <> kqlValue route <> ")"
   | otherwise = "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
   where
     prefix = fst $ T.breakOn "{" $ fst $ T.breakOn ":id" route
@@ -1779,12 +1763,12 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "P75 per page, bi
         $ M.fromListWith (<>) [(pageRoute p.page, [p]) | p <- points]
 
 
-vitalsTable_ :: RumData -> Html ()
-vitalsTable_ page = do
+vitalsTable_ :: [Vital] -> Html ()
+vitalsTable_ vitals = do
   rumPanel_ "Web Vitals field performance" "P75 of the most recent samples — what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing do
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
       thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ [class_ "text-right"] "Samples"
-      tbody_ $ forM_ page.vitals \vital -> tr_ do
+      tbody_ $ forM_ vitals \vital -> tr_ do
         td_ do
           strong_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml vital.label
           span_ [class_ "text-xs text-textWeak"] $ toHtml vital.description
@@ -1931,19 +1915,10 @@ errorKql :: Text
 errorKql = "(status_code == \"ERROR\" or attributes.exception.type != null)"
 
 
-browserPageViewKql :: Text
-browserPageViewKql = browserKql <> " and " <> pageViewKql
-
-
 -- | A first-stage KQL filter carrying the page's service scope. The scope has to land in
 -- the filter stage — before any pipe — or a piped query would append it to the summarize.
 scopedKql :: RumLinks -> Text -> Text
 scopedKql links q = q <> foldMap (\value -> " and resource.service.name == " <> kqlValue value) links.service
-
-
--- | Matches 'pagePath': our SDK sets url.path, the browser SDK only url.full.
-pagePathKql :: Text -> Text
-pagePathKql path = "(attributes.url.path == " <> kqlValue path <> " or attributes.url.full == " <> kqlValue path <> ")"
 
 
 -- | KQL string literal: backslashes first, then quotes, so a value can't break out of the literal.
@@ -1976,10 +1951,8 @@ sessionLogsUrl links sid = logsUrl links $ "attributes.session.id == " <> kqlVal
 sessionsUrl :: RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> Text
 sessionsUrl links query sessionFilter sessionM =
   rumUrl links
-    $ [("tab", "sessions")]
-    <> maybeToList (("q",) <$> query)
-    <> maybeToList (("filter",) <$> sessionFilterParam sessionFilter)
-    <> maybeToList (("session",) <$> sessionM)
+    $ ("tab", "sessions")
+    : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
 
 
 degradedBanner_ :: [Text] -> Html ()

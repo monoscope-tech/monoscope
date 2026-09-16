@@ -137,7 +137,7 @@ import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATBaseCtx)
+import System.Types (ATBaseCtx, useTfReads)
 import Text.Slugify (slugify)
 import Utils (hostPath)
 import Web.ApiTypes
@@ -963,7 +963,7 @@ enrichIssue pid issue = case Issues.issuePayload issue of
         case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
           Nothing -> pure issue
           Just (trId, ts) -> do
-            useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+            useTf <- useTfReads
             now <- Time.currentTime
             synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
             pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (Issues.payloadJson (Issues.RuntimeExceptionP rd{Issues.stackTrace = synth}))}
@@ -1295,5 +1295,5 @@ apiFacets pid sinceM fromM toM fieldM = do
 -- timestamp). Returns 404 when the event is not found.
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
 apiEventGet pid eid ts = do
-  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  useTf <- useTfReads
   AE.toJSON <$> (notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId useTf pid ts eid)

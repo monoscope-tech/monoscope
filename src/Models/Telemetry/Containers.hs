@@ -311,7 +311,7 @@ containersInWindowCached cache key ttl useTimefusion pid fromTime toTime =
 -- off a wide window rather than appearing with hours-old numbers sorted among the live ones.
 -- Keeping it would need presence over the whole window, which measured 25s at 24h — the scan
 -- is the cost, not the pivot. The page says so rather than implying otherwise; see
--- 'Pages.Containers.freshnessLabel'.
+-- @freshnessLabel@ in "Pages.Containers".
 freshnessWindow :: NominalDiffTime
 freshnessWindow = 15 * 60
 

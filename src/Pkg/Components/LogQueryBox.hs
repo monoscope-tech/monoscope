@@ -1,7 +1,6 @@
 module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
-import Data.Default
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -16,7 +15,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (modal_, options_)
+import Pages.Components (filterInputAttr_, modal_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
@@ -42,14 +41,12 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   -- ^ Server-side parse error to display inline on page load
   }
   deriving (Generic, Show)
-  deriving anyclass (Default)
 
 
 -- | Reusable log query box component that can be used in both Logs and Dashboards pages
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  let noActiveQuery = maybe True T.null config.query
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
@@ -122,14 +119,11 @@ logQueryBox_ config = do
               , hxExt_ "json-enc"
               , hxVals_ "js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
               , hxIndicator_ "#ai-search-loader"
-              , data_ "container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
+              , data_ "container-id" containerSelector
               , -- The response fans out to three JS subsystems (time picker, query editor,
                 -- viz tabs), so the routing lives in one named function beside them rather
                 -- than as a branch tree here — see window.applyAiSearchResult.
-                [__|on input
-                     if my.value.trim().length > 0 then set #ai-search-submit's @aria-disabled to 'false'
-                     else set #ai-search-submit's @aria-disabled to 'true' end
-                   on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
+                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
                    on keydown[key=='Enter']
                      if my.value.trim().length > 0
                        then halt then trigger htmx:trigger
@@ -141,6 +135,9 @@ logQueryBox_ config = do
               [ type_ "button"
               , id_ "ai-search-submit"
               , Aria.disabled_ "true"
+              , -- Disabled follows the prompt box reactively (hx-live re-runs on every
+                -- input event), replacing hand-rolled attribute flipping in hyperscript.
+                term "hx-live:aria-disabled" "!q('#ai-search-input').value.trim()"
               , class_ "px-3 py-0.5 inline-flex gap-2 items-center border rounded-sm shadow-strokeBrand-weak aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-disabled:border-strokeWeak aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-textBrand aria-[disabled=false]:border-strokeBrand-strong aria-[disabled=false]:shadow-md"
               , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
@@ -179,7 +176,7 @@ logQueryBox_ config = do
                       <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
                       <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                   )
-                  (queryEditorSkeleton_ config.query)
+                  queryEditorSkeleton_
                 whenNothing_ config.targetWidgetPreview
                   $ label_ [Lucid.for_ "ai-search-chkbox", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-0.5 inline-flex gap-1.5 items-center cursor-pointer rounded-sm text-textWeak hover:bg-fillWeak hover:text-textBrand group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English"] do
                     faSprite_ "sparkles" "regular" "inline-block icon h-4 w-4 text-iconNeutral"
@@ -212,7 +209,7 @@ logQueryBox_ config = do
 
       div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
-          visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
+          visualizationTabs_
           div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
             span_ [class_ "text-textWeak text-xs"] "Sort:"
             select_
@@ -259,8 +256,7 @@ logQueryBox_ config = do
             datalist_ [id_ "pattern-field-list"] $ options_ Nothing $ map (,"") $ Map.keys Schema.telemetrySchema.fields
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden", Aria.hidden_ "true"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
-          whenNothing_ config.targetWidgetPreview
-            $ popularSearchChips_ config.pid noActiveQuery
+          whenNothing_ config.targetWidgetPreview popularSearchChips_
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
           fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label text-textWeak space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
@@ -292,79 +288,124 @@ logQueryBox_ config = do
               <> [checked_ | config.alert]
             span_ "Create monitor"
 
-  queryEditorInitializationCode config.vizType config.pid
+  queryEditorInitializationCode config.vizType
+  where
+    noActiveQuery = maybe True T.null config.query
+    containerSelector = fromMaybe "visualization-widget-container" config.targetWidgetPreview
 
+    -- Editable stand-in while the query-editor chunk loads. The component adopts
+    -- its text, selection and focus when it upgrades, so early keystrokes are retained.
+    queryEditorSkeleton_ :: Html ()
+    queryEditorSkeleton_ =
+      textarea_
+        [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60"
+        , term "data-query-input" ""
+        , Aria.label_ "Query"
+        , rows_ "1"
+        , placeholder_ "level == \"ERROR\""
+        ]
+        $ toHtml (fromMaybe "" config.query)
 
--- | Helper for visualizing the data with different chart types
-visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
-visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
-  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    let
-      -- A widget container means we are in the dashboard widget editor rather than the
-      -- log explorer.
-      inWidgetEditor = isJust widgetContainerId
-      -- A dashboard widget starts as a chart. Logs is a full log table — the most
-      -- expensive thing on a dashboard and the wrong thing to drop on one by default.
-      defaultVizType = fromMaybe (bool "logs" "timeseries" (alert || inWidgetEditor)) vizTypeM
-      containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-      -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
-      -- views with no corresponding WidgetType, so a widget set to either could not be
-      -- decoded on save: the tab was offered and simply did not work.
-      hidden = bool [] ["sessions"] alert <> bool [] ["patterns", "sessions"] inWidgetEditor
-      -- Same reason Logs is not the default here: on a dashboard the chart types are
-      -- what the reader wants, so they lead the strip and Logs moves to the end. The log
-      -- explorer keeps Logs first, where it is the view the page is named after.
-      visible =
-        bool id (sortOn ((== "logs") . (.key))) inWidgetEditor
-          $ filter ((`notElem` hidden) . (.key)) visTypes
-    forM_ visible \v -> do
-      let vizType = v.key
-      label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
-        input_
-          $ [ type_ "radio"
-            , name_ "visualization"
-            , id_ $ "viz-" <> vizType
-            , class_ $ bool "no-chart" "default-chart" (vizType `elem` ["logs", "patterns", "sessions"])
-            , value_ vizType
-            , data_ "update-url" (bool "false" "true" updateUrl)
-            , data_ "container-id" containerSelector
-            , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
-              -- #page-summary-region when a viz change crosses the sessions boundary, since
-              -- sessions renders a different server region than other viz types.
-              [__| on change if my.checked
-                          set prevViz to window.currentVisualizationType
-                          call updateVizTypeInUrl(my.value, @data-update-url === 'true', me.closest('form').querySelector('query-editor'))
-                          if window.widgetJSON
-                            set widgetJSON.type to my.value
-                            send 'update-widget' to #{@data-container-id}
-                          end
-                          if #resultTable exists
-                            set #resultTable's mode to my.value
-                            set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
-                            call #resultTable.refetchLogs()
-                          end
-                          if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
-                        end
-                     |]
+    -- Helper for visualizing the data with different chart types
+    visualizationTabs_ :: Html ()
+    visualizationTabs_ =
+      div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
+        let
+          -- A widget container means we are in the dashboard widget editor rather than the
+          -- log explorer.
+          inWidgetEditor = isJust config.targetWidgetPreview
+          -- A dashboard widget starts as a chart. Logs is a full log table — the most
+          -- expensive thing on a dashboard and the wrong thing to drop on one by default.
+          defaultVizType = fromMaybe (bool "logs" "timeseries" (config.alert || inWidgetEditor)) config.vizType
+          -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
+          -- views with no corresponding WidgetType, so a widget set to either could not be
+          -- decoded on save: the tab was offered and simply did not work.
+          hidden = ["sessions" | config.alert || inWidgetEditor] <> ["patterns" | inWidgetEditor]
+          -- Same reason Logs is not the default here: on a dashboard the chart types are
+          -- what the reader wants, so they lead the strip and Logs moves to the end. The log
+          -- explorer keeps Logs first, where it is the view the page is named after.
+          visible =
+            bool id (sortOn ((== "logs") . (.key))) inWidgetEditor
+              $ filter ((`notElem` hidden) . (.key)) visTypes
+        forM_ visible \v -> do
+          let vizType = v.key
+          label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+            input_
+              $ [ type_ "radio"
+                , name_ "visualization"
+                , id_ $ "viz-" <> vizType
+                , class_ $ bool "no-chart" "default-chart" (vizType `elem` ["logs", "patterns", "sessions"])
+                , value_ vizType
+                , data_ "update-url" (bool "false" "true" config.updateUrl)
+                , data_ "container-id" containerSelector
+                , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
+                  -- #page-summary-region when a viz change crosses the sessions boundary, since
+                  -- sessions renders a different server region than other viz types.
+                  [__| on change if my.checked
+                              set prevViz to window.currentVisualizationType
+                              call updateVizTypeInUrl(my.value, @data-update-url === 'true', me.closest('form').querySelector('query-editor'))
+                              if window.widgetJSON
+                                set widgetJSON.type to my.value
+                                send 'update-widget' to #{@data-container-id}
+                              end
+                              if #resultTable exists
+                                set #resultTable's mode to my.value
+                                set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
+                                call #resultTable.refetchLogs()
+                              end
+                              if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
+                            end
+                         |]
+                ]
+              <> [checked_ | vizType == defaultVizType]
+            -- Emojis only in widget mode, not in the log explorer
+            when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
+            span_ $ toHtml v.label
+
+    -- Popular search chips + query library dropdown, unified as one component.
+    -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
+    popularSearchChips_ :: Html ()
+    popularSearchChips_ =
+      div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
+        when noActiveQuery
+          $ span_
+            [ class_ "inline-flex gap-1.5 items-center"
+            , id_ "popular-search-chips"
+            , [__|on 'update-query' from window if (event.detail.value or '').trim() is not '' add .hidden to me else remove .hidden from me|]
             ]
-          <> [checked_ | vizType == defaultVizType]
-        -- Emojis only in widget mode, not in the log explorer
-        when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
-        span_ $ toHtml v.label
-
-
--- | Editable stand-in while the query-editor chunk loads. The component adopts
--- its text, selection and focus when it upgrades, so early keystrokes are retained.
-queryEditorSkeleton_ :: Maybe Text -> Html ()
-queryEditorSkeleton_ query =
-  textarea_
-    [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60"
-    , term "data-query-input" ""
-    , Aria.label_ "Query"
-    , rows_ "1"
-    , placeholder_ "level == \"ERROR\""
-    ]
-    $ toHtml (fromMaybe "" query)
+            do
+              span_ [class_ "text-textWeak"] "Try:"
+              forM_ (take 3 popularQueries) \(q, l, _) ->
+                button_
+                  [ type_ "button"
+                  , -- py-1, not py-0.5: these chips were 22px tall, under the 24px WCAG 2.5.8
+                    -- minimum pointer target.
+                    class_ "px-2 py-1 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
+                  , onclick_ $ applyQueryJS q
+                  ]
+                  $ toHtml l
+        button_
+          [ type_ "button"
+          , class_ "px-1.5 py-0.5 text-textBrand hover:underline cursor-pointer inline-flex items-center gap-1"
+          , term "popovertarget" "queryLibraryPopover"
+          , style_ "anchor-name: --querylib-anchor"
+          , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
+          , hxTrigger_ "click once"
+          , hxTarget_ "#queryLibraryPopover"
+          , hxSwap_ "innerHTML"
+          , hxIndicator_ "#queryLibraryLoader"
+          ]
+          do
+            "Library"
+            faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
+        div_
+          [ id_ "queryLibraryPopover"
+          , term "popover" "auto"
+          , class_ "bg-bgBase rounded-xl border-2 border-strokeStrong shadow-lg w-[480px] max-w-[90vw] min-h-16 overflow-hidden z-50 mt-1"
+          , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
+          ]
+          $ div_ [id_ "queryLibraryLoader", class_ "htmx-indicator h-16 flex items-center justify-center"]
+          $ span_ [class_ "loading loading-spinner loading-sm text-textBrand", role_ "status", Aria.label_ "Loading query library"] ""
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
@@ -404,13 +445,10 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
       label_ [class_ "input input-sm flex items-center gap-2 flex-1"] do
         faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
         input_
-          [ type_ "text"
+          [ type_ "search"
           , class_ "grow"
           , placeholder_ "Search"
-          , data_ "filterParent" $ "dataLibContent" <> label
-          , [__|on keyup
-                 if the event's key is 'Escape' set my value to '' then trigger keyup
-                 else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
+          , filterInputAttr_ $ ".query-item in .dataLibContent" <> label
           ]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
@@ -418,9 +456,52 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
           span_ [Aria.hidden_ "true", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
           span_ [Aria.hidden_ "true", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
 
+    queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
+    queryLibItem_ isRecent qli =
+      div_
+        [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
+        , data_ "query" qli.queryText
+        ]
+        do
+          div_ [class_ "pr-8", onclick_ $ "window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query); " <> hidePopoverJS] do
+            div_ [class_ "flex items-baseline gap-2 mb-1"] do
+              whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
+              small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
+                $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
+                >> when qli.byMe " • by me"
+            code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
-hidePopoverJS :: Text
-hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
+          div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
+            actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
+            actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
+            when qli.byMe
+              $ if isRecent
+                then
+                  actionBtn_
+                    "Save as named query"
+                    "floppy-disk"
+                    [onclick_ "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"]
+                else do
+                  actionBtn_
+                    "Edit query title"
+                    "pen-to-square"
+                    [onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"]
+                  actionBtn_
+                    "Delete query"
+                    "trash"
+                    [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
+                    , hxTarget_ "#queryLibraryPopover"
+                    , hxSwap_ "innerHTML"
+                    , hxPushUrl_ "false"
+                    ]
+
+    actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
+    actionBtn_ tip icon attrs =
+      button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
+        $ faSprite_ icon "regular" "h-3 w-3"
+
+    hidePopoverJS :: Text
+    hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
 
 
 applyQueryJS :: Text -> Text
@@ -461,118 +542,12 @@ visTypes =
   ]
 
 
--- | Simplified query library item with reduced DOM nodes
-queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
-queryLibItem_ isRecent qli =
-  div_
-    [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
-    , data_ "query" qli.queryText
-    , data_ "query-id" qli.id.toText
-    ]
-    do
-      div_ [class_ "pr-8", onclick_ $ "window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query); " <> hidePopoverJS] do
-        div_ [class_ "flex items-baseline gap-2 mb-1"] do
-          whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
-          small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
-            $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-            >> when qli.byMe " • by me"
-        code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
-
-      div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
-        actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
-        actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
-        when qli.byMe
-          $ if isRecent
-            then
-              actionBtn_
-                "Save as named query"
-                "floppy-disk"
-                [onclick_ "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"]
-            else do
-              actionBtn_
-                "Edit query title"
-                "pen-to-square"
-                [onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"]
-              actionBtn_
-                "Delete query"
-                "trash"
-                [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
-                , hxTarget_ "#queryLibraryPopover"
-                , hxSwap_ "innerHTML"
-                , hxPushUrl_ "false"
-                ]
-  where
-    actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
-    actionBtn_ tip icon attrs =
-      button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
-        $ faSprite_ icon "regular" "h-3 w-3"
-
-
--- | Popular search chips + query library dropdown, unified as one component.
--- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
-popularSearchChips_ :: Projects.ProjectId -> Bool -> Html ()
-popularSearchChips_ pid showChips =
-  div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
-    when showChips
-      $ span_
-        [ class_ "inline-flex gap-1.5 items-center"
-        , id_ "popular-search-chips"
-        , [__|on 'update-query' from window if (event.detail.value or '').trim() is not '' add .hidden to me else remove .hidden from me|]
-        ]
-        do
-          span_ [class_ "text-textWeak"] "Try:"
-          forM_ (take 3 popularQueries) \(q, l, _) ->
-            button_
-              [ type_ "button"
-              , -- py-1, not py-0.5: these chips were 22px tall, under the 24px WCAG 2.5.8
-                -- minimum pointer target.
-                class_ "px-2 py-1 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
-              , onclick_ $ applyQueryJS q
-              ]
-              $ toHtml l
-    button_
-      [ type_ "button"
-      , class_ "px-1.5 py-0.5 text-textBrand hover:underline cursor-pointer inline-flex items-center gap-1"
-      , term "popovertarget" "queryLibraryPopover"
-      , style_ "anchor-name: --querylib-anchor"
-      , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/queries"
-      , hxTrigger_ "click once"
-      , hxTarget_ "#queryLibraryPopover"
-      , hxSwap_ "innerHTML"
-      , hxIndicator_ "#queryLibraryLoader"
-      ]
-      do
-        "Library"
-        faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
-    div_
-      [ id_ "queryLibraryPopover"
-      , term "popover" "auto"
-      , class_ "bg-bgBase rounded-xl border-2 border-strokeStrong shadow-lg w-[480px] max-w-[90vw] min-h-16 overflow-hidden z-50 mt-1"
-      , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
-      ]
-      $ div_ [id_ "queryLibraryLoader", class_ "htmx-indicator h-16 flex items-center justify-center"]
-      $ span_ [class_ "loading loading-spinner loading-sm text-textBrand", role_ "status", Aria.label_ "Loading query library"] ""
-
-
--- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
--- | How many example values a field advertises for autocomplete, and how long one may be.
---
--- Uncapped, this was 93% of a 713KB response that every log-explorer session downloads,
--- parses and holds for its lifetime: 1,610 timestamps on @events.[*].event_time@, 496 whole
--- log lines on @attributes.log.original@ (100KB by itself), 500 opaque hex strings on
--- @traceparent@. None of that is a suggestion anyone picks from — the completion list shows a
--- handful, and a high-cardinality opaque field has no useful suggestions at all.
---
--- Kept by descending frequency, so what survives is what a reader is most likely to want.
-facetExamplesPerField :: Int
-facetExamplesPerField = 25
-
-
-facetExampleMaxLength :: Int
-facetExampleMaxLength = 120
-
-
 -- | The example values one field advertises for autocomplete, most frequent first.
+--
+-- Uncapped, examples were 93% of a 713KB response every log-explorer session downloads and
+-- holds for its lifetime: 1,610 timestamps on @events.[*].event_time@, 496 whole log lines on
+-- @attributes.log.original@ (100KB alone), 500 opaque hex strings on @traceparent@ — none of
+-- which anyone picks from a completion list.
 --
 -- Ordered by frequency and capped, whatever order they arrive in:
 --
@@ -589,12 +564,13 @@ facetExampleMaxLength = 120
 -- []
 facetExamples :: [FacetValue] -> [Text]
 facetExamples =
-  take facetExamplesPerField
+  take 25
     . map (.value)
     . sortOn (Down . (.count))
-    . filter ((<= facetExampleMaxLength) . T.length . (.value))
+    . filter ((<= 120) . T.length . (.value))
 
 
+-- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
 enrichSchemaWithFacets :: Schema.Schema -> FacetData -> AE.Value
 enrichSchemaWithFacets schema (FacetData facetMap) =
   AE.toJSON $ schema{Schema.fields = HM.foldlWithKey' mergeField schema.fields facetMap}
@@ -602,12 +578,12 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
     mergeField acc facetKey facetVals =
       let dotKey = T.replace "___" "." $ T.replace "severity___severity_" "severity." facetKey
           vals = Just $ facetExamples facetVals
-       in Map.alter (Just . maybe (Schema.FieldInfo "string" "" vals) (\fi -> fi{Schema.examples = vals})) dotKey acc
+       in Map.insertWith (\_ fi -> fi{Schema.examples = vals}) dotKey (Schema.FieldInfo "string" "" vals) acc
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
-queryEditorInitializationCode :: Maybe Text -> Projects.ProjectId -> Html ()
-queryEditorInitializationCode vizTypeM _pid = do
+queryEditorInitializationCode :: Maybe Text -> Html ()
+queryEditorInitializationCode vizTypeM = do
   let
     popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
     vizType = fromMaybe "logs" vizTypeM

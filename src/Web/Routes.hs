@@ -618,8 +618,8 @@ type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 type IssuesRoutes' :: Type -> Type
 data IssuesRoutes' mode = IssuesRoutes'
-  { acknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , unAcknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
@@ -1053,8 +1053,8 @@ logExplorerServer pid =
 issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
 issuesServer pid =
   IssuesRoutes'
-    { acknowlegeGet = IssuesPage.acknowledgeIssueGetH pid True
-    , unAcknowlegeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
+    { acknowledgeGet = IssuesPage.acknowledgeIssueGetH pid True
+    , unAcknowledgeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
     , archiveGet = IssuesPage.archiveIssueGetH pid True
     , unarchiveGet = IssuesPage.archiveIssueGetH pid False
     , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid

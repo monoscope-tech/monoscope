@@ -23,8 +23,8 @@ import Pages.Telemetry qualified as PTelemetry
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import Servant (err404)
-import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import System.Config (AuthContext (..))
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
 import UnliftIO.Exception (throwIO)
 
 
@@ -36,15 +36,18 @@ data ShareView
       { hoursLeft :: !Int
       , breakdown :: !(Maybe (Html ())) -- full Timeline/Waterfall/Services trace breakdown when this is a trace
       , detail :: !(Html ()) -- LogItem.expandedItemView; its built-in header supplies the event summary
-      , replay :: !(Maybe (Text, Text, UUID.UUID)) -- (shareId, projectId, sessionId) for the session-replay player
+      , replay :: !(Maybe (UUID.UUID, Projects.ProjectId, UUID.UUID)) -- (shareId, projectId, sessionId) for the session-replay player
       }
 
 
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
-  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  useTf <- useTfReads
   _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwIO err404
+  -- Random on purpose, not genUUID: the test interpreter restarts its static sequence per
+  -- effect run, and ShareSpec creates a second link via apiShareLinkCreate — the same
+  -- deterministic id twice is a share_events pkey collision.
   shareId <- liftIO UUIDV4.nextRandom
   ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
@@ -102,6 +105,12 @@ resolveShare sid now =
       ShareRow pid eid ty eca (ceiling (diffUTCTime (addUTCTime (48 * 3600) createdAt) now / 3600))
 
 
+-- | The share page's replay player and 'shareReplaySessionGetH''s access check must
+-- agree on this value, or the page renders a player whose fetch 404s.
+sessionIdOf :: Telemetry.OtelLogsAndSpans -> Maybe UUID.UUID
+sessionIdOf anchor = Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes) >>= UUID.fromText
+
+
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -110,29 +119,24 @@ shareLinkGetH sid = do
     resolveShare sid now >>= \case
       Nothing -> pure ShareMissing
       Just row | row.hoursLeft <= 0 -> pure ShareExpired
-      Just row -> resolveBody sid now row
+      Just row -> resolveBody now row
   pure $ ShareLinkGet $ PageCtx (def :: BWConfig){pageTitle = "Shared event", config = authCtx.config} view
-
-
-resolveBody :: UUID.UUID -> UTCTime -> ShareRow -> ATBaseCtx ShareView
-resolveBody sid now row = do
-  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
-  Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId >>= \case
-    Nothing -> pure ShareMissing
-    Just anchor -> do
-      let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
-      if row.eventType == "log"
-        then pure $ ShareLive row.hoursLeft Nothing detail Nothing
-        else do
-          breakdownM <- runMaybeT do
-            tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
-            (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
-            pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
-          let replayInfo =
-                Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes)
-                  >>= UUID.fromText
-                  <&> (UUID.toText sid,row.pid.toText,)
-          pure $ ShareLive row.hoursLeft breakdownM detail replayInfo
+  where
+    resolveBody :: UTCTime -> ShareRow -> ATBaseCtx ShareView
+    resolveBody now row = do
+      useTf <- useTfReads
+      Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId >>= \case
+        Nothing -> pure ShareMissing
+        Just anchor -> do
+          let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
+          if row.eventType == "log"
+            then pure $ ShareLive row.hoursLeft Nothing detail Nothing
+            else do
+              breakdownM <- runMaybeT do
+                tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
+                (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
+                pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
+              pure $ ShareLive row.hoursLeft breakdownM detail (sessionIdOf anchor <&> (sid,row.pid,))
 
 
 newtype ShareLinkGet = ShareLinkGet (PageCtx ShareView)
@@ -152,9 +156,9 @@ shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
   row <- resolveShare sid now `whenNothingM` throwIO err404
   when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
-  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  useTf <- useTfReads
   anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
-  when ((Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes) >>= UUID.fromText) /= Just sessionId) $ throwIO err404
+  when (sessionIdOf anchor /= Just sessionId) $ throwIO err404
   -- Unauthenticated surface: a share link must die with its project, so this
   -- asks for an ACTIVE one rather than any row bearing the id.
   project <- Projects.activeProjectById row.pid `whenNothingM` throwIO err404
@@ -180,9 +184,9 @@ sharePage v = do
             span_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ UUID.toText sessionId
           termWith
             "session-replay"
-            [ term "projectId" projectId
+            [ term "projectId" projectId.toText
             , term "initialSession" (UUID.toText sessionId)
-            , term "sessionUrl" $ "/share/r/" <> shareId <> "/replay_session/" <> UUID.toText sessionId
+            , term "sessionUrl" $ "/share/r/" <> UUID.toText shareId <> "/replay_session/" <> UUID.toText sessionId
             , term "hideControls" "1"
             , class_ "block"
             ]
@@ -192,23 +196,20 @@ sharePage v = do
     ShareMissing -> blank "empty" "Event not found" "This share link doesn't exist or the underlying event is no longer available."
   where
     blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn about Monoscope"}
-
-
--- | Slim sticky top bar: logo, "Shared event" label, expiry pill, About link.
-shareTopBar :: Maybe Int -> Html ()
-shareTopBar hoursLeftM =
-  nav_ [class_ "sticky top-0 z-20 h-12 w-full border-b border-strokeWeak bg-bgBase/90 backdrop-blur-sm"] do
-    div_ [class_ "max-w-6xl mx-auto h-full px-4 flex items-center justify-between gap-4 flex-nowrap"] do
-      div_ [class_ "flex items-center gap-3 min-w-0 flex-nowrap"] do
-        a_ [href_ "https://monoscope.tech", target_ "_blank", class_ "flex items-center shrink-0"] do
-          img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-          img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-        span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
-        span_ [class_ "text-2xs uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
-        whenJust hoursLeftM \h -> do
-          let cls = bool "text-textWeak border-strokeWeak bg-fillWeaker" "text-textError border-strokeError-strong/40 bg-fillError-weak" (h <= 6) :: Text
-          span_ [class_ $ "text-2xs px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> cls]
-            $ toHtml @Text ("Expires in " <> show h <> "h")
-      a_
-        [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
-        "About Monoscope ↗"
+    -- Slim sticky top bar: logo, "Shared event" label, expiry pill, About link.
+    shareTopBar :: Maybe Int -> Html ()
+    shareTopBar hoursLeftM =
+      nav_ [class_ "sticky top-0 z-20 h-12 w-full border-b border-strokeWeak bg-bgBase/90 backdrop-blur-sm"] do
+        div_ [class_ "max-w-6xl mx-auto h-full px-4 flex items-center justify-between gap-4 flex-nowrap"] do
+          div_ [class_ "flex items-center gap-3 min-w-0 flex-nowrap"] do
+            a_ [href_ "https://monoscope.tech", target_ "_blank", class_ "flex items-center shrink-0"] do
+              img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+              img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+            span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
+            span_ [class_ "text-2xs uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
+            whenJust hoursLeftM \h ->
+              span_ [class_ $ "text-2xs px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> bool "text-textWeak border-strokeWeak bg-fillWeaker" "text-textError border-strokeError-strong/40 bg-fillError-weak" (h <= 6)]
+                $ toHtml @Text ("Expires in " <> show h <> "h")
+          a_
+            [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
+            "About Monoscope ↗"
