@@ -231,7 +231,8 @@ monitorFromInput pid now mid existingM inp =
     , thresholdSustainedForMins = fromMaybe 0 inp.thresholdSustainedForMins
     , alertConfig =
         Monitors.MonitorAlertConfig
-          { title = inp.title
+          { unit = mfilter (not . T.null) $ T.strip <$> inp.unit
+          , title = inp.title
           , severity = fromMaybe "error" inp.severity
           , subject = fromMaybe inp.title inp.subject
           , message = fromMaybe "" inp.message
@@ -294,7 +295,8 @@ apiMonitorYaml pid mid = do
   m <- apiMonitorGet pid mid
   pure
     MonitorInput
-      { title = m.alertConfig.title
+      { unit = m.alertConfig.unit
+      , title = m.alertConfig.title
       , query = m.logQuery
       , severity = Just m.alertConfig.severity
       , subject = Just m.alertConfig.subject
@@ -327,7 +329,8 @@ apiMonitorPatch pid mid patch = do
   let ac = existing.alertConfig
       mergedAc =
         ac
-          { Monitors.title = fromMaybe ac.title patch.title
+          { Monitors.unit = mfilter (not . T.null) $ T.strip <$> (patch.unit <|> ac.unit)
+          , Monitors.title = fromMaybe ac.title patch.title
           , Monitors.severity = fromMaybe ac.severity patch.severity
           , Monitors.subject = fromMaybe ac.subject patch.subject
           , Monitors.message = fromMaybe ac.message patch.message

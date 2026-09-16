@@ -68,12 +68,32 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(option.yAxis.max(extent)).toBeGreaterThan(upper);
     expect(option.yAxis.min(extent)).toBeLessThanOrEqual(lower);
     expect(option.series[0].markLine.data.map((line: any) => line.yAxis)).toEqual(Object.values(thresholds));
-    expect(option.series[0].markLine.data[0].label.position).toBe('insideEndTop');
+    // Under the line: the axis headroom around a threshold is 5% of the range, less than a
+    // line of text, so a label above the topmost threshold is clipped by the grid.
+    expect(option.series[0].markLine.data[0].label.position).toBe('insideEndBottom');
+    expect(option.series[0].markLine.data[0].label.textBorderWidth).toBe(0);
     // An empty dataset makes ECharts pass ±Infinity extents; bounds must stay finite
     // or the axis (and everything drawn against it) breaks.
     const empty = { min: Infinity, max: -Infinity };
     expect(Number.isFinite(option.yAxis.min(empty))).toBe(true);
     expect(Number.isFinite(option.yAxis.max(empty))).toBe(true);
+  });
+
+  // The label used to print echarts' raw `{c}`, so a millisecond widget read "Alert: 1800"
+  // under an axis labelled "1.8s". It formats through the same helper the axis does.
+  test('a threshold label reads in the widget’s unit, like its axis', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="ms-thresholds" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'p75'], dataset: [[0, 1]],
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    (window as any).chartWidget({ ...widget('ms-thresholds'), unit: 'ms', alertThreshold: 1800, warningThreshold: 800 });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+
+    const labels = instance.setOption.mock.calls.at(-1)![0].series[0].markLine.data.map((line: any) => line.label.formatter);
+    expect(labels).toEqual(['Alert: 1.8s', 'Warning: 800.0ms']);
   });
 
   test('holds fetch slots until streaming bodies finish', async () => {
@@ -285,6 +305,24 @@ describe('Log Explorer chart auto-refresh', () => {
 
     responses.splice(0).forEach((resolve) => resolve(chartData));
     await frame();
+  });
+
+  // RUM's Web Vitals trends are computed server-side and embedded, so they carry no project
+  // and no query. Refetching one asked /chart_data for a default count(*) against `pid=null`,
+  // which answers 401 — and a 401 on a chart fetch reloads the page, so every live tick tore
+  // the whole page down to its skeletons instead of updating data in place.
+  test('a widget with no project of its own never fetches, on load or on a live tick', async () => {
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => chart() };
+    document.body.innerHTML = '<div id="embedded" data-chart-widget></div><div id="embedded_bordered"></div>';
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => chartData })) as any;
+
+    (window as any).chartWidget({ ...widget('embedded'), pid: null, opt: { dataset: { source: [['timestamp', 'P75'], [0, 1]] }, series: [], legend: {}, yAxis: {} } });
+    (globalThis as any).triggerIntersection();
+    window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+    await frame();
+    await frame();
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test('shows the loader when the time picker refreshes a chart', async () => {

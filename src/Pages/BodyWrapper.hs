@@ -177,6 +177,10 @@ data BWConfig = BWConfig
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
   let isProd = bcfg.config.environment /= Dev
+      -- One condition for the SDK <script> and the constructor that needs it. They were two
+      -- different conditions, and the constructor's omitted `isProd`: any non-prod deploy
+      -- carrying a telemetry key rendered `new Monoscope(...)` with nothing having loaded it.
+      browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
       initialTheme = maybe "dark" (.theme) bcfg.sessM
       themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
   doctype_
@@ -258,6 +262,9 @@ bodyWrapper bcfg child = do
             -- only load-bearing for third-party code (hyperscript binds the legacy load event).
             assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
           , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
+          , -- Reactive DOM bindings (`:checked="…"`, `:class`, …) so UI state that CSS
+            -- can't derive on its own stays declarative instead of scripted.
+            assetUrl "/public/assets/deps/htmx/hx-live-4.js"
           , assetUrl "/public/assets/js/main.js"
           , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
             -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
@@ -281,7 +288,7 @@ bodyWrapper bcfg child = do
       -- Vendored (not unpkg): a third-party CDN must never sit on our critical path — a
       -- slow or unreachable CDN stalled first paint for every visitor. defer keeps even
       -- the local copy off the parser.
-      when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
+      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
 
       -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
@@ -511,20 +518,26 @@ bodyWrapper bcfg child = do
                   // echarts.connect('default');
                 });
       |]
-      -- Initialize Monoscope only when telemetryApiKey is available
-      when (bcfg.config.telemetryApiKey /= "" && bcfg.config.enableBrowserMonitoring)
+      -- Constructed on DOMContentLoaded, not inline: the SDK <script> above is `defer`, so it
+      -- executes after the parser finishes — after this inline script would have run. Calling
+      -- the constructor directly threw `Monoscope is not defined` on every page load and no
+      -- browser telemetry was ever collected from the dashboard. Deferred scripts are
+      -- guaranteed to run before DOMContentLoaded fires, so this is the earliest safe moment.
+      when browserMonitoring
         $ let enableReplay = bool "false" "true" bcfg.config.enableSessionReplay
            in script_
                 [text|
-                  window.monoscope = new Monoscope({
-                    apiKey: "${telemetryApiKey}",
-                    serviceName: "${telemetryServiceName}",
-                    debug: undefined,
-                    sessionReplay: ${enableReplay},
-                    user: {
-                      email: ${email},
-                      name: "${name}"
-                    }
+                  window.addEventListener('DOMContentLoaded', () => {
+                    window.monoscope = new Monoscope({
+                      apiKey: "${telemetryApiKey}",
+                      serviceName: "${telemetryServiceName}",
+                      debug: undefined,
+                      sessionReplay: ${enableReplay},
+                      user: {
+                        email: ${email},
+                        name: "${name}"
+                      }
+                    });
                   });
               |]
 
@@ -888,7 +901,9 @@ navFlyoutItems pidTxt = \case
   "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
   "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
   "Real User Monitoring" -> [("Overview", p "/rum"), ("Sessions", p "/rum?tab=sessions"), ("Performance", p "/rum?tab=performance")]
-  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
+  -- API Docs carries no host: it is the whole project's learned spec. The
+  -- per-host and per-endpoint scopes are reached from the catalog rows.
+  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing"), ("API Docs", p "/api_catalog/docs?request_type=Incoming")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
   "Settings" -> [(t, l) | (t, l, _) <- navBottomList pidTxt]

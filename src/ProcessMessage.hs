@@ -150,7 +150,7 @@ processMessages msgs attrs =
 -- match byte-for-byte. Drift here is the root cause of "UNKNOWN /"
 -- new-endpoint notifications: when these two functions disagree on the
 -- canonical path, the schema-learning anomaly's @target_hash@ never matches
--- @apis.endpoints.hash@ and the join in 'Anomalies.getAnomaliesVM' returns
+-- @apis.endpoints.hash@ and the join in 'ApiChanges.getAnomaliesVM' returns
 -- NULL for method/path.
 data HttpKey = HttpKey
   { method :: !Text

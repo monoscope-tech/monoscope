@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -1017,6 +1017,28 @@ outputFieldAliases =
     ]
 
 
+-- | When a record with no @errors@ payload — a log — still counts as an error. The three
+-- signals are alternatives because SDKs populate different ones: a bare @level@, an OTel
+-- @severity_number@ (17 is ERROR), or a span-shaped @status_code@.
+--
+-- One definition, used by both the @errors@ flag below and @is_error@ in
+-- 'Models.Apis.LogQueries'. They were separate copies of this text, and the copies in
+-- 'Models.Telemetry.Report' have already drifted from it — see the note there.
+severityIsErrorSql :: T.Text
+severityIsErrorSql = "lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'"
+
+
+-- | The @errors@ flag as the event tables project it: structured error data for a span, or
+-- 'severityIsErrorSql' for a log, which carries no @errors@ payload.
+--
+-- Shared with the projection in 'Pkg.Parser.otelLogsCols' so a row's @errors: true@ and a
+-- @errors == true@ filter cannot mean two different things. It is the one output field whose
+-- value is computed rather than read from the column of the same name, which is why
+-- 'outputFieldAliases' — a name-to-name map — cannot carry it.
+errorFlagSql :: T.Text
+errorFlagSql = "COALESCE(errors is not null OR (kind = 'log' AND (" <> severityIsErrorSql <> ")), false)"
+
+
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
 -- Exception fields can live on the flattened attributes___exception___* column
@@ -1278,6 +1300,21 @@ scalarFuncToSQL name args
 -- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
 -- "jsonb_path_exists(to_jsonb(errors), '$[*].\"message\"[0].\"details\" ? (@ == \"detailsVal\")'::jsonpath)"
 --
+-- A bare @errors@ compared with a boolean answers with the projected flag, and the two
+-- spellings of each verdict agree:
+--
+-- >>> display (Eq (Subject "errors" "errors" []) (Boolean True))
+-- "(COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false))"
+-- >>> display (NotEq (Subject "errors" "errors" []) (Boolean True)) == display (Eq (Subject "errors" "errors" []) (Boolean False))
+-- True
+-- >>> T.isPrefixOf "(NOT " (display (Eq (Subject "errors" "errors" []) (Boolean False)))
+-- True
+--
+-- The column itself is still addressable, so nothing that already worked changes:
+--
+-- >>> display (NotEq (Subject "errors" "errors" []) Null)
+-- "errors IS NOT NULL"
+--
 -- -- abc[*].xyz which should generate something else than what is generated.
 -- -- TODO: investigate and then FIXME
 -- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
@@ -1384,6 +1421,18 @@ displayExprHelper op prec sub val =
       else case (op, val) of
         ("=", Null) -> displayPrec prec sub <> " IS NULL"
         ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
+        -- A result row reads `errors: true` because the projection computes it, so the
+        -- obvious filter is `errors == true` — which compared the raw payload column against
+        -- a boolean and failed the *whole* query (TimeFusion: "Cannot infer common argument
+        -- type for comparison operation Utf8View = Boolean"; Postgres: no jsonb = boolean
+        -- operator). Answer it with the same predicate the projection uses.
+        --
+        -- Bare subject only: `errors != null` and `errors[0].message` still address the
+        -- column itself, which is what those spellings have always meant.
+        (_, Boolean b)
+          | Subject "errors" _ [] <- sub
+          , Just positive <- lookup op [("=", b), ("!=", not b)] ->
+              displayParen True $ displayBuilder $ bool ("NOT " <> errorFlagSql) errorFlagSql positive
         (_, List vs) | op `elem` ["IN", "NOT IN"] -> displayPrec prec sub <> displayBuilder (" " <> op <> " (") <> commaSep vs <> ")"
         -- has_any/has_all fan the (escaped, case-insensitive) literal match over the list
         (_, List vs) | Just j <- lookup op [("HAS_ANY", " OR "), ("HAS_ALL", " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"

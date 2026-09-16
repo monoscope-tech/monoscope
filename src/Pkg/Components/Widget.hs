@@ -1,6 +1,7 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception.Safe qualified as Safe
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
@@ -13,6 +14,7 @@ import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
@@ -35,7 +37,7 @@ import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
-import Pkg.DeriveUtils (WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -152,6 +154,24 @@ summarizeByPrefix SBMean = ""
 summarizeByPrefix SBRate = ""
 
 
+data PngProfile = PngStandard | PngSlack
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Png" PngProfile
+
+
+-- | Export dimensions are part of the profile carried by the signed widget.
+--
+-- >>> pngExportSize Nothing
+-- (900,300)
+-- >>> pngExportSize (Just PngSlack)
+-- (960,320)
+pngExportSize :: Maybe PngProfile -> (Int, Int)
+pngExportSize profile = case fromMaybe PngStandard profile of
+  PngStandard -> (900, 300)
+  PngSlack -> (960, 320)
+
+
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
@@ -223,12 +243,15 @@ data Widget = Widget
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
+  , pngProfile :: Maybe PngProfile
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   , dbSource :: Maybe Text -- "postgres" or "timefusion"; Nothing = default routing
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] Widget
+  -- Widget's nested types have no ToSchema; document it as an open JSON value.
+  deriving (ToSchema) via JsonValueSchema Widget
 
 
 instance ToHtml Widget where
@@ -349,9 +372,29 @@ isTrue = (== Just True)
 
 
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
--- /widget endpoint with the widget JSON url-encoded as a query param.
+-- /widget endpoint carrying the widget as a compressed @widgetZ@ blob.
+--
+-- Url-encoding the raw JSON put a table widget's multi-KB SQL on the request line;
+-- past ~9.6KB nginx drops the whole HTTP/2 connection rather than just that stream, so
+-- Cloudflare answered 520 for the oversized request *and* every sibling multiplexed
+-- onto the same connection — which is what made dashboard charts fail in scattered,
+-- retry-able subsets. Compression keeps these an order of magnitude under the limit.
 widgetFetchUrl :: Widget -> Text
-widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetJSON=" <> toUriStr (encodeText w)
+widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetZ=" <> encodeWidgetZ (encodeText w)
+
+
+-- | gzip + base64url, the wire form of a widget on a request line. 'decodeWidgetZ' inverts it.
+encodeWidgetZ :: Text -> Text
+encodeWidgetZ = B64.extractBase64 . B64URL.encodeBase64 . toStrict . GZip.compress . encodeUtf8
+
+
+-- | Inverse of 'encodeWidgetZ'; 'Nothing' for anything that isn't a well-formed blob.
+-- Forced here so a corrupt payload fails as a decode miss rather than as a lazy
+-- 'GZip.decompress' bomb detonating deep inside the handler.
+decodeWidgetZ :: MonadIO m => Text -> m (Maybe Text)
+decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
+  Left _ -> pure Nothing
+  Right bs -> liftIO $ Safe.handleAny (const $ pure Nothing) $ Just <$> evaluateWHNF (decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs)
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
@@ -371,7 +414,7 @@ widgetPostH pid sinceM fromM toM widget = do
 widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = encodeText widget
-      compressed = B64.extractBase64 $ B64URL.encodeBase64 $ toStrict $ GZip.compress $ encodeUtf8 widgetJson
+      compressed = encodeWidgetZ widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetZ=" <> compressed <> timeParams <> "&sig=" <> sig
@@ -980,11 +1023,21 @@ renderChart widget = do
                 p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
             let sumBy = fromMaybe SBSum widget.summarizeBy
                 theme = fromMaybe "default" widget.theme
-                echartOpt = encodeText $ widgetToECharts widget
+                -- Encoded again, deliberately: the first encode produces JSON, the
+                -- second makes that JSON a *JS string literal*. Interpolating it
+                -- into a `template literal` instead — which is what this did —
+                -- means JS unescapes it before JSON.parse sees it, so every \" in
+                -- a value collapses to " and the parse dies with "Expected ',' or
+                -- '}' after property value". Harmless until a value contained a
+                -- quote; the unit-aware `label.formatter` function string added one
+                -- and took every chart on the page down with it.
+                echartOptJS = encodeText $ encodeText $ widgetToECharts widget
                 yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
                 query = encodeText widget.query
                 pid = encodeText $ widget._projectId <&> (.toText)
-                querySQL = maybeToMonoid widget.sql
+                -- Same reason as echartOptJS: a backtick or a ${…} in stored SQL
+                -- would otherwise end the template literal or interpolate.
+                querySQLJS = encodeText $ maybeToMonoid widget.sql
                 chartType = mapWidgetTypeToChartType widget.wType
                 summarizeBy = toText $ encodeEnumSC @"SB" sumBy
                 summarizeByPfx = summarizeByPrefix sumBy
@@ -1014,11 +1067,11 @@ renderChart widget = do
                 // Configuration for this specific widget
                 const config = {
                   chartId: "${chartId}",
-                  echartOpt: `${echartOpt}`,
+                  echartOpt: ${echartOptJS},
                   chartType: '${chartType}',
                   widgetType: ${wType},
                   query: ${query},
-                  querySQL: `${querySQL}`,
+                  querySQL: ${querySQLJS},
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},
@@ -1093,15 +1146,37 @@ extractSeriesNamesFromDataset ds = case ds <&> (.source) of
   _ -> []
 
 
+-- | Whether a free-text unit word ("rows", "requests") is spelled out after the number.
+-- The y axis drops it: repeating it down every tick — @3.0K rows@ over @0 rows@ — widens the
+-- axis gutter by a word the widget's title already carries, and on a log-explorer-sized chart
+-- that gutter is plotting area. Duration and byte units are unaffected either way, because
+-- there the suffix is the number's own magnitude (@10.0m@, @1 GiB@), not a label.
+data UnitWord = KeepUnitWord | DropUnitWord
+  deriving stock (Eq)
+
+
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration
 -- units convert+format, everything else uses formatNumber. Shared by the
 -- tooltip valueFormatter and the yAxis axisLabel formatter.
-unitValueExprJS :: Maybe Text -> Text
-unitValueExprJS unitM
+--
+-- >>> unitValueExprJS DropUnitWord (Just "rows")
+-- "formatNumber(value)"
+-- >>> unitValueExprJS KeepUnitWord (Just "rows")
+-- "formatNumber(value) + \" rows\""
+--
+-- A duration formats identically on both, so an axis keeps reading @10.0m@ / @0ns@:
+--
+-- >>> unitValueExprJS DropUnitWord (Just "ms") == unitValueExprJS KeepUnitWord (Just "ms")
+-- True
+unitValueExprJS :: UnitWord -> Maybe Text -> Text
+unitValueExprJS unitWord unitM
   | Just u <- durationUnit = "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
   | isBytes = "formatBytes(value)"
-  | otherwise = "formatNumber(value)"
+  | otherwise = "formatNumber(value)" <> foldMap (\u -> " + " <> encodeText (" " <> u)) unitWordM
   where
+    unitWordM = case unitWord of
+      KeepUnitWord -> unitM
+      DropUnitWord -> Nothing
     durationUnit = guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM
     -- Bytes are their own case because formatNumber's suffixes are decimal magnitudes: a memory
     -- chart's axis read "1.0B" for a gigabyte -- B for "billion" -- directly above a table
@@ -1130,7 +1205,7 @@ widgetToECharts widget =
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
               , "valueFormatter"
-                  AE..= ("function(value) { return " <> unitValueExprJS widget.unit <> "; }")
+                  AE..= ("function(value) { return " <> unitValueExprJS KeepUnitWord widget.unit <> "; }")
               ]
         , "legend"
             AE..= AE.object
@@ -1208,7 +1283,7 @@ widgetToECharts widget =
                     , "margin" AE..= (8 :: Int)
                     , "hideOverlap" AE..= True
                     , "formatter"
-                        AE..= let fmt = unitValueExprJS widget.unit
+                        AE..= let fmt = unitValueExprJS DropUnitWord widget.unit
                                   showOnlyMax = fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
                                in if showOnlyMax
                                     then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
@@ -1245,7 +1320,7 @@ addMarkLinesToFirstSeries widget series
       AE.object
         [ "yAxis" AE..= threshold
         , "lineStyle" AE..= AE.object ["color" AE..= (color :: Text), "type" AE..= ("dashed" :: Text), "width" AE..= (2 :: Int)]
-        , "label" AE..= AE.object ["formatter" AE..= ((label <> ": {c}") :: Text), "position" AE..= ("insideEndTop" :: Text)]
+        , "label" AE..= AE.object ["formatter" AE..= (("function(params) { var value = params.value; return " <> encodeText (label <> ": " :: Text) <> " + " <> unitValueExprJS KeepUnitWord widget.unit <> "; }") :: Text), "position" AE..= ("insideEndTop" :: Text)]
         ]
 
     markLineData :: [AE.Value]

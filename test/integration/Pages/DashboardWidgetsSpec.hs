@@ -18,6 +18,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
+import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
@@ -26,6 +27,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
+import Utils qualified
+import Web.Routes qualified as Routes
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -51,14 +54,14 @@ noFilters = Dashboards.DashboardFilters{tag = []}
 -- restarts per request, so the id minted here is the same in every example and a second
 -- create would collide on the primary key. This spec's database is created fresh from a
 -- template and is private to the file, so clearing is safe.
-newDashboard :: TestResources -> Text -> IO DashboardModel.DashboardId
-newDashboard tr title = do
+newDashboard :: TestResources -> Text -> Text -> IO DashboardModel.DashboardId
+newDashboard tr file title = do
   (_, existing) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case existing of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
       for_ dashboards \d -> void $ testServant tr $ Dashboards.dashboardDeleteH testPid d.id
     _ -> pass
-  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
+  _ <- testServant tr $ Dashboards.dashboardsPostH testPid Dashboards.DashboardForm{Dashboards.title = title, Dashboards.file = file, Dashboards.teams = [], Dashboards.fileDir = Nothing}
   (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
   case pg of
     Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) ->
@@ -125,7 +128,7 @@ spec = sequential $ aroundAll withTestResources do
 
   describe "Adding widgets to a dashboard" do
     it "widthless widgets default to four per row" \tr -> do
-      dashId <- newDashboard tr "Widget Default Width"
+      dashId <- newDashboard tr "overview.yaml" "Widget Default Width"
       addWidgets tr dashId [w{Widget.layout = Nothing} | w <- numberedWidgets 5]
 
       stored <- storedWidgets tr dashId
@@ -135,7 +138,7 @@ spec = sequential $ aroundAll withTestResources do
         `shouldBe` [(Just 0, Just 0, Just 3), (Just 3, Just 0, Just 3), (Just 6, Just 0, Just 3), (Just 9, Just 0, Just 3), (Just 0, Just 1, Just 3)]
 
     it "edits a widget in place and retains an omitted query" \tr -> do
-      dashId <- newDashboard tr "Widget Edit"
+      dashId <- newDashboard tr "overview.yaml" "Widget Edit"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")
       wid <- firstWidgetId =<< storedWidgets tr dashId
 
@@ -155,7 +158,7 @@ spec = sequential $ aroundAll withTestResources do
       for_ ["aria-label=\"Expand widget\"", "gap-0.5 flex flex-col", "min-h-8 px-1", "min-h-0 p-3"] \fragment ->
         html `shouldSatisfy` T.isInfixOf fragment
 
-      _ <- newDashboard tr "Widget destination"
+      _ <- newDashboard tr "overview.yaml" "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
       toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "successToast"
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
@@ -175,7 +178,7 @@ spec = sequential $ aroundAll withTestResources do
   -- cheap to assert — and a type that silently fails to persist shows up as its own line in
   -- the diff rather than as one opaque failure.
   it "every widget type survives add, move, resize and reload" \tr -> do
-    dashId <- newDashboard tr "Widget Lifecycle"
+    dashId <- newDashboard tr "overview.yaml" "Widget Lifecycle"
     addWidgets tr dashId [widgetOf wt (show @Text wt) | wt <- allWidgetTypes]
     added <- storedWidgets tr dashId
     map (show @Text . (.wType)) added `shouldBe` map (show @Text) allWidgetTypes
@@ -197,7 +200,7 @@ spec = sequential $ aroundAll withTestResources do
 
   describe "Moving and resizing on the canvas" do
     it "moving a widget to the origin is not mistaken for an absent coordinate" \tr -> do
-      dashId <- newDashboard tr "Widget Origin"
+      dashId <- newDashboard tr "overview.yaml" "Widget Origin"
       let atSix = (widgetOf Widget.WTTimeseries "origin"){Widget.layout = Just def{Widget.x = Just 6, Widget.y = Just 6, Widget.w = Just 3, Widget.h = Just 3}}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing atSix
       wid <- firstWidgetId =<< storedWidgets tr dashId
@@ -208,7 +211,7 @@ spec = sequential $ aroundAll withTestResources do
       (only.layout >>= (.x), only.layout >>= (.y)) `shouldBe` (Just 0, Just 0)
 
     it "a widget dropped from the patch is removed from the dashboard" \tr -> do
-      dashId <- newDashboard tr "Widget Delete"
+      dashId <- newDashboard tr "overview.yaml" "Widget Delete"
       addWidgets tr dashId (numberedWidgets 3)
       wids <- mapMaybe (.id) <$> storedWidgets tr dashId
       let kept = take 1 wids <> drop 2 wids
@@ -222,7 +225,7 @@ spec = sequential $ aroundAll withTestResources do
     -- A patch built before an HTMX swap can name only stale ids. Applying it would wipe
     -- the dashboard, since reorderWidgets rebuilds the list purely from the patch.
     it "a patch naming only unknown widgets is ignored rather than emptying the canvas" \tr -> do
-      dashId <- newDashboard tr "Widget Stale Patch"
+      dashId <- newDashboard tr "overview.yaml" "Widget Stale Patch"
       addWidgets tr dashId (numberedWidgets 2)
       priorWidgets <- storedWidgets tr dashId
 
@@ -244,7 +247,7 @@ spec = sequential $ aroundAll withTestResources do
           (_, dash) <- testServant tr (Dashboards.getDashAndVM testPid dashId Nothing >>= addRespHeaders . snd)
           pure $ maybe [] (.widgets) $ find (\t -> slugify t.name == slug) (fold dash.tabs)
         newTabbedDashboard tr = do
-          dashId <- newDashboard tr "Tabbed"
+          dashId <- newDashboard tr "overview.yaml" "Tabbed"
           _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid dashId tabbedYaml
           pure dashId
 
@@ -313,7 +316,7 @@ spec = sequential $ aroundAll withTestResources do
   -- app listened for either.
   describe "Saving the canvas layout" do
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
-      dashId <- newDashboard tr "Save Failure Signal"
+      dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
       (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing []
       let rendered = case pg of PageCtx _ d -> toStrict $ renderText $ toHtml d
           formTag = T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" rendered
@@ -331,7 +334,7 @@ spec = sequential $ aroundAll withTestResources do
     -- table: it is the wrong thing to drop on a dashboard by default, and it is the
     -- most expensive one to render.
     it "defaults to a timeseries chart, not the logs table" \tr -> do
-      dashId <- newDashboard tr "Add Widget Default"
+      dashId <- newDashboard tr "overview.yaml" "Add Widget Default"
       (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       -- Assert on the seeded `widgetJSON` rather than on which radio carries `checked`:
       -- that object is what the save actually posts, and every tab's inline hyperscript
@@ -345,7 +348,7 @@ spec = sequential $ aroundAll withTestResources do
     -- widgetJSON.type to a string with no WidgetType constructor, so the widget could
     -- not be decoded on save — the tab looked available and simply did not work.
     it "offers only visualizations the API can actually store as a widget" \tr -> do
-      dashId <- newDashboard tr "Add Widget Tabs"
+      dashId <- newDashboard tr "overview.yaml" "Add Widget Tabs"
       (_, html) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let rendered = toStrict $ renderText html
           offered = [T.takeWhile (/= '"') seg | seg <- drop 1 (T.splitOn "id=\"viz-" rendered)]
@@ -407,6 +410,37 @@ spec = sequential $ aroundAll withTestResources do
       md.error `shouldBe` Nothing
       md.dataText `shouldBe` V.singleton (V.fromList ["", "after"])
 
+    -- The same trap one decoder over: a plotted widget's SQL runs as DTMetric, whose leading
+    -- column the pivot reads as an epoch number. `time_bucket('1m', timestamp) AS timestamp`
+    -- — the obvious way to bucket by hand, and what the KQL builder writes before wrapping it
+    -- in extract(epoch …) — is a timestamptz, and took the whole widget down with
+    -- `Incompatible {errSQLType = "timestamptz", errSQLField = "timestamp", errHaskellType = "Int"}`.
+    it "plots a timestamptz bucket column, not just an epoch number" \tr -> do
+      let plotSql q = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
+      stamped <- plotSql "SELECT '2026-01-02 03:04:05+00'::timestamptz AS timestamp, 'value'::text, 7::double precision"
+      stamped.error `shouldBe` Nothing
+      -- Epoch milliseconds, the same wire shape an epoch-number bucket lands in.
+      (stamped.dataset V.!? 0 >>= (V.!? 0)) `shouldBe` Just (Just 1767323045000)
+      epoch <- plotSql "SELECT 1767323045::int4 AS timestamp, 'value'::text, 7::double precision"
+      epoch.dataset `shouldBe` stamped.dataset
+      -- A first column that is neither still fails: there is nothing to plot a series against.
+      wrong <- plotSql "SELECT 'not a bucket'::text, 'value'::text, 7::double precision"
+      wrong.error `shouldSatisfy` isJust
+
+  -- A dashboard variable declares the store its statement belongs to (`source: postgres`
+  -- for apis.endpoints). The page render honoured it, but the client re-runs the same
+  -- statement through /chart_data on every refresh and that carried no source — so it was
+  -- planned against TimeFusion, which answers "table 'datafusion.apis.endpoints' not
+  -- found", and the Endpoint Analytics picker silently stopped updating.
+  describe "Client-supplied SQL routing" do
+    let endpointsSql = "select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' limit 5"
+    -- Through the route, not queryMetrics directly: the route is where the source was
+    -- being dropped. (The guard the same route applies to client SQL is doctested on
+    -- 'Web.Routes.clientPostgresSqlRejection'.)
+    it "routes the statement at the store the variable declared" \tr -> do
+      (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      md.error `shouldBe` Nothing
+
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
     it "emits partial data and the same final chart as the JSON endpoint" \tr -> do
@@ -434,3 +468,89 @@ spec = sequential $ aroundAll withTestResources do
       frames `shouldSatisfy` \case
         Right [AE.Object obj] -> KM.lookup "type" obj == Just (AE.String "error")
         _ -> False
+
+  -- Every /widget request carries its whole widget definition on the request line. For a
+  -- table widget that is multi-KB of SQL, and past ~9.6KB nginx tears down the entire
+  -- HTTP/2 connection rather than just that stream — so Cloudflare answered 520 for the
+  -- oversized request *and* for every unrelated request multiplexed onto the same
+  -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
+  -- ("Couldn't load this chart") with no query ever reaching the database.
+  describe "Widget fetch URL size" do
+    let bigSqlWidget =
+          (def :: Widget.Widget)
+            { Widget.wType = Widget.WTTable
+            , Widget.title = Just "Query Optimization Targets"
+            , Widget.sql = Just $ "SELECT " <> T.intercalate ", " [T.replicate 4 "attributes___db___system___name" <> " AS c" <> show n | n <- [1 :: Int .. 100]] <> " FROM otel_logs_and_spans"
+            , Widget._projectId = Just testPid
+            }
+
+    it "keeps a table widget's URL far below the proxy's header limit" \_ -> do
+      let raw = "/p/" <> testPid.toText <> "/widget?widgetJSON=" <> Utils.toUriStr (Utils.encodeText bigSqlWidget)
+      -- The shape that broke: uncompressed, this widget alone overruns the limit.
+      T.length raw `shouldSatisfy` (> 9600)
+      T.length (Widget.widgetFetchUrl bigSqlWidget) `shouldSatisfy` (< 4000)
+
+    it "round-trips the widget through the compressed parameter the URL now uses" \tr -> do
+      let widgetZ = snd $ T.breakOnEnd "widgetZ=" $ Widget.widgetFetchUrl bigSqlWidget
+      (_, got) <- testServant tr $ Routes.widgetGetH testPid Nothing (Just widgetZ) (Just "24H") Nothing Nothing []
+      got.sql `shouldBe` bigSqlWidget.sql
+      got.title `shouldBe` bigSqlWidget.title
+
+    it "rejects a corrupt blob instead of decompressing something arbitrary" \_ ->
+      Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
+
+  -- Endpoint Analytics filters by endpoint hash, which already identifies one endpoint.
+  -- Every widget *also* pinned kind=="server", so the ~56% of a project's endpoints that
+  -- are outgoing calls (apis.endpoints.outgoing, discovered from client spans) rendered an
+  -- entirely empty dashboard: "0 reqs", "No data in this time range", while the log
+  -- explorer showed the traffic. Reported by a customer for dellyman.com/api/v3.0/GetQuotes.
+  describe "Endpoint Analytics covers outgoing endpoints" do
+    let outgoingHash = "ba3431d5"
+        seedClientSpan tr = withResource tr.trPool \conn ->
+          PG.execute
+            conn
+            [SqlQQ.sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, date, name, kind, status_code, duration, hashes, summary)
+                  VALUES (gen_random_uuid(), ?, ?, ?, ?, 'POST', 'client', '200', 5000000, ARRAY[?], ARRAY['POST']) |]
+            (testPid.toText, frozenTime, frozenTime, frozenTime, outgoingHash)
+
+    it "returns the endpoint's spans when they are client spans" \tr -> do
+      void $ seedClientSpan tr
+      md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      md.error `shouldBe` Nothing
+      V.length md.dataset `shouldSatisfy` (> 0)
+      -- The filter that caused the blank dashboard: it matches nothing for this endpoint.
+      excluded <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "kind==\"server\" AND hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      V.length excluded.dataset `shouldBe` 0
+
+    it "ships a template that does not filter the endpoint's widgets by span kind" \_ -> do
+      template <- decodeUtf8 <$> readFileBS "static/public/dashboards/endpoint-stats.yaml"
+      template `shouldSatisfy` T.isInfixOf "hashes[*]==\"{{var-endpointHash}}\""
+      template `shouldNotSatisfy` T.isInfixOf "kind"
+
+  -- The variable picker replaces the tab's content, so every widget the render produced
+  -- was thrown away. The gate lived in the view, so the handler ran the whole widget
+  -- phase first — with the required variable interpolated to '', which for Endpoint
+  -- Analytics means hashes[*]=="" scanning until the render budget kills it. The picker,
+  -- the first screen a user of such a dashboard ever sees, cost as much as the fully
+  -- populated dashboard (5.4s vs 5.5s measured against a customer project).
+  describe "Dashboards prompting for a required variable" do
+    let tabWidgets :: Dashboards.DashboardGet -> [Widget.Widget]
+        -- Flattened: the eager widgets on these templates are children of a group.
+        tabWidgets (Dashboards.DashboardGet _ _ dash _ _) = foldMap (foldMap (concatMap flatten . (.widgets))) dash.tabs
+        flatten w = w : concatMap flatten (fold w.children)
+        -- `eager` alone proves nothing: the template declares it. Server work shows up as
+        -- rendered html or a fetched dataset.
+        prefilled w = isJust w.html || isJust w.dataset
+        openTab tr dashId params = do
+          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") params
+          pure dg
+
+    it "skips the widget phase whose results the picker would discard" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
+      -- host is set, endpointHash is not: the picker is what renders.
+      gated <- openTab tr dashId [("var-host", Just "dellyman.com")]
+      let ws = tabWidgets gated
+      -- Not vacuous: the tab really does carry widgets, and the picker is what renders.
+      ws `shouldSatisfy` not . null
+      map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
+      toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"

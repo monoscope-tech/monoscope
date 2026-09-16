@@ -3,9 +3,6 @@
 -- are re-exported here, so importing this module still gets you everything.
 module Pkg.DeriveUtils (
   module Pkg.Deriving,
-  SnakeSchema (..),
-  CamelSchema (..),
-  JsonValueSchema (..),
   AesonText (..),
   BaselineState (..),
   DB,
@@ -38,7 +35,6 @@ module Pkg.DeriveUtils (
 ) where
 
 import Control.Exception (throwIO)
-import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
@@ -51,9 +47,7 @@ import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
 import Data.HashMap.Strict qualified as HM
 import Data.IntMap qualified as IntMap
-import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
-import Data.OpenApi qualified as OpenApi
-import Data.OpenApi.Internal.Schema (GToSchema)
+import Data.OpenApi (ToParamSchema (..), ToSchema (..))
 import Data.Text qualified as T
 import Data.Time (DiffTime, UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -68,7 +62,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (IOE, type (:>))
-import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Settings qualified as HCS
@@ -86,7 +79,6 @@ import Relude
 import Servant (FromHttpApiData (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO.Unsafe (unsafePerformIO)
-import Text.Casing (quietSnake)
 
 
 type DB es = (Hasql :> es, IOE :> es)
@@ -267,60 +259,6 @@ instance Show a => HI.EncodeValue (WrappedEnumShow a) where
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
   decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
-
-
--- | OpenApi half of the shared deriving wrappers. Kept out of 'Pkg.Deriving' so
--- the CLI does not link openapi3; everything here is server-side only.
---
--- The instances for 'WrappedEnumSC' are orphans for the same reason.
-instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
-  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = pure $ NamedSchema Nothing $ enumSCSchema @prefix @a
-
-
-instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
-  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = enumSCSchema @prefix @a
-
-
--- | Shared string-enum OpenApi schema for a 'WrappedEnumSC'.
-enumSCSchema :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => OpenApi.Schema
-enumSCSchema =
-  mempty
-    & type_
-    ?~ OpenApi.OpenApiString
-      & enum_
-    ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
-
-
--- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
-newtype SnakeSchema a = SnakeSchema a
-
-
-instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (SnakeSchema a) where
-  declareNamedSchema _ =
-    genericDeclareNamedSchema
-      OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
-      (Proxy @a)
-
-
--- | DerivingVia wrapper: produces ToSchema with unmodified (camelCase) field names.
-newtype CamelSchema a = CamelSchema a
-
-
-instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (CamelSchema a) where
-  declareNamedSchema _ = genericDeclareNamedSchema OpenApi.defaultSchemaOptions (Proxy @a)
-
-
--- | DerivingVia wrapper: emit an unconstrained JSON value schema for types whose
--- subtrees don't have ToSchema (escape hatch for deeply nested domain types).
-newtype JsonValueSchema a = JsonValueSchema a
-
-
-instance Typeable a => ToSchema (JsonValueSchema a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AET.Value)
-
-
-instance ToSchema AET.Value where
-  declareNamedSchema _ = pure $ NamedSchema (Just "JSONValue") mempty
 
 
 data BaselineState = BSLearning | BSEstablished

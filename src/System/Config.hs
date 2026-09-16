@@ -97,6 +97,8 @@ data EnvConfig = EnvConfig
   , enableBackgroundJobs :: Bool
   , slackClientId :: Text
   , slackClientSecret :: Text
+  , slackSigningSecret :: Text
+  , slackAppId :: Text
   , slackRedirectUri :: Text
   , slackBotToken :: Text
   , discordRedirectUri :: Text
@@ -502,7 +504,17 @@ configToEnv config = do
   -- PGWire proxy's five-minute timeout. Thirty minutes retained closed sockets;
   -- thirty seconds previously caused excessive connection churn.
   let timefusionIdleSeconds = 240 :: Int
-  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (fromIntegral timefusionIdleSeconds) 10 & setNumStripes (Just 2))
+  -- This pool size IS our concurrency limit against TimeFusion — resource-pool
+  -- blocks once it is exhausted, so it staggers a dashboard's widgets for free.
+  -- It has to be this low, because TF's sort machinery reserves
+  -- `sort_spill_reservation_bytes` per partition UP FRONT and unspillably:
+  -- the pool must fit N x partitions x that reservation. 8 x 24 x 64 MiB =
+  -- 12 GiB of TF's 16 GiB query pool. At the 128 MiB prod was running on
+  -- 2026-09-10 even five concurrent sorts filled it, which is how the
+  -- Overview/Infra tab killed a 28.8 MiB request with `Resources exhausted`.
+  -- Note this pool also serves Anomalies and the log explorer, so it throttles
+  -- those reads too — that is the price of not failing them instead.
+  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (fromIntegral timefusionIdleSeconds) 8 & setNumStripes (Just 2))
   let mainHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       tfHasqlSettings = tfParams
   hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings

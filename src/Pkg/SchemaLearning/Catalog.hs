@@ -537,7 +537,7 @@ data FieldCategoryEnum
 
 
 -- Type aliases for the legacy ID newtypes — VM types in
--- "Models.Apis.Anomalies" still reference these.
+-- "Models.Apis.ApiChanges" still reference these.
 type FieldId = UUIDId "field"
 
 

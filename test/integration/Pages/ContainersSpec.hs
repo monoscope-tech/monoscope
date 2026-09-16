@@ -332,7 +332,10 @@ spec = sequential $ aroundAll withTestResources do
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
       T.count "class=\"container-usage-chart " html `shouldBe` 2
-      html `shouldContainAll` ["px-2 pt-2", "\"bottom\":0", "\"tooltip\":{\"show\":true}"]
+      -- Escaped, because the chart options now ride in a JS *string literal* rather than a
+      -- template literal (6bfc9434f): the page carries \"bottom\":0, and asserting the bare
+      -- form would pass only for the shape that broke every chart's JSON.parse.
+      html `shouldContainAll` ["px-2 pt-2", "\\\"bottom\\\":0", "\\\"tooltip\\\":{\\\"show\\\":true}"]
       T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
       -- column, crossing the badge border. The label is one indivisible status.

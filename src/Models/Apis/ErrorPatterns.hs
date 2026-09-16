@@ -21,7 +21,6 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternSubscription,
   NotifiedStamp (..),
   updateErrorPatternThreadIds,
-  revertLastNotifiedAt,
   setErrorPatternAssignee,
   updateErrorPatternAnalysis,
   -- Error spike detection
@@ -59,6 +58,17 @@ newtype ErrorPatternId = ErrorPatternId {unErrorPatternId :: UUID.UUID}
   deriving anyclass (HI.DecodeRow)
 
 
+-- | How an error pattern is trending. This deliberately overlaps
+-- @Incidents.EpisodePhase@ (@active@\/@recovered@\/@resolved@) and the two are
+-- bridged by @Incidents.resolveErrorIncident@, which flips both in one
+-- transaction.
+--
+-- They are not merged, and that is a design decision rather than an oversight:
+-- this describes the /signal/ (is the error getting worse?) while a phase
+-- describes one /notification episode/ (is a Slack thread still open?). One
+-- pattern outlives many episodes, so collapsing them would need the escalation
+-- states to mean something per-episode. Revisit only with that answer in hand —
+-- the bridge is the contract, so any change has to keep the two in step.
 data ErrorState
   = ESNew
   | ESEscalating
@@ -95,7 +105,7 @@ data ErrorPattern = ErrorPattern
   , occurrences_1h :: Int
   , occurrences_24h :: Int
   , quietMinutes :: Int
-  , resolutionThresholdMinutes :: Int
+  , resolutionThresholdMinutes :: Int -- Historical setting; silence no longer establishes resolution.
   , baselineState :: BaselineState
   , baselineSamples :: Int
   , baselineErrorRateMean :: Maybe Double
@@ -119,6 +129,7 @@ data ErrorPattern = ErrorPattern
   , errorCategory :: Maybe Text
   , parentHash :: Maybe Text
   , isFramework :: Bool
+  , resolvedBy :: Maybe Projects.UserId
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
@@ -252,7 +263,7 @@ propagateMergedCountsBatch pids =
     WHERE c.id = m.canonical_id AND c.project_id = ANY(#{pids}) |]
 
 
--- | Batch version: decay occurrence counts for all given projects in a single query.
+-- | Decay occurrence counts without inferring recovery from missing errors.
 updateOccurrenceCountsBatch :: DB es => V.Vector Projects.ProjectId -> UTCTime -> Eff es Int64
 updateOccurrenceCountsBatch pids _ | V.null pids = pure 0
 updateOccurrenceCountsBatch pids now =
@@ -265,13 +276,8 @@ updateOccurrenceCountsBatch pids now =
         occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
         quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
         state = CASE
-          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
           WHEN state = 'regressed' AND regressed_at IS NOT NULL AND #{now}::timestamptz - regressed_at >= INTERVAL '7 days' THEN 'ongoing'
           ELSE state
-        END,
-        resolved_at = CASE
-          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN #{now}
-          ELSE resolved_at
         END
       WHERE project_id = ANY(#{pids})
         AND (state != 'resolved' OR occurrences_24h > 0)
@@ -280,7 +286,6 @@ updateOccurrenceCountsBatch pids now =
         -- quiet patterns and stops the TOAST relation from outrunning autovacuum.
         AND (
           occurrences_1m > 0 OR occurrences_5m > 0 OR occurrences_1h > 0 OR occurrences_24h > 0
-          OR (state IN ('new','escalating','ongoing','regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes)
           OR (state = 'regressed' AND regressed_at IS NOT NULL AND #{now}::timestamptz - regressed_at >= INTERVAL '7 days')
         )
     |]
@@ -294,8 +299,9 @@ updateErrorPatternState eid newState now =
         UPDATE apis.error_patterns SET
           state = #{newState},
           resolved_at = CASE WHEN #{newState}::text = 'resolved' THEN #{now}::timestamptz ELSE resolved_at END,
+          resolved_by = NULL,
           updated_at = #{now}
-        WHERE id = #{eid}
+        WHERE id = #{eid} AND state IS DISTINCT FROM #{newState}::text
       |]
 
 
@@ -344,15 +350,6 @@ updateErrorPatternThreadIds stamp eid slackTs discordMsgId now =
         discord_message_id = COALESCE(#{discordMsgId}, discord_message_id),
         last_notified_at = CASE WHEN #{stamp == StampNotifiedAt} THEN #{now} ELSE last_notified_at END,
         updated_at = #{now} WHERE id = #{eid} |]
-
-
--- | Revert an atomic 'claimDueErrorNotifications' claim when the send was
--- skipped (e.g. rate-limited) so the next tick is eligible to retry. Passing
--- 'Nothing' restores the pre-claim 'never notified' state.
-revertLastNotifiedAt :: DB es => ErrorPatternId -> Maybe UTCTime -> UTCTime -> Eff es Int64
-revertLastNotifiedAt eid previous now =
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.error_patterns SET last_notified_at = #{previous}, updated_at = #{now} WHERE id = #{eid} |]
 
 
 -- | Bulk-update baselines for all active error patterns in a project using a single SQL CTE.
@@ -523,6 +520,7 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
             quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
+            resolved_by = NULL,
             regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN #{now} ELSE apis.error_patterns.regressed_at END,
             regression_count = CASE WHEN apis.error_patterns.state = 'resolved'
                                     THEN apis.error_patterns.regression_count + 1

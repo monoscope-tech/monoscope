@@ -67,7 +67,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -1558,7 +1558,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
     window.openTraceDetails = function(panel) {
       if (panel.offsetWidth > 5) return;
       const storedWidth = localStorage.getItem('resizer-trace_details_width');
-      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '38%');
+      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '33.333%');
       panel.classList.add('open');
       document.getElementById('trace-details-resizer-wrapper')?.classList.remove('hidden');
       window.dispatchEvent(new Event('loglist-resize'));

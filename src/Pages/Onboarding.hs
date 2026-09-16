@@ -65,7 +65,7 @@ onboardingGetH pid onboardingStepM = do
       hasDiscord <- isJust <$> getDiscordDataByProjectId pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       let phone = fromMaybe "" $ everyoneTeamM >>= viaNonEmpty head . V.toList . (.phone_numbers)
-          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> appCtx.env.slackRedirectUri <> "&state=" <> pid.toText <> "__onboarding"
+          slackUrl = "/p/" <> pid.toText <> "/slack/install?onboarding"
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
     "Integration" -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid

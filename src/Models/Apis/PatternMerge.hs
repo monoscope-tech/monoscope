@@ -76,9 +76,15 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
+-- | Unbox an embedding at the decode boundary: hasql only decodes @float4[]@ into a
+-- boxed vector, and every consumer wants the unboxed one.
+unboxEmbedding :: V.Vector Float -> VU.Vector Float
+unboxEmbedding = V.convert
+
+
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
 getCanonicalErrorPatterns pid =
-  map (second (V.convert :: V.Vector Float -> VU.Vector Float))
+  map (second unboxEmbedding)
     <$> Hasql.interp
       [HI.sql| SELECT id, embedding FROM apis.error_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
@@ -155,7 +161,7 @@ updateLogEmbeddings pairs =
 
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
 getCanonicalLogPatterns pid =
-  map (second (V.convert :: V.Vector Float -> VU.Vector Float))
+  map (second unboxEmbedding)
     <$> Hasql.interp
       [HI.sql| SELECT id, embedding FROM apis.log_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL

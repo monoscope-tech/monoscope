@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 -- Standard library imports
 import Control.Lens
@@ -56,16 +56,14 @@ import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerE
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
-import Web.WireSchemas ()
 
 -- Model imports
 
-import Codec.Compression.GZip qualified as GZip
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
-import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
@@ -78,15 +76,15 @@ import Pkg.Parser (PageDirection)
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
-import "base64" Data.ByteString.Base64.URL qualified as B64URL
+import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
-import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
@@ -99,6 +97,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.Infrastructure qualified as Infrastructure
+import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -174,6 +173,15 @@ instance MimeUnrender RawJSON BS.ByteString where
   mimeUnrender _ = Right . toStrict
 
 
+-- | Preserve Slack's form bytes until the handler verifies their signature.
+data RawForm
+  deriving (Accept) via FormUrlEncoded
+
+
+instance MimeUnrender RawForm BS.ByteString where
+  mimeUnrender _ = Right . toStrict
+
+
 -- | OTLP/HTTP wire format (raw protobuf bytes; decoding happens in the handler).
 data OTLPProto
 
@@ -204,6 +212,19 @@ instance Accept PNG where
 
 instance MimeRender PNG LBS.ByteString where
   mimeRender _ = id
+
+
+-- | The learned OpenAPI spec, served as YAML. Response-only, so no
+-- 'MimeUnrender'.
+data YAML
+
+
+instance Accept YAML where
+  contentType _ = "application/yaml"
+
+
+instance MimeRender YAML Text where
+  mimeRender _ = fromStrict . encodeUtf8
 
 
 -- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
@@ -408,13 +429,12 @@ data Routes mode = Routes
   , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] Replay.ReplaySessionResp
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> LocationRedirect BotUtils.BotResponse
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
-  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
-  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackActionForm :> Post '[JSON] AE.Value
-  , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
-  , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
+  , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
+  , slackActionsPost :: mode :- "actions" :> "slack" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
+  , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
+  , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[RawForm] BS.ByteString :> Header "X-Slack-Request-Timestamp" Text :> Header "X-Slack-Signature" Text :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
@@ -459,6 +479,10 @@ type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> LocationRedirect NoContent
+  , slackInstallGet :: mode :- "p" :> ProjectId :> "slack" :> "install" :> QueryFlag "onboarding" :> LocationRedirect NoContent
+  , slackIdentityGet :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> Get '[HTML] (RespHeaders (Html ()))
+  , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
   , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
@@ -488,16 +512,22 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
-    chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+    chartsDataGet :: mode :- "chart_data" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
-  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
+  , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
   , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
+  , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
+    -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
+    -- because these URLs are meant to be pasted into curl, CI, and codegen.
+    apiCatalogDocs :: mode :- "p" :> ProjectId :> "api_catalog" :> "docs" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[HTML] (RespHeaders ApiCatalog.ApiDocsPage)
+  , apiCatalogSpecJson :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.json" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[JSON] (RespHeaders AE.Value)
+  , apiCatalogSpecYaml :: mode :- "p" :> ProjectId :> "api_catalog" :> "openapi.yaml" :> QPT "host" :> QPT "request_type" :> QPT "endpoint" :> Get '[YAML] (RespHeaders Text)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
@@ -536,7 +566,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
-  , anomalies :: mode :- "p" :> ProjectId :> "issues" :> AnomaliesRoutes
+  , issues :: mode :- "p" :> ProjectId :> "issues" :> IssuesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
   , monitors :: mode :- "p" :> ProjectId :> "monitors" :> MonitorsRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
@@ -551,7 +581,7 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
-  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPD "direction" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> Get '[JSON] (RespHeaders Log.LogResult)
+  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPD "direction" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "sort" :> Get '[JSON] (RespHeaders Log.LogResult)
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
   , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
@@ -584,24 +614,24 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   deriving stock (Generic)
 
 
--- Anomalies Routes
-type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
+-- Issues Routes
+type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 
-type AnomaliesRoutes' :: Type -> Type
-data AnomaliesRoutes' mode = AnomaliesRoutes'
-  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowledge" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" AnomalyList.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
+type IssuesRoutes' :: Type -> Type
+data IssuesRoutes' mode = IssuesRoutes'
+  { acknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unAcknowlegeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
+  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
-  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   , sampleGet :: mode :- Capture "issueID" Issues.IssueId :> "sample" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> QPT "trace_id" :> QPU "trace_ts" :> Get '[HTML] (RespHeaders (Html ()))
@@ -618,7 +648,7 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> Get '[HTML] (RespHeaders RUM.RumGet)
+  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> QPT "refresh" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
@@ -732,13 +762,12 @@ server logger env tp otlpTraces otlpLogs =
     , otlpLogsPost = otlpHttpH otlpLogs
     , shareLinkGet = Share.shareLinkGetH
     , shareReplaySessionGet = Share.shareReplaySessionGetH
-    , slackLinkProjectGet = Slack.linkProjectGetH
     , discordLinkProjectGet = Discord.linkDiscordGetH
     , discordInteractions = Discord.discordInteractionsH
-    , slackInteractions = Slack.slackInteractionsH
-    , slackActionsPost = Slack.slackActionsH
+    , slackInteractions = Slack.slackFormPostH Slack.slackInteractionsH
+    , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
     , slackEventsPost = Slack.slackEventsPostH
-    , externalOptionsGet = Slack.externalOptionsH
+    , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH
@@ -905,6 +934,10 @@ cookieProtectedServer =
   CookieProtectedRoutes
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
+    , slackInstallGet = Slack.startInstallGetH
+    , slackIdentityGet = Slack.linkIdentityGetH
+    , slackIdentityPost = Slack.linkIdentityPostH
+    , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , rumDashboardRedirect = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
     , dashboardsGet = Dashboards.dashboardGetH
@@ -932,8 +965,8 @@ cookieProtectedServer =
     , apiPatch = Settings.apiActivateH
     , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
-      chartsDataGet = Charts.queryMetrics Nothing
-    , chartsDataStreamGet = Charts.queryMetricsStream Nothing
+      chartsDataGet = chartsDataGetH
+    , chartsDataStreamGet = chartsDataStreamGetH
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
@@ -972,6 +1005,9 @@ cookieProtectedServer =
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
     , apiCatalogBulkAction = ApiCatalog.apiCatalogBulkActionH
+    , apiCatalogDocs = ApiCatalog.apiDocsH
+    , apiCatalogSpecJson = ApiCatalog.apiSpecJsonH
+    , apiCatalogSpecYaml = ApiCatalog.apiSpecYamlH
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
@@ -980,7 +1016,7 @@ cookieProtectedServer =
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
-    , anomalies = anomaliesServer
+    , issues = issuesServer
     , monitors = monitorsServer
     , traces = telemetryServer
     }
@@ -1015,27 +1051,27 @@ logExplorerServer pid =
     }
 
 
--- Anomalies server
-anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
-anomaliesServer pid =
-  AnomaliesRoutes'
-    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid True
-    , unAcknowlegeGet = \aid -> AnomalyList.acknowledgeAnomalyGetH pid False aid Nothing
-    , archiveGet = AnomalyList.archiveAnomalyGetH pid True
-    , unarchiveGet = AnomalyList.archiveAnomalyGetH pid False
-    , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
-    , listGet = AnomalyList.anomalyListGetH pid
-    , anomalyGet = AnomalyList.anomalyDetailGetH pid
-    , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
-    , assignErrorPost = AnomalyList.assignErrorPostH pid
-    , resolveErrorPost = AnomalyList.resolveErrorPostH pid
-    , errorSubscriptionPost = AnomalyList.errorSubscriptionPostH pid
-    , aiChatPost = AnomalyList.aiChatPostH pid
-    , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
-    , sampleGet = AnomalyList.issueSampleGetH pid
-    , activityGet = AnomalyList.issueActivityGetH pid
-    , errorGroupMembersGet = AnomalyList.errorGroupMembersGetH pid
-    , errorUnmergePost = AnomalyList.errorUnmergePostH pid
+-- Issues server
+issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
+issuesServer pid =
+  IssuesRoutes'
+    { acknowlegeGet = IssuesPage.acknowledgeIssueGetH pid True
+    , unAcknowlegeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
+    , archiveGet = IssuesPage.archiveIssueGetH pid True
+    , unarchiveGet = IssuesPage.archiveIssueGetH pid False
+    , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid
+    , listGet = IssuesPage.issueListGetH pid
+    , detailGet = IssuesPage.issueDetailGetH pid
+    , detailHashGet = IssuesPage.issueDetailHashGetH pid
+    , assignErrorPost = IssuesPage.assignErrorPostH pid
+    , resolveErrorPost = IssuesPage.resolveErrorPostH pid
+    , errorSubscriptionPost = IssuesPage.errorSubscriptionPostH pid
+    , aiChatPost = IssuesPage.aiChatPostH pid
+    , aiChatHistoryGet = IssuesPage.aiChatHistoryGetH pid
+    , sampleGet = IssuesPage.issueSampleGetH pid
+    , activityGet = IssuesPage.issueActivityGetH pid
+    , errorGroupMembersGet = IssuesPage.errorGroupMembersGetH pid
+    , errorUnmergePost = IssuesPage.errorUnmergePostH pid
     }
 
 
@@ -1176,11 +1212,57 @@ avatarGetH userId =
       "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" rx=\"64\" fill=\"#e5e7eb\"/><circle cx=\"64\" cy=\"48\" r=\"23\" fill=\"#9ca3af\"/><path d=\"M23 116c5-25 19-38 41-38s36 13 41 38\" fill=\"#9ca3af\"/></svg>"
 
 
+-- | @/chart_data@ is the one query path whose SQL text arrives from the browser
+-- (a dashboard variable re-running its statement, see @reloadVarWhitelist@), and
+-- @db_source=postgres@ points it at the pool holding the application's own tables
+-- rather than telemetry. So it has to clear the same gates dashboard SQL clears
+-- server-side in 'LogQueries.executeSecuredQuery': SELECT-only, and scoped to the
+-- project being asked about. Statements defined server-side (widget YAML, the PNG
+-- export) never come through here and keep their existing freedom.
+-- The statement still carries @{{project_id}}@ here, so substitute it the way
+-- 'Charts.queryMetrics' is about to and ask the question of the result.
+--
+-- >>> let pid = UUIDId UUID.nil :: Projects.ProjectId
+-- >>> clientPostgresSqlRejection (Just "timefusion") (Just pid) (Just "select 1 from otel_logs_and_spans")
+-- Nothing
+-- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints limit 5")
+-- Just "Query must filter by project_id"
+-- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
+-- Nothing
+clientPostgresSqlRejection :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
+clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
+  (Just "postgres", Just pid, Just sql)
+    | let resolved = T.replace "{{project_id}}" pid.toText sql ->
+        if
+          | not (LogQueries.validateSqlQuery resolved) -> Just "Query contains disallowed operations"
+          | not (LogQueries.hasProjectIdFilter resolved pid) -> Just "Query must filter by project_id"
+          | otherwise -> Nothing
+  _ -> Nothing
+
+
+guardClientPostgresSql :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
+guardClientPostgresSql dbSource pidM querySqlM =
+  whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
+
+
+chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
+chartsDataGetH dbSource dt pid q qSql since fromD toD src density params =
+  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density params
+
+
+chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params =
+  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density params
+
+
 -- Widget GET handler that accepts dashboard parameters
-widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
-widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
+widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
+widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
+  -- widgetZ is what we render now (see 'Widget.widgetFetchUrl'); widgetJSON stays readable
+  -- for hand-built URLs and for pages still open from before the change.
+  widgetJson <- maybe (pure widgetJsonM) (fmap (<|> widgetJsonM) . Widget.decodeWidgetZ) widgetZM
   widget <-
-    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJsonM)
+    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
   let widgetWithPid = widget & #_projectId ?~ pid
@@ -1199,42 +1281,57 @@ widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text ->
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- ask @AuthContext
   let fallback = fromMaybe "" widgetJsonM
-  v <- case widgetZM of
-    Just z
-      | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
-          handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
-    _ -> pure fallback
-  let width = clamp (100, 2000) $ fromMaybe 900 widthM
-      height = clamp (100, 2000) $ fromMaybe 300 heightM
-
+  v <- maybe (pure fallback) (fmap (fromMaybe fallback) . Widget.decodeWidgetZ) widgetZM
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
   whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
+  let (defaultWidth, defaultHeight) = Widget.pngExportSize widget.pngProfile
+      width = clamp (100, 2000) $ fromMaybe defaultWidth widthM
+      height = clamp (100, 2000) $ fromMaybe defaultHeight heightM
   -- The signature covers the dataset as well as the query. Saved report charts
   -- carry their measured data, and must remain usable after telemetry expires.
-  processedWidget <- case widget.dataset of
-    Just _ -> pure widget
-    Nothing -> Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+  chart <- case widget.dataset of
+    Just _ -> pure $ Right widget
+    Nothing -> do
+      md <- Dashboards.widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+      pure $ case md.error of
+        Just queryError -> Left queryError
+        Nothing ->
+          Right $ widget
+            & #dataset ?~ case widget.wType of
+              Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+              _ -> Widget.toWidgetDataset md
+  whenLeft_ chart \queryError ->
+    Log.logAttention "widgetPngGetH: chart query unavailable" $ AE.object ["widgetId" AE..= widget.id, "error" AE..= queryError]
 
-  let input =
+  let darkMode = case L.lookup "appearance" allParams of
+        Just (Just "dark") -> True
+        Just (Just "light") -> False
+        _ -> widget.theme == Just "dark"
+      input =
         AE.encode
           $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts (processedWidget & #_staticRender ?~ True)
+            [ "echarts"
+                AE..= either
+                  (const $ AE.object ["graphic" AE..= AE.object ["type" AE..= ("text" :: Text), "left" AE..= ("center" :: Text), "top" AE..= ("middle" :: Text), "style" AE..= AE.object ["text" AE..= ("Chart unavailable\nOpen the incident or monitor for details." :: Text), "fontSize" AE..= (18 :: Int), "fill" AE..= (bool "#334155" "#cbd5e1" darkMode :: Text), "textAlign" AE..= ("center" :: Text)]]])
+                  (Widget.widgetToECharts . (#_staticRender ?~ True))
+                  chart
+            , "profile" AE..= fromMaybe Widget.PngStandard widget.pngProfile
             , "width" AE..= width
             , "height" AE..= height
-            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            , "theme" AE..= fromMaybe "default" widget.theme
             , -- Presentation only, like width/height; the signed widget data is unchanged.
-              "darkMode" AE..= (case L.lookup "appearance" allParams of Just (Just "dark") -> True; Just (Just "light") -> False; _ -> processedWidget.theme == Just "dark")
+              "darkMode" AE..= darkMode
             ]
 
   pngBytes <-
     liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
-      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height])
+      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height])
       Just (ExitSuccess, bytes, _) -> pure bytes
-      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id])
+      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id])
 
-  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
+  pure $ addHeader @"Cache-Control" (if isLeft chart then "no-store" else bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 
 
 -- =============================================================================

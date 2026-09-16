@@ -15,6 +15,7 @@ import Pkg.Parser (
   parseQueryToAST,
   parseQueryToComponents,
  )
+import Pkg.Parser.Expr (errorFlagSql)
 import Pkg.Parser.Stats (Sources (..))
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
@@ -643,6 +644,23 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((COALESCE(status_code, 0) >= 400)) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
+
+    -- The list projects `errors` as a computed boolean, so `errors == true` is what a reader
+    -- writes next. It used to reach the raw payload column and fail the whole query with
+    -- "Cannot infer common argument type for comparison operation Utf8View = Boolean" on
+    -- TimeFusion. The filter must be the same predicate the projection is.
+    it "filters on the projected errors flag rather than the payload column" do
+      -- Asserted on the WHERE clause rather than the whole statement: the projection contains
+      -- the same predicate, and how deeply the filter happens to be parenthesised is
+      -- incidental. 'errorFlagSql' is imported rather than retyped — its text is pinned by
+      -- the doctest on 'Pkg.Parser.Expr.displayExprHelper'; what belongs here is the wiring.
+      let whereOf q = snd $ T.breakOn "WHERE" $ fst $ fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) q
+      whereOf "errors == true" `shouldSatisfy` T.isInfixOf errorFlagSql
+      whereOf "errors == true" `shouldNotSatisfy` T.isInfixOf "NOT "
+      whereOf "errors == false" `shouldSatisfy` T.isInfixOf ("NOT " <> errorFlagSql)
+      whereOf "errors != true" `shouldBe` whereOf "errors == false"
+      -- Nothing that already worked moves: the column itself stays addressable.
+      whereOf "errors != null" `shouldSatisfy` T.isInfixOf "errors IS NOT NULL"
 
     it "parses isnull as standalone expression" do
       let result = parseQueryToAST "isnull(status_message)"

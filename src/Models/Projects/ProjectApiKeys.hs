@@ -21,7 +21,7 @@ import Data.Base64.Types qualified as B64T
 import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -30,6 +30,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
+import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -42,6 +43,7 @@ import Pkg.DeriveUtils (selectFrom)
 import Relude hiding (ask, id)
 import Servant.API (FromHttpApiData)
 import System.Config qualified as Config
+import System.Logging qualified as Log
 import System.Types (DB)
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptonite" Crypto.Cipher.AES (AES256)
@@ -51,12 +53,8 @@ import "cryptonite" Crypto.Error (throwCryptoError)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField, ToParamSchema, ToSchema)
   deriving anyclass (FromRow, ToRow)
-
-
-instance ToSchema ProjectApiKeyId where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
-instance ToParamSchema ProjectApiKeyId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 instance HasField "toText" ProjectApiKeyId Text where
@@ -116,28 +114,43 @@ getProjectApiKey kid = Hasql.interp (selectFrom @ProjectApiKey <> [HI.sql| WHERE
 -- | Cache-backed lookup. DB-level failures (connection refused, pool exhausted, …)
 -- throw 'Hasql.HasqlException' so the caller (ultimately 'Pkg.Queue') routes the batch
 -- to the DLQ; a clean @Nothing@ stays the legitimate "key not in DB" signal.
-getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+--
+-- A live key whose /project/ is switched off is a different thing from a key we
+-- don't know, and it is the one that needs a human: "Engine/API Prod" ingested
+-- nothing for 17 days behind this @Nothing@ while its subscription kept billing.
+-- The log is emitted on the cache miss, so a rejected key costs one line per key
+-- per TTL rather than one per request.
+getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es, Log :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 getProjectIdByApiKey projectKey = do
   appCtx <- Effectful.ask @Config.AuthContext
-  liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \key ->
-    OHasql.use
-      appCtx.hasqlPool
-      ( Session.statement
-          ()
-          ( HI.interp
-              True
-              [HI.sql|
-      SELECT k.project_id FROM projects.project_api_keys k
-      JOIN projects.projects p ON p.id = k.project_id
-      WHERE k.key_prefix = #{key} AND k.active = TRUE AND k.deleted_at IS NULL
-        AND p.active = TRUE AND p.deleted_at IS NULL
+  liftIO (Cache.lookup appCtx.projectKeyCache projectKey) >>= \case
+    Just cached -> pure cached
+    Nothing -> do
+      row :: Maybe (Projects.ProjectId, Bool) <-
+        liftIO
+          $ OHasql.use
+            appCtx.hasqlPool
+            ( Session.statement
+                ()
+                ( HI.interp
+                    True
+                    [HI.sql|
+      SELECT k.project_id, (p.active AND p.deleted_at IS NULL)
+        FROM projects.project_api_keys k
+        JOIN projects.projects p ON p.id = k.project_id
+       WHERE k.key_prefix = #{projectKey} AND k.active = TRUE AND k.deleted_at IS NULL
     |]
-          )
-      )
-      >>= either (throwIO . Hasql.HasqlException) pure
+                )
+            )
+          >>= either (throwIO . Hasql.HasqlException) pure
+      whenJust (mfilter (not . snd) row) \(pid, _) ->
+        Log.logAttention "api key rejected: project is deactivated or deleted" ("project_id", pid.toText)
+      let pidM = fst <$> mfilter snd row
+      liftIO $ Cache.insert appCtx.projectKeyCache projectKey pidM
+      pure pidM
 
 
-projectIdsByProjectApiKeys :: (DB es, Effectful.Reader Config.AuthContext :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys :: (DB es, Effectful.Reader Config.AuthContext :> es, Log :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
 projectIdsByProjectApiKeys projectKeys =
   V.catMaybes <$> forM projectKeys \key -> fmap (key,) <$> getProjectIdByApiKey key
 

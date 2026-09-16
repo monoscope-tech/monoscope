@@ -1,9 +1,9 @@
 module Pages.Bots.SlackSpec (spec) where
 
-import Control.Exception (try)
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Effectful.Error.Static (catchError)
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Pages.Bots.BotFixtures
@@ -11,6 +11,7 @@ import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)
 import Pkg.TestUtils
 import Relude
+import Servant.Server (ServerError (errHTTPCode))
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
@@ -19,7 +20,7 @@ spec = around withTestResources do
   describe "Slack Bot" do
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do
-        setupSlackData tr testPid "T01HEREA9X"
+        setupLinkedSlackData tr testPid "T01HEREA9X"
         let interaction = slackInteraction "/monoscope-here" "" "T01HEREA9X"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -33,7 +34,7 @@ spec = around withTestResources do
           Nothing -> expectationFailure "Slack data not found"
 
       it "returns correct block structure" \tr -> do
-        setupSlackData tr testPid "T02BLOCKB8Y"
+        setupLinkedSlackData tr testPid "T02BLOCKB8Y"
         let interaction = slackInteraction "/monoscope-here" "" "T02BLOCKB8Y"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -46,7 +47,7 @@ spec = around withTestResources do
 
     describe "/monoscope command" do
       it "returns loading message immediately" \tr -> do
-        setupSlackData tr testPid "T03MONOSC0P"
+        setupLinkedSlackData tr testPid "T03MONOSC0P"
         let interaction = slackInteraction "/monoscope" "show error rate" "T03MONOSC0P"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -62,24 +63,24 @@ spec = around withTestResources do
 
     describe "/dashboard command" do
       it "returns error when no dashboards exist" \tr -> do
-        setupSlackData tr testPid "T04DASHEMTY"
+        setupLinkedSlackData tr testPid "T04DASHEMTY"
         let interaction = slackInteraction "/dashboard" "" "T04DASHEMTY"
-        result <- try $ toBaseServantResponse tr $ slackInteractionsH interaction
-        case result of
-          Left (e :: SomeException) -> T.isInfixOf "dashboards" (toText $ show e) `shouldBe` True
-          Right _ -> pass
+        status <-
+          toBaseServantResponse tr
+            $ catchError @ServerError (slackInteractionsH interaction $> 200) (\_ err -> pure err.errHTTPCode)
+        status `shouldBe` 400
 
     describe "Anomaly Notifications" do
       it "captures Slack notification when anomaly occurs" \tr -> do
         setupSlackData tr testPid "T05ANOMALY1"
-        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel "T05ANOMALY1" "C06ALERTSCH" Nothing
+        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel testPid "C06ALERTSCH" Nothing
 
         -- Use existing infrastructure from TestUtils
         (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx pass
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do
-        setupSlackData tr testPid "T06ANOMQRY2"
+        setupLinkedSlackData tr testPid "T06ANOMQRY2"
 
         let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T06ANOMQRY2"
         result <- toBaseServantResponse tr $ slackInteractionsH interaction
@@ -89,7 +90,7 @@ spec = around withTestResources do
 
     describe "Channel Management" do
       it "/here command adds channel to @everyone team" \tr -> do
-        setupSlackData tr testPid "T07HERETEAM"
+        setupLinkedSlackData tr testPid "T07HERETEAM"
         let interaction = slackInteraction "/monoscope-here" "" "T07HERETEAM"
         void $ toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -103,7 +104,7 @@ spec = around withTestResources do
           Nothing -> expectationFailure "Slack data not found"
 
       it "/here command does not duplicate channels in @everyone team" \tr -> do
-        setupSlackData tr testPid "T08HEREDUP"
+        setupLinkedSlackData tr testPid "T08HEREDUP"
         let interaction = slackInteraction "/monoscope-here" "" "T08HEREDUP"
         void $ toBaseServantResponse tr $ slackInteractionsH interaction
         void $ toBaseServantResponse tr $ slackInteractionsH interaction
@@ -120,7 +121,7 @@ spec = around withTestResources do
           Nothing -> expectationFailure "Slack data not found"
 
       it "/here updates both default channel_id and @everyone team" \tr -> do
-        setupSlackData tr testPid "T09HEREBOTH"
+        setupLinkedSlackData tr testPid "T09HEREBOTH"
         let interaction = slackInteraction "/monoscope-here" "" "T09HEREBOTH"
         void $ toBaseServantResponse tr $ slackInteractionsH interaction
 
@@ -135,7 +136,7 @@ spec = around withTestResources do
           Nothing -> expectationFailure "Slack data not found"
 
       it "/here sends welcome message when channel is newly added" \tr -> do
-        setupSlackData tr testPid "T10HEREWELC"
+        setupLinkedSlackData tr testPid "T10HEREWELC"
         let interaction = slackInteraction "/monoscope-here" "" "T10HEREWELC"
         -- First call should add channel and attempt to send welcome message
         void $ toBaseServantResponse tr $ slackInteractionsH interaction
@@ -150,7 +151,7 @@ spec = around withTestResources do
           Nothing -> expectationFailure "Slack data not found"
 
       it "/here does not send welcome message when channel already exists" \tr -> do
-        setupSlackData tr testPid "T11HERENODUP"
+        setupLinkedSlackData tr testPid "T11HERENODUP"
         let interaction = slackInteraction "/monoscope-here" "" "T11HERENODUP"
         -- First call adds channel
         void $ toBaseServantResponse tr $ slackInteractionsH interaction

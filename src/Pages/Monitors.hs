@@ -73,7 +73,8 @@ import Web.HttpApiData (FromHttpApiData)
 
 
 data AlertUpsertForm = AlertUpsertForm
-  { alertId :: Maybe Text
+  { unit :: Maybe Text
+  , alertId :: Maybe Text
   , alertThreshold :: Double
   , warningThreshold :: Maybe Text
   , recipientEmails :: [Text]
@@ -125,7 +126,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
 
       alertConfig =
         Monitors.MonitorAlertConfig
-          { severity = alertForm.severity
+          { unit = mfilter (not . T.null) $ T.strip <$> alertForm.unit
+          , severity = alertForm.severity
           , title = alertForm.title
           , subject = alertForm.subject
           , message = alertForm.message
@@ -289,16 +291,17 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
           option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
-thresholdsSection_ :: Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
-thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
+thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
+thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
   let chartUpdateAttr = case chartTargetIdM of
         Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
         Nothing -> [__|on input set chart to #visualization-widget if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
       showVal = maybe "" show
   panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
+    formField_ FieldSm def{value = fromMaybe "" unitM, placeholder = "e.g. s, bytes, requests/s"} "Measurement unit" "unit" False Nothing
     div_ [class_ "flex flex-row gap-2 py-2"] do
-      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
-      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
+      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
+      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
       formSelectField_ FieldSm "Trigger condition" "direction" False
         $ options_ (Just $ bool "above" "below" triggerLessThan) [("above", "Above threshold"), ("below", "Below threshold")]
     div_ [class_ "mt-3 pt-3 border-t border-strokeWeak space-y-2"] do
@@ -306,8 +309,8 @@ thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessT
         div_ (span_ [class_ "font-medium text-textStrong"] "Recovery thresholds " >> span_ "(optional)")
         p_ "Alert recovers only when value crosses these thresholds"
       div_ [class_ "flex flex-row gap-2 py-2"] do
-        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal alertRecoveryM} "Alert recovery" "alertRecoveryThreshold" False Nothing
-        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
+        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal alertRecoveryM} "Alert recovery" "alertRecoveryThreshold" False Nothing
+        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
 notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Text -> Maybe Monitors.QueryMonitor -> Html ()

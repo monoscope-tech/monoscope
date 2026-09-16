@@ -215,13 +215,19 @@ spec = around withTestResources do
       it "create → get → patch → mute → unmute → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
-            input = (def :: ApiT.MonitorInput){ApiT.title = "t1", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+            input = (def :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.title = "t1", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         created <- runB $ ApiH.apiMonitorCreate testPid input
         created.alertConfig.title `shouldBe` "t1"
         got <- runB $ ApiH.apiMonitorGet testPid created.id
         got.id `shouldBe` created.id
+        got.alertConfig.unit `shouldBe` Just "s"
         patched <- runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.title = Just "t2"})
         patched.alertConfig.title `shouldBe` "t2"
+        retained <- runB $ ApiH.apiMonitorGet testPid created.id
+        retained.alertConfig.unit `shouldBe` Just "s"
+        void $ runB $ ApiH.apiMonitorPatch testPid created.id ((def :: ApiT.MonitorPatch){ApiT.unit = Just "ms"})
+        exported <- runB $ ApiH.apiMonitorYaml testPid created.id
+        exported.unit `shouldBe` Just "ms"
         muted <- runB $ ApiH.apiMonitorMute testPid created.id (Just 60)
         muted.mutedUntil `shouldSatisfy` isJust
         unmuted <- runB $ ApiH.apiMonitorUnmute testPid created.id

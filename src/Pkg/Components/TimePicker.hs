@@ -5,6 +5,9 @@ module Pkg.Components.TimePicker (
   refreshButton_,
   timeHiddenInputs_,
   TimePicker (..),
+  rangePairs,
+  rangeJson,
+  rangeQuery,
   TimeWindow (..),
   mkTimeWindow,
   windowUrl,
@@ -13,6 +16,7 @@ module Pkg.Components.TimePicker (
 
 import Data.Aeson qualified as AE
 import Data.List (lookup)
+import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -29,7 +33,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl)
+import Utils (faSprite_, formatUTC, nonEmptyT, popoverPanel_, popoverTrigger_, sinceWindows, timeScopedUrl, toUriStr)
 
 
 -- $setup
@@ -49,6 +53,33 @@ data TimePicker = TimePicker
   deriving (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TimePicker
+
+
+-- | The selected range as wire params, in the order the picker reads them, with
+-- blanks dropped. Pages hand the same three values to seed scripts, @hx-vals@ and
+-- Explorer links, so all three shapes below come from here.
+--
+-- >>> rangePairs (TimePicker (Just "24H") Nothing (Just ""))
+-- [("since","24H")]
+rangePairs :: TimePicker -> [(Text, Text)]
+rangePairs tp = [(k, v) | (k, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+
+
+-- | 'rangePairs' as a JSON object. @<@ is escaped for callers that embed it in an
+-- inline @<script>@, where a literal @<@ can close the element.
+--
+-- >>> rangeJson (TimePicker Nothing (Just "2026-01-01T00:00:00Z") (Just ""))
+-- "{\"from\":\"2026-01-01T00:00:00Z\"}"
+rangeJson :: TimePicker -> Text
+rangeJson = T.replace "<" "\\u003c" . decodeUtf8 . AE.encode . Map.fromList . rangePairs
+
+
+-- | 'rangePairs' as query params, each already prefixed with @&@.
+--
+-- >>> rangeQuery (TimePicker (Just "24H") Nothing (Just "2026-01-01T00:00:00Z"))
+-- "&since=24H&to=2026-01-01T00%3A00%3A00Z"
+rangeQuery :: TimePicker -> Text
+rangeQuery = foldMap (\(k, v) -> "&" <> k <> "=" <> toUriStr v) . rangePairs
 
 
 -- | Test parseSince with different time units

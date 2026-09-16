@@ -60,7 +60,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Report qualified as Report
 import Relude
-import Utils (formatWithCommas, kqlQuoted, showFFloat', toUriStr)
+import Utils (formatWithCommas, isoT, kqlQuoted, showFFloat', toUriStr)
 
 
 -- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
@@ -535,8 +535,6 @@ traceExplorerUrl projectUrl tid when' =
     <> isoT (addUTCTime (-1800) when')
     <> "&to="
     <> isoT (addUTCTime 1800 when')
-  where
-    isoT t = toText $ formatTime defaultTimeLocale "%FT%TZ" t
 
 
 errorCard :: Text -> Text -> Maybe Text -> ErrorPatterns.ATError -> Html ()
@@ -776,7 +774,7 @@ weeklyReportEmail d =
                 when (null infra.resources) $ reportNote "No infrastructure metrics observed. Configure an OpenTelemetry host, Docker or Kubernetes receiver to include resource usage."
                 forM_ (reportRows 4 infra.resources) $ \r ->
                   reportItem
-                    (d.projectUrl <> (if r.scope == "Host" then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (reportISO infra.observedFrom) <> "&to=" <> toUriStr (reportISO infra.observedUntil))
+                    (d.projectUrl <> (if r.scope == "Host" then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
                     r.name
                     (T.intercalate " · " $ r.scope : catMaybes [r.host, r.cluster, r.namespace])
                     [("CPU / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.cpuRatio, "Latest sample"), ("Memory / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.memoryRatio, "Latest sample"), ("Storage used", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.storageRatio, "Latest sample"), ("Readiness", maybe "Not reported" (\ready -> if ready then "Ready" else "Not ready") r.ready, maybe "" (\n -> "Restart counter: " <> reportDecimal n) r.restartCounter)]
@@ -922,10 +920,6 @@ reportObserved :: Report.ReportSection a -> (a -> Html ()) -> Html ()
 reportObserved section render = case section of
   Report.Available value -> render value
   Report.Unavailable -> reportNote "This section could not be loaded for the report. Open the linked workspace to investigate."
-
-
-reportISO :: UTCTime -> Text
-reportISO = toText . formatTime defaultTimeLocale "%FT%TZ"
 
 
 reportSection :: Text -> Text -> Html () -> Html ()

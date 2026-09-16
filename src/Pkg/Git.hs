@@ -43,6 +43,13 @@ module Pkg.Git (
   listRepos,
   defaultBranchOf,
   computeContentSha,
+  Deployment (..),
+  DeploymentStatus (..),
+  DeploymentState (..),
+  DeploymentEvidence (..),
+  DeploymentReadError (..),
+  EvidencePage (..),
+  listDeployments,
 
   -- * Webhooks
   WebhookReq (..),
@@ -60,8 +67,11 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
@@ -70,7 +80,7 @@ import Network.HTTP.Types.Status (statusCode)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import Network.Wreq (FormParam (..))
-import Pkg.DeriveUtils (enumFromField, refineText)
+import Pkg.DeriveUtils (WrappedEnumSC (..), enumFromField, refineText)
 import Relude
 import Relude.Extra.Bifunctor (firstF)
 
@@ -89,11 +99,19 @@ import "memory" Data.ByteArray qualified as BA
 -- | Which REST dialect a connection speaks.
 --
 -- The DB stores the slug, not the constructor name: @show GitHub@ would snake-case to
--- @git_hub@, which is nobody's idea of a host name. 'hostSlug' and 'parseHostSlug' are the one
--- place that mapping lives.
+-- @git_hub@. The derived JSON tags preserve the same lowercase spellings as
+-- 'hostSlug' and 'parseHostSlug'.
+--
+-- >>> map AE.toJSON [GitHub, GitLab, Bitbucket, Gitea]
+-- [String "github",String "gitlab",String "bitbucket",String "gitea"]
+-- >>> map (AE.fromJSON @GitHost . AE.String) ["github", "gitlab", "bitbucket", "gitea"]
+-- [Success GitHub,Success GitLab,Success Bitbucket,Success Gitea]
+-- >>> AE.decode @GitHost "\"GitHub\"" == Nothing
+-- True
 data GitHost = GitHub | GitLab | Bitbucket | Gitea
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.Rename "GitHub" "github", DAE.Rename "GitLab" "gitlab", DAE.Rename "Bitbucket" "bitbucket", DAE.Rename "Gitea" "gitea"]] GitHost
 
 
 -- | How the host is spelled to a human — which is exactly how it is spelled as a constructor.
@@ -130,17 +148,8 @@ parseHostSlug :: Text -> Maybe GitHost
 parseHostSlug = inverseMap hostSlug
 
 
--- | Hand-written rather than via 'WrappedEnumSC': that wrapper snake-cases the constructor,
--- which would make @GitHub@ into @git_hub@ — a value 0125's CHECK constraint rejects, and not
--- what anyone would type into a URL either. 'hostSlug' is the single source of the spelling.
-instance AE.ToJSON GitHost where
-  toJSON = AE.toJSON . hostSlug
-
-
-instance AE.FromJSON GitHost where
-  parseJSON = AE.withText "GitHost" $ maybe (fail "unknown git host") pure . parseHostSlug
-
-
+-- JSON derives lowercase constructor tags, matching hostSlug and the database
+-- slugs. The DB codecs below retain their TEXT representation.
 instance ToField GitHost where
   toField = toField . hostSlug
 
@@ -511,6 +520,76 @@ pagedJson conn size items dec mkUrl = paginate size \p -> fmap (mapMaybe dec . i
 ----------------------------------------------------------------------
 -- Operations
 ----------------------------------------------------------------------
+
+data Deployment = Deployment
+  { id :: Int64
+  , revision :: Text
+  , ref :: Text
+  , environment :: Text
+  , createdAt :: UTCTime
+  , description :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "revision" "sha", DAE.CamelToSnake]] Deployment
+
+
+data DeploymentState = DSPending | DSQueued | DSInProgress | DSSuccess | DSFailure | DSError | DSInactive
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "DS" DeploymentState
+
+
+data DeploymentStatus = DeploymentStatus
+  { state :: DeploymentState
+  , createdAt :: UTCTime
+  , description :: Maybe Text
+  , logUrl :: Maybe Text
+  , environmentUrl :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DeploymentStatus
+
+
+-- | A bounded evidence read. Reaching the limit does not prove more rows exist,
+-- and callers must not treat a capped page as a complete deployment history.
+data EvidencePage a = EvidencePage {entries :: [a], limitReached :: Bool}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data DeploymentReadError
+  = UnsupportedDeploymentHost GitHost
+  | DeploymentRequestFailed Text
+  | InvalidDeploymentResponse Text
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data DeploymentEvidence = DeploymentEvidence
+  { requestUrl :: Text
+  , deployment :: Deployment
+  , statuses :: Either DeploymentReadError (EvidencePage DeploymentStatus)
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+getJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)
+getJson conn endpoint = (first DeploymentRequestFailed >=> first (InvalidDeploymentResponse . toText) . AE.eitherDecode) <$> get_ conn endpoint
+
+
+-- | GitHub deployment requests plus reported execution states. A status lookup
+-- failure stays explicit for its deployment; it is not an empty successful history.
+listDeployments :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Maybe Text -> Eff es (Either DeploymentReadError (EvidencePage DeploymentEvidence))
+listDeployments conn repo environment
+  | conn.host /= GitHub = pure $ Left $ UnsupportedDeploymentHost conn.host
+  | otherwise = runExceptT do
+      deployments <- ExceptT $ getJson @[Deployment] conn $ repoUrl conn repo ("/deployments?per_page=5" <> foldMap (("&environment=" <>) . enc) environment)
+      evidence <- lift $ forM (take 5 deployments) \deployment -> do
+        let requestUrl = repoUrl conn repo ("/deployments/" <> show deployment.id)
+        statuses <- getJson @[DeploymentStatus] conn (requestUrl <> "/statuses?per_page=10")
+        pure $ DeploymentEvidence requestUrl deployment $ (\rows -> EvidencePage (take 10 rows) (length rows >= 10)) <$> statuses
+      pure $ EvidencePage evidence (length deployments >= 5)
+
 
 -- | The resolved head commit of @r.ref@ — the revision marker every host can report.
 --

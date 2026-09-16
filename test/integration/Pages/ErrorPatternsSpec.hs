@@ -20,13 +20,13 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
-import Pages.Anomalies qualified
+import Pages.Issues qualified
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -144,14 +144,14 @@ spec = sequential $ aroundAll withTestResources do
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
-      (_, page) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherPage) <- testServant tr $ Pages.Anomalies.anomalyDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
+      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf issue.title
@@ -495,31 +495,32 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Test assign
           let sess = Servant.getResponse tr.trSessAndHeader
-          void $ testServant tr $ Pages.Anomalies.assignErrorPostH pid errUuid (Pages.Anomalies.AssignErrorForm (Just $ sess.user.id.toText))
+          void $ testServant tr $ Pages.Issues.assignErrorPostH pid errUuid (Pages.Issues.AssignErrorForm (Just $ sess.user.id.toText))
           assignedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.assigneeId) assignedPat `shouldBe` Just (Just sess.user.id)
 
-          -- Test resolve
-          void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
+          -- Resolve after the prior spike evaluations, not before their incident events.
+          advanceMinutes tr 241
+          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)
-          (_, issueList) <- testServant tr $ Pages.Anomalies.anomalyListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
+          (_, issueList) <- testServant tr $ Pages.Issues.issueListGetH pid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] []
           let listHtml = TL.toStrict $ renderText $ toHtml issueList
           listHtml `shouldSatisfy` T.isInfixOf issue.title
           listHtml `shouldSatisfy` T.isInfixOf "RESOLVED"
 
           -- Test subscribe
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid errUuid (Pages.Issues.ErrorSubscriptionForm (Just 30))
           subscribedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) subscribedPat `shouldBe` Just True
 
           -- Test unsubscribe
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm Nothing)
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid errUuid (Pages.Issues.ErrorSubscriptionForm Nothing)
           unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) unsubPat `shouldBe` Just False
 
-    it "7. Occurrence count decay and auto-resolution" \tr -> do
+    it "7. Occurrence count decay does not infer resolution from silence" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       -- Find or create a non-resolved pattern
       let activePatM = find (\p -> p.state /= ESResolved) patterns
@@ -547,7 +548,7 @@ spec = sequential $ aroundAll withTestResources do
           updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case updatedPat of
             Just p -> do
-              p.state `shouldBe` ESResolved
+              p.state `shouldBe` ESOngoing
               p.occurrences_1m `shouldBe` 0
             Nothing -> expectationFailure "Pattern not found after occurrence count update"
 
@@ -600,17 +601,23 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> expectationFailure "fresh notification pattern not created"
         Just pat -> do
           -- Ensure it's subscribed
-          void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
+          void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Issues.ErrorSubscriptionForm (Just 30))
           -- Ensure matching issue exists
           void $ runAllBackgroundJobs frozenTime tr.trATCtx
-          -- Reset last_notified_at so this pattern is eligible (prior tests may have already notified it)
-          withResource tr.trPool \conn ->
-            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
-
-          -- First notification: should create thread IDs and produce Slack + Discord notifications
-          (notifs1, _) <-
-            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+          let notifyAt time =
+                runTestBackgroundWithNotifications time tr.trLogger tr.trATCtx do
+                  BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+                  replicateM_ 2 BackgroundJobs.runSlackIncidentDeliveries
+              roots = withResource tr.trPool \conn ->
+                PGS.query
+                  conn
+                  [sql|SELECT r.channel_id, r.message_ts FROM apis.slack_incident_roots r
+                  JOIN apis.incident_episodes e ON e.id = r.episode_id
+                  WHERE e.source_kind = 'error' AND e.source_id = ? ORDER BY r.channel_id|]
+                  (PGS.Only pat.id)
+                  :: IO [(Text, Maybe Text)]
+          -- Ingestion created the root; reminders must preserve it.
+          (notifs1, _) <- notifyAt (addUTCTime 3600 frozenTime)
           -- Verify notification types and content
           let slackNotifs1 = [sd | SlackNotification sd <- notifs1]
               discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
@@ -629,27 +636,17 @@ spec = sequential $ aroundAll withTestResources do
             slackPayloadViolations sd.payload `shouldBe` []
 
           pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
-          let slackTs1 = pat1 >>= (.slackThreadTs)
-              discordId1 = pat1 >>= (.discordMessageId)
-          isJust slackTs1 `shouldBe` True
+          roots1 <- roots
+          map fst roots1 `shouldBe` ["C_TEST"]
+          map snd roots1 `shouldSatisfy` all isJust
+          let discordId1 = pat1 >>= (.discordMessageId)
           isJust discordId1 `shouldBe` True
 
-          -- Make notification due again by pushing last_notified_at into the past
-          withResource tr.trPool \conn ->
-            void
-              $ PGS.execute
-                conn
-                [sql| UPDATE apis.error_patterns SET last_notified_at = ?::timestamptz - INTERVAL '2 hours' WHERE id = ? |]
-                (frozenTime, pat.id)
-
-          -- Second notification: should reuse same thread IDs (threading preserved)
-          (notifs2, _) <-
-            runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-              $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
-          length [() | SlackNotification _ <- notifs2] `shouldSatisfy` (>= 1)
-
+          (notifs2, _) <- notifyAt (addUTCTime 7200 frozenTime)
+          let replies = [sd | SlackNotification sd <- notifs2, isJust sd.threadTs]
+          map (\sd -> (sd.channelId, sd.threadTs)) replies `shouldBe` roots1
+          roots `shouldReturn` roots1
           pat2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
-          (pat2 >>= (.slackThreadTs)) `shouldBe` slackTs1
           (pat2 >>= (.discordMessageId)) `shouldBe` discordId1
 
     it "9. Error fingerprint stability across IPs and timestamps" \tr -> do

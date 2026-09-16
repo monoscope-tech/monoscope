@@ -1,5 +1,6 @@
 module Pages.CodeContextSpec (spec) where
 
+import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
@@ -15,6 +16,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
 import Network.HTTP.Types.Status (Status (..))
 import Network.HTTP.Types.Version (http11)
+import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as PageCodeContext
 import Pages.Components (stackTrace_)
 import Pkg.Git qualified as Git
@@ -153,6 +155,59 @@ spec = do
   snippetCacheSpec
   repoListCacheSpec
   around withTestResources do
+    describe "Repository deployment evidence" do
+      it "keeps deployment requests, reported statuses, failures, and result limits distinct" \tr -> do
+        let cfg = tr.trATCtx.config
+            revision = T.replicate 40 "a"
+            deployment n =
+              AE.object
+                [ "id" AE..= (n :: Int)
+                , "sha" AE..= revision
+                , "ref" AE..= ("main" :: Text)
+                , "environment" AE..= ("production" :: Text)
+                , "created_at" AE..= ("2025-01-01T00:00:00Z" :: Text)
+                , "statuses_url" AE..= ("https://untrusted.example/statuses" :: Text)
+                ]
+            status reportedState at = AE.object ["state" AE..= (reportedState :: Text), "created_at" AE..= (at :: Text)]
+            statusRows = [status "success" "2025-01-01T00:05:00Z", status "pending" "2025-01-01T00:02:00Z"] :: [AE.Value]
+            repoUrl = "https://api.github.com/repos/acme/checkout-service"
+        Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_deployment_fixture")
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
+        linked <- runQueryEffect tr $ CodeContext.getLinkedRepositories testPid (Just "checkout")
+        mapping <- case linked.entries of
+          [entry] -> pure entry.mappingId
+          _ -> fail "Expected one linked repository"
+        otherPid <- createTestProject tr "Other deployment project"
+        (deniedRequests, denied) <- runTestBgRecordingHTTP frozenTime tr $ CodeContext.fetchDeployments cfg otherPid mapping Nothing
+        denied `shouldSatisfy` isLeft
+        deniedRequests `shouldBe` []
+        for_ ([(2, 2), (6, 12)] :: [(Int, Int)]) \(count, statusCount) -> do
+          let transport = withHTTPResponses \_ endpoint -> do
+                let suffix = drop (length repoUrl) endpoint
+                take (length repoUrl) endpoint `shouldBe` repoUrl
+                pure $ Just $ AE.encode $ case suffix of
+                  "/deployments?per_page=5&environment=production" -> AE.toJSON $ map deployment [1 .. count]
+                  "/deployments/2/statuses?per_page=10" -> AE.toJSON ([status "unrecognized_state" "2025-01-01T00:04:00Z"] :: [AE.Value])
+                  _ -> AE.toJSON $ take statusCount $ cycle statusRows
+          (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ CodeContext.fetchDeployments cfg testPid mapping (Just "production")
+          length requests `shouldBe` 1 + min 5 count
+          case result of
+            Right page -> do
+              length page.entries `shouldBe` min 5 count
+              page.limitReached `shouldBe` (count >= 5)
+              case page.entries of
+                firstEntry : secondEntry : _ -> do
+                  firstEntry.deployment.revision `shouldBe` revision
+                  case firstEntry.statuses of
+                    Right reported -> do
+                      map (.state) reported.entries `shouldBe` take (min 10 statusCount) (cycle [Git.DSSuccess, Git.DSPending])
+                      reported.limitReached `shouldBe` (statusCount >= 10)
+                      all ((> firstEntry.deployment.createdAt) . (.createdAt)) reported.entries `shouldBe` True
+                    Left err -> fail $ show err
+                  secondEntry.statuses `shouldSatisfy` isLeft
+                _ -> fail "Expected at least two deployments"
+            Left err -> fail $ show err
+
     describe "Source code settings (code mappings)" do
       -- Without a credential there is nothing to read repos through, so the page must point at
       -- the control that fixes that rather than offer a form whose every submission is discarded.

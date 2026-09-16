@@ -14,21 +14,25 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
+  MeasurementFailure (..),
   getAlertsByTeam,
   monitorRemoveTeam,
   getActiveQueryMonitors,
-  updateLastEvaluatedAt,
   queryMonitorByWidgetId,
   deleteMonitorsByWidgetIds,
   WidgetAlertStatus (..),
   getWidgetAlertStatuses,
+  recordEvaluation,
+  recordEvaluationTx,
+  getEvaluations,
+  pruneEvaluations,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema (..), ToSchema (..))
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text.Display (Display)
 import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
@@ -44,6 +48,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
@@ -54,12 +60,15 @@ import System.Types (DB)
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField, ToSchema)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField, ToParamSchema, ToSchema)
   deriving anyclass (HI.DecodeRow)
 
 
 instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
-instance ToParamSchema QueryMonitorId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+
+
+data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFailed
+  deriving stock (Eq, Show)
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
@@ -68,12 +77,41 @@ data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "MS" MonitorStatus
 
 
-instance HI.DecodeRow MonitorStatus where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
+-- | The first completed evaluation at a timestamp is immutable. Retries must
+-- not rewrite the measurement behind an already delivered alert snapshot.
+recordEvaluation :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Eff es ()
+recordEvaluation pid mid at value status = Hasql.transaction TxS.ReadCommitted TxS.Write $ recordEvaluationTx pid mid at value status
+
+
+recordEvaluationTx :: Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Tx.Transaction ()
+recordEvaluationTx pid mid at value status =
+  void
+    $ Tx.statement ()
+    $ HI.interp @HI.RowsAffected
+      True
+      [HI.sql|INSERT INTO monitors.evaluations (monitor_id, evaluated_at, value, status)
+      SELECT id, #{at}, #{value}, #{status} FROM monitors.query_monitors
+      WHERE id = #{mid} AND project_id = #{pid}
+      ON CONFLICT (monitor_id, evaluated_at) DO NOTHING|]
+
+
+getEvaluations :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> UTCTime -> Eff es [(UTCTime, Double)]
+getEvaluations pid mid from to =
+  Hasql.interp
+    [HI.sql|SELECT e.evaluated_at, e.value FROM monitors.evaluations e
+      JOIN monitors.query_monitors m ON m.id = e.monitor_id
+      WHERE m.project_id = #{pid} AND m.id = #{mid}
+        AND e.evaluated_at >= #{from} AND e.evaluated_at <= #{to}
+      ORDER BY e.evaluated_at|]
+
+
+pruneEvaluations :: DB es => UTCTime -> Eff es ()
+pruneEvaluations before = Hasql.interpExecute_ [HI.sql|DELETE FROM monitors.evaluations WHERE evaluated_at < #{before}|]
 
 
 data MonitorAlertConfig = MonitorAlertConfig
-  { title :: Text
+  { unit :: Maybe Text
+  , title :: Text
   , severity :: Text
   , subject :: Text
   , message :: Text
@@ -264,10 +302,6 @@ getActiveQueryMonitors =
             )
         |]
     )
-
-
-updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
-updateLastEvaluatedAt qmId time = Hasql.interpExecute [HI.sql|UPDATE monitors.query_monitors SET last_evaluated=#{time} where id=#{qmId}|]
 
 
 queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)

@@ -343,7 +343,7 @@ effToHandler computation = do
 type ApiKeyAuthContext = AuthHandler Request Projects.ProjectId
 
 
-resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 resolveApiKeyProject bearerToken =
   ProjectApiKeys.getProjectIdByApiKey (stripBearer bearerToken)
 

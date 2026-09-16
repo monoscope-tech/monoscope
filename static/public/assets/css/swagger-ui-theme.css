@@ -1,0 +1,125 @@
+/* Monoscope skin for Swagger UI.
+ *
+ * Companion to the vendored swagger-ui-dist 5.32.15 in
+ * ../deps/swagger-ui/. Those two files are copied straight out of the npm
+ * tarball and committed; there is deliberately no npm dependency, because the
+ * only macOS `npm install` that would add one prunes the linux-only optional
+ * packages out of package-lock.json and CI's `npm ci` then refuses the lockfile.
+ * To refresh:
+ *
+ *   npm pack swagger-ui-dist@<version> && tar xf swagger-ui-dist-*.tgz
+ *   cp package/swagger-ui-bundle.js package/swagger-ui.css ../deps/swagger-ui/
+ *
+
+ * Loaded only by /p/:pid/api_catalog/docs, after swagger-ui.css. Two jobs:
+ *
+ *  1. Dark mode. Swagger UI ships none and hard-codes light greys, so a themed
+ *     page would otherwise flip to a white slab. Everything below is scoped to
+ *     body[data-theme='dark'] .swagger-ui — the light rendering is untouched.
+ *  2. Drop the chrome we don't want: the topbar/URL bar (we serve the spec) and
+ *     the "Authorize" button (nothing is submittable — supportedSubmitMethods
+ *     is empty).
+ */
+
+.swagger-ui .topbar,
+.swagger-ui .auth-wrapper,
+.swagger-ui .information-container .info__tos,
+.swagger-ui .information-container .info__contact {
+  display: none;
+}
+
+.swagger-ui {
+  font-family: inherit;
+}
+
+.swagger-ui .info .title,
+.swagger-ui .opblock-tag,
+.swagger-ui .model-title {
+  font-family: inherit;
+}
+
+body[data-theme='dark'] .swagger-ui {
+  --sui-bg: oklch(0.21 0.012 265);
+  --sui-bg-raised: oklch(0.26 0.013 265);
+  --sui-border: oklch(0.34 0.014 265);
+  --sui-text: oklch(0.92 0.005 265);
+  --sui-text-weak: oklch(0.72 0.008 265);
+  color: var(--sui-text);
+}
+
+body[data-theme='dark'] .swagger-ui .info .title,
+body[data-theme='dark'] .swagger-ui .info li,
+body[data-theme='dark'] .swagger-ui .info p,
+body[data-theme='dark'] .swagger-ui .info table,
+body[data-theme='dark'] .swagger-ui .opblock-tag,
+body[data-theme='dark'] .swagger-ui .opblock .opblock-summary-operation-id,
+body[data-theme='dark'] .swagger-ui .opblock .opblock-summary-path,
+body[data-theme='dark'] .swagger-ui .opblock .opblock-summary-description,
+body[data-theme='dark'] .swagger-ui .opblock-description-wrapper p,
+body[data-theme='dark'] .swagger-ui .opblock-section-header h4,
+body[data-theme='dark'] .swagger-ui .opblock-section-header > label,
+body[data-theme='dark'] .swagger-ui .parameter__name,
+body[data-theme='dark'] .swagger-ui .parameter__type,
+body[data-theme='dark'] .swagger-ui .response-col_status,
+body[data-theme='dark'] .swagger-ui .response-col_links,
+body[data-theme='dark'] .swagger-ui table thead tr td,
+body[data-theme='dark'] .swagger-ui table thead tr th,
+body[data-theme='dark'] .swagger-ui .model,
+body[data-theme='dark'] .swagger-ui .model-title,
+body[data-theme='dark'] .swagger-ui section.models h4,
+body[data-theme='dark'] .swagger-ui .tab li button.tablinks,
+body[data-theme='dark'] .swagger-ui label {
+  color: var(--sui-text);
+}
+
+body[data-theme='dark'] .swagger-ui .parameter__extension,
+body[data-theme='dark'] .swagger-ui .parameter__in,
+body[data-theme='dark'] .swagger-ui .prop-format,
+body[data-theme='dark'] .swagger-ui .renderedMarkdown p {
+  color: var(--sui-text-weak);
+}
+
+body[data-theme='dark'] .swagger-ui .opblock-tag,
+body[data-theme='dark'] .swagger-ui .opblock .opblock-section-header,
+body[data-theme='dark'] .swagger-ui table thead tr td,
+body[data-theme='dark'] .swagger-ui table thead tr th {
+  border-color: var(--sui-border);
+}
+
+body[data-theme='dark'] .swagger-ui .opblock .opblock-section-header,
+body[data-theme='dark'] .swagger-ui section.models,
+body[data-theme='dark'] .swagger-ui section.models .model-container,
+body[data-theme='dark'] .swagger-ui .model-box {
+  background: var(--sui-bg-raised);
+}
+
+/* Operation cards keep their per-method accent border/tint; only the body plate
+ * needs to stop being white. */
+body[data-theme='dark'] .swagger-ui .opblock .opblock-summary,
+body[data-theme='dark'] .swagger-ui .opblock-body {
+  background: var(--sui-bg);
+}
+
+/* The servers strip is a white plate with its own shadow in stock Swagger UI. */
+body[data-theme='dark'] .swagger-ui .scheme-container {
+  background: var(--sui-bg-raised);
+  box-shadow: none;
+  border-bottom: 1px solid var(--sui-border);
+}
+
+body[data-theme='dark'] .swagger-ui select,
+body[data-theme='dark'] .swagger-ui input[type='text'],
+body[data-theme='dark'] .swagger-ui textarea {
+  background: var(--sui-bg);
+  color: var(--sui-text);
+  border-color: var(--sui-border);
+}
+
+body[data-theme='dark'] .swagger-ui svg:not(:root) {
+  fill: var(--sui-text);
+}
+
+body[data-theme='dark'] .swagger-ui .microlight {
+  background: oklch(0.16 0.01 265) !important;
+  color: oklch(0.9 0.02 150) !important;
+}

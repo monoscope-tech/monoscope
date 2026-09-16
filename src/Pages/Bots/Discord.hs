@@ -12,6 +12,7 @@ import Effectful.Reader.Static (asks)
 import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pkg.AI qualified as AI
 import Relude hiding (ask, asks)
 import "cryptonite" Crypto.Error qualified as Crypto
 import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
@@ -209,7 +210,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                   (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
                   (fmap (map \m -> (if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser, m.content)) <$> getThreadStarterMessage interaction envCfg.discordBotToken)
             _ -> pure Nothing
-      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg discordData.projectId (optionText options "") resolveThread
+      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg AI.ServiceAccess discordData.projectId (optionText options "") resolveThread
 
 
 -- | First slash-command option's string value, or a fallback.

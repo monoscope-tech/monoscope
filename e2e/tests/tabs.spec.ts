@@ -34,10 +34,14 @@ test("issue investigation tabs swap between trace and logs", async ({ page }) =>
   page.on("pageerror", e => errors.push(e.message));
 
   // Reached from the list rather than a fixed id: issues age out of the demo data.
-  await page.goto(`/p/${DEMO_PROJECT}/issues`);
+  // Filtered to runtime exceptions on purpose — the trace/logs tabs under test are
+  // the exception investigation panel, and a query-alert or api-change issue has no
+  // #error-details-container at all. Unfiltered, this asserted on whatever sorted
+  // first and failed the moment the list order changed.
+  await page.goto(`/p/${DEMO_PROJECT}/issues?type=runtime_exception`);
   // Same reason as metric-exemplars: an empty demo project has no issue to open.
   await page.waitForLoadState("networkidle").catch(() => {});
-  test.skip((await page.locator('a[href*="/issues/"]').count()) === 0, "no issues — environment has no telemetry");
+  test.skip((await page.locator('a[href*="/issues/"]').count()) === 0, "no runtime exceptions — environment has no telemetry");
 
   await page.locator('a[href*="/issues/"]').first().click({ timeout: 30000 });
   await page.locator("#error-details-container").waitFor({ timeout: 30000 });
@@ -48,7 +52,10 @@ test("issue investigation tabs swap between trace and logs", async ({ page }) =>
 
   // Whichever starts open, the other must be closed, and clicking swaps them.
   await expect(logs).toBeVisible({ visible: !initialTraceVisible });
-  await page.locator(initialTraceVisible ? "label:has(#err-tab-logs)" : "label:has(#err-tab-trace)").click();
+  // Class, not id: detailTab_ renders the marker as a class on the radio
+  // (`class_ ("sr-only " <> marker)`) and sets no id, so `#err-tab-logs` matched
+  // nothing and this line could never have passed.
+  await page.locator(initialTraceVisible ? "label:has(.err-tab-logs)" : "label:has(.err-tab-trace)").click();
   await expect(trace).toBeVisible({ visible: !initialTraceVisible });
   await expect(logs).toBeVisible({ visible: initialTraceVisible });
 

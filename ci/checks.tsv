@@ -21,7 +21,7 @@ build	ghc	@hs @fe
 doctests	ghc	@hs @fe
 unit-tests	ghc	@hs @fe
 cli-tests	ghc	@cli
-integration-tests	ghc pg minio tf-real	@hs @fe
+integration-tests	ghc node bun pg minio tf-real	@hs @fe
 weeder	ghc	@hs @fe
 hlint	hlint	src .hlint.yaml
 ui-tests	node	@fe

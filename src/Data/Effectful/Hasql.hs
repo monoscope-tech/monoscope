@@ -5,6 +5,7 @@ module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
   SqlSource (..),
+  sqlSourceParam,
   SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
@@ -22,18 +23,26 @@ module Data.Effectful.Hasql (
   labeledTransaction,
   interp,
   interpOne,
+  interpOneJson,
+  interpOneOrThrow,
+  interpOneJsonOrThrow,
   interpExecute,
   interpExecute_,
+  queryTx,
+  oneTx,
+  executeTx,
   withHasqlTimefusion,
   withLabeled,
 ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (throwIO)
+import Control.Exception (ErrorCall (..), throwIO)
 import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -61,6 +70,17 @@ data SqlSource = SqlPostgres | SqlTimefusion
   deriving stock (Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "Sql", DAE.CamelToSnake]] SqlSource
+
+
+-- | The wire spelling of a source, shared by its JSON tag and the @db_source@
+-- query parameter the client sends back when it re-runs a dashboard statement.
+--
+-- >>> map sqlSourceParam [SqlPostgres, SqlTimefusion]
+-- ["postgres","timefusion"]
+sqlSourceParam :: SqlSource -> Text
+sqlSourceParam = \case
+  SqlPostgres -> "postgres"
+  SqlTimefusion -> "timefusion"
 
 
 data SecuredSql = SecuredSql
@@ -121,6 +141,12 @@ instance Exception HasqlException where
 --
 -- >>> isTransientUsageError AcquisitionTimeoutUsageError
 -- True
+--
+-- >>> let tfPoolExhausted msg = SessionUsageError (ScriptSessionError "q" (ServerError "XX000" msg Nothing Nothing Nothing))
+-- >>> isTransientUsageError (tfPoolExhausted "Resources exhausted: Additional allocation failed for ExternalSorter[0]")
+-- True
+-- >>> isTransientUsageError (tfPoolExhausted "Arrow error: invalid UTF-8")
+-- False
 isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
@@ -135,9 +161,19 @@ isTransientUsageError = \case
     -- retry treats the reset as poison and dead-letters writable data (the
     -- 2026-06-21 DLQ flood). Same incident class as ConnectionUsageError above.
     emptySqlState = \case
-      StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _)) -> code == ""
-      ScriptSessionError _ (ServerError code _ _ _ _) -> code == ""
+      StatementSessionError _ _ _ _ _ (ServerStatementError err) -> transientServerError err
+      ScriptSessionError _ err -> transientServerError err
       _ -> False
+    -- An empty code is infra (see above). TimeFusion's momentary query-pool
+    -- exhaustion arrives as XX000 with a distinctive message: the pool is
+    -- shared process-wide and its sort reservations are unspillable, so a
+    -- burst of concurrent widgets can starve one query that succeeds seconds
+    -- later — the siblings holding the pool are themselves short-lived, which
+    -- is what makes waiting the whole fix (same predicate as the chart path's
+    -- retryOnPoolExhaustion; here it reaches the log explorer's
+    -- retryTransientEff site).
+    transientServerError (ServerError code message _ _ _) =
+      code == "" || (code == "XX000" && any (`T.isInfixOf` message) ["Resources exhausted", "Not enough memory to continue external sort"])
 
 
 isTransientHasqlError :: HasqlException -> Bool
@@ -211,6 +247,42 @@ interp s = statement () (HI.interp True s)
 -- | Run a query expecting at most one row.
 interpOne :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
 interpOne s = listToMaybe <$> interp s
+
+
+-- | Decode a single JSON column, dropping both wrappers the call sites repeat.
+-- The decoder comes from @Pkg.DeriveUtils@'s @Aeson@ instance, so the constraint
+-- is stated rather than imported — this module stays free of that dependency.
+interpOneJson :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
+interpOneJson s = fmap (\(HI.OneColumn (Aeson value)) -> value) <$> interpOne s
+
+
+-- | Demand a row the caller cannot proceed without. @what@ names the read or
+-- write, so the failure says which statement returned nothing.
+orThrow :: IOE :> es => Text -> Eff es (Maybe a) -> Eff es a
+orThrow what = (>>= maybe (liftIO $ throwIO $ ErrorCall $ toString what <> " returned no row") pure)
+
+
+interpOneOrThrow :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneOrThrow what = orThrow what . interpOne
+
+
+interpOneJsonOrThrow :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneJsonOrThrow what = orThrow what . interpOneJson
+
+
+-- | Run a query inside a transaction. The 'interp' family, for 'Tx.Transaction'.
+queryTx :: HI.DecodeResult a => HI.Sql -> Tx.Transaction a
+queryTx = Tx.statement () . HI.interp True
+
+
+-- | Run a transactional query expecting exactly one row.
+oneTx :: HI.DecodeRow a => HI.Sql -> Tx.Transaction a
+oneTx = fmap HI.getOneRow . queryTx
+
+
+-- | Run a transactional INSERT/UPDATE/DELETE, discarding the row count.
+executeTx :: HI.Sql -> Tx.Transaction ()
+executeTx s = void (queryTx s :: Tx.Transaction HI.RowsAffected)
 
 
 -- | Run an INSERT/UPDATE/DELETE and return the number of rows affected.

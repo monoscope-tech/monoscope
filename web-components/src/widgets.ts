@@ -396,7 +396,7 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
   if (widgetData.alertThreshold != null && Number.isFinite(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
   if (widgetData.warningThreshold != null && Number.isFinite(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
   if (Object.keys(thresholds).length > 0 && opt.series?.length) {
-    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) };
+    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, widgetData.unit ?? '') };
     // ECharts excludes markLines from automatic extents. Include thresholds in
     // the data-derived bounds, including streamed updates, with room for labels.
     const values = Object.values(thresholds);
@@ -497,6 +497,13 @@ export const chartDataUrl = ({
   return `/chart_data?${params}`;
 };
 
+// A widget whose data the server computed and embedded has no project to query — RUM's
+// Web Vitals trends are one (Pages.RealUserMonitoring.vitalTrendPanel_). Fetching for one
+// asks /chart_data for a default `count(*)` against `pid=null`, which answers 401, and a
+// 401 on a chart fetch reloads the page: the 15s live tick was rebuilding the entire page
+// — skeletons and all — instead of updating data in place.
+const canFetchData = (widgetData: WidGetData) => !!widgetData.pid && widgetData.pid !== 'null';
+
 // A widget's first request used to wait on echarts loading, the stagger queue, chart
 // construction and an IntersectionObserver — on the log explorer that put it ~2.8s into
 // the page. Nothing about the request depends on any of that, so it starts as soon as this
@@ -512,7 +519,7 @@ const checkChartResponse = (res: Response) => {
 
 const prefetchChartData = (widgetData: WidGetData) => {
   const { chartId } = widgetData;
-  if (!chartId || chartDataPrefetch.has(chartId)) return;
+  if (!chartId || !canFetchData(widgetData) || chartDataPrefetch.has(chartId)) return;
   // Same viewport gate as queueChartInit. Off-screen widgets deliberately don't fetch
   // until scrolled to, so prefetching every one would turn a 40-widget dashboard into
   // 40 requests on load. Absent element (not yet in the DOM) counts as near.
@@ -569,7 +576,7 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
 };
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
-  if (!shouldFetch || lifetimeSignal.aborted) return;
+  if (!shouldFetch || !canFetchData(widgetData) || lifetimeSignal.aborted) return;
   // A timer must not replace an unfinished stream with a blocking refresh.
   if (!showLoader && chartRequests.has(chart)) return;
   chartRequests.get(chart)?.abort();
@@ -949,7 +956,7 @@ const chartWidget = (widgetData: WidGetData) => {
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
   chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
   applyHighlightBand(chart, widgetData);
-  (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
+  (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds, widgetData.unit ?? '');
 
   // Opt-in per chart: the Lucid container declares data-exemplars-url next to the
   // chart it decorates (see Pages.Telemetry.metricDetailChart).
@@ -1212,32 +1219,59 @@ document.addEventListener('click', (e) => {
   } catch { /* ignore malformed data attributes */ }
 });
 
-// Create threshold markLines for ECharts (reads semantic colors from CSS tokens)
-const createThresholdMarkLines = (thresholds: Record<string, number>) => {
+// Create threshold markLines for ECharts (reads semantic colors from CSS tokens).
+// `unit` is the widget's, so a threshold prints the way its axis does — "Alert: 1.8s"
+// against an axis of seconds, not the raw 1800 the label used to carry.
+const createThresholdMarkLines = (thresholds: Record<string, number>, unit = '') => {
   const styles = getChartStyles();
-  const thresholdStyles: Record<string, { color: string; formatter: string }> = {
-    alert: { color: styles.errorColor, formatter: 'Alert: {c}' },
-    warning: { color: styles.warningColor, formatter: 'Warning: {c}' },
+  const thresholdStyles: Record<string, { color: string; label: string }> = {
+    alert: { color: styles.errorColor, label: 'Alert' },
+    warning: { color: styles.warningColor, label: 'Warning' },
   };
   return Object.entries(thresholds)
     .filter(([_, value]) => !isNaN(value))
-    .map(([type, value]) => ({
-      yAxis: value,
-      name: type,
-      label: { formatter: thresholdStyles[type]?.formatter || `${type}: {c}`, position: 'insideEndTop' },
-      lineStyle: { color: thresholdStyles[type]?.color || styles.textColor, width: 2, type: 'dashed' },
-    }));
+    .map(([type, value]) => {
+      const color = thresholdStyles[type]?.color || styles.textColor;
+      return {
+        yAxis: value,
+        name: type,
+        label: {
+          // Formatted here rather than left to echarts' `{c}`: that prints the raw number,
+          // which read "Alert: 1800" under an axis labelled "1.8s".
+          formatter: `${thresholdStyles[type]?.label || type}: ${formatStatValue(value, unit)}`,
+          // Below the line rather than above it. The axis headroom around a threshold is 5%
+          // of the range (see updateChartConfiguration) — less than a line of text — so the
+          // topmost threshold's label was drawn half outside the grid and clipped.
+          position: 'insideEndBottom',
+          // Left unstyled, the label inherited echarts' mark defaults: white, stroked in the
+          // mark colour, which over a dashed line of that same colour reads as doubled text.
+          // Say the colour, kill the stroke, and sit it on a chip of the chart background so
+          // it stays readable where the series crosses it.
+          color,
+          fontSize: 10,
+          fontWeight: 600,
+          textBorderWidth: 0,
+          textShadowBlur: 0,
+          // The raised-surface token, not the chart's translucent overlay: the label has to
+          // stay readable where the series itself passes under it.
+          backgroundColor: styles.tooltipBg,
+          padding: [2, 4],
+          borderRadius: 3,
+        },
+        lineStyle: { color, width: 2, type: 'dashed' },
+      };
+    });
 };
 
 // Apply thresholds to a chart
-const applyThresholds = (chart: any, thresholds: Record<string, number>) => {
+const applyThresholds = (chart: any, thresholds: Record<string, number>, unit = '') => {
   const option = chart?.getOption();
   if (!option?.series?.length) return;
 
   chart.setOption({
     series: option.series.map((s: any) => ({
       ...s,
-      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) },
+      markLine: { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds, unit) },
     })),
   });
 };

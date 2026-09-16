@@ -569,6 +569,10 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
     query_sql: querySql,
     data_type: 'text',
   });
+  // The statement belongs to one store. Omitting this routed postgres-only variable
+  // queries (apis.endpoints) at TimeFusion, which answers "table not found".
+  const dbSource = input.getAttribute('data-tagify-db-source');
+  if (dbSource) params.set('db_source', dbSource);
   const url = `/chart_data?${params}`;
   const active = variableRefreshes.get(input);
   if (active?.url === url) return active.request;

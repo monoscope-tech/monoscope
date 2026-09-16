@@ -13,6 +13,7 @@ module Models.Telemetry.RUM (
   RumQuery (..),
   RumCacheKey (..),
   rumPanelCacheGet,
+  rumPanelCacheGetStale,
   withSharedCache,
   rumPanelCacheSet,
 ) where
@@ -97,6 +98,7 @@ data RumSession = RumSession
   , userEmail :: Maybe Text
   , service :: Maybe Text
   , lastPage :: Maybe Text
+  , userAgent :: Maybe Text
   , hasReplay :: Bool
   }
   deriving stock (Eq, Generic, Show)
@@ -188,6 +190,19 @@ rumPanelCacheGet key =
   fmap (\(HI.OneColumn (AesonText value)) -> value)
     . listToMaybe
     <$> Hasql.interp [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|]
+
+
+-- | Payload plus staleness: 'True' when the entry is past its freshness expiry but still
+-- inside the prune horizon ('rumPanelCacheSet' deletes rows expired by over an hour).
+-- The RUM page serves stale entries instantly and revalidates in the background, so a
+-- panel never holds first paint hostage to a fresh scan of the window. Entries older than
+-- the horizon are treated as absent — past that point the drift would mislead rather than
+-- orient.
+rumPanelCacheGetStale :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe (a, Bool))
+rumPanelCacheGetStale key =
+  fmap (\(AesonText value, isStale) -> (value, isStale))
+    . listToMaybe
+    <$> Hasql.interp [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '1 hour'|]
 
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for

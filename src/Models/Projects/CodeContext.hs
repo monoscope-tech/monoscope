@@ -18,18 +18,36 @@ module Models.Projects.CodeContext (
   deriveMapping,
   sliceAround,
   fetchSnippet,
+  SourceEvidence (..),
+  fetchSourceEvidence,
+  LinkedRepository (..),
+  getLinkedRepositories,
+  fetchDeployments,
+  DeploymentError (..),
+  RunbookQuery (..),
+  RunbookRead (..),
+  RunbookError (..),
+  RunbookPage (..),
+  listRunbooks,
+  readRunbook,
 ) where
 
+import Control.Monad.Trans.Except (throwE)
+import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
+import Data.Char (isControl, isHexDigit)
 import Data.Default (Default (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime (..), fromGregorian)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Hasql.Interpolate qualified as HI
@@ -97,6 +115,7 @@ data SnippetError
   | -- | The line is past the end of the file at that revision — almost always a build\/source mismatch.
     LineOutOfRange Text Int Text
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
 -- | The reason as a line of prose for the frame panel.
@@ -122,6 +141,172 @@ data Snippet = Snippet
   , body :: [Text]
   }
   deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data SourceEvidence = SourceEvidence
+  { host :: Git.GitHost
+  , apiOrigin :: Maybe Text
+  , repository :: Text
+  , revision :: Text
+  , snippet :: Snippet
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data LinkedRepository = LinkedRepository
+  { mappingId :: CodeMappingId
+  , service :: Maybe Text
+  , repository :: Text
+  , host :: Git.GitHost
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+getLinkedRepositories :: DB es => ProjectId -> Maybe Text -> Eff es (Git.EvidencePage LinkedRepository)
+getLinkedRepositories pid service = do
+  rows <-
+    Hasql.interp
+      [HI.sql|SELECT mapping.id, mapping.service, mapping.owner || '/' || mapping.repo, credential.host
+      FROM projects.code_mappings mapping JOIN projects.git_credentials credential ON credential.id = mapping.credential_id
+      WHERE mapping.project_id = #{pid} AND credential.project_id = #{pid}
+        AND (#{service}::text IS NULL OR mapping.service IS NULL OR mapping.service = #{service})
+      ORDER BY mapping.service, mapping.owner, mapping.repo, mapping.id LIMIT 50|]
+  pure $ Git.EvidencePage rows (length rows == 50)
+
+
+data DeploymentError
+  = DeploymentMappingMissing CodeMappingId
+  | DeploymentConnectionFailed SnippetError
+  | DeploymentProviderFailed Git.DeploymentReadError
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+fetchDeployments :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Maybe Text -> Eff es (Either DeploymentError (Git.EvidencePage Git.DeploymentEvidence))
+fetchDeployments cfg pid mappingId environment = runExceptT do
+  mapping <- ExceptT $ maybeToRight (DeploymentMappingMissing mappingId) . find ((== mappingId) . (.id)) <$> getCodeMappings pid
+  (_, conn) <- ExceptT $ first DeploymentConnectionFailed <$> mappingConnection cfg pid mapping
+  ExceptT $ first DeploymentProviderFailed <$> Git.listDeployments conn (Git.RepoRef mapping.owner mapping.repo mapping.ref) environment
+
+
+-- | Tool input codecs follow the existing snake_case argument names.
+data RunbookQuery = RunbookQuery
+  { mappingId :: CodeMappingId
+  , revision :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RunbookQuery
+
+
+data RunbookRead = RunbookRead
+  { mappingId :: CodeMappingId
+  , revision :: Text
+  , path :: Text
+  , startLine :: Maybe Int
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RunbookRead
+
+
+data RunbookError
+  = RunbookMappingMissing CodeMappingId
+  | RunbookRevisionInvalid
+  | RunbookPathInvalid Text
+  | RunbookConnectionFailed SnippetError
+  | RunbookProviderFailed Text
+  | RunbookTooLarge
+  | RunbookNotText
+  | RunbookLineOutOfRange Int
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data RunbookPage = RunbookPage
+  { host :: Git.GitHost
+  , apiOrigin :: Maybe Text
+  , repository :: Text
+  , revision :: Text
+  , path :: Text
+  , startLine :: Int
+  , body :: [Text]
+  , nextLine :: Maybe Int
+  , linesTruncated :: Bool
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+runbookRepository :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Text -> ExceptT RunbookError (Eff es) (CodeMapping, GitSync.GitHubCredential, Git.GitConn)
+runbookRepository cfg pid mappingId revision = do
+  unless (T.length revision `elem` [40, 64] && T.all isHexDigit revision) $ throwE RunbookRevisionInvalid
+  mapping <- ExceptT $ maybeToRight (RunbookMappingMissing mappingId) . find ((== mappingId) . (.id)) <$> getCodeMappings pid
+  (credential, connection) <- ExceptT $ first RunbookConnectionFailed <$> mappingConnection cfg pid mapping
+  pure (mapping, credential, connection)
+
+
+-- | Keep repository-relative paths intact; reject traversal and non-document input.
+--
+-- >>> map validRunbookPath ["docs/runbooks/checkout.md", "../runbook.md", "/runbook.md", "docs/../runbook.md", "runbook.png"]
+-- [True,False,False,False,False]
+validRunbookPath :: Text -> Bool
+validRunbookPath path =
+  all (`notElem` ["", ".", ".."]) (T.splitOn "/" path)
+    && not (T.any (\c -> c == '\\' || isControl c) path)
+    && any (`T.isSuffixOf` T.toLower path) [".md", ".markdown", ".mdx", ".txt", ".rst", ".adoc"]
+
+
+-- | Discover candidates by conventional path names, not by assuming their contents.
+-- Provider truncation remains an error through fetchTree; only the returned candidates
+-- are capped here. No per-file reads are needed for discovery.
+listRunbooks :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookQuery -> Eff es (Either RunbookError (Git.EvidencePage Text))
+listRunbooks cfg pid query = runExceptT do
+  (mapping, _, connection) <- runbookRepository cfg pid query.mappingId query.revision
+  (_, entries) <- ExceptT $ first RunbookProviderFailed <$> Git.fetchTree connection (Git.RepoRef mapping.owner mapping.repo query.revision) ""
+  let candidates = take 20 $ sort $ ordNub [entry.path | entry <- entries, entry.isBlob, validRunbookPath entry.path, any (`T.isInfixOf` T.toLower entry.path) ["runbook", "playbook"]]
+  pure $ Git.EvidencePage candidates (length candidates == 20)
+
+
+-- | Read numbered pages at a pinned commit, without sharing another credential's cache.
+readRunbook :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookRead -> Eff es (Either RunbookError RunbookPage)
+readRunbook cfg pid query = runExceptT do
+  unless (validRunbookPath query.path) $ throwE $ RunbookPathInvalid query.path
+  let start = fromMaybe 1 query.startLine
+  when (start < 1) $ throwE $ RunbookLineOutOfRange start
+  (mapping, credential, connection) <- runbookRepository cfg pid query.mappingId query.revision
+  blob <- ExceptT $ first RunbookProviderFailed <$> Git.fetchFile connection (Git.RepoRef mapping.owner mapping.repo query.revision) query.path
+  when (BS.length blob > 1_048_576) $ throwE RunbookTooLarge
+  document <- hoistEither $ first (const RunbookNotText) $ decodeUtf8' blob
+  when (T.any (== '\0') document) $ throwE RunbookNotText
+  let documentLines = lines document
+      total = length documentLines
+      selected = take 100 $ drop (start - 1) documentLines
+      next = start + length selected
+  when (start > max 1 total) $ throwE $ RunbookLineOutOfRange start
+  pure
+    RunbookPage
+      { host = credential.host
+      , apiOrigin = credential.apiBase
+      , repository = mapping.owner <> "/" <> mapping.repo
+      , revision = query.revision
+      , path = query.path
+      , startLine = start
+      , body = map (T.take 2000) selected
+      , nextLine = if next <= total then Just next else Nothing
+      , linesTruncated = any ((> 2000) . T.length) selected
+      }
+
+
+mappingConnection :: (DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMapping -> Eff es (Either SnippetError (GitSync.GitHubCredential, Git.GitConn))
+mappingConnection cfg pid mapping = runExceptT do
+  cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid mapping.credentialId
+  creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
+  let located = mapping.owner <> "/" <> mapping.repo
+  token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
+  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  pure (cred, conn)
 
 
 getCodeMappings :: DB es => ProjectId -> Eff es [CodeMapping]
@@ -172,11 +357,18 @@ deleteCodeMapping pid mid = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.co
 --
 -- >>> snd <$> resolveRepoPath [m Nothing "" "src"] Nothing "app/main.go"
 -- Just "src/app/main.go"
+-- >>> resolveRepoPath [m Nothing "/srv/app/" "src"] Nothing "/srv/app/../../other-repo/file" & isNothing
+-- True
+-- >>> resolveRepoPath [m Nothing "" ""] Nothing "/absolute/file" & isNothing
+-- True
 resolveRepoPath :: [CodeMapping] -> Maybe Text -> Text -> Maybe (CodeMapping, Text)
 resolveRepoPath mappings svc path = do
   (cm, rest) <- listToMaybe $ sortOn (Down . T.length . (.pathPrefix) . fst) candidates
   let root = T.dropWhileEnd (== '/') cm.sourceRoot
-  pure (cm, if T.null root then rest else root <> "/" <> rest)
+      repoPath = if T.null root then rest else root <> "/" <> rest
+      segments = T.splitOn "/" $ T.replace "\\" "/" repoPath
+  guard $ not (T.null repoPath || T.isPrefixOf "/" repoPath || ".." `elem` segments)
+  pure (cm, repoPath)
   where
     candidates =
       [ (cm, rest)
@@ -292,15 +484,25 @@ fetchSnippet
   -> Text
   -> Int
   -> Eff es (Either SnippetError Snippet)
-fetchSnippet blobCache cfg pid svc revM path lineNo = runExceptT do
+fetchSnippet blobCache cfg pid svc revM path lineNo = fmap (.snippet) <$> fetchSourceEvidence blobCache cfg pid svc revM path lineNo
+
+
+fetchSourceEvidence
+  :: (DB es, Log :> es, W.HTTP :> es)
+  => Cache Config.CodeBlobKey ByteString
+  -> Config.EnvConfig
+  -> ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Text
+  -> Int
+  -> Eff es (Either SnippetError SourceEvidence)
+fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
   mappings <- lift $ getCodeMappings pid
   (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
       located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref
-  cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid cm.credentialId
-  creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
-  token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  (cred, conn) <- ExceptT $ mappingConnection cfg pid cm
   let blobKey = (cm.owner, cm.repo, repoRef.ref, repoPath)
   cached <- liftIO $ Cache.lookup blobCache blobKey
   blob <- case cached of
@@ -311,5 +513,5 @@ fetchSnippet blobCache cfg pid svc revM path lineNo = runExceptT do
       b <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
       liftIO $ Cache.insert blobCache blobKey b
       pure b
-  (\s -> s{path = repoPath})
+  (\s -> SourceEvidence cred.host cred.apiBase (cm.owner <> "/" <> cm.repo) repoRef.ref s{path = repoPath})
     <$> hoistEither (maybeToRight (LineOutOfRange repoPath lineNo repoRef.ref) $ sliceAround 5 lineNo (lines (decodeUtf8 blob)))

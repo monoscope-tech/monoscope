@@ -95,6 +95,11 @@ trendStats useTf pid start end = do
       let sliceEnd = min end (addUTCTime 86400 sliceStart)
        in Hasql.withHasqlTimefusion useTf
             $ Hasql.interp
+              -- Broader than 'Pkg.Parser.Expr.severityIsErrorSql', which is what the log
+              -- explorer's `errors` flag and `is_error` both mean: this also counts an
+              -- exception payload, and treats FATAL as an error. Whether that is intentional
+              -- or drift is unresolved — reconciling them moves published error counts, so it
+              -- wants a product decision rather than a refactor. Same shape again below.
               [HI.sql|
           SELECT extract(epoch from time_bucket('1 hour', timestamp))::bigint,
             COUNT(*)::bigint,

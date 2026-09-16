@@ -2,13 +2,11 @@
 
 module Pages.Charts.Charts (queryMetrics, queryMetricsStream, ChartStream, streamQuery_, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
-import Control.Concurrent (threadWaitRead)
+import Control.Concurrent (threadDelay, threadWaitRead)
 import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as E
 import Control.Exception.Annotated (checkpoint, try)
 import Control.Monad (foldM)
-import Control.Monad.Trans.Reader (runReaderT)
-import Control.Monad.Trans.State.Strict (runStateT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.ByteString qualified as BS
@@ -16,6 +14,7 @@ import Data.Default
 import Data.Effectful.Hasql (runHasqlPool)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -23,10 +22,11 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, FromRow, SomePostgreSqlException, SqlError (..), query_)
-import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..))
+import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..), typeOid)
 import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Ok (ManyErrors (..), Ok (..))
+import Database.PostgreSQL.Simple.TypeInfo.Static (timestamptz, typoid)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -442,6 +442,43 @@ fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTim
 fetchMetricsData = fetchMetricsDataWithProgress Nothing
 
 
+-- | Is this failure TimeFusion's shared query pool being momentarily full,
+-- rather than anything wrong with the query?
+--
+-- TF's query memory pool is process-wide and its sort-merge reservations are
+-- unspillable, so a dashboard that fires every widget at once can exhaust it
+-- and whichever widget allocates next loses (2026-09-10, Overview/Infra tab).
+-- The same SQL succeeds on its own seconds later.
+--
+-- >>> isPoolExhaustion "Resources exhausted: Additional allocation failed for ExternalSorter[4]"
+-- True
+-- >>> isPoolExhaustion "Not enough memory to continue external sort. Consider increasing ..."
+-- True
+-- >>> isPoolExhaustion "column \"nope\" does not exist"
+-- False
+isPoolExhaustion :: Text -> Bool
+isPoolExhaustion msg = any (`T.isInfixOf` msg) ["Resources exhausted", "Not enough memory to continue external sort"]
+
+
+-- | Retry a widget query while it fails with 'isPoolExhaustion': the siblings
+-- holding the pool are themselves short-lived, so waiting is the whole fix.
+-- Backs off 200/400 ms with up to 100 ms of jitter (from the monotonic clock,
+-- so no RNG dependency) — the widgets of one dashboard render arrive together
+-- and must not retry in lockstep.
+retryOnPoolExhaustion :: IO (Either SomePostgreSqlException a) -> IO (Either SomePostgreSqlException a)
+retryOnPoolExhaustion act = go (0 :: Int)
+  where
+    go n =
+      act >>= \case
+        Left e
+          | n < 2
+          , isPoolExhaustion . toText $ displayException e -> do
+              jitter <- (`mod` 100_000) . fromIntegral <$> getMonotonicTimeNSec
+              threadDelay $ 200_000 * (n + 1) + jitter
+              go (n + 1)
+        result -> pure result
+
+
 metricsPool :: AuthContext -> Maybe Text -> Pool Connection
 metricsPool authCtx dbSource = case dbSource of
   Just "postgres" -> authCtx.pool
@@ -456,7 +493,7 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
   let runQ :: FromRow r => IO [r]
       runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
 
-  try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+  retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
       chartData <- runQ :: IO [Only (Maybe Double)]
       pure
@@ -465,7 +502,10 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
           , rowsCount = 1
           }
     DTMetric -> do
-      let metrics rows =
+      -- Rows arrive as 'BucketEpoch' so a hand-written bucket column may be a timestamptz;
+      -- coerce back to the epoch Int the pivot works in.
+      let metrics :: V.Vector (BucketEpoch, Text, Double) -> MetricsData
+          metrics (coerce -> rows) =
             let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
              in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
       case progress of
@@ -511,6 +551,27 @@ newtype AnyText = AnyText Text
 
 instance FromField AnyText where
   fromField _ = pure . AnyText . maybe "" (decodeUtf8With lenientDecode)
+
+
+-- | The metric decoder's leading bucket column, as epoch seconds.
+--
+-- 'pivot'' plots against a number, and the KQL builder always emits one
+-- (@extract(epoch from …)::integer@). Widget SQL is author-written, though, and the obvious
+-- way to bucket by hand is @time_bucket('1m', timestamp) AS timestamp@ — a timestamptz, which
+-- failed the whole widget with
+-- @Incompatible {errSQLType = "timestamptz", errSQLField = "timestamp", errHaskellType = "Int"}@
+-- instead of drawing the series. Same reasoning as 'AnyText': a cast the author cannot see
+-- demanded of them is a trap, not a contract.
+--
+-- Deliberately only these two shapes. A first column that is neither a number nor a timestamp
+-- still fails, because there is nothing to plot a series against.
+newtype BucketEpoch = BucketEpoch Int
+
+
+instance FromField BucketEpoch where
+  fromField f v
+    | typeOid f == typoid timestamptz = BucketEpoch . round . utcTimeToPOSIXSeconds <$> fromField f v
+    | otherwise = BucketEpoch <$> fromField f v
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
