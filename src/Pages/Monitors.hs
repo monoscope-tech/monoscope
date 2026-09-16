@@ -397,7 +397,6 @@ teamAlertsGetH pid teamId = do
 -- producer and consumer were two literal lists that had to agree by hand. Capturing this
 -- in the route makes Servant reject an unknown action and the dispatch exhaustive.
 
-
 -- | Which tab to land on after a bulk action — deactivating moves the monitors to
 -- Inactive, everything else leaves them on Active. Spelled out rather than defaulted so a
 -- new action has to state where the user ends up instead of silently landing on Active.
