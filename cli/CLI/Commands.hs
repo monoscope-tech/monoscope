@@ -670,7 +670,7 @@ runEventsTail cfg opts kindOverride = do
         | not (all (`T.isInfixOf` haystack) opts.grep) = pass
         | otherwise = putTextLn $ if fmt == FmtLogfmt then renderLogfmt r else renderEventLine color w r
         where
-          haystack = T.unwords (catMaybes [r.summary, r.spanName, r.service])
+          haystack = unwords (catMaybes [r.summary, r.spanName, r.service])
   seenRef <- newIORef (S.empty :: Set Text)
   let step since = do
         poll since >>= \case
@@ -1168,13 +1168,13 @@ runStatus cfg opts mode = do
     section "Open issues"
     putTextLn $ case issues ^.. AL.key "data" . AL._Array . traverse . AL.key "title" . AL._String of
       [] -> Chart.dim color "  none"
-      ts -> T.unlines ["  " <> Chart.ellipsize (w - 2) t | t <- take 5 ts]
+      ts -> unlines ["  " <> Chart.ellipsize (w - 2) t | t <- take 5 ts]
     let alerting = alertingMonitors monitors
     section "Monitors"
     putTextLn
       $ if null alerting
         then Chart.dim color "  all quiet"
-        else T.unlines ["  " <> Chart.colorize color (Chart.seriesColor 6) ("ALERTING  " <> t) | t <- alerting]
+        else unlines ["  " <> Chart.colorize color (Chart.seriesColor 6) ("ALERTING  " <> t) | t <- alerting]
 
 
 -- | Titles of monitors currently in an alerting state.

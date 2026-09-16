@@ -298,7 +298,7 @@ run_body() { # <check>
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config config/weeder.toml --hie-directory dist-newstyle
       ;;
-    hlint)   hlint src/ ;;
+    hlint)   hlint src/ shared/src cli ;;
     ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.

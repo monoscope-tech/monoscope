@@ -23,6 +23,6 @@ unit-tests	ghc	@hs @fe
 cli-tests	ghc	@cli
 integration-tests	ghc node bun pg minio tf-real	@hs @fe
 weeder	ghc	@hs @fe
-hlint	hlint	src .hlint.yaml
+hlint	hlint	src shared/src cli .hlint.yaml
 ui-tests	node	@fe @uisrc
 e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh

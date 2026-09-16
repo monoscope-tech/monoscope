@@ -214,7 +214,7 @@ renderStat opts label valM series =
 sparkline :: Int -> [Double] -> Text
 sparkline w ys
   | null ys || w < 1 = ""
-  | otherwise = T.pack [T.index blocks (level y) | y <- buckets]
+  | otherwise = toText [T.index blocks (level y) | y <- buckets]
   where
     blocks = " ▁▂▃▄▅▆▇█"
     buckets = map avg (chunkInto w ys)

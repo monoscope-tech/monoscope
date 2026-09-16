@@ -22,7 +22,7 @@ import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo, stripAnsi, visib
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Pkg.CLIFormat (extractColIdxMap, extractRows, renderSummaryCell)
 import System.Console.ANSI qualified as ANSI
@@ -89,7 +89,7 @@ eventRows :: AE.Value -> [EventRow]
 eventRows = \case
   AE.Object obj ->
     let idx = extractColIdxMap (KM.lookup "colIdxMap" obj)
-        at name row = Map.lookup name idx >>= \i -> guarded (not . T.null) =<< (row !!? i)
+        at name row = Map.lookup name idx >>= (guarded (not . T.null) <=< (row !!?))
         known = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "kind", "summary", "errors", "parent_id", "start_time_ns", "latency_breakdown"]
         others = [(n, i) | (n, i) <- Map.toList idx, n `notElem` known]
      in [ EventRow
@@ -166,7 +166,7 @@ levelTag color r
 -- :}
 -- "ts=2026-08-06T01:02:03Z level=error service=api kind=log msg=\"boom now\" id=e1"
 renderLogfmt :: EventRow -> Text
-renderLogfmt r = T.unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (second Just) r.extras]
+renderLogfmt r = unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (second Just) r.extras]
   where
     pairs =
       [ ("ts", r.timestamp)
@@ -207,9 +207,9 @@ renderWaterfall color width rows
   | null rows = ["no spans in this trace"]
   | otherwise = header : concatMap (walk 0) roots
   where
-    ids = Set.fromList (mapMaybe (.spanId) rows)
+    ids = S.fromList (mapMaybe (.spanId) rows)
     kids p = sortOn (.startNs) [r | r <- rows, r.parentId == Just p]
-    roots = sortOn (.startNs) [r | r <- rows, maybe True (`Set.notMember` ids) r.parentId]
+    roots = sortOn (.startNs) [r | r <- rows, maybe True (`S.notMember` ids) r.parentId]
     t0 = foldl' min (1 / 0) (mapMaybe (.startNs) rows)
     t1 = foldl' max 0 [s + fromMaybe 0 r.durationNs | r <- rows, Just s <- [r.startNs]]
     total = max 1 (t1 - t0)
