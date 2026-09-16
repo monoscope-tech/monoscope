@@ -317,16 +317,16 @@ logQueryBox_ config = do
           -- A dashboard widget starts as a chart. Logs is a full log table — the most
           -- expensive thing on a dashboard and the wrong thing to drop on one by default.
           defaultVizType = fromMaybe (bool "logs" "timeseries" (config.alert || inWidgetEditor)) config.vizType
-          -- Sessions is not a valid alerting surface. Patterns and Sessions are log-explorer
-          -- views with no corresponding WidgetType, so a widget set to either could not be
-          -- decoded on save: the tab was offered and simply did not work.
-          hidden = ["sessions" | config.alert || inWidgetEditor] <> ["patterns" | inWidgetEditor]
+          -- An 'ExplorerOnly' tab offered in the widget editor was a tab that simply did not
+          -- work — the widget could not decode on save. Sessions is additionally not a valid
+          -- alerting surface, which is a separate fact from whether a dashboard can hold it.
+          hiddenHere v = (inWidgetEditor && v.surface == ExplorerOnly) || (config.alert && v.key == "sessions")
           -- Same reason Logs is not the default here: on a dashboard the chart types are
           -- what the reader wants, so they lead the strip and Logs moves to the end. The log
           -- explorer keeps Logs first, where it is the view the page is named after.
           visible =
             bool id (sortOn ((== "logs") . (.key))) inWidgetEditor
-              $ filter ((`notElem` hidden) . (.key)) visTypes
+              $ filter (not . hiddenHere) visTypes
         forM_ visible \v -> do
           let vizType = v.key
           label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
@@ -334,19 +334,26 @@ logQueryBox_ config = do
               $ [ type_ "radio"
                 , name_ "visualization"
                 , id_ $ "viz-" <> vizType
-                , class_ $ bool "no-chart" "default-chart" (vizType `elem` ["logs", "patterns", "sessions"])
+                , class_ $ bool "no-chart" "default-chart" (v.surface /= Chart)
                 , value_ vizType
                 , data_ "update-url" (bool "false" "true" config.updateUrl)
                 , data_ "container-id" containerSelector
+                , -- Whether the widget container is what renders this tab, and so whether the
+                  -- viz radio should ask it to refetch. In the editor every offered tab is.
+                  data_ "widgetable" (bool "false" "true" (inWidgetEditor || v.surface == Chart))
                 , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
                   -- #page-summary-region when a viz change crosses the sessions boundary, since
                   -- sessions renders a different server region than other viz types.
                   [__| on change if my.checked
                               set prevViz to window.currentVisualizationType
                               call updateVizTypeInUrl(my.value, @data-update-url === 'true', me.closest('form').querySelector('query-editor'))
-                              if window.widgetJSON
+                              if window.widgetJSON and @data-widgetable is 'true'
                                 set widgetJSON.type to my.value
-                                send 'update-widget' to #{@data-container-id}
+                                -- A container still holding its placeholder has `intersect once`
+                                -- pending; hx-vals spreads widgetJSON when that fires, so it
+                                -- already carries the new type and a send here only races it.
+                                set preview to #{@data-container-id}
+                                if preview.innerHTML is not '' then send 'update-widget' to preview end
                               end
                               if #resultTable exists
                                 set #resultTable's mode to my.value
@@ -522,10 +529,23 @@ popularQueries =
   ]
 
 
+-- | Where a visualization's result is rendered, which is what decides whether the widget
+-- container owns it and whether a dashboard can hold it. Spelling this per tab keeps the
+-- three call sites reading one declared fact instead of repeating the same key list.
+data VizSurface
+  = -- | Drawn by the widget container: the dashboard editor can offer it.
+    Chart
+  | -- | The explorer's own log table, and also a legitimate dashboard widget.
+    LogTable
+  | -- | Explorer-only region with no 'Widget.WidgetType' — a widget set to it can't decode.
+    ExplorerOnly
+  deriving stock (Eq)
+
+
 -- | A visualization the query box can switch to. @key@ is the wire value shared with
 -- @viz_type@ in the URL, the radio ids, and 'WidgetType'; @emoji@ is shown in the
 -- dashboard widget editor only.
-data VizType = VizType {label :: Text, key :: Text, emoji :: Text}
+data VizType = VizType {label :: Text, key :: Text, emoji :: Text, surface :: VizSurface}
 
 
 -- | Visualization types used across the application.
@@ -534,11 +554,11 @@ data VizType = VizType {label :: Text, key :: Text, emoji :: Text}
 -- Number (stat), Gauge and Text.
 visTypes :: [VizType]
 visTypes =
-  [ VizType "Logs" "logs" "📋"
-  , VizType "Bar" "timeseries" "📊"
-  , VizType "Line" "timeseries_line" "📈"
-  , VizType "Patterns" "patterns" "🔍"
-  , VizType "Sessions" "sessions" "👥"
+  [ VizType "Logs" "logs" "📋" LogTable
+  , VizType "Bar" "timeseries" "📊" Chart
+  , VizType "Line" "timeseries_line" "📈" Chart
+  , VizType "Patterns" "patterns" "🔍" ExplorerOnly
+  , VizType "Sessions" "sessions" "👥" ExplorerOnly
   ]
 
 

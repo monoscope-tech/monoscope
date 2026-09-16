@@ -1744,6 +1744,10 @@ apiLogsPage page = do
                 , "_center_title" AE..= True
                 , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
                 ]
+      -- Same contract as the dashboard widget editor: the viz radios rewrite
+      -- @widgetJSON.type@ and fire @update-widget@. A literal hx-vals would freeze the
+      -- chart at the load-time viz_type.
+      script_ [text|var widgetJSON = ${widgetVals};|]
       div_
         [ id_ "visualization-widget-container"
         , class_ " w-full"
@@ -1752,7 +1756,7 @@ apiLogsPage page = do
         , hxTrigger_ "intersect once, update-widget"
         , hxTarget_ "this"
         , hxSwap_ "innerHTML"
-        , hxVals_ widgetVals
+        , hxVals_ "js:{...widgetJSON}"
         , hxExt_ "json-enc,forward-page-params"
         , term "hx-sync" "this:replace"
         ]

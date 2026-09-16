@@ -736,6 +736,19 @@ spec = around withTestResources do
       find (T.isInfixOf "id=\"log_details_container\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "hx-sync=\"this:replace\"")
 
+  -- The viz tabs change the chart by rewriting window.widgetJSON and firing update-widget.
+  -- While the container carried its spec as a literal hx-vals, that rewrite reached nothing:
+  -- the chart stayed on whichever viz_type the URL held at load, so Bar/Line — and the type
+  -- an AI answer selected — never redrew.
+  describe "Visualization type switching" do
+    it "apiLogH_widgetContainerReadsItsTypeFromMutableWidgetJSON" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing
+      let html = toText $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldSatisfy` T.isInfixOf "var widgetJSON = {"
+      html `shouldSatisfy` T.isInfixOf "\"type\":\"timeseries_line\""
+      find (T.isInfixOf "id=\"visualization-widget-container\"") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "hx-vals=\"js:{...widgetJSON}\"")
+
   describe "Trace fullscreen scrolling" do
     it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

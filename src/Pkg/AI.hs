@@ -127,6 +127,16 @@ getNormalTupleResponse response =
 -- | Parse raw LLM text into an 'LLMResponse' (@toolCalls@ always 'Nothing').
 -- Tolerates markdown fences, trailing commas and partially invalid fields, and
 -- falls back to an explanation-only response for non-JSON text.
+--
+-- @visualization@ is normalised by 'parseVisualizationType'; an unrecognised one is
+-- dropped, since a value no tab carries leaves the chart on whatever it already showed.
+--
+-- >>> (.visualization) <$> parseLLMResponse "{\"visualization\": \"Line Chart\"}"
+-- Right (Just "timeseries_line")
+-- >>> (.visualization) <$> parseLLMResponse "{\"visualization\": \"logs\"}"
+-- Right (Just "logs")
+-- >>> (.visualization) <$> parseLLMResponse "{\"visualization\": \"squiggle\"}"
+-- Right Nothing
 parseLLMResponse :: Text -> Either Text LLMResponse
 parseLLMResponse response =
   let cleaned = fixTrailingCommas $ stripCodeBlock response
@@ -144,7 +154,8 @@ parseLLMResponse response =
             }
       -- Fallback: treat plain text as explanation-only response
       textFallback = LLMResponse{explanation = Just cleaned, query = Nothing, visualization = Nothing, widgets = [], timeRange = Nothing, toolCalls = Nothing}
-   in Right $ fromMaybe (fromMaybe textFallback partial) (valM >>= parseMaybe AE.parseJSON)
+      resp = fromMaybe (fromMaybe textFallback partial) (valM >>= parseMaybe AE.parseJSON)
+   in Right resp{visualization = parseVisualizationType =<< resp.visualization}
 
 
 -- | Like 'parseLLMResponse' but keeps the tool-call history: each call's @rawData@
@@ -160,12 +171,20 @@ fixTrailingCommas :: Text -> Text
 fixTrailingCommas = T.replace ",\n}" "\n}" . T.replace ", }" "}" . T.replace ",}" "}" . T.replace ",\n]" "\n]" . T.replace ", ]" "]" . T.replace ",]" "]"
 
 
+-- | Map an LLM's chart wording onto the wire spelling shared by @viz_type@, the viz
+-- radio values and 'Widget.WidgetType'. Nothing but this map enforces that agreement, so
+-- pin it: a renamed constructor has to fail here rather than silently stop parsing.
+--
+-- >>> import Web.HttpApiData (parseQueryParam)
+-- >>> traverse (parseQueryParam @Widget.WidgetType) (mapMaybe parseVisualizationType ["logs", "bar", "Line Chart", "pie", "top_list", "table", "stat", "heatmap", "distribution"])
+-- Right [WTLogs,WTTimeseries,WTTimeseriesLine,WTPieChart,WTTopList,WTTable,WTStat,WTHeatmap,WTDistribution]
 parseVisualizationType :: Text -> Maybe Text
-parseVisualizationType = flip Map.lookup vizTypeMap
+parseVisualizationType = flip Map.lookup vizTypeMap . T.toLower . T.strip
   where
     vizTypeMap =
       Map.fromList
-        [ ("bar", "timeseries")
+        [ ("logs", "logs")
+        , ("bar", "timeseries")
         , ("line", "timeseries_line")
         , ("timeseries", "timeseries")
         , ("timeseries_line", "timeseries_line")
@@ -253,7 +272,8 @@ kqlGuide =
 
   ### Critical Rules (must follow)
   1. ONLY use field names that appear in the schema. Never invent fields like `value`, `count`, or `total`. If a field is unknown, call `get_schema` or `get_field_values`.
-  2. NEVER add timestamp filters in the KQL query (no `where timestamp >= datetime(...)`, no `where timestamp between ...`). Time filtering belongs in the JSON `time_range` field. When the user mentions a relative or absolute time range (e.g. "last 2 hours", "from 6pm to 7pm"), set `time_range` and leave the query free of timestamp predicates.
+  2. When the user names a chart style ("as a line chart", "bar", "pie"), honour it in `visualization` — e.g. a line chart is `timeseries_line`, not `timeseries`.
+  3. NEVER add timestamp filters in the KQL query (no `where timestamp >= datetime(...)`, no `where timestamp between ...`). Time filtering belongs in the JSON `time_range` field. When the user mentions a relative or absolute time range (e.g. "last 2 hours", "from 6pm to 7pm"), set `time_range` and leave the query free of timestamp predicates.
   </kql_reference>
   |]
 
