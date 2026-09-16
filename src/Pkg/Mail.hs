@@ -320,8 +320,7 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
     started = maybe observedAt (.startedAt) episode
     seconds = max 0 $ floor (diffUTCTime observedAt started) :: Int
     duration = if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min"
-    -- The notification preview and any surface without the rail fall back to
-    -- this, so it still carries the whole story on one line.
+    -- The notification preview falls back to this, so it carries the whole line.
     text =
       label
         <> " · "
@@ -401,12 +400,9 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
         , state = label
         , title
         , titleUrl = Just incidentUrl
-        , -- An exception line is code. Rendered as prose it ran into the
-          -- surrounding sentence and the reader had to find where it began.
-          detail = Just $ slackEscape $ T.take 300 err.message
-        , -- Escaped like the text fallback beside it: these are telemetry
-          -- resource attributes set by the instrumented app, so an unescaped
-          -- `<https://evil|Click here>` would render as a live link in the alert.
+        , detail = Just $ slackEscape $ T.take 300 err.message
+        , -- Escaped: these are app-set resource attributes, and mrkdwn would
+          -- render a link in them.
           facts =
             [ ("Service", foldMap slackEscape err.serviceName)
             , ("Environment", foldMap slackEscape err.environment)
@@ -428,15 +424,8 @@ tagged identifier (AE.Object block) = AE.Object $ KEM.insert "block_id" (AE.Stri
 tagged _ block = block
 
 
--- | Every Slack alert Monoscope sends, in one shape.
---
--- Seven hand-rolled layouts used to render the same idea — a state, a linked
--- title, some facts, maybe a chart, an action — and they drifted into two
--- different designs. A monitor alert arriving through the direct path got a
--- colour rail, bold state and a linked title; the same alert arriving through
--- the incident path got every one of those values joined into a single grey
--- paragraph with interpuncts. Same event, two looks, depending on a code path
--- the reader cannot see. One renderer is the only thing that keeps them honest.
+-- | Every Slack alert, in one shape — the only renderer, so two paths cannot
+-- drift into two designs again.
 data SlackAlert = SlackAlert
   { tone :: IncidentTone
   , state :: Text
@@ -456,12 +445,8 @@ instance Default SlackAlert where
   def = SlackAlert ToneNeutral "" "" Nothing Nothing [] Nothing Nothing "Chart" Nothing []
 
 
--- | The block list for an alert. @incident_onset@\/@incident_chart@ keep their
--- ids because 'retainSlackSnapshot' carries exactly those forward onto a root
--- update — they are wire identity, not decoration.
---
--- The order is the reading order: what happened, the evidence, the facts, when
--- it started, the chart, what to do about it.
+-- | An alert's blocks, in reading order. The @incident_*@ block ids are wire
+-- identity: 'retainSlackSnapshot' carries exactly those onto a root update.
 --
 -- >>> let kinds = map (\b -> AE.Object b ^. key "type" . _String) . mapMaybe (\case AE.Object o -> Just o; _ -> Nothing)
 -- >>> let full = def{state = "ALERTING", title = "TypeError", titleUrl = Just "u", detail = Just "boom", facts = [("Service","api")], onsetNote = Just "Started now", chartUrl = Just "c", actions = [("Open issue", Just "primary", "u")]}
@@ -493,41 +478,34 @@ renderSlackAlert a =
     linked = case a.titleUrl of
       Just u | not (T.null a.title) -> Just $ "<" <> u <> "|" <> a.title <> ">"
       _ -> guarded (not . T.null) a.title
-    fence t = "```" <> t <> "```"
+    -- A stray fence in app-controlled text would close ours early.
+    fence t = "```" <> T.replace "```" "\8216\8216\8216" t <> "```"
     chartBlocks = case (a.chartUrl, a.chartFallback) of
       (Just url, _) -> [tagged "incident_chart" $ slackImage a.chartAlt Nothing url]
       (Nothing, Just note) -> [tagged "incident_chart" $ slackContext [note]]
       _ -> []
 
 
--- | How severe an incident message is, as a colour rail down the left edge.
---
--- Slack Block Kit has no colour; an attachment is the only place severity can be
--- a visual signal, and it is what the pre-incident alerts used before the
--- lifecycle rewrite dropped it. The state word stays in the body regardless:
--- colour alone is below the accessibility floor, and several Slack surfaces
--- (notifications, some mobile views) drop the rail entirely.
-data IncidentTone = ToneAlert | ToneWarn | ToneRecovered | ToneNeutral
+-- | Severity as a colour rail. Block Kit has no colour of its own, so this needs
+-- an attachment; the state word stays in the body because surfaces drop the rail.
+data IncidentTone = ToneAlert | ToneWarn | ToneRecovered | ToneInfo | ToneNeutral
   deriving stock (Eq, Show)
 
 
+-- | The one severity palette; every Slack surface reads its colour from here.
 toneColor :: IncidentTone -> Text
 toneColor = \case
   ToneAlert -> "#ef4444"
-  ToneWarn -> "#f59e0b"
+  ToneWarn -> "#eab308"
   ToneRecovered -> "#22c55e"
+  ToneInfo -> "#3b82f6"
   ToneNeutral -> "#64748b"
 
 
--- | Every incident message is one text fallback plus its Block Kit list, carried
--- in a single attachment so the rail can render.
+-- | One text fallback plus its blocks, in an attachment so the rail renders.
 incidentMessage :: IncidentTone -> Text -> [AE.Value] -> Incidents.SlackPayload
 incidentMessage tone text blocks =
-  Incidents.SlackPayload
-    $ KEM.fromList
-      [ "text" AE..= text
-      , "attachments" AE..= ([AE.object ["color" AE..= toneColor tone, "fallback" AE..= text, "blocks" AE..= blocks]] :: [AE.Value])
-      ]
+  Incidents.SlackPayload $ KEM.fromList ["text" AE..= text, "attachments" AE..= arr [colouredAttachment (toneColor tone) text blocks]]
 
 
 atUtc :: UTCTime -> Text
@@ -588,12 +566,8 @@ slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;
 
 
 -- | Updating status must not replace the original onset and chart snapshot.
---
--- Both payload shapes have to be understood at once. @initial@ is read back from
--- a row written days earlier, so it may predate the severity rail and keep its
--- blocks at the top level, while @current@ carries them inside the attachment.
--- Reading only one shape would silently drop the onset and chart from every root
--- update spanning the change.
+-- @initial@ comes from a row written days earlier, so both payload shapes —
+-- blocks at the top level, and blocks inside the attachment — must be read.
 --
 -- >>> let p = fromJust . AE.decode @Incidents.SlackPayload
 -- >>> let ids = \(Incidents.SlackPayload o) -> AE.Object o ^.. key "attachments" . nth 0 . key "blocks" . values . key "block_id" . _String
@@ -617,10 +591,6 @@ retainSlackSnapshot :: Incidents.SlackPayload -> Incidents.SlackPayload -> Incid
 retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload current) =
   Incidents.SlackPayload $ putBlocks current (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))
   where
-    -- Payloads stored before the severity rail keep their blocks at the top
-    -- level, and `initial` is read back from rows written days earlier — so both
-    -- shapes have to be understood, and the result written back where `current`
-    -- keeps its own.
     attachmentBlocks obj = case KEM.lookup "attachments" obj of
       Just (AE.Array as) | Just (AE.Object a) <- viaNonEmpty head (toList as) -> Just (a, blockList a)
       _ -> Nothing
@@ -691,10 +661,10 @@ newEndpointsExplorerUrl projectUrl endpoints =
 -- @logLevel@ only gates the "warning" branch since drain-derived rows don't set it.
 logPatternSeverity :: Bool -> Maybe Text -> (Text, Text, Int, Text)
 logPatternSeverity isError logLevel
-  | isError = ("🚨", "New error log pattern", 15278902, "#ef4444")
+  | isError = ("🚨", "New error log pattern", 15278902, toneColor ToneAlert)
   | any ((`elem` (["warn", "warning"] :: [Text])) . T.toLower) logLevel =
-      ("⚠️", "New warning log pattern", 15909152, "#eab308")
-  | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
+      ("⚠️", "New warning log pattern", 15909152, toneColor ToneWarn)
+  | otherwise = ("🔍", "New log pattern", 3901174, toneColor ToneInfo)
 
 
 -- | Rate-change presentation: (Slack shortcode, Discord emoji, hex color, Discord int color).
@@ -973,10 +943,13 @@ runtimeAlertMessages = \case
 -- so the same payload works on both chat.postMessage and the webhook transport.
 slackAttachment :: Text -> Text -> [AE.Value] -> AE.Value
 slackAttachment channelId color blocks =
-  AE.object
-    [ "channel" AE..= channelId
-    , "attachments" AE..= arr [AE.object ["color" AE..= color, "fallback" AE..= ("Monoscope alert" :: Text), "blocks" AE..= arr blocks]]
-    ]
+  AE.object ["channel" AE..= channelId, "attachments" AE..= arr [colouredAttachment color "Monoscope alert" blocks]]
+
+
+-- | One coloured rail around a block list, shared by both payload shapes.
+colouredAttachment :: Text -> Text -> [AE.Value] -> AE.Value
+colouredAttachment color fallback blocks =
+  AE.object ["color" AE..= color, "fallback" AE..= fallback, "blocks" AE..= arr blocks]
 
 
 arr :: [AE.Value] -> AE.Value
@@ -996,9 +969,7 @@ slackSection :: Text -> AE.Value
 slackSection t = AE.object ["type" AE..= "section", "text" AE..= mrkdwn t]
 
 
--- | Slack renders a section's @fields@ as a two-column grid. Service,
--- environment and rate were being joined into one sentence with interpuncts,
--- which reads as a wall rather than as facts you can scan.
+-- | Slack renders a section's @fields@ as a two-column grid.
 slackFields :: [(Text, Text)] -> AE.Value
 slackFields entries =
   AE.object ["type" AE..= "section", "fields" AE..= arr [mrkdwn ("*" <> k <> "*\n" <> v) | (k, v) <- entries, not (T.null (T.strip v))]]

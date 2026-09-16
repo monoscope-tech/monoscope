@@ -203,7 +203,7 @@ deliveryOperation :: HI.Sql
 deliveryOperation =
   [HI.sql|CASE
     WHEN d.operation = 'post_root' THEN jsonb_build_object('tag', 'PostRoot')
-    -- A reply with no thread to join is a standalone post, not a lost message.
+    -- A reply with no thread to join posts standalone.
     WHEN d.operation = 'post_reply' AND r.threadless THEN jsonb_build_object('tag', 'PostRoot')
     WHEN d.operation = 'post_reply' THEN jsonb_build_object('tag', 'PostReply', 'contents', r.message_ts)
     WHEN d.operation = 'update_root' THEN jsonb_build_object('tag', 'UpdateRoot', 'contents', r.message_ts)
@@ -224,21 +224,9 @@ getEpisode :: DB es => Projects.ProjectId -> EpisodeId -> Eff es (Maybe Episode)
 getEpisode pid eid = Hasql.interpOne (episodeSelect <> [HI.sql|WHERE project_id = #{pid} AND id = #{eid}|])
 
 
--- | The conversation a Slack thread belongs to.
---
--- An alert thread is a conversation /about an issue/: its root message was posted
--- for an episode, and that episode hangs off an issue. Resolving to the issue's
--- own conversation id is what makes the Slack investigation and the issue page's
--- AI chat one thread — ask in Slack, open the issue, and the history is there.
--- They were one table (@apis.ai_chat_messages@) all along, keyed two different
--- ways, which is why neither side could see the other.
---
--- A thread with no alert root behind it — someone @-mentions the bot in a channel
--- — has no issue to belong to and keeps the thread-scoped id.
---
--- This is also the authorization derivation: a caller-supplied conversation id is
--- only valid if it equals what this returns for the thread it claims to be in.
--- It must therefore stay the single place that mapping is computed.
+-- | The conversation a Slack thread belongs to: the issue's, when an alert root
+-- backs the thread, else the thread's own. Also the authorization derivation — a
+-- caller-supplied id is valid only if it equals this — so keep it the only one.
 threadConversationId :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es (UUIDId "conversation")
 threadConversationId pid teamId channelId threadTs =
   maybe (Issues.slackScopedConversationId pid teamId channelId threadTs) (\iid -> UUIDId iid.unUUIDId)
@@ -565,13 +553,8 @@ recordIncidentEventTx update = do
                                 SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
                                 FROM apis.slack_incident_roots
                                 WHERE id = #{rootId} AND first_event_id <> #{eventId}
-                                  -- Never queue an edit to a message that cannot be
-                                  -- edited. A threadless root has no timestamp and never
-                                  -- will, so an update_root against it could never be
-                                  -- claimed — and because noEarlierUnsettledDelivery
-                                  -- blocks on the earliest unsettled row, one stuck edit
-                                  -- silences every later reply on that root. That is the
-                                  -- precise failure this whole change exists to remove.
+                                  -- An edit to a threadless root can never be claimed,
+                                  -- and one stuck row blocks the whole queue behind it.
                                   AND NOT (threadless AND #{operation} = 'update_root')
                                 ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
                       pure $ Recorded current eventId
@@ -625,10 +608,8 @@ data SlackDeliveryF timestamp = SlackDelivery
   deriving anyclass (HI.DecodeRow)
 
 
--- | Whether a root posted by this transport can still acquire a timestamp.
--- Recovery needs @conversations.history@ or a Slack event carrying the root,
--- and both need a bot token — so a webhook-only install can never confirm one
--- and must not wait for it.
+-- | Whether a root posted by this transport can ever acquire a timestamp.
+-- Recovery needs a bot token, so a webhook-only install never will.
 data RootThreading = ThreadCapable | Threadless
   deriving stock (Eq, Show)
 
@@ -672,13 +653,8 @@ claimSlackDeliveriesTx now = do
     [HI.sql|UPDATE apis.slack_incident_deliveries
     SET state = 'uncertain', last_error = 'send_lease_expired'
     WHERE state = 'sending' AND lease_until < #{now}|]
-  -- `recordIncidentEventTx` declines to queue an edit against a root already
-  -- known threadless, but a root only becomes threadless when its post_root
-  -- settles — so an event arriving before that (a fast alert/recover flap) can
-  -- still queue one. Settling them here as well closes that window: an edit to a
-  -- message that cannot be edited is inapplicable, and left pending it would
-  -- block every later delivery on the root. Migration 0183 does this once for
-  -- the backlog; this is the same rule applied continuously.
+  -- A root turns threadless only once its post_root settles, so an event
+  -- arriving before that still queues an edit. Settle those here too.
   executeTx
     [HI.sql|UPDATE apis.slack_incident_deliveries d
     SET state = 'failed', last_error = 'threadless_root_cannot_be_edited', lease_token = NULL, lease_until = NULL
@@ -719,8 +695,7 @@ finishSlackDelivery :: DB es => UTCTime -> SlackDelivery -> DeliveryOutcome -> E
 finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let (deliveryState, availableAt, messageTs, err) = case outcome of
         DeliveryConfirmed ts -> ("delivered", now, Just ts, Nothing)
-        -- Only a thread-capable root waits: 'Threadless' means nothing can ever
-        -- confirm it, and parking it would block every follow-up for good.
+        -- Parking a threadless root would block its follow-ups for good.
         WebhookAccepted ThreadCapable -> (if delivery.operation == PostRoot then "waiting_root" else "delivered", now, Nothing, Nothing)
         WebhookAccepted Threadless -> ("delivered", now, Nothing, Nothing)
         DeliveryRetry retryAt reason -> ("pending", max now retryAt, Nothing, Just reason)
@@ -734,8 +709,7 @@ finishSlackDelivery now delivery outcome = Hasql.transaction TxS.ReadCommitted T
     WHERE id = #{delivery.id} AND lease_token = #{delivery.leaseToken} AND state IN ('sending', 'uncertain')
     RETURNING root_id|]
   case (listToMaybe completed, delivery.operation, outcome) of
-    -- Record on the root, not just this delivery: every follow-up queued behind
-    -- it has to know there is no thread to join.
+    -- On the root, not the delivery: follow-ups need to know there is no thread.
     (Just rid, PostRoot, WebhookAccepted Threadless) -> do
       executeTx [HI.sql|UPDATE apis.slack_incident_roots SET threadless = TRUE WHERE id = #{rid} AND message_ts IS NULL AND NOT threadless|]
       pure True
@@ -835,8 +809,7 @@ claimIncidentSearches now =
           JOIN apis.slack s ON s.project_id = e.project_id AND s.team_id = r.team_id
           WHERE d.attempts > 0 AND d.history_retry_at <= #{now} AND p.active AND p.deleted_at IS NULL
             AND (d.state IN ('uncertain', 'waiting_root') OR (d.state = 'sending' AND d.lease_until < #{now}))
-            -- Never search history for a threadless root: recovery reads
-            -- conversations.history, which is exactly the call its install cannot make.
+            -- Recovery reads conversations.history, the one call it cannot make.
             AND NOT r.threadless
             AND (d.operation = 'post_root' OR r.message_ts IS NOT NULL) AND |]
     <> noEarlierUnsettledDelivery

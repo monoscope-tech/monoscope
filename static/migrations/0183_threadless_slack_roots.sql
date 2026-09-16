@@ -29,12 +29,19 @@ ALTER TABLE apis.slack_incident_roots
 
 -- Backfill: unconfirmed roots belonging to an install with no bot token were
 -- always threadless — nothing could ever have confirmed them.
+-- Scoped through the episode's project, not by team_id alone: apis.slack is
+-- unique on project_id, so one workspace can be connected to two projects with
+-- different bot-token status. The delivery worker resolves the install the same
+-- way (getProjectSlackData on the delivery's project, then a teamId check), and a
+-- one-shot backfill has no second chance to be right.
 UPDATE apis.slack_incident_roots r
 SET threadless = TRUE
-WHERE r.message_ts IS NULL
+FROM apis.incident_episodes e
+WHERE e.id = r.episode_id
+  AND r.message_ts IS NULL
   AND EXISTS (
     SELECT 1 FROM apis.slack s
-    WHERE s.team_id = r.team_id AND COALESCE(s.bot_token, '') = ''
+    WHERE s.project_id = e.project_id AND s.team_id = r.team_id AND COALESCE(s.bot_token, '') = ''
   );
 
 -- Settle the roots those deliveries were waiting on. They were sent — the

@@ -414,19 +414,10 @@ insertIssueReturningIdTx :: Issue -> Tx.Transaction IssueId
 insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True . insertIssueSql
 
 
--- | The issue a recurring signal belongs to: the existing one, reopened, or a
--- fresh row if the signal has never fired.
---
--- 'insertIssueSql' already upserts while an issue is /open/ — its partial unique
--- index covers only open rows — so a monitor that fired, was acknowledged, then
--- fired again used to start a brand new issue and strand its history on the old
--- one. A monitor's @target_hash@ is its id, so there is exactly one signal here
--- and it deserves exactly one long-lived row carrying every episode.
---
--- An acknowledgement is a snooze, not a dismissal: while @acknowledged_until@ is
--- still in the future the row keeps its ack and only its activity is bumped, so a
--- firing inside the window cannot un-silence what someone deliberately quieted.
--- Past that window the row is reopened and the upsert merges the fresh reading.
+-- | The issue a recurring signal belongs to: the existing one reopened, or a
+-- fresh row. 'insertIssueSql' only upserts while an issue is open, so without
+-- this a fired-acked-fired monitor stranded its history on the old row. An
+-- unexpired ack is a snooze — the row keeps it and only its activity is bumped.
 reopenOrInsertIssueTx :: UTCTime -> Issue -> Tx.Transaction IssueId
 reopenOrInsertIssueTx now issue = do
   prior <-
@@ -822,29 +813,12 @@ hashPrefixWidth :: Int
 hashPrefixWidth = 8
 
 
--- | Acknowledge issues by id, then sweep every sibling sharing their endpoint
--- prefix. Acking an endpoint's issue has to silence the field and shape issues
--- underneath it, or the same change keeps notifying through a different row.
---
--- Project-scoped: a @target_hash@ is content-derived, so two tenants seeing the
--- same endpoint shape produce the same 8-character hash and an unscoped sweep
--- would silence the other tenant's issues. Scoping is also what lets the sweep
--- use an index — every index on the table leads with @project_id@.
---
--- @LIKE@ against a parameter array is not sargable on its own, so the sweep also
--- narrows on @LEFT(target_hash, 8)@, the expression migration 0130 indexed for
--- exactly this shape. The LIKE stays as the exact test; the prefix equality only
--- picks the pages to look at. Measured on prod with EXPLAIN:
---
--- @
---   Seq Scan 11,438ms  ->  +project_id 375ms  ->  +prefix index 2.64ms
--- @
---
--- That narrowing is only a valid superset while every target is at least the 8
--- characters the index is built on: for a shorter target @LEFT(row, 8)@ is longer
--- than the target itself and the filter would drop rows the LIKE would match.
--- Hence the guard rather than an unconditional narrowing — an 8-char hash is what
--- the schema produces, but this also sweeps legacy hashes and must keep finding them.
+-- | Acknowledge issues by id, then sweep siblings sharing their endpoint prefix,
+-- so acking an endpoint silences the field/shape issues under it. Project-scoped:
+-- a target_hash is content-derived and collides across tenants. The
+-- @LEFT(target_hash, 8)@ narrowing reaches migration 0130's index (11,438ms ->
+-- 2.64ms) but is only a valid superset while every target is at least that wide —
+-- hence the guard.
 ackCascade :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> AckWindow -> [IssueId] -> Eff es [IssueId]
 ackCascade pid uid window iids
   | null iids = pure []
@@ -1498,12 +1472,8 @@ data EpisodeKind = EKAlert | EKObservation | EKReminder | EKDataUnavailable | EK
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
 
 
--- | One thing that happened to an issue: a lifecycle transition someone (or the
--- ack sweeper) caused, or an alert episode the delivery pipeline recorded.
---
--- These were two tables telling one story out of order — the audit log knew an
--- issue was acknowledged at 09:12 and the episode ledger knew it fired again at
--- 09:40, and neither could say so. Interleaved they read as a sequence.
+-- | One thing that happened to an issue: a lifecycle transition, or an alert
+-- episode. Two tables telling one story, read in order.
 data ActivityEvent = Lifecycle IssueEvent | Episode EpisodeKind
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -1562,10 +1532,8 @@ logIssueActivity issueId event createdBy metadataM = do
     WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
 
 
--- | An issue's whole timeline, newest first: its own lifecycle log plus every
--- event of every alert episode that hung off it. The episodes are reachable from
--- here and nowhere else, which is the point — an episode is a chapter of an
--- issue, not a thing to go and look at separately.
+-- | An issue's whole timeline, newest first — its lifecycle log plus every
+-- episode event. The only place episodes are read from.
 selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId = do
   rows <-
@@ -1580,8 +1548,7 @@ selectIssueActivity pid issueId = do
         JOIN apis.incident_episodes ep ON ep.id = ev.episode_id
         WHERE ep.issue_id = #{issueId} AND ep.project_id = #{pid}
         ORDER BY 3 DESC LIMIT 200 |]
-  -- A spelling neither vocabulary knows means the DB grew an event kind that
-  -- 'ActivityEvent' has not; say so rather than dropping it off the timeline.
+  -- An unknown spelling means the DB grew a kind 'ActivityEvent' has not.
   let (unparsable, activities) = partitionEithers (toActivity <$> rows)
   unless (null unparsable)
     $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])

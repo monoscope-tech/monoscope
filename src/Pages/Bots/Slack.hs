@@ -609,22 +609,10 @@ sendSlackWelcomeMessage token channelId projectTitle =
 -- rejected semantically (invalid_payload, channel_is_archived, no_service).
 -- Throws on either HTTP error or body≠ok so tryAny-wrapping callers surface
 -- the failure as a welcome-message-failed log with context.
--- | Deliver a notice that tells the user how to fix a broken install.
---
--- Such a notice cannot depend on the credential that is broken. 34 of 43
--- production installs have no bot token, so the "Reconnect Slack to grant Agent
--- permissions" prompt — posted through @chat.postEphemeral@ with that very
--- token — threw before it reached anyone: the bot looked dead rather than
--- misconfigured, and the one message explaining the fix was the one message that
--- could not be sent.
---
--- Falls back to the incoming webhook, the only transport a token-less install
--- still has. It cannot post ephemerally, so the notice becomes a channel message
--- — visible beats invisible. If neither transport works this logs and returns:
--- an undeliverable prompt must not also abort the event being handled.
--- Returns whether the notice actually went out. A caller that records a
--- delivery receipt must not write one on 'False': an identity link marked
--- delivered but never sent strands the user with no link and no retry.
+-- | A notice telling the user to fix a broken install cannot depend on the
+-- credential that is broken, so this falls back to the webhook and logs rather
+-- than throwing. Returns whether it actually went out — a caller recording a
+-- delivery receipt must not write one on 'False'.
 sendRecoveryNotice :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Text -> Text -> Eff es Bool
 sendRecoveryNotice context slackData channel user noticeText = do
   delivered <-
@@ -879,8 +867,7 @@ processSlackEvent receiptId =
           | otherwise -> Log.logTrace "Slack App Home visit outside Messages retained" (AE.object [])
         UserMessage message -> handleMessage False envCfg message workspaceId
         AppMention message -> handleMessage True envCfg message workspaceId
-        -- Only a *started* thread is greeted; a context change is the user
-        -- switching channels in an open thread and must not re-prompt them.
+        -- Greet on start only; a context change is a channel switch mid-thread.
         AssistantStarted session -> do
           saveAssistantContext workspaceId session
           whenJustM (getSlackDataByTeamId workspaceId) (`greetAssistantThread` session)
@@ -893,12 +880,8 @@ processSlackEvent receiptId =
       slackData <- getSlackDataByTeamId workspaceId >>= maybe (throwError err403) pure
       linkId <- UUIDId <$> UUID.genUUID
       request <- Integrations.createSlackLink linkId receiptId >>= maybe (throwError err403) pure
-      -- Ephemeral only, and deliberately no webhook fallback: this is a one-shot
-      -- account-linking URL for one user, and an incoming webhook posts to the
-      -- whole channel. Failing to deliver is far better than leaking it, so an
-      -- install without a usable bot token gets an error here rather than a
-      -- private link in public. ('sendRecoveryNotice' may fall back only because
-      -- a "reconnect Slack" prompt carries nothing secret.)
+      -- No webhook fallback: this is a private one-shot link and a webhook posts
+      -- to the whole channel. Failing to deliver beats leaking it.
       slackApiOrThrow "Slack identity link" slackData.botToken "chat.postEphemeral"
         $ AE.object
           [ "channel" AE..= request.channelId
@@ -1407,10 +1390,8 @@ data SlackSessionUpdate = SlackSessionUpdate
   deriving anyclass (AE.ToJSON)
 
 
--- | The agent's "working" indicator. This is @agents.sessions.setStatus@ from
--- Slack's Agents & AI Apps surface, not the older @assistant.threads.setStatus@
--- — Monoscope is built on the newer one, and there must not be a second way to
--- say the same thing.
+-- | The agent's "working" indicator — @agents.sessions.setStatus@ from the
+-- Agents surface, not the older @assistant.threads.setStatus@.
 setSessionStatus :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> SlackSessionStatus -> Eff es ()
 setSessionStatus token channel thread status =
   slackApiOrThrow "Slack session status" token "agents.sessions.setStatus" $ AE.toJSON $ SlackSessionUpdate channel thread status
@@ -1427,12 +1408,8 @@ saveAppContext workspaceId event =
 
 
 -- | Slack navigation context is untrusted input, not project authorization.
--- | The starters Slack shows in an otherwise empty assistant thread.
---
--- An assistant that opens blank reads as unfinished — there is nothing to tell a
--- first-time user what it can answer, which is the difference between the
--- Monoscope panel and the agents people compare it to. @title@ is what the user
--- sees; @message@ is what gets sent if they click it.
+-- | Starters for an otherwise empty assistant thread; @title@ is shown,
+-- @message@ is sent on click.
 assistantPrompts :: [(Text, Text)]
 assistantPrompts =
   [ ("What is broken right now?", "What is broken right now?")
@@ -1441,12 +1418,8 @@ assistantPrompts =
   ]
 
 
--- | Greet a newly opened assistant thread and offer starters.
---
--- Best-effort on purpose: these are presentation, and a workspace whose install
--- predates the Agent scopes will refuse them. Failing the event over a missing
--- greeting would take the whole conversation down with it, so this logs and
--- carries on — the thread still works, it just opens bare.
+-- | Offer starters on a newly opened assistant thread. Best-effort: an install
+-- predating the Agent scopes refuses these, and that must not fail the event.
 greetAssistantThread :: (HTTP :> es, Log.Log :> es) => SlackData -> SlackAssistantEvent -> Eff es ()
 greetAssistantThread slackData event = unless (T.null slackData.botToken) do
   let session = event.assistant_thread
