@@ -2342,10 +2342,11 @@ backfillSessionSql pid windowStart windowEnd =
     WHERE o.project_id = #{pid.toText}
       AND o.context___trace_id = s.context___trace_id
       AND o.timestamp >= #{windowStart} AND o.timestamp < #{windowEnd}
-      AND (o.attributes___session___id IS NULL OR o.attributes___user___id IS NULL
-        OR o.attributes___user___email IS NULL OR o.attributes___user___name IS NULL
-        OR o.attributes___user___full_name IS NULL)
-      AND (s.sid IS NOT NULL OR s.uid IS NOT NULL) |]
+      AND ((o.attributes___session___id IS NULL AND s.sid IS NOT NULL)
+        OR (o.attributes___user___id IS NULL AND s.uid IS NOT NULL)
+        OR (o.attributes___user___email IS NULL AND s.uemail IS NOT NULL)
+        OR (o.attributes___user___name IS NULL AND s.uname IS NOT NULL)
+        OR (o.attributes___user___full_name IS NULL AND s.ufull IS NOT NULL)) |]
 
 
 processEagerBatch
