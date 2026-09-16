@@ -4829,6 +4829,7 @@ runSlackIncidentDeliveries = do
         Just sd | sd.teamId == delivery.teamId -> do
           let (operation, parent) = case delivery.operation of
                 Incidents.PostRoot -> (Notify.SlackPost, Nothing)
+                Incidents.PostStandalone -> (Notify.SlackPost, Nothing)
                 Incidents.PostReply ts -> (Notify.SlackPost, Just $ Incidents.slackTimestampText ts)
                 Incidents.UpdateRoot ts -> (Notify.SlackUpdate $ Incidents.slackTimestampText ts, Nothing)
               message =
@@ -4838,6 +4839,7 @@ runSlackIncidentDeliveries = do
                   , Notify.payload = AE.toJSON $ Incidents.correlateSlackDelivery delivery $ case delivery.operation of
                       Incidents.PostReply _ -> delivery.payload
                       Incidents.PostRoot -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
+                      Incidents.PostStandalone -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                       Incidents.UpdateRoot _ -> Mail.retainSlackSnapshot delivery.initialPayload delivery.payload
                   , Notify.threadTs = parent
                   , Notify.webhookUrl = if delivery.channelId == sd.channelId then sd.webhookUrl else Nothing
