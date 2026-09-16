@@ -143,7 +143,7 @@ data ApiItemDetailed
 -- enclosing @.details-panel@; each shell (log-explorer, anomalies, trace view) owns
 -- its handler on that container.
 closeDetailAttrs :: [Attribute]
-closeDetailAttrs = [term "hx-on:click" "htmx.trigger(this.closest('.details-panel'), 'closeDetailPanel')"]
+closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-panel/>|]]
 
 
 -- | The panel a clicked log row's details load into. One element, one id: the
@@ -370,7 +370,7 @@ expandedItemView pid item aptSp selectedTabM = do
           , Aria.label_ "Toggle fullscreen"
           , data_ "tip" "Expand panel"
           , term "data-share-hide" "1"
-          , term "hx-on:click" "htmx.trigger(document.getElementById('apiLogsPage'), 'toggleFullscreen', {mode: 'details'})"
+          , [__|on click send toggleFullscreen(mode: 'details') to #apiLogsPage|]
           ]
           do
             faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
@@ -406,7 +406,7 @@ expandedItemView pid item aptSp selectedTabM = do
     htmxOverlayIndicator_ "details_indicator"
     headerBlock
     div_ [class_ "w-full mt-3 group/dtab"] do
-      div_ [class_ "flex", term "hx-on:click" "event.stopPropagation()"] do
+      div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
         traverse_ detailTabRadio_ tabs
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
       -- The selected panel renders now; hidden placeholders fetch and replace

@@ -16,6 +16,7 @@ import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
@@ -199,9 +200,7 @@ codeMappingsContent pid sampleM = do
               def
                 { value = maybe "main" (.defaultBranch) (viaNonEmpty head repos)
                 , placeholder = "main"
-                , -- Re-seed from the chosen repo's default branch only when the selection changes,
-                  -- so the user's own edits to the field survive unrelated recomputes.
-                  extraAttrs = [term "hx-live" "const b = repo.selectedOptions[0].dataset.branch; if (this.dataset.b != b) { this.dataset.b = b; this.value = b }" | not (null repos)]
+                , extraAttrs = [[__| on load or change from #repo set my value to #repo.selectedOptions[0].dataset.branch |] | not (null repos)]
                 }
               "Branch"
               "ref"

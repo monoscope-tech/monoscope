@@ -601,7 +601,7 @@ renderFacetValue f (FacetValue val count) =
           , class_ "checkbox checkbox-xs max-md:checkbox-sm"
           , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
             -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
-            [__|on click js(me) window.queryEditorCall('toggleSubQuery', me.dataset.field + ' == "' + me.dataset.value + '"') end|]
+            term "hx-on:click" "window.queryEditorCall('toggleSubQuery', this.dataset.field + ' == \"' + this.dataset.value + '\"')"
           , Aria.label_ (f.path <> " equals " <> val)
           , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
           , term "data-field" f.path
@@ -1937,7 +1937,7 @@ alertConfigurationForm_ project alertM teams = do
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
-        , [__|on htmx:after:request[detail.ctx.response.status < 400] set my value to '' then call me.reset()|]
+        , term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]

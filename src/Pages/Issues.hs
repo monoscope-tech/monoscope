@@ -82,7 +82,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
@@ -407,7 +407,7 @@ issueSampleCard_ pid snapshot result = detailCard_ Nothing def "Event sample" $ 
   SampleEmpty -> withSnapshot "No matching event in the selected range. Try another range or inspect the logs below."
   SampleUnavailable -> withSnapshot do
     "The event sample could not be loaded. "
-    button_ [type_ "button", class_ "text-textBrand underline underline-offset-2", term "hx-on:click" "htmx.trigger(document.getElementById('issue-sample'), 'retryIssueSample')"] "Retry"
+    button_ [type_ "button", class_ "text-textBrand underline underline-offset-2", [__|on click send retryIssueSample to #issue-sample|]] "Retry"
   where
     withSnapshot message = do
       div_ [class_ "px-4 py-3 text-sm text-textWeak", role_ "status"] message
@@ -893,7 +893,7 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
       picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
         TimePicker.timepicker_ (Just refreshId) currentRange Nothing
         TimePicker.refreshButton_
-  div_ [id_ refreshId, class_ "hidden", term "hx-on:submit" "htmx.trigger(window, 'update-query')"] ""
+  div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
   detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto max-md:w-full"] picker)} chartTitle
     $ div_ [class_ heightCls]
     $ Widget.widget_
@@ -1126,7 +1126,7 @@ investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert
           -- Icon state is CSS-driven off the container's fullscreen class; the click
           -- only sends the event. tippy, not daisyUI, whose ::before bubble is
           -- clipped by the card's overflow.
-          button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", term "hx-on:click" "htmx.trigger(document.getElementById('error-details-container'), 'toggleFullscreen')"] do
+          button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #error-details-container|]] do
             faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
             faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
       div_ [class_ "max-md:p-1 p-2 w-full overflow-x-clip investigation-content"] do
@@ -1223,10 +1223,15 @@ aiSidePanel_ pid issueId = do
     [ type_ "checkbox"
     , id_ "ai-panel-toggle"
     , class_ "hidden"
-    , -- Seed once from localStorage (a live binding would fight the user's own click),
-      -- then the change handler writes the choice back.
-      term "hx-live" "if (!this.dataset.seeded) { this.dataset.seeded = '1'; this.checked = localStorage.getItem('ai-panel-open') == 'true'; if (this.checked) htmx.trigger(document.getElementById('ai-response-container'), 'load-chat') }"
-    , term "hx-on:change" "localStorage.setItem('ai-panel-open', this.checked); if (this.checked) htmx.trigger(document.getElementById('ai-response-container'), 'load-chat')"
+    , -- The event name must be quoted: hyperscript reads the `-` in a bare
+      -- `load-chat` as minus, which left the panel never loading.
+      [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
+            if my.checked trigger 'load-chat' on #ai-response-container end
+          end
+          on change
+            call localStorage.setItem('ai-panel-open', my.checked)
+            if my.checked trigger 'load-chat' on #ai-response-container end
+          end|]
     ]
   label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"]
     $ faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
@@ -1817,9 +1822,9 @@ anomalyAIChatBody_ pid issueId = do
         , class_ "text-xs px-2 py-1.5 rounded-full bg-fillWeaker text-textWeak hover:text-textStrong hover:bg-fillWeak transition-colors cursor-pointer tap-target"
         , -- The label travels as a data attribute, not interpolated into the script:
           -- Lucid escapes attribute values, so an apostrophe in a suggestion can't
-          -- terminate the script's string literal and break the handler.
+          -- terminate the hyperscript string literal and break the handler.
           data_ "q" txt
-        , term "hx-on:click" "const i = document.getElementById('ai-chat-input'); i.value = this.dataset.q; i.form.requestSubmit()"
+        , [__|on click set #ai-chat-input.value to my @data-q then call #ai-chat-input.form.requestSubmit()|]
         ]
         $ toHtml @Text txt
 

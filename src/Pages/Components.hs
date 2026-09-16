@@ -363,7 +363,7 @@ pricingButton_ isCurrent normalCls attrs label =
 -- | Plan CTA: inert when already the current plan, else a Stripe checkout POST or a LemonSqueezy popup.
 pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
-  div_ [term "hx-on:click" "event.stopPropagation(); event.preventDefault()"]
+  div_ [[__|on click halt|]]
     $ pricingButton_ isCurrent normalCls (type_ "button" : attrs) "Start 30 day free trial"
   where
     attrs :: [Attribute]
@@ -389,7 +389,7 @@ freePricing pid isCurrent =
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [term "hx-on:click" "event.stopPropagation(); event.preventDefault()"] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
+        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
         ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 

@@ -34,6 +34,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
+import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -423,7 +424,7 @@ integrationsPage pid apikey =
         button_
           [ class_ "flex items-center gap-2 text-textBrand cursor-pointer"
           , type_ "button"
-          , term "hx-on:click" "document.getElementById('docs-panel').classList.remove('open')"
+          , [__|on click remove .open from #docs-panel|]
           ]
           do
             faSprite_ "arrow-left" "regular" "h-4 w-4"

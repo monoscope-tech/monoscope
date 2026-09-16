@@ -15,7 +15,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (filterInputAttr_, modal_, options_)
+import Pages.Components (filterInputAttr_, keyboardActivateAttr_, modal_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
@@ -144,7 +144,7 @@ logQueryBox_ config = do
               do
                 faSprite_ "arrow-right" "regular" "h-4 w-4"
                 "Submit"
-            label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Collapse AI search", class_ "cursor-pointer p-1 focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tippy-content" "Collapse AI search", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+            label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Collapse AI search", class_ "cursor-pointer p-1 focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tippy-content" "Collapse AI search", keyboardActivateAttr_] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
           -- Above the editor, not below it: the suggestions dropdown opens downward
           -- over that space and hid the message while the user was typing the query

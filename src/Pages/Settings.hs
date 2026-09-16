@@ -92,6 +92,7 @@ import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -435,7 +436,7 @@ copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
                 "Copy Key"
               if hasNext
                 then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand ml-4", onclick_ "window.location.reload()"] "Next"
-                else button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textSuccess ml-2", term "hx-on:click" "document.getElementById('apiFeedbackSection').remove()"] "Dismiss"
+                else button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textSuccess ml-2", [__|on click remove #apiFeedbackSection|]] "Dismiss"
 
 
 ----------------------------------------------------------------------

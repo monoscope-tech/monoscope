@@ -45,6 +45,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
+import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, keyboardActivateAttr_)
 import Relude
@@ -412,7 +413,7 @@ swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> ti
 
 
 selectAllCheckbox_ :: Html ()
-selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", term "hx-on:change" "htmx.live.q('.bulkactionItemCheckbox').checked = this.checked"]
+selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
 
 
 selectRowCheckbox_ :: Bool -> Text -> Html ()

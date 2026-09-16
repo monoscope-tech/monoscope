@@ -1450,7 +1450,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
     , hxTrigger_ "submit"
     , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
     , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
-    , [__|on htmx:after:request if event.detail.ctx.response.status < 400 set my value to '' then call me.reset() end|]
+    , term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
@@ -1626,15 +1626,8 @@ renderDashboardListItem checked title value description icon prview = label_
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
   , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" prview
-  , [__| on mouseover set #dItemPreview.src to my @data-preview
-              then set #dItemTitle.innerText to my @data-title
-              then set #dItemDescription.innerText to my @data-description
-          on mouseout
-              put (<.dashboardListItem:has(input:checked)/>) into checkedLabel
-              set #dItemPreview.src to checkedLabel's @data-preview
-              then set #dItemTitle.innerText to checkedLabel's @data-title
-              then set #dItemDescription.innerText to checkedLabel's @data-description
-              |]
+  , term "hx-on:mouseover" "dItemPreview.src = this.dataset.preview; dItemTitle.innerText = this.dataset.title; dItemDescription.innerText = this.dataset.description"
+  , term "hx-on:mouseout" "const c = document.querySelector('.dashboardListItem:has(input:checked)'); if (c) { dItemPreview.src = c.dataset.preview; dItemTitle.innerText = c.dataset.title; dItemDescription.innerText = c.dataset.description }"
   ]
   do
     input_ $ [class_ "hidden", type_ "radio", name_ "file", value_ value] <> [checked_ | checked]
@@ -1759,12 +1752,7 @@ dashboardsGet_ dg = do
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
                         , hxSwap_ "none"
                         , data_ "success-message" $ bool "Widget added to " "Widget copied to " (isJust sourceDashIdM) <> dash.title
-                        , [__|on htmx:after:request
-                            if event.detail.ctx.response.status >= 200 and event.detail.ctx.response.status < 300
-                              set #dashboards-modal.checked to false
-                              send successToast(value:[my.dataset.successMessage]) to <body/>
-                            end
-                          |]
+                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) { document.getElementById('dashboards-modal').checked = false; htmx.trigger(document.body, 'successToast', {value: [this.dataset.successMessage]}) }"
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
@@ -2575,8 +2563,8 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
           label_ [class_ "btn btn-sm cursor-pointer", Lucid.for_ "yaml-import-input"] do
             faSprite_ "upload" "regular" "w-3 h-3 mr-1"
             "Import"
-          input_ [id_ "yaml-import-input", type_ "file", accept_ ".yaml,.yml", class_ "hidden", [__|on change call yamlEditorImport(me.files[0]) then set my.value to ''|]]
-          button_ [class_ "btn btn-sm", [__|on click call yamlEditorExport()|]] do
+          input_ [id_ "yaml-import-input", type_ "file", accept_ ".yaml,.yml", class_ "hidden", term "hx-on:change" "yamlEditorImport(this.files[0]); this.value = ''"]
+          button_ [class_ "btn btn-sm", term "hx-on:click" "yamlEditorExport()"] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
           label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"

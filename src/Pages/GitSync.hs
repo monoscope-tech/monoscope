@@ -23,6 +23,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
@@ -543,7 +544,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
                 , class_ "radio radio-sm"
                 , required_ ""
                 , term "data-branch" repo.defaultBranch
-                , term "hx-on:change" "branch.value = this.dataset.branch"
+                , [__| on change set #branch.value to my @data-branch |]
                 ]
               <> [checked_ | idx == 0]
             span_ [class_ "font-medium text-textStrong truncate"] $ toHtml repo.fullName

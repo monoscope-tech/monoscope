@@ -1766,7 +1766,7 @@ popoverPanel_ pid = [id_ pid, term "popover" "auto", style_ $ "position-try:flip
 -- closes the popover after an item runs, and `halt`s so the click can't bubble to an
 -- enclosing @<label for>@ (e.g. the facet-section collapse header) and toggle it.
 fieldMenuPanel_ :: Text -> [Attribute]
-fieldMenuPanel_ pid = popoverPanel_ pid <> [term "hx-on:click" "this.hidePopover(); event.stopPropagation(); event.preventDefault()"]
+fieldMenuPanel_ pid = popoverPanel_ pid <> [[__|on click call me.hidePopover() then halt|]]
 
 
 -- | Makes a whole table row open the drawer: clickable, focusable, and Enter/Space activated.
