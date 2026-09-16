@@ -203,9 +203,9 @@ spec = sequential $ aroundAll withTestResources $ do
                   $ Hasql.interp [HI.sql|SELECT slack_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
               pure $ V.toList xs
 
-        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] ["C_NOTIF_CHANNEL"])
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] ["C_NOTIF_CHANNEL"] Nothing)
         stored `shouldReturn` ["C_NOTIF_CHANNEL"]
-        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] [])
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack"] [] [] [] Nothing)
         stored `shouldReturn` []
 
     describe "disabled_channels inversion (form save)" $ do
@@ -217,14 +217,24 @@ spec = sequential $ aroundAll withTestResources $ do
                   $ Hasql.interp [HI.sql|SELECT disabled_channels FROM projects.teams WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
               pure $ sort $ V.toList xs
 
-        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack", "email"] [] [] [])
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["slack", "email"] [] [] [] Nothing)
         disabled `shouldReturn` ["discord", "pagerduty", "phone"]
         -- HTMX 4 used to serialize checked channels as one comma-joined value.
         -- Reject that request without changing the previously enabled channels.
-        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["email,slack"] [] [] [])
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm ["email,slack"] [] [] [] Nothing)
         disabled `shouldReturn` ["discord", "pagerduty", "phone"]
-        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [])
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing)
         disabled `shouldReturn` ["discord", "email", "pagerduty", "phone", "slack"]
+
+    describe "alert identity privacy" $ do
+      it "defaults to including user identity and persists an explicit opt-out" \tr -> do
+        Projects.includeAlertUserIdentity testPid `shouldReturn` True
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] (Just False))
+        Projects.includeAlertUserIdentity testPid `shouldReturn` False
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing)
+        Projects.includeAlertUserIdentity testPid `shouldReturn` False
+        void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] (Just True))
+        Projects.includeAlertUserIdentity testPid `shouldReturn` True
 
 
 -- Helper functions

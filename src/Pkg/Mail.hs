@@ -1,4 +1,4 @@
-module Pkg.Mail (monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -98,6 +98,17 @@ data RuntimeAlertType
   | EscalatingErrors
   | RegressedErrors
   | ErrorSpike
+  deriving stock (Eq, Generic, Show)
+
+
+-- | Operational and user context for one alert. Project and tenant stay
+-- distinct so the fallback context is never mislabeled as a telemetry tenant.
+data AlertImpact = AlertImpact
+  { projectName :: Text
+  , tenant :: Maybe Text
+  , userName :: Maybe Text
+  , userEmail :: Maybe Text
+  }
   deriving stock (Eq, Generic, Show)
 
 
@@ -261,13 +272,13 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     (titleEmoji, titleLabel) = case ongoingForM of
       Just d -> (":hourglass_flowing_sand:", "Still firing · " <> d)
       Nothing -> (msgs.slackEmoji, msgs.alertLabel)
-    title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> incidentHeadline err.errorType <> " in " <> slackEscape project <> ">"
+    title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> errorAlertTitle err <> " in " <> slackEscape project <> ">"
     body = errorSnippet 600 err
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     tidM = err.traceId >>= guarded (not . T.null)
     inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
     buttons =
-      slackButton "🔍 Investigate" (Just "primary") targetUrl
+      slackButton "Open issue" (Just "primary") targetUrl
         : maybeToList (tidM <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
 
 
@@ -339,21 +350,21 @@ monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl 
 
 
 -- | Error episodes retain their onset/chart while reminders carry current evidence.
-errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
-errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence =
+errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> AlertImpact -> (Incidents.SlackPayload, Incidents.SlackPayload)
+errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence impact =
   (incidentMessage fallback [headline, detail, metadata, onset, chartBlock, actions], incidentMessage fallback [headline, detail, metadata, actions])
   where
     label = case alertType of NewRuntimeError -> "ALERTING"; RegressedErrors -> "REGRESSED"; EscalatingErrors -> "ESCALATING"; ErrorSpike -> "ESCALATING"
-    title = incidentHeadline err.errorType
+    title = errorAlertTitle err
     -- Slack can expose the top-level text above Block Kit in notifications and
     -- some clients. Keep it a compact fallback, not a second copy of the
     -- exception and its metadata.
     fallback = label <> " · " <> title <> foldMap (" · " <>) err.serviceName
     headline = slackSection $ "<" <> incidentUrl <> "|:red_circle: *" <> label <> "* · " <> title <> ">"
     detail = slackSection $ errorSnippet 600 err
-    metadata = slackContext [fromMaybe ("Observed " <> atUtc now) $ errorMetaLine err occurrence ("Observed " <> atUtc now)]
+    metadata = slackContext [T.intercalate " · " $ impactContext impact <> [fromMaybe ("Observed " <> atUtc now) $ errorMetaLine err occurrence ("Observed " <> atUtc now)] <> impactedUser impact]
     onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
-    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
+    chartBlock = tagged "incident_chart" $ maybe (slackContext ["Trend unavailable yet · <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Error occurrences · " <> title) Nothing) chart
     actions =
       tagged "incident_actions"
         $ slackActions
@@ -361,6 +372,18 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
               : maybeToList
                 ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
           )
+
+
+impactContext :: AlertImpact -> [Text]
+impactContext impact = ["Project " <> slackEscape impact.projectName] <> maybe [] (pure . ("Tenant " <>) . slackEscape) impact.tenant
+
+
+impactedUser :: AlertImpact -> [Text]
+impactedUser impact = case (slackEscape <$> impact.userName, slackEscape <$> impact.userEmail) of
+  (Just name, Just email) -> ["User " <> name <> " <" <> email <> ">"]
+  (Just name, Nothing) -> ["User " <> name]
+  (Nothing, Just email) -> ["User " <> email]
+  (Nothing, Nothing) -> []
 
 
 tagged :: Text -> AE.Value -> AE.Value
@@ -426,6 +449,29 @@ errorSnippet limit err = "```" <> bounded <> "```"
       | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"
 
 
+-- | Pull the human-useful route out of the noisy @wreq@ exception rendering.
+-- The full message remains below as evidence; this only makes the alert's
+-- primary line answer "what failed?" at a glance.
+errorAlertTitle :: ErrorPatterns.ATError -> Text
+errorAlertTitle err
+  | "HttpExceptionRequest" `T.isInfixOf` err.message =
+      "HTTP request failed" <> maybe "" ((" · " <>) . slackEscape) endpoint
+  | otherwise = incidentHeadline err.errorType
+  where
+    endpoint = do
+      host <- quotedRecordField "host" err.message
+      pure $ host <> fromMaybe "" (quotedRecordField "path" err.message)
+
+
+quotedRecordField :: Text -> Text -> Maybe Text
+quotedRecordField field source = do
+  let marker = field <> " = \""
+  (_, rest) <- Just $ T.breakOn marker source
+  value <- T.stripPrefix marker rest
+  guard $ not $ T.null value
+  pure $ T.takeWhile (/= '\"') value
+
+
 -- | One intentionally quiet context line. Slack lays multiple context elements
 -- out as a grid, which made service, rate, and timestamp compete with the
 -- exception; a single element keeps them secondary and scannable.
@@ -459,7 +505,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     headlineBlock = slackSection ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")
-    actionsBlock = slackActions [slackButton "View in Explorer" (Just "primary") explorerUrl]
+    actionsBlock = slackActions [slackButton "Open issue" (Just "primary") targetUrl, slackButton "View in Explorer" Nothing explorerUrl]
     -- Option A layout: host is the primary group header (bold, with globe), service · env
     -- drops to a dimmed context caption on the same line. Bullets below.
     groupHeader hostM ctxM = case hostM of
@@ -531,7 +577,7 @@ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField o
            , "*Source:* " <> sourceField
            , "*Matched:* " <> show occurrenceCount
            ]
-       , slackActions [slackButton "🔍 Investigate" (Just "primary") issueUrl]
+       , slackActions [slackButton "Open issue" (Just "primary") issueUrl]
        ]
   where
     (emoji, label, _, color) = logPatternSeverity isError logLevel
@@ -551,7 +597,7 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
         , "*Level:* " <> fromMaybe "—" logLevel
         , "*Service:* " <> fromMaybe "—" serviceName
         ]
-    , slackActions [slackButton "🔍 Investigate" (Just "primary") issueUrl]
+    , slackActions [slackButton "Open issue" (Just "primary") issueUrl]
     ]
   where
     (icon, _, color, _) = rateChangeSeverity isError direction

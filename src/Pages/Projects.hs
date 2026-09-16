@@ -251,6 +251,7 @@ integrationsSettingsGetH pid = do
       missingIds = filter (`S.notMember` (knownChannelIds <> seededIds)) $ V.toList existingSlackChannels
   fetchedExtras <- maybe (pure []) (\d -> mapMaybeM (SlackP.getSlackChannelInfo d.botToken) missingIds) slackInfo
   projectM <- Projects.projectById pid
+  includeUserIdentityInAlerts <- Projects.includeAlertUserIdentity pid
   let extraSlackChannels = seededExtras <> fetchedExtras
       bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders
@@ -271,6 +272,7 @@ integrationsSettingsGetH pid = do
         , everyoneTeamId = (.id) <$> everyoneTeamM
         , slackChannelsError = leftToMaybe channelsE
         , alertsOff = maybe [] (\p -> [l | (l, enabled) <- [("Runtime error alerts", p.errorAlerts), ("New endpoint alerts", p.endpointAlerts)], not enabled]) projectM
+        , includeUserIdentityInAlerts
         }
 
 
@@ -279,6 +281,7 @@ data NotifListForm = NotifListForm
   , phones :: [Text]
   , emails :: [Text]
   , slackChannels :: [Text]
+  , includeUserIdentityInAlerts :: Maybe Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
@@ -299,7 +302,7 @@ allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationCh
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels} = do
+updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = do
   validateNotificationChannels pid enabledChannels phones >>= \case
     Left errorMessage -> addErrorToast errorMessage Nothing
     Right () -> do
@@ -349,6 +352,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
 
         unless (null unreachable)
           $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
+      whenJust includeUserIdentityInAlerts $ Projects.setIncludeAlertUserIdentity pid
       addSuccessToast "Updated Notification Channels successfully" Nothing
   integrationsSettingsGetH pid
 
@@ -461,6 +465,7 @@ data IntegrationsConfig = IntegrationsConfig
   , -- \| Labels of the project-level alert toggles that are switched off. A
     -- connected Slack with these off delivers nothing, which is invisible here otherwise.
     alertsOff :: [Text]
+  , includeUserIdentityInAlerts :: Bool
   }
 
 
@@ -502,7 +507,7 @@ integrationsBody IntegrationsConfig{..} = do
               , type_ "button"
               , id_ "integrations-save"
               , hxPost_ [text|/p/$pid/notifications-channels|]
-              , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
+              , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input'), includeUserIdentityInAlerts: document.querySelector('#include-user-identity-in-alerts').checked}"
               , [__| on input or change from #notifsForm put 'Unsaved changes' into #integrations-save-status |]
               ]
                 <> integrationsSwapAttrs_
@@ -512,6 +517,16 @@ integrationsBody IntegrationsConfig{..} = do
         div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
           forM_ integrations \(val, testCh, title, configured, icon, content) ->
             renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
+
+        div_ [class_ "mt-4 rounded-xl border border-strokeWeak p-3"] do
+          div_ [class_ "flex items-start gap-3"] do
+            input_
+              ( [id_ "include-user-identity-in-alerts", name_ "includeUserIdentityInAlerts", type_ "checkbox", class_ "toggle toggle-sm toggle-primary mt-0.5"]
+                  <> [checked_ | includeUserIdentityInAlerts]
+              )
+            label_ [for_ "include-user-identity-in-alerts", class_ "cursor-pointer"] do
+              span_ [class_ "block text-sm font-medium text-textStrong"] "Include affected user identity in alerts"
+              span_ [class_ "block mt-1 text-xs text-textWeak"] "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do

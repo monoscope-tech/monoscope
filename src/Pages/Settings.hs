@@ -880,7 +880,7 @@ notificationsTestPostH pid TestForm{..} = do
   alert <- case baseAlert of
     RuntimeErrorAlert{errorData} -> do
       let errHash = (errorData :: ErrorPatterns.ATError).hash
-      chartUrlM <- errorTrendChartUrl appCtx pid errHash (formatUTC (addUTCTime (-3600) now)) (formatUTC now)
+      chartUrlM <- errorTrendChartUrl appCtx pid errHash (addUTCTime (-3600) now) now
       pure baseAlert{chartUrl = chartUrlM}
     _ -> pure baseAlert
 

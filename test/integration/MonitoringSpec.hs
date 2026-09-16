@@ -52,15 +52,23 @@ spec = sequential $ aroundAll withTestResources do
       let err =
             def
               { ErrorPatterns.errorType = "HttpException"
-              , ErrorPatterns.message = T.replicate 50 "HttpExceptionRequest Request { host = api.example.com path = /oauth/token } "
+              , ErrorPatterns.message = T.replicate 50 "HttpExceptionRequest Request { host = \"api.example.com\" path = \"/oauth/token\" } "
               , ErrorPatterns.serviceName = Just "monoscope-dev"
               }
-          (root, reply) = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing "https://example.com" "https://example.com/issues/1" Nothing (Just "1/hr")
+          impact = Mail.AlertImpact "Monoscope" (Just "Acme Corp") (Just "Ada Lovelace") (Just "ada@example.com")
+          (root, reply) = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing "https://example.com" "https://example.com/issues/1" (Just "https://example.com/error-trend.png") (Just "1/hr") impact
+          (withoutTrend, _) = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing "https://example.com" "https://example.com/issues/1" Nothing (Just "1/hr") impact
           rootText = decodeUtf8 @Text $ toStrict $ AE.encode root
           replyText = decodeUtf8 @Text $ toStrict $ AE.encode reply
+          withoutTrendText = decodeUtf8 @Text $ toStrict $ AE.encode withoutTrend
       rootText `shouldSatisfy` T.isInfixOf "```HttpExceptionRequest"
+      rootText `shouldSatisfy` T.isInfixOf "HTTP request failed · api.example.com/oauth/token"
       rootText `shouldSatisfy` T.isInfixOf "monoscope-dev · 1/hr · Observed"
-      rootText `shouldSatisfy` not . T.isInfixOf (ErrorPatterns.message err)
+      rootText `shouldSatisfy` T.isInfixOf "Project Monoscope · Tenant Acme Corp · monoscope-dev · 1/hr · Observed"
+      rootText `shouldSatisfy` T.isInfixOf "Ada Lovelace &lt;ada@example.com&gt;"
+      rootText `shouldSatisfy` T.isInfixOf "https://example.com/error-trend.png"
+      withoutTrendText `shouldSatisfy` T.isInfixOf "Trend unavailable yet"
+      rootText `shouldSatisfy` not . T.isInfixOf err.message
       replyText `shouldSatisfy` T.isInfixOf "Open issue"
 
     it "should create monitor with no triggers" $ \tr -> do
@@ -231,7 +239,7 @@ spec = sequential $ aroundAll withTestResources do
                    , "whatsapp:+15550001111"
                    ]
 
-      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] []
+      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] [] Nothing
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget
       advanceMinutes tr 1
       gated <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
@@ -240,7 +248,7 @@ spec = sequential $ aroundAll withTestResources do
                    , "email:alerts@example.com"
                    , "pagerduty:widget-monitor-test:PDTrigger"
                    ]
-      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] []
+      void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
 
       currentMonitor <- maybe (fail "the widget monitor disappeared before deletion") pure firedMonitor
       let otherMonitorId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "a11e7ed0-0000-0000-0000-000000000001"

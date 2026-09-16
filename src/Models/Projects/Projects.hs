@@ -54,6 +54,8 @@ module Models.Projects.Projects (
   ProjectCache (..),
   defaultProjectCache,
   updateProjectS3Bucket,
+  includeAlertUserIdentity,
+  setIncludeAlertUserIdentity,
   QueryLibItemId,
   QueryLibType (..),
   QueryLibItem (..),
@@ -305,8 +307,10 @@ data Project = Project
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
   , customerId :: Maybe Text
-  , -- Positional decode: must stay LAST to match the trailing @billing_provider@ column added in migration 0106.
+  , -- Positional decode follows the trailing project settings: billing provider
+    -- (migration 0106), then alert identity privacy (migration 0185).
     billingProvider :: BillingProvider
+  , includeUserIdentityInAlerts :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -344,8 +348,10 @@ data ProjectListItem = ProjectListItem
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
   , customerId :: Maybe Text
-  , -- Positional: matches @pp.*@ (billing_provider is the last projects column), before the joined columns below.
+  , -- Positional: matches @pp.*@, including trailing billing and alert privacy
+    -- settings, before the joined columns below.
     billingProvider :: BillingProvider
+  , includeUserIdentityInAlerts :: Bool
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -458,6 +464,18 @@ insertProject p = EHasql.interpExecute_ [HI.sql| INSERT INTO projects.projects (
 -- 'activeProjectById' is what those want.
 projectById :: DB es => ProjectId -> Eff es (Maybe Project)
 projectById pid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where id=#{pid}|]
+
+
+-- | User identity in alerts is intentionally opt-out. The fallback keeps old
+-- rows readable while a rolling migration adds the project column.
+includeAlertUserIdentity :: DB es => ProjectId -> Eff es Bool
+includeAlertUserIdentity pid =
+  fromMaybe True <$> EHasql.interpOne [HI.sql| SELECT include_user_identity_in_alerts FROM projects.projects WHERE id = #{pid} |]
+
+
+setIncludeAlertUserIdentity :: DB es => ProjectId -> Bool -> Eff es ()
+setIncludeAlertUserIdentity pid includeIdentity =
+  EHasql.interpExecute_ [HI.sql| UPDATE projects.projects SET include_user_identity_in_alerts = #{includeIdentity} WHERE id = #{pid} |]
 
 
 -- | The project only if it is live. A deactivated or soft-deleted project reads

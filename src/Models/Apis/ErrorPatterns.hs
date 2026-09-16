@@ -179,8 +179,10 @@ data ATError = ATError
   , endpointHash :: Maybe Text
   , userId :: Maybe Text
   , userEmail :: Maybe Text
+  , userName :: Maybe Text
   , userIp :: Maybe Text
   , sessionId :: Maybe Text
+  , tenantName :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)

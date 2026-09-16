@@ -2185,6 +2185,7 @@ atErrorFrom spanObj typ msg stack =
       resc = unAesonTextMaybe spanObj.resource
       getSpanAttr k = attrs >>= Map.lookup k >>= valText
       getUserAttrM k v = valText =<< Map.lookup k =<< jsonToMap =<< Map.lookup v =<< resc
+      getIdentityAttrM k namespaces = asum [getUserAttrM k namespace | namespace <- namespaces]
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
       -- TODO: parse telemetry.sdk.name to SDKTypes
@@ -2216,10 +2217,12 @@ atErrorFrom spanObj typ msg stack =
         , parentSpanId = spanObj.parent_id
         , endpointHash = Nothing
         , environment = Nothing
-        , userId = getUserAttrM "id" "user"
-        , userEmail = getUserAttrM "email" "user"
+        , userId = getIdentityAttrM "id" ["user", "enduser"]
+        , userEmail = getIdentityAttrM "email" ["user", "enduser"]
+        , userName = getIdentityAttrM "name" ["user", "enduser"]
         , userIp = getSpanAttr "client.address"
         , sessionId = getUserAttrM "id" "session"
+        , tenantName = getSpanAttr "tenant.name" <|> getIdentityAttrM "name" ["tenant", "organization"]
         }
 
 

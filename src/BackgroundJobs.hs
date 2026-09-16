@@ -1544,9 +1544,38 @@ trendChartUrl ctx pid widget fromTxt toTxt =
     <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget{Widget.pngProfile = Just Widget.PngSlack} Nothing (Just fromTxt) (Just toTxt)
 
 
-errorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
-errorTrendChartUrl ctx pid errHash =
-  trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+-- | A Slack image is fetched after its message is sent, so the PNG endpoint
+-- cannot tell Slack to omit an empty chart. Check the pattern's latest event
+-- first; an alert-triggering event updates this timestamp during ingestion.
+errorTrendChartUrl :: (DB es, Log :> es) => Config.AuthContext -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe Text)
+errorTrendChartUrl ctx pid errHash from to = do
+  hasObservations <-
+    fromMaybe False
+      <$> Hasql.interpOne
+        [HI.sql|
+          SELECT EXISTS (
+            SELECT 1
+            FROM apis.error_patterns
+            WHERE project_id = #{pid}
+              AND hash = #{errHash}
+              AND updated_at >= #{from}
+          )
+        |]
+  if hasObservations
+    then
+      trendChartUrl
+        ctx
+        pid
+        def
+          { Widget.wType = Widget.WTTimeseries
+          , Widget.title = Just "Error occurrences"
+          , Widget.unit = Just "errors"
+          , Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)"
+          , Widget.theme = Just "roma"
+          }
+        (formatUTC from)
+        (formatUTC to)
+    else pure Nothing
 
 
 -- | Long-form duration ("3 days", "8 hours", "45 minutes") for the "Still firing"
@@ -1578,11 +1607,12 @@ firstSeenLine :: UTCTime -> UTCTime -> Text
 firstSeenLine now t = relTimeAgo now t <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" t)
 
 
--- | Assemble a runtime-error alert: the trend chart over the standard 15-minute
--- window plus the alert payload. The chart URL comes back separately because the
--- email body needs it too.
+-- | Assemble a runtime-error alert. A new incident starts with a focused
+-- 15-minute window; follow-ups widen to six hours so the chart shows whether the
+-- incident is improving or worsening rather than a repeated sliver of data.
+-- The chart URL comes back separately because the email body needs it too.
 runtimeErrorAlert
-  :: Log :> es
+  :: (DB es, Log :> es)
   => Config.AuthContext
   -> Projects.ProjectId
   -> UTCTime -- now
@@ -1595,7 +1625,8 @@ runtimeErrorAlert
   -> Maybe Text -- ongoing-for text
   -> Eff es (Maybe Text, NotificationAlerts)
 runtimeErrorAlert ctx pid now issueId issueTitle runtimeAlertType errorData firstSeenAt occurrenceText ongoingFor = do
-  chartUrl <- errorTrendChartUrl ctx pid errorData.hash (formatUTC $ addUTCTime (-(15 * 60)) now) (formatUTC now)
+  let chartWindow = if isJust ongoingFor then 6 * 60 * 60 else 15 * 60
+  chartUrl <- errorTrendChartUrl ctx pid errorData.hash (addUTCTime (-chartWindow) now) now
   pure (chartUrl, RuntimeErrorAlert{issueId, issueTitle, errorData, runtimeAlertType, chartUrl, occurrenceText, firstSeenText = Just $ firstSeenLine now firstSeenAt, ongoingFor})
 
 
@@ -1880,7 +1911,14 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                     previous <- Incidents.latestEpisodeTx pid source
                     let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
                         incidentUrl = baseUrl <> "/issues/" <> (fromMaybe sub.issueId (active >>= (.issueId))).toText
-                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active baseUrl incidentUrl chart occText
+                        impact =
+                          Mail.AlertImpact
+                            { Mail.projectName = project.title
+                            , Mail.tenant = sub.errorData.tenantName
+                            , Mail.userName = sub.errorData.userName <* guard project.includeUserIdentityInAlerts
+                            , Mail.userEmail = sub.errorData.userEmail <* guard project.includeUserIdentityInAlerts
+                            }
+                        (rootPayload, replyPayload) = Mail.errorIncidentMessages alertType sub.errorData now active baseUrl incidentUrl chart occText impact
                         change
                           | isNothing active = Incidents.IncidentAlert
                           | sub.errorState == AESEscalating = Incidents.IncidentObservation
