@@ -1430,7 +1430,7 @@ renderTableWithDataAndParams widget dataRows params = do
               td_ [class_ $ cellClass col]
                 $ if isJust col.progress
                   then renderProgressCell col (getRowValue idx row) maxValues valueWidths
-                else renderLongTextOr widget col (getRowValue idx row)
+                  else renderLongTextOr widget col (getRowValue idx row)
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
