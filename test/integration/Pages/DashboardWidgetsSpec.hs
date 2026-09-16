@@ -40,6 +40,13 @@ import Test.Hspec
 import Text.Slugify (slugify)
 
 
+-- Flattened: the eager widgets on these templates are children of a group.
+renderedWidgets :: Dashboards.DashboardGet -> [Widget.Widget]
+renderedWidgets (Dashboards.DashboardGet _ _ dash _ _) = foldMap (foldMap (concatMap flatten . (.widgets))) dash.tabs
+  where
+    flatten w = w : concatMap flatten (fold w.children)
+
+
 allWidgetTypes :: [Widget.WidgetType]
 allWidgetTypes = [minBound .. maxBound]
 
@@ -317,7 +324,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Saving the canvas layout" do
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
-      (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing []
+      (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
       let rendered = case pg of PageCtx _ d -> toStrict $ renderText $ toHtml d
           formTag = T.takeWhile (/= '>') $ snd $ T.breakOn "id=\"widget-order-trigger\"" rendered
 
@@ -520,23 +527,41 @@ spec = sequential $ aroundAll withTestResources do
   -- the first screen a user of such a dashboard ever sees, cost as much as the fully
   -- populated dashboard (5.4s vs 5.5s measured against a customer project).
   describe "Dashboards prompting for a required variable" do
-    let tabWidgets :: Dashboards.DashboardGet -> [Widget.Widget]
-        -- Flattened: the eager widgets on these templates are children of a group.
-        tabWidgets (Dashboards.DashboardGet _ _ dash _ _) = foldMap (foldMap (concatMap flatten . (.widgets))) dash.tabs
-        flatten w = w : concatMap flatten (fold w.children)
-        -- `eager` alone proves nothing: the template declares it. Server work shows up as
+    let -- `eager` alone proves nothing: the template declares it. Server work shows up as
         -- rendered html or a fetched dataset.
         prefilled w = isJust w.html || isJust w.dataset
         openTab tr dashId params = do
-          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") params
+          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params
           pure dg
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
       -- host is set, endpointHash is not: the picker is what renders.
       gated <- openTab tr dashId [("var-host", Just "dellyman.com")]
-      let ws = tabWidgets gated
+      let ws = renderedWidgets gated
       -- Not vacuous: the tab really does carry widgets, and the picker is what renders.
       ws `shouldSatisfy` not . null
       map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
       toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"
+
+  -- A swap already has a painted page around it, so it ships skeletons that fetch
+  -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
+  describe "Prefill on a full load, skeletons on a swap" do
+    let openTab tr dashId hx = do
+          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
+          pure dg
+        eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
+
+    it "keeps the server-side prefill for a full page load" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Full"
+      full <- openTab tr dashId Nothing
+      eagerOnes (renderedWidgets full) `shouldSatisfy` not . null
+
+    it "hands a swap the same widgets with nothing prefilled" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Swap"
+      swapped <- openTab tr dashId (Just "true")
+      let ws = renderedWidgets swapped
+      ws `shouldSatisfy` not . null
+      -- lazyWidget strips `eager` too: renderStatContent reads the flag as "data is here"
+      -- and would otherwise spin forever.
+      map (fromMaybe "<untitled>" . (.title)) (eagerOnes ws) `shouldBe` []

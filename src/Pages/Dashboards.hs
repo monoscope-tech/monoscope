@@ -868,8 +868,21 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 
 -- Process a single widget recursively. Keeps sql/query with {{var-*}} templates intact
 -- so they can be interpolated at data fetch time with current URL params.
-processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now timeRange allParams widgetBase = do
+-- | Whether a render prefills widget data server-side. An htmx swap skips it: the shell
+-- reaches the browser in about a second with skeletons that fetch themselves, instead of
+-- blocking on the widget phase that dominates a dashboard render.
+data Prefill = PrefillWidgets | WidgetsFetchThemselves
+  deriving stock (Eq)
+
+
+-- | A swap already has a painted page around it, so skeletons that fill in beat a blank
+-- wait. A full load has nothing to show meanwhile, so it still prefills.
+prefillFor :: Maybe Text -> Prefill
+prefillFor hxRequest = if isJust hxRequest then WidgetsFetchThemselves else PrefillWidgets
+
+
+processWidget :: Prefill -> Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget prefill pid now timeRange allParams widgetBase = do
   let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
@@ -886,14 +899,15 @@ processWidget pid now timeRange allParams widgetBase = do
       -- built-in templates.
       | widget.wType == Widget.WTAnomalies -> processEagerWidget pid now timeRange allParams widget
       -- Label by id, not title: untitled widgets would all log the same string.
-      | widget.eager == Just True ->
+      | widget.eager == Just True, prefill == PrefillWidgets ->
           withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
             $ processEagerWidget pid now timeRange allParams widget
+      | widget.eager == Just True -> pure $ lazyWidget widget
       | otherwise -> pure widget
 
   -- Recursively process child widgets concurrently, inheriting the parent's dashboard id
   forOf (#children . _Just) widget' \kids ->
-    pooledForConcurrently kids $ processWidget pid now timeRange allParams . (#_dashboardId %~ (<|> widget'._dashboardId))
+    pooledForConcurrently kids $ processWidget prefill pid now timeRange allParams . (#_dashboardId %~ (<|> widget'._dashboardId))
 
 
 -- | Strip every trace of a server-side prefill so the widget renders as if it had
@@ -1174,8 +1188,9 @@ dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus
     }
 
 
-dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
+dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
+  let prefill = prefillFor hxRequest
   (_, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -1195,7 +1210,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       dash'' <-
         if isJust $ findVarToPrompt Nothing (fold dash'.variables)
           then pure dash'
-          else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants dash'.widgets
+          else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants dash'.widgets
 
       bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
       addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
@@ -2190,7 +2205,7 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
   widgetToExpand <- (snd <$> findWidgetInDashboard widgetId dash) `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
-  processedWidget <- processWidget pid now timeParams allParamsWithConstants widgetToExpand
+  processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
@@ -2397,24 +2412,26 @@ resolveDashboardParams pid now timeParams allParams dash = do
 -- | Full render pipeline for a set of widgets: concurrent processing (tagged with
 -- the dashboard id), then alert statuses and PNG URLs.
 processDashWidgets
-  :: Projects.ProjectId
+  :: Prefill
+  -> Projects.ProjectId
   -> Dashboards.DashboardId
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
   -> [Widget.Widget]
   -> ATAuthCtx [Widget.Widget]
-processDashWidgets pid dashId now timeParams paramsWithConstants widgets = do
+processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets = do
   appCtx <- ask @AuthContext
-  pooledForConcurrently widgets (fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants)
+  pooledForConcurrently widgets (fmap (#_dashboardId ?~ dashId.toText) . processWidget prefill pid now timeParams paramsWithConstants)
     >>= populateWidgetAlertStatuses
     >>= populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams
 
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
-dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest allParams = do
+  let prefill = prefillFor hxRequest
   (_, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -2437,7 +2454,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       else forOf (#tabs . _Just) dash' \tabs ->
         forM (zip [0 ..] tabs) \(idx, tab) ->
           if idx == activeTabIdx
-            then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets pid dashId now timeParams allParamsWithConstants tab.widgets
+            then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
             else pure tab
 
   bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
