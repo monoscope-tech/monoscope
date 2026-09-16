@@ -71,6 +71,22 @@ spec = around withTestResources do
           (mkEndpoint, _hashes, _, _) = processSpanToEntities emptyPathClassifier Projects.defaultProjectCache pid badSpan
       fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just pid
 
+    -- isNewEndpoint reads the classifier's knownHashes, not the cache vector it is built
+    -- from. They are the same set by construction (mkPathClassifier); this pins that, so a
+    -- caller that populates one and not the other re-mints every endpoint on every span.
+    it "treats a hash already in knownHashes as an existing endpoint" $ \_ -> do
+      now <- getCurrentTime
+      let sp = emptySpan now
+          run c pc = processSpanToEntities c pc pid sp
+          mints c pc = isJust $ (\(mk, _, _, _) -> mk UUID.nil) (run c pc)
+          -- take the hash the function itself stamps rather than re-deriving it
+          stamped = (\(_, hs, _, _) -> hs V.!? 0) (run emptyPathClassifier Projects.defaultProjectCache)
+      hashOf <- maybe (fail "no endpoint hash stamped") pure stamped
+      let seen = emptyPathClassifier{knownHashes = fromList [hashOf]}
+          cache = Projects.defaultProjectCache{Projects.endpointHashes = V.singleton hashOf}
+      mints emptyPathClassifier Projects.defaultProjectCache `shouldBe` True
+      mints seen cache `shouldBe` False
+
   -- http.route is the one place a template arrives as fact rather than
   -- inference. It was being preferred over url.path and then handed, in the
   -- framework's own syntax, to code that expects a URL.

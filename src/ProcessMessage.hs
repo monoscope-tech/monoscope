@@ -273,7 +273,9 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
 
-      !isNewEndpoint = notElem endpointHash pjc.endpointHashes && statusCode /= 404
+      -- knownHashes is the same set, built once per batch. The vector scan this replaces
+      -- ran per span, over a catalog that reaches 7k entries on a busy project.
+      !isNewEndpoint = not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404
 
       endpoint dumpId =
         if not isNewEndpoint
