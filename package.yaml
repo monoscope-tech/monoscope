@@ -16,6 +16,17 @@ custom-setup:
     - Cabal
     - proto-lens-setup
 
+# `build-type: Custom` makes cabal build EVERY test suite in the package when you
+# ask it for one — `cabal test doctests` was compiling test-dev's 210 modules
+# (src/ + every integration spec) before running a single doctest, ~4.5min per CI
+# run plus a rebuild in each later step. test-dev exists only for `make
+# live-test-dev`'s GHCi session, so CI turns it off with `-f-devtest`.
+flags:
+  devtest:
+    description: Build the test-dev GHCi target. Off in CI (-f-devtest).
+    manual: true
+    default: true
+
 build-tools:
   - proto-lens-protoc:proto-lens-protoc
 
@@ -331,7 +342,14 @@ tests:
   # test-dev: lib + integration tests as ONE GHCi target (Jade's cabal test-dev trick).
   # Use via `make live-test-dev`. Library deps come from hpack-includes/lib-deps.yaml
   # (shared with `library`); integration-only extras listed inline. Not run by `make test` / CI.
+  #
+  # Gated on the `devtest` flag (see the top of this file): CI passes -f-devtest so
+  # `build-type: Custom`'s build-every-suite behaviour doesn't compile these 210
+  # modules on the way to the doctests.
   test-dev:
+    when:
+      - condition: "!flag(devtest)"
+        buildable: false
     main: Main.hs
     source-dirs:
       - src

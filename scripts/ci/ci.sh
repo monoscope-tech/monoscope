@@ -274,13 +274,20 @@ runner=$runner_id")
 
 # ---------------------------------------------------------------- check bodies
 
-# ONE ghc-options string for every cabal invocation. cabal's build plan hash
-# includes these, so `build` and the test checks disagreeing means each test step
-# recompiles all ~184 modules that `build` just compiled. That is most of the
-# waste in this job, and it is also a memory cliff: without -A64m GHC uses its
-# default allocation area, and on a 4-vCPU runner the recompile OOMs and dies
-# with no error at all — the failure mode that blocked the deploy of b052d6cf4.
-CABAL_OPTS='--ghc-options=-O0 +RTS -A64m -n2m -RTS'
+# ONE options string for every cabal invocation. cabal's build plan hash includes
+# these, so `build` and the test checks disagreeing means each test step recompiles
+# all ~184 modules that `build` just compiled. That is most of the waste in this
+# job, and it is also a memory cliff: without -A64m GHC uses its default
+# allocation area, and on a 4-vCPU runner the recompile OOMs and dies with no
+# error at all — the failure mode that blocked the deploy of b052d6cf4.
+#
+# -f-devtest is here for the same reason it must be everywhere or nowhere: it is
+# part of the plan hash. `build-type: Custom` makes `cabal test <suite>` build
+# EVERY suite in the package, so without it `cabal test doctests` compiles
+# test-dev — src/ plus every integration spec, 210 modules — before running one
+# doctest. (Verified: a minimal Custom package builds its 'slow' suite when asked
+# only for 'fast'; adding the flag stops it.)
+CABAL_OPTS='-f-devtest --ghc-options=-O0 +RTS -A64m -n2m -RTS'
 
 run_body() { # <check>
   case "$1" in
@@ -327,7 +334,9 @@ run_integration() {
   (cd web-components && npm ci --prefer-offline --no-audit)
   make build-chart-cli
   cabal build integration-tests "$CABAL_OPTS"
-  bin=$(cabal list-bin integration-tests)
+  # Same flags as the build above: list-bin resolves against a plan, and a
+  # different one points at a path the build never wrote.
+  bin=$(cabal list-bin integration-tests $CABAL_OPTS)
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" --color > "build-shard-$i.log" 2>&1
@@ -832,6 +841,22 @@ cmd_selftest() {
   WORKTREE_TREE=''
   : > "web-components/src/$probe"; WORKTREE_TREE=''; after=$(fingerprint hlint); rm -f "web-components/src/$probe"
   assert "unrelated change keeps fp" same "$([ "$before" = "$after" ] && echo same)"
+
+  # The two ways this job silently loses ~35 minutes. Both are one-line edits
+  # elsewhere in the repo that nothing else would catch.
+  #
+  # 1. test-dev must stay gated. `build-type: Custom` makes cabal build EVERY
+  #    test suite in the package when asked for one, so an ungated test-dev puts
+  #    src/ + every integration spec (210 modules) in front of the doctests.
+  assert "test-dev is flag-gated" yes \
+    "$(grep -q 'flag(devtest)' monoscope.cabal && echo yes)"
+  assert "cabal opts pass -f-devtest" yes \
+    "$(printf '%s' "$CABAL_OPTS" | grep -q -- '-f-devtest' && echo yes)"
+  # 2. The deps image must pre-build BOTH ways. `profiling: True` is part of a
+  #    dependency's store hash, so a prof-only image leaves `cabal build all`
+  #    with an empty store and all ~434 deps recompile in-job.
+  assert "deps image builds both ways" 2 \
+    "$(grep -c 'cabal build --only-dependencies all' Dockerfile.deps)"
 
   # A typo in an input path is invisible — git silently matches nothing — and
   # silently narrows what the check depends on, which is how an untested change

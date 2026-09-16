@@ -212,6 +212,7 @@ extra-source-files:
     static/migrations/0181_issue_timeline_indexes.sql
     static/migrations/0181_projects_subscribed_not_deactivated.sql
     static/migrations/0182_drop_anomaly_ack_mirror.sql
+    static/migrations/0183_threadless_slack_roots.sql
 
 source-repository head
   type: git
@@ -222,6 +223,11 @@ custom-setup
       Cabal
     , base
     , proto-lens-setup
+
+flag devtest
+  description: Build the test-dev GHCi target. Off in CI (-f-devtest).
+  manual: True
+  default: True
 
 library
   exposed-modules:
@@ -1273,6 +1279,8 @@ test-suite test-dev
     , yaml
     , zlib
   default-language: GHC2024
+  if !flag(devtest)
+    buildable: False
 
 test-suite unit-tests
   type: exitcode-stdio-1.0

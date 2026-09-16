@@ -44,13 +44,25 @@ COPY *.cabal cabal.project* Setup.hs LICENSE ./
 COPY shared/*.cabal ./shared/
 COPY cli/*.cabal ./cli/
 
-# Update cabal index and build all dependencies (including test deps).
-# profiling: True pre-builds the prof way of every dep (no cost centres) so the
-# production prof-way image build (see Dockerfile) hits the store cache.
+# Update cabal index and build all dependencies (including test deps), BOTH ways.
+#
+# `profiling: True` is part of a dependency's store hash, so the prof-way store
+# entries are a *different* set of directories from the vanilla ones — they do not
+# substitute for each other. Building only the prof way (which is what this did
+# until 2026-09-16) left CI's ordinary `cabal build all` with an empty store: all
+# 434 dependencies recompiled in-job, every run, which is the whole of the ~31min
+# "Build" step and most of the Deploy workflow's wall clock.
+#
+# Vanilla first and last so the final cabal.project.local in the image is the one
+# CI's checkout would produce (no profiling stanza); the prod image (see
+# Dockerfile) appends its own stanza and hits the prof-way half of the store.
 RUN cabal update && \
   cabal configure --enable-tests --enable-benchmarks && \
+  cabal build --only-dependencies all -j$(nproc) && \
+  cp cabal.project.local cabal.project.local.vanilla && \
   printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n' >> cabal.project.local && \
-  cabal build --only-dependencies all -j$(nproc)
+  cabal build --only-dependencies all -j$(nproc) && \
+  mv cabal.project.local.vanilla cabal.project.local
 
 # Pre-install npm dependencies for faster deploys
 COPY package*.json ./
