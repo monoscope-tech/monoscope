@@ -84,7 +84,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
@@ -601,7 +601,7 @@ renderFacetValue f (FacetValue val count) =
           , class_ "checkbox checkbox-xs max-md:checkbox-sm"
           , -- Via queryEditorCall, not the element directly: Monaco is loaded lazily, so on a fresh
             -- page load <query-editor> is still un-upgraded and `.toggleSubQuery` doesn't exist yet.
-            [__|on click js(me) window.queryEditorCall('toggleSubQuery', me.dataset.field + ' == "' + me.dataset.value + '"') end|]
+            term "hx-on:click" "window.queryEditorCall('toggleSubQuery', this.dataset.field + ' == \"' + this.dataset.value + '\"')"
           , Aria.label_ (f.path <> " equals " <> val)
           , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
           , term "data-field" f.path
@@ -1076,41 +1076,41 @@ lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
 lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
 
 
--- Widget definitions for log explorer charts
+-- Widget definitions for log explorer charts, sharing one base
+logWidgetBase :: Projects.ProjectId -> Widget.Widget
+logWidgetBase pid =
+  (def :: Widget.Widget)
+    { Widget.standalone = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    }
+
+
 logChartWidget :: Projects.ProjectId -> Widget.Widget
 logChartWidget pid =
-  (def :: Widget.Widget)
+  (logWidgetBase pid)
     { Widget.id = Just "log-explorer-all-traces"
     , Widget.wType = WTTimeseries
     , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
-    , Widget._projectId = Just pid
-    , Widget.standalone = Just True
-    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.allowZoom = Just True
     , Widget.showMarkArea = Just True
-    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     }
 
 
 logLatencyWidget :: Projects.ProjectId -> Widget.Widget
 logLatencyWidget pid =
-  (def :: Widget.Widget)
+  (logWidgetBase pid)
     { Widget.wType = WTTimeseriesLine
-    , Widget.standalone = Just True
     , Widget.title = Just "Latency percentiles"
     , Widget.hideSubtitle = Just True
-    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.summarizeBy = Just Widget.SBMax
-    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
     , Widget.unit = Just "ns"
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
-    , Widget._projectId = Just pid
     }
 
 
@@ -1937,7 +1937,7 @@ alertConfigurationForm_ project alertM teams = do
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
-        , [__|on htmx:after:request[detail.ctx.response.status < 400] set my value to '' then call me.reset()|]
+        , resetFormOnSuccessAttr_
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]

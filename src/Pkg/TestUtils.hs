@@ -1677,12 +1677,9 @@ parseISOTime t = fromMaybe (error $ "invalid ISO-8601 timestamp in CLI test path
 routeDeleteRequest :: TestResources -> Text -> IO (Response LBS.ByteString)
 routeDeleteRequest tr path
   | "/api/v1/" `T.isPrefixOf` path = case T.splitOn "/" (T.drop 8 path) of
-      ["monitors", mid] ->
-        runAsBase tr (ApiH.apiMonitorDelete testPid (monitorId mid)) $> mockResponse (AE.encode AE.Null)
-      ["dashboards", did] ->
-        runAsBase tr (ApiH.apiDashboardDelete testPid (parseUUIDId did)) $> mockResponse (AE.encode AE.Null)
-      ["dashboards", did, "star"] ->
-        runAsBase tr (ApiH.apiDashboardUnstar testPid (parseUUIDId did)) $> mockResponse (AE.encode AE.Null)
+      ["monitors", mid] -> jsonRoute tr (AE.Null <$ ApiH.apiMonitorDelete testPid (monitorId mid))
+      ["dashboards", did] -> jsonRoute tr (AE.Null <$ ApiH.apiDashboardDelete testPid (parseUUIDId did))
+      ["dashboards", did, "star"] -> jsonRoute tr (AE.Null <$ ApiH.apiDashboardUnstar testPid (parseUUIDId did))
       other -> error $ "runHTTPtoServant: unhandled DELETE api/v1/" <> T.intercalate "/" other
   | otherwise = error $ "runHTTPtoServant: unhandled DELETE path: " <> path
 

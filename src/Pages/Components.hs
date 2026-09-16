@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -16,7 +16,7 @@ import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, deleteParam, faSprite_, loadingIndicator_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -370,7 +370,7 @@ pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
     attrs
       | isCurrent = []
       | useStripe = [hxPost_ $ "/p/" <> pid.toText <> "/stripe_checkout", hxVals_ $ "{\"plan\": \"" <> plan <> "\"}", hxSwap_ "none"]
-      | otherwise = [term "_" $ "on click call window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
+      | otherwise = [term "hx-on:click" $ "window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
 
 
 pricingBadge_ :: Html () -> Html () -> Html ()
@@ -389,7 +389,7 @@ freePricing pid isCurrent =
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [[__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] "Start free")
+        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
         ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
@@ -1014,7 +1014,39 @@ settingsNavLink_ href icon title desc =
     faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
 
 
--- | Hyperscript attribute for a save button that activates when its parent form changes
+-- | \"Repository missing?\" escape hatch under GitHub-App repo pickers: the list is
+-- exactly what the installation was granted, so widening it happens on GitHub.
+installationSettingsLink_ :: Text -> Html ()
+installationSettingsLink_ url =
+  a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "text-xs text-textBrand underline inline-flex items-center gap-1"] do
+    "Repository missing? Add it to the installation on GitHub"
+    faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
+
+
+-- | A server-open @\<details\>@ that starts collapsed below @px@ viewport width.
+-- Seeds once; after that the reader's own toggling owns the state.
+detailsClosedBelowAttr_ :: Int -> Attribute
+detailsClosedBelowAttr_ px = term "hx-live" $ "if (!this.dataset.seeded) { this.dataset.seeded = '1'; if (window.innerWidth < " <> show px <> ") this.open = false }"
+
+
+-- | Enter/Space activates the element's click behavior, for label/row controls that
+-- cannot be a native @\<button\>@.
+keyboardActivateAttr_ :: Attribute
+keyboardActivateAttr_ = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
+
+
+-- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,
+-- flashes @.copy-success@ on the trigger and raises the success toast.
+copySourceAttr_ :: Text -> Attribute
+copySourceAttr_ el = copyToClipboardAttr_ ("(" <> el <> ").innerText") "Value copied to the Clipboard"
+
+
+-- | Clear a form once its request succeeds.
+resetFormOnSuccessAttr_ :: Attribute
+resetFormOnSuccessAttr_ = term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
+
+
+-- | Save button that activates when its parent form changes.
 dirtyFormSaveAttr_ :: Attribute
 dirtyFormSaveAttr_ = [__| on change from closest <form/> remove @disabled from me then remove .btn-ghost from me then remove .text-textWeak from me then add .btn-primary to me |]
 

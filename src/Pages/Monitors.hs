@@ -42,8 +42,8 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -59,7 +59,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
+import Pkg.DeriveUtils (bulkActionSlug)
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -69,7 +69,6 @@ import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData)
 
 
 data AlertUpsertForm = AlertUpsertForm
@@ -277,7 +276,7 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
       -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
       -- tests the element rather than the method, it threw on every change instead of
       -- degrading. Charts only carry the `applyThresholds` expando (web-components/src/widgets.ts).
-      chartUpdateAttr = [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
+      chartUpdateAttr = term "hx-on:change" "document.querySelector('query-builder')?.updateBinInQuery('timestamp', this.value)"
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex gap-2 py-2"] do
@@ -286,16 +285,15 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
         $ Just (select_ [class_ "select select-bordered select-sm w-full", name_ "timeWindow", id_ "timeWindow", chartUpdateAttr] $ forM_ timeOpts mkTimeOpt)
       formField_ FieldSm def "Notify me when" "conditionType" False
         $ Just
-        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", [__|on change if my value == 'threshold_exceeded' then set #thresholds.open to true else set #thresholds.open to false end|]] do
+        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"] do
           option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "threshold is exceeded"
           option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
 thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
-  let chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-        Nothing -> [__|on input set chart to #visualization-widget if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+  let chartId = fromMaybe "visualization-widget" chartTargetIdM
+      chartUpdateAttr = term "hx-on:input" [text|document.getElementById('${chartId}')?.applyThresholds?.({alert: parseFloat(alertThreshold.value), warning: parseFloat(warningThreshold.value)})|]
       showVal = maybe "" show
   panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
     formField_ FieldSm def{value = fromMaybe "" unitM, placeholder = "e.g. s, bytes, requests/s"} "Measurement unit" "unit" False Nothing
@@ -397,15 +395,6 @@ teamAlertsGetH pid teamId = do
 -- and the UI reported success. The action URLs are *generated* by 'bulkActionsFor', so
 -- producer and consumer were two literal lists that had to agree by hand. Capturing this
 -- in the route makes Servant reject an unknown action and the dispatch exhaustive.
---
--- The slugs are the existing wire spellings, so live URLs are unchanged:
---
--- >>> map bulkActionSlug [minBound .. maxBound :: MonitorBulkAction]
--- ["deactivate","reactivate","mute","unmute","resolve","delete"]
-data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
-
 
 -- | Which tab to land on after a bulk action — deactivating moves the monitors to
 -- Inactive, everything else leaves them on Active. Spelled out rather than defaulted so a
@@ -425,13 +414,7 @@ alertBulkActionH pid action form = do
   _ <- Projects.sessionAndProject pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
-    case action of
-      BADeactivate -> void $ Monitors.monitorDeactivateByIds pid monitorIds
-      BAReactivate -> void $ Monitors.monitorReactivateByIds pid monitorIds
-      BAMute -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
-      BAUnmute -> void $ Monitors.monitorUnmuteByIds pid monitorIds
-      BAResolve -> void $ Monitors.monitorResolveByIds pid monitorIds
-      BADelete -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
+    void $ Monitors.monitorsBulkUpdate pid action Nothing monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
   unifiedMonitorsGetH pid (Just $ monitorTabParam $ tabAfter action) Nothing
 
@@ -618,15 +601,15 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM =
-  monitorActionH (`Monitors.monitorMuteByIds` durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+  monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAMute durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-alertUnmuteH = monitorActionH Monitors.monitorUnmuteByIds "Monitor unmuted"
-alertResolveH = monitorActionH Monitors.monitorResolveByIds "Monitor resolved"
+alertUnmuteH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAUnmute Nothing) "Monitor unmuted"
+alertResolveH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAResolve Nothing) "Monitor resolved"
 alertDeleteH pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
-  void $ Monitors.monitorSoftDeleteByIds pid [monitorId]
+  void $ Monitors.monitorsBulkUpdate pid BADelete Nothing [monitorId]
   Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
   addSuccessToast "Monitor deleted" Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
@@ -744,25 +727,22 @@ unifiedMonitorOverviewH pid monitorId = do
           deactLabel = bool "Deactivate" "Activate" isInactive
           deactIcon = bool "pause" "circle-play" isInactive
           needsResolve = alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]
+          actionBtn_ icon label tip path =
+            button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ label, data_ "tip" tip, hxPost_ $ muteBase <> path] do
+              faSprite_ icon "regular" "h-4 w-4"
+              toHtml label
           bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
-                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
-                        faSprite_ "bell" "regular" "h-4 w-4"
-                        "Unmute"
+                      Just _ -> actionBtn_ "bell" "Unmute" "Resume notifications for this monitor" "/unmute"
                       Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
                         button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
-                    when needsResolve
-                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Resolve", data_ "tip" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
-                        faSprite_ "check" "regular" "h-4 w-4"
-                        "Resolve"
-                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ deactLabel, data_ "tip" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
-                      faSprite_ deactIcon "regular" "h-4 w-4"
-                      toHtml deactLabel
+                    when needsResolve $ actionBtn_ "check" "Resolve" "Mark as resolved and reset status to normal" "/resolve"
+                    actionBtn_ deactIcon deactLabel (bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive) "/toggle_active"
                     div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
                   let mobilePopId = "monitor-actions-" <> alert.id.toText
                       mobItem_ :: Text -> Text -> Text -> Html ()

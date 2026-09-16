@@ -334,9 +334,9 @@ spec = around withTestResources
         T.isInfixOf "data-field=\"attributes.http.request.method\"" html `shouldBe` True
         T.isInfixOf "data-field=\"resource.service.name\"" html `shouldBe` True
         T.isInfixOf "data-field=\"level\"" html `shouldBe` True
-        -- The facet path + value are carried on data-field/data-value; the
-        -- hyperscript pseudo-command reads them off the element at click time
-        -- (no inline interpolation to escape).
+        -- The facet path + value are carried on data-field/data-value; the click
+        -- handler reads them off the element at click time (no inline
+        -- interpolation to escape).
         T.isInfixOf "data-value=\"GET\"" html `shouldBe` True
         -- Explorer and inventory tables share the facet section/option contract.
         T.isInfixOf "data-component=\"facet-section\"" html `shouldBe` True
@@ -346,7 +346,7 @@ spec = around withTestResources
         -- on it threw "not a function" and dropped the filter. The shim loads it, then calls.
         T.isInfixOf "queryEditorCall(" html `shouldBe` True
         T.isInfixOf "toggleSubQuery" html `shouldBe` True
-        T.isInfixOf "me.dataset.field" html `shouldBe` True
+        T.isInfixOf "this.dataset.field" html `shouldBe` True
         T.isInfixOf "getElementById(" html `shouldBe` False
         -- Section headers for groups that have populated facets show up.
         T.isInfixOf "Common Filters" html `shouldBe` True

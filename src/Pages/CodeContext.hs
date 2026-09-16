@@ -21,7 +21,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (withSettingsPage)
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, formSelectField_, settingsH2_, settingsSection_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, formSelectField_, installationSettingsLink_, settingsH2_, settingsSection_)
 import Pkg.Git qualified as Git
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -209,16 +209,7 @@ codeMappingsContent pid sampleM = do
             formField_ FieldSm def{placeholder = "any service"} "Only for service" "service" False Nothing
           -- The picker can only offer what the installation was granted, so a missing repository
           -- is a narrower grant rather than a bug in the list, and this is where it is widened.
-          whenJust instIdM \instId ->
-            a_
-              [ href_ (GitSync.installationSettingsUrl instId)
-              , target_ "_blank"
-              , rel_ "noopener"
-              , class_ "text-xs text-textBrand underline inline-flex items-center gap-1"
-              ]
-              do
-                "Repository missing? Add it to the installation on GitHub"
-                faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
+          whenJust instIdM $ installationSettingsLink_ . GitSync.installationSettingsUrl
           formField_
             FieldSm
             def{value = sample, placeholder = "/srv/app/services/checkout.py"}

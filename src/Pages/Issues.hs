@@ -82,7 +82,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
@@ -940,7 +940,7 @@ issueEvidence_ v@IssueView{..} = case Issues.issuePayload issue of
         contextCard_ "p-4" "Request" do
           span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
           span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
-    details_ [class_ "surface-raised rounded-2xl group/details", open_ "", [__|init if window.innerWidth < 768 remove @open from me|]] do
+    details_ [class_ "surface-raised rounded-2xl group/details", open_ "", detailsClosedBelowAttr_ 768] do
       summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
         faSprite_ "code" "regular" "w-3.5 h-3.5 text-textWeak"
         h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide shrink-0"] $ if hasStack then "Stack trace" else "Error details"

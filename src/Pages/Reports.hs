@@ -7,10 +7,6 @@ module Pages.Reports (
   PerformanceReport (..),
   ReportsGet (..),
   ReportsPost (..),
-  getSpanTypeStats,
-  computeDurationChanges,
-  EndpointStatsTuple,
-  anomalyTypeCounts,
   pctChange,
   eventsWidget,
   errorsWidget,
@@ -25,7 +21,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
-import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
@@ -124,19 +119,6 @@ eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize c
 errorsWidget = eventsWidget{Widget.query = Just "(status_code == \"ERROR\" or attributes.exception.type != null or severity.severity_number >= 17 or level =~ /(?i)^(error|fatal)$/) | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
 
 
-anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int, Int, Int)
-anomalyTypeCounts getType =
-  foldl'
-    ( \(e, a, m, lp, rc) x -> case getType x of
-        Issues.RuntimeException -> (e + 1, a, m, lp, rc)
-        Issues.ApiChange -> (e, a + 1, m, lp, rc)
-        Issues.QueryAlert -> (e, a, m + 1, lp, rc)
-        Issues.LogPattern -> (e, a, m, lp + 1, rc)
-        Issues.LogPatternRateChange -> (e, a, m, lp, rc + 1)
-    )
-    (0, 0, 0, 0, 0)
-
-
 -- | New reports persist one evidence snapshot. The legacy decoder below remains for
 -- existing reports; new collection no longer computes unused chart datasets.
 buildReportJson' :: Report.ReportSnapshot -> AE.Value
@@ -154,9 +136,6 @@ snapshotTotals snapshot = (events, errors, pctChange events (fromIntegral oldEve
     oldErrors = sum $ map (.errorEvents) previous
 
 
-type EndpointStatsTuple = (Text, Text, Text, Int64, Int64)
-
-
 -- | Percent change of @cur@ over @prev@, rounded to 2dp; 0 when there's no baseline.
 pctChange :: Integral a => a -> a -> Double
 pctChange cur prev
@@ -164,33 +143,6 @@ pctChange cur prev
   | otherwise = fromIntegral (round (ratio * 10000) :: Int) / 100
   where
     ratio = fromIntegral (cur - prev) / fromIntegral prev :: Double
-
-
-getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
-getSpanTypeStats current prev =
-  V.fromList
-    [ (t, c, pctChange c pc, d, pctChange d pd)
-    | t <- ordNub [st | (st, _, _) <- V.toList current <> V.toList prev]
-    , let (c, d) = Map.findWithDefault (0, 0) t curMap
-    , let (pc, pd) = Map.findWithDefault (0, 0) t prevMap
-    ]
-  where
-    -- first row wins on duplicate span types, matching the pre-map lookup
-    toMap v = Map.fromListWith (\_ old -> old) [(t, (c, d)) | (t, c, d) <- V.toList v]
-    curMap = toMap current
-    prevMap = toMap prev
-
-
-computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
-computeDurationChanges current prev = V.map compute current
-  where
-    prevMap :: Map.Map (Text, Text, Text) (Int64, Int64)
-    prevMap = Map.fromList [((h, m, u), (dur, req)) | (h, m, u, dur, req) <- V.toList prev]
-    -- no positive baseline reads as "all new": 100%
-    change cur = maybe 100 (\p -> if p > 0 then pctChange cur p else 100)
-    compute (h, m, u, dur, req) =
-      let pv = Map.lookup (h, m, u) prevMap
-       in (h, m, u, dur, change dur (fst <$> pv), req, change req (snd <$> pv))
 
 
 -- $setup

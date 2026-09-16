@@ -701,11 +701,7 @@ data RumData = RumData
 
 
 newtype RumGet = RumGet (PageCtx (Deferred RumData))
-
-
-instance ToHtml RumGet where
-  toHtml (RumGet page) = toHtml page
-  toHtmlRaw = toHtml
+  deriving newtype (ToHtml)
 
 
 -- Empty panels are not cached: browser telemetry can arrive immediately after SDK setup, and

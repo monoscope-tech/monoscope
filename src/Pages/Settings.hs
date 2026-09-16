@@ -2,7 +2,6 @@ module Pages.Settings (
   -- S3
   bringS3GetH,
   brings3PostH,
-  getMinioConnectInfo,
   brings3RemoveH,
   -- Api
   apiGetH,
@@ -51,7 +50,6 @@ module Pages.Settings (
   createStripePortalSession,
   cancelProjectSubscription,
   lemonSqueezyOpts,
-  verifyStripeSignature,
   verifyLemonSqueezySignature,
 ) where
 
@@ -104,7 +102,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -383,19 +381,15 @@ makeApiKeysTable pid apiKeys elemId =
             span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
             span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
             div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-              let keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
-              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivate]
+              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
                 $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivate]
+              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
                 $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
               button_
                 [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
                 , type_ "button"
                 , Aria.label_ $ "Copy " <> apiKey.title
-                , -- Shared Copy behavior (BodyWrapper): copies the element's innerText and
-                  -- adds the .copy-success flash. The hand-rolled version here had no flash,
-                  -- so copy feedback differed from the log detail panel.
-                  term "_" ("install Copy(content: #key-value-" <> apiKey.id.toText <> ")")
+                , copySourceAttr_ ("document.getElementById('key-value-" <> apiKey.id.toText <> "')")
                 , data_ "tip" "Copy key"
                 ]
                 $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
@@ -435,7 +429,7 @@ copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
               button_
                 [ type_ "button"
                 , class_ "btn btn-sm btn-success"
-                , [__|install Copy(content: #newKey)|]
+                , copySourceAttr_ "document.getElementById('newKey')"
                 ]
                 "Copy Key"
               if hasNext

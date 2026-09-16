@@ -118,7 +118,6 @@ module Models.Apis.Issues (
 
   -- * Issue Summary (for reports/emails)
   IssueSummary (..),
-  toIssueSummary,
 
   -- * Reports
   Report (..),
@@ -243,11 +242,6 @@ data IssueSummary = IssueSummary
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueSummary
-
-
-toIssueSummary :: IssueL -> IssueSummary
-toIssueSummary IssueL{base, activityBuckets} =
-  IssueSummary base.id base.title base.critical base.severity base.issueType (Just $ V.toList activityBuckets)
 
 
 -- | Rounded-to-integer number with a unit suffix — the only numeric formatting

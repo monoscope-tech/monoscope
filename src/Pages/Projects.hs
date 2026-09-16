@@ -24,8 +24,6 @@ module Pages.Projects (
   manageTeamsGetH,
   -- CreateProject
   createProjectPostH,
-  createProjectFormV,
-  createProjectFormToModel,
   CreateProjectFormError (..),
   pricingUpdateH,
   PricingUpdateForm (..),

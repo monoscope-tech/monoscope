@@ -13,14 +13,12 @@ module Pages.Telemetry (
   metricExemplarsGetH,
   MetricExemplarsGet (..),
   relatedMetricsGetH,
-  traceOverlayUrl,
   -- Trace
   traceH,
   traceFragmentUrl,
   TraceDetailsGet (..),
   TraceUnavailableReason (..),
   tracePage,
-  spanDetailAttrs_,
   DetailLoading (..),
 ) where
 
@@ -1397,21 +1395,15 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                   , Components.filterInputAttr_ ".span-filterble in #trace_span_container"
                   ]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
-                div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords] do
-                  button_
-                    [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer"
-                    , Aria.label_ "Previous matching span"
-                    , term "data-tippy-content" "Previous matching span"
-                    , onpointerdown_ "navigateSpans('prev')"
-                    ]
-                    $ faSprite_ "chevron-up" "regular" "w-3 h-3"
-                  button_
-                    [ class_ "h-6 w-6 flex items-center justify-center rounded-full bg-fillWeaker font-bold border border-strokeWeak text-textStrong cursor-pointer"
-                    , Aria.label_ "Next matching span"
-                    , term "data-tippy-content" "Next matching span"
-                    , onpointerdown_ "navigateSpans('next')"
-                    ]
-                    $ faSprite_ "chevron-down" "regular" "h-3 w-3"
+                div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords]
+                  $ forM_ ([("prev", "chevron-up", "Previous matching span"), ("next", "chevron-down", "Next matching span")] :: [(Text, Text, Text)]) \(dir, icon, lbl) ->
+                    button_
+                      [ class_ "h-6 w-6 flex items-center justify-center bg-fillWeaker rounded-full font-bold border border-strokeWeak text-textStrong cursor-pointer"
+                      , Aria.label_ lbl
+                      , term "data-tippy-content" lbl
+                      , onpointerdown_ $ "navigateSpans('" <> dir <> "')"
+                      ]
+                      $ faSprite_ icon "regular" "w-3 h-3"
               button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full hidden group-has-[#tab-timeline:checked]/tt:block", id_ "flame_graph"] do
             div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2 relative", style_ "--tl-left:65%", id_ $ "timeline-layout-" <> traceItem.traceId] do

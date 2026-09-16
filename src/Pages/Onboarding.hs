@@ -795,7 +795,7 @@ inviteTeamMemberModal pid emails enableFreetier =
         select_ [name_ "permissions", class_ "select select-xs"]
           $ options_ Nothing [("admin", "Admin"), ("edit", "Can Edit"), ("view", "Can View")]
         button_
-          [ [__| on click remove the closest parent <div/> then halt |]
+          [ term "hx-on:click" "this.closest('div').remove()"
           , class_ "text-textBrand ml-4 text-sm underline"
           , type_ "button"
           ]

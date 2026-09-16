@@ -231,11 +231,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
-
-
-instance ToHtml ContainersGet where
-  toHtml (ContainersPage pg) = toHtml pg
-  toHtmlRaw = toHtml
+  deriving newtype (ToHtml)
 
 
 -- | 'freshnessWindow' rendered for the result summary, so the number the page quotes and the

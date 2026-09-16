@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -371,15 +371,6 @@ bodyWrapper bcfg child = do
               for el in <.ctx-val/> in menu set el's textContent to (anchor's @data-field-value or 'value') end
             end
           end
-          behavior Copy(content)
-               on click if 'clipboard' in window.navigator then
-                    call navigator.clipboard.writeText(content's innerText)
-                    add .copy-success to me then
-                    wait 1500ms then remove .copy-success from me then
-                    send successToast(value:['Value copied to the Clipboard']) to <body/>
-                    halt
-              end
-            end
     |]
 
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" initialTheme, term "hx-preload:inherited" "mouseover"] do
@@ -628,7 +619,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         )
         do
           faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
-      label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Close menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
+      label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Close menu", Components.keyboardActivateAttr_] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
     let searchScript = [__|on click send paletteToggle to #cmd-palette-global|]
     div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
@@ -753,7 +744,7 @@ navbar bcfg menuL =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1 px-4 py-1 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
       when (isJust bcfg.currProject) do
-        label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
+        label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
         a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
@@ -762,17 +753,16 @@ navbar bcfg menuL =
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
       h1_ [class_ $ "flex min-w-0 items-center text-textStrong" <> bool "" " max-md:hidden" (isJust bcfg.pageActions)] do
         let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
-            keyboardActivate = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
         case targetPageM of
           Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
           Nothing -> case bcfg.pageTitleModalId of
-            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, keyboardActivate] $ toHtml bcfg.pageTitle
+            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
             Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
         -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
         span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
           faSprite_ "chevron-right" "regular" "w-3 h-3"
           case bcfg.pageTitleSuffixModalId of
-            Just modalId -> label_ [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleSuffixText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> suffix, keyboardActivate] $ toHtml suffix
+            Just modalId -> label_ [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleSuffixText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> suffix, Components.keyboardActivateAttr_] $ toHtml suffix
             Nothing -> span_ [class_ "font-medium text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
@@ -874,7 +864,7 @@ settingsWrapper pid current pageHtml =
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full [&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"] do
         li_ [class_ "md:hidden shrink-0"]
-          $ label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]]
+          $ label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     section_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto", Aria.label_ current] do

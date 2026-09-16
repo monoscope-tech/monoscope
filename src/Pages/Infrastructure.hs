@@ -13,9 +13,7 @@ module Pages.Infrastructure (
   ImagesGet (..),
   KubernetesGet (..),
   HostMapGet (..),
-  HostDetailGet (..),
-  ImageDetailGet (..),
-  KubernetesDetailGet (..),
+  DetailGet (..),
 ) where
 
 import Data.Default (def)
@@ -306,29 +304,26 @@ hostDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Text
 hostDetailUrl pid window name = infraUrl pid "/infrastructure/hosts/detail" [("host", name)] window
 
 
-data HostDetailGet = HostDetailMissing | HostDetail Projects.ProjectId HostRow
+-- | Drawer payload shared by the three infrastructure detail routes: the rendered
+-- detail, or the section's empty state when the entity left the time window.
+newtype DetailGet = DetailGet (Html ())
+  deriving newtype (ToHtml)
 
 
-instance ToHtml HostDetailGet where
-  toHtml =
-    toHtmlRaw . \case
-      HostDetailMissing ->
-        emptyState_
-          def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"}
-          "Host not found in this time range"
-          "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range."
-      HostDetail pid host -> hostDetail_ pid host
-  toHtmlRaw = toHtml
+detailFrom :: EmptyStateCfg -> Text -> Text -> (a -> Html ()) -> Maybe a -> DetailGet
+detailFrom cfg title sub render = DetailGet . maybe (emptyState_ cfg title sub) render
 
 
 -- | The drawer reads the same window the table row was rendered from. Anything else shows a
 -- host's usage from a range the user did not pick, and re-runs the snapshot query the page
 -- has already run instead of reusing it.
-hostDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders HostDetailGet)
+hostDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders DetailGet)
 hostDetailGetH pid hostM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   hosts <- hostsFromRows <$> infraSnapshot pid window
-  addRespHeaders $ maybe HostDetailMissing (HostDetail pid) $ V.find ((== hostM) . Just . (.name)) hosts
+  addRespHeaders
+    $ detailFrom def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid)
+    $ V.find ((== hostM) . Just . (.name)) hosts
 
 
 hostDetail_ :: Projects.ProjectId -> HostRow -> Html ()
@@ -518,22 +513,13 @@ imageDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Text
 imageDetailUrl pid window image = infraUrl pid "/infrastructure/images/detail" [("image", image)] window
 
 
-data ImageDetailGet = ImageDetailMissing | ImageDetail Projects.ProjectId ImageRow
-
-
-instance ToHtml ImageDetailGet where
-  toHtml =
-    toHtmlRaw . \case
-      ImageDetailMissing -> emptyState_ def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." ""
-      ImageDetail pid image -> imageDetail_ pid image
-  toHtmlRaw = toHtml
-
-
-imageDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ImageDetailGet)
+imageDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders DetailGet)
 imageDetailGetH pid imageM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   images <- imagesFromRows <$> infraSnapshot pid window
-  addRespHeaders $ maybe ImageDetailMissing (ImageDetail pid) $ V.find ((== imageM) . Just . (.image)) images
+  addRespHeaders
+    $ detailFrom def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." "" (imageDetail_ pid)
+    $ V.find ((== imageM) . Just . (.image)) images
 
 
 imageDetail_ :: Projects.ProjectId -> ImageRow -> Html ()
@@ -730,23 +716,14 @@ kubeDetailUrl pid window resource row =
     window
 
 
-data KubernetesDetailGet = KubernetesDetailMissing | KubernetesDetail Projects.ProjectId KubeResource KubeRow
-
-
-instance ToHtml KubernetesDetailGet where
-  toHtml =
-    toHtmlRaw . \case
-      KubernetesDetailMissing -> emptyState_ def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." ""
-      KubernetesDetail pid resource row -> kubernetesDetail_ pid resource row
-  toHtmlRaw = toHtml
-
-
-kubernetesDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders KubernetesDetailGet)
+kubernetesDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders DetailGet)
 kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   let resource = parseParam KubePods kubeResourceParam resourceM
   rows <- kubeRowsFromRows resource <$> infraSnapshot pid window
-  addRespHeaders $ maybe KubernetesDetailMissing (KubernetesDetail pid resource) $ V.find (\row -> Just row.name == nameM && matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace) rows
+  addRespHeaders
+    $ detailFrom def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." "" (kubernetesDetail_ pid resource)
+    $ V.find (\row -> Just row.name == nameM && matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace) rows
 
 
 kubernetesDetail_ :: Projects.ProjectId -> KubeResource -> KubeRow -> Html ()
