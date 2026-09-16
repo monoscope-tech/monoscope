@@ -311,15 +311,15 @@ processBackgroundJob authCtx bgJob =
       tryStep "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
     SafetyNetReprocess pid -> safetyNetReprocess pid
     ProcessProjectErrorsJob pid errors now -> processProjectErrors pid errors now
-    NotificationSweepJob scheduledTime -> do
-      -- Re-enqueue first so a mid-tick failure still produces a next tick.
-      rescheduleSelf authCtx Jobs.NotificationSweepJob (addUTCTime 600 scheduledTime)
+    -- Seed-only, like the other tickers: the daily seeder is the restart net. These used
+    -- to also self-chain, and a chained tick running beside its seeded twin doubled the
+    -- population every period — 60k queued InfraHealthCheck rows and ~2h of notification
+    -- delay by 2026-09-16 (plans/job-scheduler-redesign.md).
+    NotificationSweepJob scheduledTime ->
       unlessStale "NotificationSweepJob" scheduledTime 1800 $ runNotificationSweep scheduledTime
-    NotificationDigestJob scheduledTime -> do
-      rescheduleSelf authCtx Jobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
+    NotificationDigestJob scheduledTime ->
       unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
-    InfraHealthCheck scheduledTime -> do
-      rescheduleSelf authCtx Jobs.InfraHealthCheck (addUTCTime 3600 scheduledTime)
+    InfraHealthCheck scheduledTime ->
       unlessStale "InfraHealthCheck" scheduledTime (2 * 3600) $ runInfraHealthCheck authCtx
     ReplayParkedMessages cap -> do
       moved <- runParkingReplay authCtx cap
