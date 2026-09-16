@@ -174,7 +174,7 @@ onboardingTests =
 
       let from = toText $ iso8601Show $ addUTCTime (-60) eventTime
           to = toText $ iso8601Show $ addUTCTime 60 eventTime
-      (_, events) <- testServant tr $ Log.logExplorerDataH testPid (Just "span_name == \"onboarding-first-span\"") Nothing Nothing Nothing Nothing (Just from) (Just to) Nothing Nothing
+      (_, events) <- testServant tr $ Log.logExplorerDataH testPid (Just "span_name == \"onboarding-first-span\"") Nothing Nothing Nothing Nothing (Just from) (Just to) Nothing Nothing Nothing
       V.length events.logsData `shouldBe` 1
 
 

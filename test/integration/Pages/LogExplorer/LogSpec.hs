@@ -77,7 +77,7 @@ fetchDataIn tr pid q cols cur since from to = fetchDataDirIn tr pid q cols cur N
 
 
 fetchDataDirIn :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Parser.PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid q cols cur dir since from to Nothing Nothing)
+fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid q cols cur dir since from to Nothing Nothing Nothing)
 
 
 -- | Re-run @act@ until @ok@ holds, then return the last result (which the caller
