@@ -42,7 +42,6 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
@@ -277,7 +276,7 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
       -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
       -- tests the element rather than the method, it threw on every change instead of
       -- degrading. Charts only carry the `applyThresholds` expando (web-components/src/widgets.ts).
-      chartUpdateAttr = [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
+      chartUpdateAttr = term "hx-on:change" "document.querySelector('query-builder')?.updateBinInQuery('timestamp', this.value)"
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex gap-2 py-2"] do
@@ -286,16 +285,15 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
         $ Just (select_ [class_ "select select-bordered select-sm w-full", name_ "timeWindow", id_ "timeWindow", chartUpdateAttr] $ forM_ timeOpts mkTimeOpt)
       formField_ FieldSm def "Notify me when" "conditionType" False
         $ Just
-        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", [__|on change if my value == 'threshold_exceeded' then set #thresholds.open to true else set #thresholds.open to false end|]] do
+        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"] do
           option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "threshold is exceeded"
           option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
 thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
-  let chartUpdateAttr = case chartTargetIdM of
-        Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-        Nothing -> [__|on input set chart to #visualization-widget if chart's applyThresholds exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+  let chartId = fromMaybe "visualization-widget" chartTargetIdM
+      chartUpdateAttr = term "hx-on:input" [text|document.getElementById('${chartId}')?.applyThresholds?.({alert: parseFloat(alertThreshold.value), warning: parseFloat(warningThreshold.value)})|]
       showVal = maybe "" show
   panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
     formField_ FieldSm def{value = fromMaybe "" unitM, placeholder = "e.g. s, bytes, requests/s"} "Measurement unit" "unit" False Nothing

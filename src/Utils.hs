@@ -526,9 +526,7 @@ jsonValueToHtmlTree val pathM = do
         -- checked state). The label is CSS: both spans render, .collapsed picks one.
         when hasChildren $ button_
           [ class_ "group/coll flex items-center gap-1 cursor-pointer"
-          , [__|on click
-                 toggle .collapsed on me
-                 for it in <.tree-toggle/> in closest .json-tree-container set the checked of it to (I match .collapsed) end|]
+          , term "hx-on:click" "const c = this.classList.toggle('collapsed'); this.closest('.json-tree-container').querySelectorAll('.tree-toggle').forEach(t => t.checked = c)"
           ]
           do
             span_ [class_ "underline group-[.collapsed]/coll:hidden"] "Collapse all"
@@ -538,9 +536,7 @@ jsonValueToHtmlTree val pathM = do
         -- The JSON payload lives once on the container; both buttons read it from there.
         button_
           [ class_ "flex items-center gap-1 cursor-pointer"
-          , [__|on click
-                  call navigator.clipboard.writeText(the @data-reqjson of the closest <.json-tree-container/>)
-                  send successToast(value:['Json copied to clipboard']) to <body/>|]
+          , term "hx-on:click" "navigator.clipboard.writeText(this.closest('.json-tree-container').dataset.reqjson); htmx.trigger(document.body, 'successToast', {value: ['Json copied to clipboard']})"
           ]
           do
             span_ [class_ "underline"] "Copy json"
@@ -1770,7 +1766,7 @@ popoverPanel_ pid = [id_ pid, term "popover" "auto", style_ $ "position-try:flip
 -- closes the popover after an item runs, and `halt`s so the click can't bubble to an
 -- enclosing @<label for>@ (e.g. the facet-section collapse header) and toggle it.
 fieldMenuPanel_ :: Text -> [Attribute]
-fieldMenuPanel_ pid = popoverPanel_ pid <> [[__|on click call me.hidePopover() then halt|]]
+fieldMenuPanel_ pid = popoverPanel_ pid <> [term "hx-on:click" "this.hidePopover(); event.stopPropagation(); event.preventDefault()"]
 
 
 -- | Makes a whole table row open the drawer: clickable, focusable, and Enter/Space activated.

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -363,14 +363,14 @@ pricingButton_ isCurrent normalCls attrs label =
 -- | Plan CTA: inert when already the current plan, else a Stripe checkout POST or a LemonSqueezy popup.
 pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
-  div_ [[__|on click halt|]]
+  div_ [term "hx-on:click" "event.stopPropagation(); event.preventDefault()"]
     $ pricingButton_ isCurrent normalCls (type_ "button" : attrs) "Start 30 day free trial"
   where
     attrs :: [Attribute]
     attrs
       | isCurrent = []
       | useStripe = [hxPost_ $ "/p/" <> pid.toText <> "/stripe_checkout", hxVals_ $ "{\"plan\": \"" <> plan <> "\"}", hxSwap_ "none"]
-      | otherwise = [term "_" $ "on click call window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
+      | otherwise = [term "hx-on:click" $ "window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
 
 
 pricingBadge_ :: Html () -> Html () -> Html ()
@@ -389,7 +389,7 @@ freePricing pid isCurrent =
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [[__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] "Start free")
+        (div_ [term "hx-on:click" "event.stopPropagation(); event.preventDefault()"] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
         ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
@@ -949,7 +949,7 @@ copyButton_ cls iconCls src attrs =
   button_
     ( [ type_ "button"
       , class_ cls
-      , term "_" $ "on click call navigator.clipboard.writeText(" <> src <> ") then put 'Copied!' into the first <span/> in me then wait 2s then put 'Copy' into the first <span/> in me"
+      , term "hx-on:click" $ "navigator.clipboard.writeText(" <> src <> "); const s = this.querySelector('span'); s.textContent = 'Copied!'; setTimeout(() => s.textContent = 'Copy', 2000)"
       ]
         <> attrs
     )
@@ -1015,6 +1015,24 @@ settingsNavLink_ href icon title desc =
 
 
 -- | Hyperscript attribute for a save button that activates when its parent form changes
+-- | A server-open @\<details\>@ that starts collapsed below @px@ viewport width.
+-- Seeds once; after that the reader's own toggling owns the state.
+detailsClosedBelowAttr_ :: Int -> Attribute
+detailsClosedBelowAttr_ px = term "hx-live" $ "if (!this.dataset.seeded) { this.dataset.seeded = '1'; if (window.innerWidth < " <> show px <> ") this.open = false }"
+
+
+-- | Enter/Space activates the element's click behavior, for label/row controls that
+-- cannot be a native @\<button\>@.
+keyboardActivateAttr_ :: Attribute
+keyboardActivateAttr_ = term "hx-on:keydown" "if (event.key == 'Enter' || event.key == ' ') { event.preventDefault(); this.click() }"
+
+
+-- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,
+-- flashes @.copy-success@ on the trigger and raises the success toast.
+copySourceAttr_ :: Text -> Attribute
+copySourceAttr_ el = term "hx-on:click" $ "navigator.clipboard.writeText((" <> el <> ").innerText); this.classList.add('copy-success'); setTimeout(() => this.classList.remove('copy-success'), 1500); htmx.trigger(document.body, 'successToast', {value: ['Value copied to the Clipboard']})"
+
+
 dirtyFormSaveAttr_ :: Attribute
 dirtyFormSaveAttr_ = [__| on change from closest <form/> remove @disabled from me then remove .btn-ghost from me then remove .text-textWeak from me then add .btn-primary to me |]
 

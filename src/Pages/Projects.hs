@@ -1489,7 +1489,7 @@ createProjectBody pid cp = do
       , hxSwap_ "innerHTML"
       , id_ "createUpdateBodyForm"
       , hxIndicator_ "#createIndicator"
-      , [__| on change add .form-dirty to me |]
+      , term "hx-on:change" "this.classList.add('form-dirty')"
       ]
       do
         -- Project details

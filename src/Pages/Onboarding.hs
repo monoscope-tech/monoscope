@@ -34,7 +34,6 @@ import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -424,7 +423,7 @@ integrationsPage pid apikey =
         button_
           [ class_ "flex items-center gap-2 text-textBrand cursor-pointer"
           , type_ "button"
-          , [__|on click remove .open from #docs-panel|]
+          , term "hx-on:click" "document.getElementById('docs-panel').classList.remove('open')"
           ]
           do
             faSprite_ "arrow-left" "regular" "h-4 w-4"
@@ -795,7 +794,7 @@ inviteTeamMemberModal pid emails enableFreetier =
         select_ [name_ "permissions", class_ "select select-xs"]
           $ options_ Nothing [("admin", "Admin"), ("edit", "Can Edit"), ("view", "Can View")]
         button_
-          [ [__| on click remove the closest parent <div/> then halt |]
+          [ term "hx-on:click" "this.closest('div').remove()"
           , class_ "text-textBrand ml-4 text-sm underline"
           , type_ "button"
           ]

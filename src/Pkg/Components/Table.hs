@@ -45,9 +45,8 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_, facetOption_, facetRail_, facetSection_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, keyboardActivateAttr_)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
 
@@ -413,7 +412,7 @@ swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> ti
 
 
 selectAllCheckbox_ :: Html ()
-selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
+selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", term "hx-on:change" "htmx.live.q('.bulkactionItemCheckbox').checked = this.checked"]
 
 
 selectRowCheckbox_ :: Bool -> Text -> Html ()
@@ -562,7 +561,7 @@ treeRowAttrs row tc =
         , tabindex_ "0"
         , term "aria-label" $ "Toggle metric namespace " <> tc.rowPath row
         , onclick_ "toggleTreeRow(this)"
-        , [__|on keydown[key=='Enter' or key==' '] halt the event then call toggleTreeRow(me) end|]
+        , keyboardActivateAttr_
         ]
       else []
 
@@ -613,7 +612,7 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
 
 renderFilterRail :: TableHeaderActions -> Html ()
 renderFilterRail actions =
-  details_ [open_ "", class_ "w-60 shrink-0 max-lg:w-full", [__|on load if window.innerWidth < 1024 remove @open from me end|]] do
+  details_ [open_ "", class_ "w-60 shrink-0 max-lg:w-full", detailsClosedBelowAttr_ 1024] do
     summary_ [class_ "flex cursor-pointer list-none items-center gap-2 rounded px-2 py-2 text-xs font-semibold text-textStrong hover:bg-fillWeak [&::-webkit-details-marker]:hidden"] "Filters"
     facetRail_ Nothing "p-2" "Search filters" (Just clearAll) $ forM_ (zip [0 :: Int ..] actions.filterMenus) \(index, menu) ->
       facetSection_ (index == 0 || any (.isActive) menu.options) "" [] (toHtml menu.label)

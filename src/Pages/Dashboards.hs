@@ -468,8 +468,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 const node = parentWidget?.gridstackNode;
                 if (!node) return;
 
-                // Don't resize if group is collapsed
-                if (parentWidget.classList.contains('collapsed')) return;
+                // Don't resize if group is collapsed (the header checkbox is the collapse state)
+                if (parentWidget.querySelector('.wgt-collapse')?.checked) return;
 
                 const isFullWidth = node.w === 12;
                 const maxRow = items.length
@@ -591,9 +591,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         const grid = window.gridStackInstance;
         if (!parentWidget || !grid) return;
 
-        // Use requestAnimationFrame for smoother animation after class toggle
+        // Use requestAnimationFrame for smoother animation after the checkbox toggle
+        // (the checkbox + CSS in Widget.hs own the hide/rotate; this handler only resizes).
         requestAnimationFrame(() => {
-          const isCollapsed = parentWidget.classList.contains('collapsed');
+          const isCollapsed = collapseBtn.querySelector('input').checked;
           const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
 
           parentWidget.dataset.collapseAction = 'true';

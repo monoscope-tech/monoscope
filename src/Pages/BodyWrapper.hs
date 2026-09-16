@@ -371,15 +371,6 @@ bodyWrapper bcfg child = do
               for el in <.ctx-val/> in menu set el's textContent to (anchor's @data-field-value or 'value') end
             end
           end
-          behavior Copy(content)
-               on click if 'clipboard' in window.navigator then
-                    call navigator.clipboard.writeText(content's innerText)
-                    add .copy-success to me then
-                    wait 1500ms then remove .copy-success from me then
-                    send successToast(value:['Value copied to the Clipboard']) to <body/>
-                    halt
-              end
-            end
     |]
 
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" initialTheme, term "hx-preload:inherited" "mouseover"] do

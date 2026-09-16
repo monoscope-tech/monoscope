@@ -34,7 +34,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), dateTime, detailTab_, emptyState_, httpTab_, stackTrace_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, dateTime, detailTab_, emptyState_, httpTab_, stackTrace_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.StackTrace qualified as StackTrace
 import Relude
@@ -143,7 +143,7 @@ data ApiItemDetailed
 -- enclosing @.details-panel@; each shell (log-explorer, anomalies, trace view) owns
 -- its handler on that container.
 closeDetailAttrs :: [Attribute]
-closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-panel/>|]]
+closeDetailAttrs = [term "hx-on:click" "htmx.trigger(this.closest('.details-panel'), 'closeDetailPanel')"]
 
 
 -- | The panel a clicked log row's details load into. One element, one id: the
@@ -370,7 +370,7 @@ expandedItemView pid item aptSp selectedTabM = do
           , Aria.label_ "Toggle fullscreen"
           , data_ "tip" "Expand panel"
           , term "data-share-hide" "1"
-          , [__|on click send toggleFullscreen(mode: 'details') to #apiLogsPage|]
+          , term "hx-on:click" "htmx.trigger(document.getElementById('apiLogsPage'), 'toggleFullscreen', {mode: 'details'})"
           ]
           do
             faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
@@ -406,7 +406,7 @@ expandedItemView pid item aptSp selectedTabM = do
     htmxOverlayIndicator_ "details_indicator"
     headerBlock
     div_ [class_ "w-full mt-3 group/dtab"] do
-      div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
+      div_ [class_ "flex", term "hx-on:click" "event.stopPropagation()"] do
         traverse_ detailTabRadio_ tabs
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
       -- The selected panel renders now; hidden placeholders fetch and replace
@@ -484,7 +484,7 @@ expandedItemView pid item aptSp selectedTabM = do
         -- in hand); the button only copies it, via the shared Copy behavior. The source
         -- is the adjacent <pre> — `next <pre/>` rather than a per-item class, so nothing
         -- has to mint a unique selector and the two stay coupled by position.
-        button_ [class_ "action-btn", [__|install Copy(content: next <pre/>)|]] $ actionBtnBody "copy" "Copy as curl"
+        button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curlCommand
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
         -- A link first, so it works from every shell this view renders in: the details
@@ -644,7 +644,7 @@ renderErrors pid svcM attr resAttr errs =
           $ button_
             [ class_ "shrink-0 cursor-pointer flex items-center gap-1 text-xs px-2 py-0.5 rounded text-textWeak hover:text-textStrong hover:bg-bgBase/60 transition-colors"
             , Aria.label_ "Copy exception message"
-            , term "_" [text|install Copy(content:.${copyId})|]
+            , copySourceAttr_ ("document.querySelector('." <> copyId <> "')")
             ]
             (faSprite_ "copy" "regular" "w-3 h-3" >> "Copy")
       unless (T.null message)
