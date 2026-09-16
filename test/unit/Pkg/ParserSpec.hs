@@ -408,6 +408,25 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let result = parseQueryToAST "kind == \"server\" | summarize countif(status_code == \"ERROR\") by resource.service.name"
       isRight result `shouldBe` True
 
+  describe "endpoint analytics query forms" do
+    it "keeps a named average available to order by" do
+      let (sql, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name != null and duration != null | summarize avg_latency=avg(duration) by name | order by avg_latency desc"
+      sql `shouldSatisfy` T.isInfixOf "AS avg_latency"
+      sql `shouldNotSatisfy` T.isInfixOf "ORDER BY avg_"
+
+    it "compiles browser error predicates and outcome grouping" do
+      let browserContext = "hashes[*]==\"807c56e1\" AND (resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != \"\" or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
+          errorPredicate = "status_code == \"ERROR\" or level in (\"ERROR\", \"FATAL\", \"error\", \"fatal\") or attributes.exception.type != null"
+          parse q = fst $ fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) q
+          errorSql = parse $ browserContext <> " AND (" <> errorPredicate <> ") | summarize count() by bin_auto(timestamp)"
+          outcomeSql = parse $ browserContext <> " | summarize count() by bin_auto(timestamp), iff(" <> errorPredicate <> ", \"Errors\", \"Non-error requests\")"
+          sessionSql = parse $ browserContext <> " AND attributes.session.id != null | summarize started_at=min(timestamp) by attributes.session.id | summarize count() by bin_auto(started_at)"
+          p75Sql = parse $ browserContext <> " AND duration != null | summarize p75(duration) / 1000000 by bin_auto(timestamp)"
+      errorSql `shouldSatisfy` T.isInfixOf "status_code = 'ERROR'"
+      outcomeSql `shouldSatisfy` T.isInfixOf "CASE WHEN"
+      sessionSql `shouldSatisfy` T.isInfixOf "min(timestamp)"
+      p75Sql `shouldSatisfy` T.isInfixOf "approx_percentile(0.75"
+
   describe "edge cases and validation" do
     it "rejects dcount with accuracy > 4" do
       parseQueryToAST "| summarize dcount(attributes.user.id, 5) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 42: dcount accuracy must be 0-4 per KQL spec"

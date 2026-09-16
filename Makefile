@@ -21,7 +21,9 @@ PORT ?= 8080
 # change never bumps the hash (ghcid only watches .hs) so the old bundle keeps serving.
 RELOAD_ASSETS := --reload=static/public/assets/web-components/dist/manifest.json \
                  --reload=static/public/assets/web-components/dist/css/index.css \
-                 --reload=static/public/assets/css/tailwind.min.css
+                 --reload=static/public/assets/css/tailwind.min.css \
+                 --reload=static/public/assets/svgs/fa-sprites/regular.svg \
+                 --reload=static/public/assets/svgs/fa-sprites/solid.svg
 RELOAD_ENV := --reload=.env
 
 css-start:

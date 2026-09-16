@@ -415,10 +415,10 @@ tabs:
         description: 'Average duration highlights operations worth investigating first.'
         query: |
           hashes[*]=="{{var-endpointHash}}" AND name != null AND duration != null
-          | summarize avg(duration) / 1000000 by name
-          | order by avg_ desc
+          | summarize avg_latency=avg(duration) by name
+          | order by avg_latency desc
           | limit 12
-        unit: ms
+        unit: ns
         layout: { w: 6, h: 4 }
 
       - type: timeseries
@@ -462,7 +462,7 @@ tabs:
             title: Browser Errors
             icon: triangle-exclamation
             query: |
-              hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND (status_code == "ERROR" or lower(coalesce(level, "")) == "error" or attributes.exception.type != null)
+              hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND (status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null)
               | summarize count() by bin_auto(timestamp)
             unit: errors
             layout: { w: 3, h: 2 }
@@ -481,7 +481,7 @@ tabs:
             description: Distinct browser sessions that saw an error on this endpoint.
             icon: triangle-exclamation
             query: |
-              hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null AND (status_code == "ERROR" or lower(coalesce(level, "")) == "error" or attributes.exception.type != null)
+              hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null AND (status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null)
               | summarize first_error=min(timestamp) by attributes.session.id
               | summarize count() by bin_auto(first_error)
             unit: sessions
@@ -493,8 +493,7 @@ tabs:
         description: Requests made by real browsers, split into non-error requests and errors so a traffic change is not mistaken for an error change.
         query: |
           hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ")
-          | extend outcome = case(status_code == "ERROR" or lower(coalesce(level, "")) == "error" or attributes.exception.type != null, "Errors", "Non-error requests")
-          | summarize count() by bin_auto(timestamp), outcome
+          | summarize count() by bin_auto(timestamp), iff(status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null, "Errors", "Non-error requests")
           | order by timestamp desc
           | limit 10000
         unit: requests
@@ -576,72 +575,39 @@ tabs:
   - name: Dependencies
     icon: sitemap
     widgets:
-      - type: group
+      - type: table
         title: Downstream health
-        description: Direct child spans of this endpoint. Child time can exceed request time when work runs in parallel.
-        layout: { w: 12, h: 4 }
-        children:
-          - type: stat
-            title: Downstream Operations
-            icon: list-tree
-            sql: |
-              WITH endpoint_spans AS (
-                SELECT context___span_id AS span_id, context___trace_id AS trace_id
-                FROM otel_logs_and_spans
-                WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
-              )
-              SELECT COUNT(DISTINCT o.name)::float
-              FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-              WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id AND o.name IS NOT NULL {{time_filter}}
-            unit: operations
-            layout: { w: 3, h: 2 }
-
-          - type: stat
-            title: Downstream Error Rate
-            icon: triangle-exclamation
-            sql: |
-              WITH endpoint_spans AS (
-                SELECT context___span_id AS span_id, context___trace_id AS trace_id
-                FROM otel_logs_and_spans
-                WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
-              )
-              SELECT ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-              WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id {{time_filter}}
+        description: Direct child spans of this endpoint. One aggregate query keeps the tab responsive; child time can exceed request time when work runs in parallel.
+        layout: { w: 12, h: 3 }
+        columns:
+          - field: operations
+            title: Operations
+            columnType: number
+          - field: error_rate
+            title: Error Rate
             unit: '%'
-            alert_threshold: 5
-            warning_threshold: 1
-            layout: { w: 3, h: 2 }
-
-          - type: stat
-            title: P95 Downstream Time
-            icon: clock
-            sql: |
-              WITH endpoint_spans AS (
-                SELECT context___span_id AS span_id, context___trace_id AS trace_id
-                FROM otel_logs_and_spans
-                WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
-              )
-              SELECT (approx_percentile(0.95, percentile_agg(o.duration)) / 1000000.0)::float
-              FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-              WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id AND o.duration IS NOT NULL {{time_filter}}
+            progress: value_percent
+            progress_variant: error
+          - field: p95_ms
+            title: P95 Time
+            columnType: duration
             unit: ms
-            layout: { w: 3, h: 2 }
-
-          - type: stat
+          - field: traces
             title: Affected Traces
-            icon: route
-            sql: |
-              WITH endpoint_spans AS (
-                SELECT context___span_id AS span_id, context___trace_id AS trace_id
-                FROM otel_logs_and_spans
-                WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
-              )
-              SELECT COUNT(DISTINCT o.context___trace_id)::float
-              FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-              WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id {{time_filter}}
-            unit: traces
-            layout: { w: 3, h: 2 }
+            columnType: number
+        sql: |
+          WITH endpoint_spans AS (
+            SELECT context___span_id AS span_id, context___trace_id AS trace_id
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
+          )
+          SELECT
+            COUNT(DISTINCT o.name)::text AS operations,
+            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text AS error_rate,
+            ROUND((approx_percentile(0.95, percentile_agg(o.duration)) / 1000000.0)::numeric, 1)::text AS p95_ms,
+            COUNT(DISTINCT o.context___trace_id)::text AS traces
+          FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
+          WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id {{time_filter}}
 
       - type: table
         title: Dependency Regressions

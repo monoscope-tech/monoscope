@@ -10,6 +10,9 @@ test("Endpoint Analytics exposes real-user impact and direct dependency investig
 
   await expect(page.getByText("Experience", { exact: true })).toBeVisible();
   await expect(page.getByText("Dependencies", { exact: true })).toBeVisible();
+  for (const name of ["Operations", "Dependencies"]) {
+    await expect(page.getByRole("tab", { name }).locator("svg path")).not.toHaveCount(0);
+  }
 
   await page.getByText("Experience", { exact: true }).click();
   await expect(page.getByText("Real-user impact", { exact: true })).toBeVisible();

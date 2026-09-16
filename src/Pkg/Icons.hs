@@ -32,6 +32,8 @@ iconTable = HM.fromList $ map fromEmbedded embeddedIcons
 
 embeddedIcons :: [(String, String, String, [(String, String)], String)]
 embeddedIcons =
+  -- Sprite files are compile-time inputs. `RELOAD_ASSETS` watches them in
+  -- development, so an added symbol refreshes this table before the page does.
   $( embedIconEntries
        [ ("regular", "static/public/assets/svgs/fa-sprites/regular.svg")
        , ("solid", "static/public/assets/svgs/fa-sprites/solid.svg")
