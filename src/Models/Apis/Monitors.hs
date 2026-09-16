@@ -4,12 +4,8 @@ module Models.Apis.Monitors (
   queryMonitorById,
   queryMonitorUpsert,
   monitorToggleActiveById,
-  monitorDeactivateByIds,
-  monitorReactivateByIds,
-  monitorMuteByIds,
-  monitorUnmuteByIds,
-  monitorResolveByIds,
-  monitorSoftDeleteByIds,
+  MonitorBulkAction (..),
+  monitorsBulkUpdate,
   QueryMonitor (..),
   MonitorAlertConfig (..),
   QueryMonitorId (..),
@@ -227,39 +223,34 @@ monitorToggleActiveById pid mid = do
         where id=#{mid} AND project_id=#{pid}|]
 
 
-monitorDeactivateByIds :: (DB es, Time :> es) => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
-monitorDeactivateByIds pid ids =
-  Time.currentTime >>= \now ->
-    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+-- $setup
+-- >>> import Pkg.DeriveUtils (bulkActionSlug)
 
 
-monitorReactivateByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
-monitorReactivateByIds pid ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
+-- | Every bulk state change on monitors, dispatched by the same action enum the
+-- routes capture. The guards make the returned count mean "rows actually changed".
+-- The slugs are the existing wire spellings, so live URLs are unchanged:
+--
+-- >>> map bulkActionSlug [minBound .. maxBound :: MonitorBulkAction]
+-- ["deactivate","reactivate","mute","unmute","resolve","delete"]
+data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
 
 
--- | Mute monitors until a future time. Pass Nothing for indefinite mute.
-monitorMuteByIds :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Int -> [QueryMonitorId] -> Eff es Int64
-monitorMuteByIds pid durationMinsM ids = do
+-- | Apply @action@ to monitors; @durationMinsM@ only matters for 'BAMute'
+-- (Nothing = indefinite).
+monitorsBulkUpdate :: (DB es, Time :> es) => Projects.ProjectId -> MonitorBulkAction -> Maybe Int -> [QueryMonitorId] -> Eff es Int64
+monitorsBulkUpdate pid action durationMinsM ids = do
   now <- Time.currentTime
   let mutedUntil = maybe (UTCTime (ModifiedJulianDay 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) |]
-
-
-monitorUnmuteByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
-monitorUnmuteByIds pid ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
-
-
-monitorResolveByIds :: DB es => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
-monitorResolveByIds pid ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
-
-
-monitorSoftDeleteByIds :: (DB es, Time :> es) => Projects.ProjectId -> [QueryMonitorId] -> Eff es Int64
-monitorSoftDeleteByIds pid ids =
-  Time.currentTime >>= \now ->
-    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+  case action of
+    BADeactivate -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+    BAReactivate -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
+    BAMute -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) |]
+    BAUnmute -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
+    BAResolve -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
+    BADelete -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]

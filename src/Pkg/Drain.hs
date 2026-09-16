@@ -6,7 +6,6 @@ module Pkg.Drain (
   emptyDrainTree,
   updateTreeWithLog,
   buildDrainTree,
-  buildDrainTreeWithMapping,
   buildDrainBatch,
   generateDrainTokens,
   generateSummaryDrainTokens,
@@ -432,15 +431,6 @@ buildDrainTree tokenize logId sampleContent initial items now =
     )
     initial
     items
-
-
--- | Map each event to its final template within this batch, including groups
--- evicted from the bounded tree. Event IDs are not retained in the cached tree.
-buildDrainTreeWithMapping :: (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> (DrainTree, V.Vector (Text, Text))
-buildDrainTreeWithMapping tokenize logId sampleContent initial items now =
-  let (tree, patterns) = buildDrainBatch tokenize logId sampleContent initial items now
-      byId = Map.fromList [(lid, dp.templateStr) | dp <- V.toList patterns, lid <- V.toList dp.logIds]
-   in (tree, V.mapMaybe (\item -> let lid = logId item in (lid,) <$> Map.lookup lid byId) items)
 
 
 -- | Batch results carry all event IDs (not the tree's capped diagnostic sample)

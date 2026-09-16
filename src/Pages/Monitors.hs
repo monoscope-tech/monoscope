@@ -43,6 +43,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -58,7 +59,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (WrappedEnumSC (..), bulkActionSlug)
+import Pkg.DeriveUtils (bulkActionSlug)
 import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -395,14 +396,6 @@ teamAlertsGetH pid teamId = do
 -- and the UI reported success. The action URLs are *generated* by 'bulkActionsFor', so
 -- producer and consumer were two literal lists that had to agree by hand. Capturing this
 -- in the route makes Servant reject an unknown action and the dispatch exhaustive.
---
--- The slugs are the existing wire spellings, so live URLs are unchanged:
---
--- >>> map bulkActionSlug [minBound .. maxBound :: MonitorBulkAction]
--- ["deactivate","reactivate","mute","unmute","resolve","delete"]
-data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BAResolve | BADelete
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" MonitorBulkAction
 
 
 -- | Which tab to land on after a bulk action — deactivating moves the monitors to
@@ -423,13 +416,7 @@ alertBulkActionH pid action form = do
   _ <- Projects.sessionAndProject pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) do
-    case action of
-      BADeactivate -> void $ Monitors.monitorDeactivateByIds pid monitorIds
-      BAReactivate -> void $ Monitors.monitorReactivateByIds pid monitorIds
-      BAMute -> void $ Monitors.monitorMuteByIds pid Nothing monitorIds
-      BAUnmute -> void $ Monitors.monitorUnmuteByIds pid monitorIds
-      BAResolve -> void $ Monitors.monitorResolveByIds pid monitorIds
-      BADelete -> void $ Monitors.monitorSoftDeleteByIds pid monitorIds
+    void $ Monitors.monitorsBulkUpdate pid action Nothing monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
   unifiedMonitorsGetH pid (Just $ monitorTabParam $ tabAfter action) Nothing
 
@@ -616,15 +603,15 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM =
-  monitorActionH (`Monitors.monitorMuteByIds` durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+  monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAMute durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-alertUnmuteH = monitorActionH Monitors.monitorUnmuteByIds "Monitor unmuted"
-alertResolveH = monitorActionH Monitors.monitorResolveByIds "Monitor resolved"
+alertUnmuteH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAUnmute Nothing) "Monitor unmuted"
+alertResolveH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAResolve Nothing) "Monitor resolved"
 alertDeleteH pid monitorId = do
   (sess, _) <- Projects.sessionAndProject pid
-  void $ Monitors.monitorSoftDeleteByIds pid [monitorId]
+  void $ Monitors.monitorsBulkUpdate pid BADelete Nothing [monitorId]
   Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
   addSuccessToast "Monitor deleted" Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"

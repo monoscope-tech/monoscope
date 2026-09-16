@@ -182,7 +182,7 @@ spec = sequential $ aroundAll withTestResources do
     -- would silently re-activate a monitor the user had deactivated.
     it "alertUpsertPost_onDeactivatedMonitor_staysDeactivated" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm
-      deactivated <- runQueryEffect tr $ monitorDeactivateByIds testPid [QueryMonitorId alertId]
+      deactivated <- runQueryEffect tr $ monitorsBulkUpdate testPid BADeactivate Nothing [QueryMonitorId alertId]
       deactivated `shouldBe` 1
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm{Alerts.title = "Renamed while deactivated"}
       saved <- runQueryEffect tr $ queryMonitorById (QueryMonitorId alertId)
