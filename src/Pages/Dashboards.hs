@@ -2058,8 +2058,9 @@ dashboardDeleteH pid dashId = do
 
 data DashboardBulkActionForm = DashboardBulkActionForm
   { itemId :: [Dashboards.DashboardId]
-  , -- Named for what it carries: these are team ids, not handles. The form never
-    -- reaches the handle-based path — see the "Add teams" note in QUALITY-SWEEP-NOTES.
+  , -- Always empty: `Table.BulkAction` posts only the table's `itemId`
+    -- checkboxes and no team picker exists, so "Add teams" always reports "No
+    -- dashboards were updated". Needs a picker before the POST, not a refactor.
     teamIds :: [ManageMembers.TeamId]
   }
   deriving stock (Generic, Show)

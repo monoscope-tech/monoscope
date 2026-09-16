@@ -3048,14 +3048,8 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           else do
             previous <- Incidents.latestEpisodeTx monitor.projectId source
             let active = mfilter ((== Incidents.EpisodeActive) . (.phase)) previous
-            -- One long-lived issue per monitor: a firing reopens it rather than
-            -- starting a new row, so every episode hangs off the same history.
-            --
-            -- Still gated on a transition, not run every tick: the write bumps
-            -- occurrence_count and affected_requests, so an unconditional call
-            -- would count evaluation ticks rather than firings — a monitor that
-            -- alerts once and stays alerting on a 1-minute interval would report
-            -- 1440 occurrences a day on the issue page and in every alert body.
+            -- One long-lived issue per monitor, written on a transition only:
+            -- the write bumps occurrence_count, so every tick would inflate it.
             persistedId <-
               if delivery == Incidents.PublishIncident || status /= monitor.currentStatus || isNothing (active >>= (.issueId))
                 then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
@@ -4852,7 +4846,9 @@ runSlackIncidentDeliveries = do
                   }
           Notify.deliverSlack operation message <&> \case
             Notify.SlackSent ts -> maybe (Incidents.DeliveryUncertain "invalid_slack_timestamp") Incidents.DeliveryConfirmed $ Incidents.slackTimestamp ts
-            Notify.SlackAccepted -> Incidents.WebhookAccepted
+            -- Without a bot token nothing can ever recover the timestamp.
+            Notify.SlackAccepted ->
+              Incidents.WebhookAccepted $ if T.null sd.botToken then Incidents.Threadless else Incidents.ThreadCapable
             Notify.SlackRateLimited seconds -> Incidents.DeliveryRetry (addUTCTime (fromIntegral seconds) now) "ratelimited"
             Notify.SlackRejected reason -> Incidents.DeliveryRejected reason
             Notify.SlackAmbiguous -> Incidents.DeliveryUncertain "network_outcome_unknown"
