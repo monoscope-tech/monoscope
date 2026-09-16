@@ -281,13 +281,22 @@ runner=$runner_id")
 # allocation area, and on a 4-vCPU runner the recompile OOMs and dies with no
 # error at all — the failure mode that blocked the deploy of b052d6cf4.
 #
-# -f-devtest is here for the same reason it must be everywhere or nowhere: it is
-# part of the plan hash. `build-type: Custom` makes `cabal test <suite>` build
-# EVERY suite in the package, so without it `cabal test doctests` compiles
-# test-dev — src/ plus every integration spec, 210 modules — before running one
-# doctest. (Verified: a minimal Custom package builds its 'slow' suite when asked
-# only for 'fast'; adding the flag stops it.)
-CABAL_OPTS='-f-devtest --ghc-options=-O0 +RTS -A64m -n2m -RTS'
+# CABAL_OPTS stays ONE argument and must keep its quotes at every call site: the
+# RTS words after -O0 are part of the --ghc-options value, and splitting them hands
+# cabal `+RTS` as a target.
+CABAL_OPTS='--ghc-options=-O0 +RTS -A64m -n2m -RTS'
+
+# Flags, which cabal wants as their own argv entries — hence a second variable
+# rather than more words in CABAL_OPTS (`-f` would swallow the whole string).
+# Like the options above this is part of the plan hash, so it goes on EVERY cabal
+# invocation or the steps invalidate each other.
+#
+# `build-type: Custom` makes `cabal test <suite>` build EVERY suite in the
+# package, so without -f-devtest `cabal test doctests` compiles test-dev — src/
+# plus every integration spec, 210 modules — before running one doctest.
+# (Verified: a minimal Custom package builds its 'slow' suite when asked only for
+# 'fast'; adding the flag stops it.)
+CABAL_FLAGS='-f-devtest'
 
 run_body() { # <check>
   case "$1" in
@@ -297,10 +306,10 @@ run_body() { # <check>
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
-    build)      cabal build all -j "$CABAL_OPTS" ;;
-    doctests)   cabal test doctests "$CABAL_OPTS" --test-show-details=direct ;;
-    unit-tests) cabal test unit-tests "$CABAL_OPTS" --test-show-details=direct ;;
-    cli-tests)  cabal test monoscope-cli:cli-tests "$CABAL_OPTS" --test-show-details=direct ;;
+    build)      cabal build all -j $CABAL_FLAGS "$CABAL_OPTS" ;;
+    doctests)   cabal test doctests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    unit-tests) cabal test unit-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    cli-tests)  cabal test monoscope-cli:cli-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config config/weeder.toml --hie-directory dist-newstyle
@@ -310,7 +319,7 @@ run_body() { # <check>
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
-      cabal build monoscope-server "$CABAL_OPTS"
+      cabal build monoscope-server $CABAL_FLAGS "$CABAL_OPTS"
       (cd e2e && npm ci --prefer-offline --no-audit && npx playwright install --with-deps chromium)
       scripts/e2e.sh
       ;;
@@ -333,10 +342,10 @@ run_integration() {
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   (cd web-components && npm ci --prefer-offline --no-audit)
   make build-chart-cli
-  cabal build integration-tests "$CABAL_OPTS"
+  cabal build integration-tests $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
-  bin=$(cabal list-bin integration-tests $CABAL_OPTS)
+  bin=$(cabal list-bin integration-tests $CABAL_FLAGS)
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" --color > "build-shard-$i.log" 2>&1
@@ -850,8 +859,8 @@ cmd_selftest() {
   #    src/ + every integration spec (210 modules) in front of the doctests.
   assert "test-dev is flag-gated" yes \
     "$(grep -q 'flag(devtest)' monoscope.cabal && echo yes)"
-  assert "cabal opts pass -f-devtest" yes \
-    "$(printf '%s' "$CABAL_OPTS" | grep -q -- '-f-devtest' && echo yes)"
+  assert "cabal flags pass -f-devtest" yes \
+    "$(printf '%s' "$CABAL_FLAGS" | grep -q -- '-f-devtest' && echo yes)"
   # 2. The deps image must pre-build BOTH ways. `profiling: True` is part of a
   #    dependency's store hash, so a prof-only image leaves `cabal build all`
   #    with an empty store and all ~434 deps recompile in-job.
