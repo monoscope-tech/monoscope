@@ -522,21 +522,12 @@ renderWidgetTree pid timeParams params w = do
 insertDashboard :: Projects.ProjectId -> Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Text -> Maybe [Text] -> Maybe [PM.TeamId] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
 insertDashboard pid uid now did title tags teams filePath schema = do
   let d =
-        Dashboards.DashboardVM
-          { id = did
-          , projectId = pid
-          , createdAt = now
-          , updatedAt = now
-          , createdBy = uid
-          , baseTemplate = Nothing
-          , schema = schema
-          , starredSince = Nothing
-          , homepageSince = Nothing
-          , tags = V.fromList (fromMaybe [] tags)
-          , title = title
-          , teams = V.fromList (fromMaybe [] teams)
-          , filePath = filePath
-          , fileSha = Nothing
+        (Dashboards.mkDashboardVM did pid now uid)
+          { Dashboards.schema = schema
+          , Dashboards.tags = V.fromList (fromMaybe [] tags)
+          , Dashboards.title = title
+          , Dashboards.teams = V.fromList (fromMaybe [] teams)
+          , Dashboards.filePath = filePath
           }
   toFull d <$ Dashboards.insert d
 

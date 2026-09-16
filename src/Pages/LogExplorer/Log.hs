@@ -84,7 +84,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
@@ -1937,7 +1937,7 @@ alertConfigurationForm_ project alertM teams = do
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
-        , term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
+        , resetFormOnSuccessAttr_
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]

@@ -1,6 +1,7 @@
 module Models.Projects.Dashboards (
   Dashboard (..),
   DashboardVM (..),
+  mkDashboardVM,
   DashboardId,
   readDashboardFile,
   readDashboardsFromDisk,
@@ -170,6 +171,11 @@ data Tab = Tab
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Tab
+
+
+-- | A blank dashboard row; callers override the fields they actually set.
+mkDashboardVM :: DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> DashboardVM
+mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing}
 
 
 insert :: DB es => DashboardVM -> Eff es Int64

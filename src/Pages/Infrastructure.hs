@@ -306,15 +306,12 @@ hostDetailUrl pid window name = infraUrl pid "/infrastructure/hosts/detail" [("h
 
 -- | Drawer payload shared by the three infrastructure detail routes: the rendered
 -- detail, or the section's empty state when the entity left the time window.
-data DetailGet = DetailMissing EmptyStateCfg Text Text | DetailFound (Html ())
+newtype DetailGet = DetailGet (Html ())
+  deriving newtype (ToHtml)
 
 
-instance ToHtml DetailGet where
-  toHtml =
-    toHtmlRaw . \case
-      DetailMissing cfg title sub -> emptyState_ cfg title sub
-      DetailFound h -> h
-  toHtmlRaw = toHtml
+detailFrom :: EmptyStateCfg -> Text -> Text -> (a -> Html ()) -> Maybe a -> DetailGet
+detailFrom cfg title sub render = DetailGet . maybe (emptyState_ cfg title sub) render
 
 
 -- | The drawer reads the same window the table row was rendered from. Anything else shows a
@@ -325,9 +322,7 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   hosts <- hostsFromRows <$> infraSnapshot pid window
   addRespHeaders
-    $ maybe
-      (DetailMissing def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range.")
-      (DetailFound . hostDetail_ pid)
+    $ detailFrom def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid)
     $ V.find ((== hostM) . Just . (.name)) hosts
 
 
@@ -523,7 +518,7 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   images <- imagesFromRows <$> infraSnapshot pid window
   addRespHeaders
-    $ maybe (DetailMissing def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." "") (DetailFound . imageDetail_ pid)
+    $ detailFrom def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." "" (imageDetail_ pid)
     $ V.find ((== imageM) . Just . (.image)) images
 
 
@@ -727,7 +722,7 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
   let resource = parseParam KubePods kubeResourceParam resourceM
   rows <- kubeRowsFromRows resource <$> infraSnapshot pid window
   addRespHeaders
-    $ maybe (DetailMissing def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." "") (DetailFound . kubernetesDetail_ pid resource)
+    $ detailFrom def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." "" (kubernetesDetail_ pid resource)
     $ V.find (\row -> Just row.name == nameM && matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace) rows
 
 

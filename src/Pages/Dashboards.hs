@@ -441,6 +441,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           document.querySelectorAll('.nested-grid').forEach(nestedEl => {
             if (!nestedEl.classList.contains('grid-stack-initialized')) {
               const parentWidget = nestedEl.closest('.grid-stack-item');
+              const collapseInput = parentWidget?.querySelector('.wgt-collapse');
               // Store original YAML height for partial-width groups
               if (parentWidget) {
                 parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
@@ -468,7 +469,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 if (!node) return;
 
                 // Don't resize if group is collapsed (the header checkbox is the collapse state)
-                if (parentWidget.querySelector('.wgt-collapse')?.checked) return;
+                if (collapseInput?.checked) return;
 
                 const isFullWidth = node.w === 12;
                 const maxRow = items.length
@@ -582,18 +583,16 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         }
       }
 
-      // Delegated handler for collapse toggle
-      document.addEventListener('click', function(e) {
-        const collapseBtn = e.target.closest('.collapse-toggle');
-        if (!collapseBtn) return;
-        const parentWidget = collapseBtn.closest('.grid-stack-item');
+      // Delegated handler for the group-collapse checkbox: the checkbox + CSS in
+      // Widget.hs own the hide/rotate; this handler only resizes the grid item.
+      document.addEventListener('change', function(e) {
+        if (!e.target.classList?.contains('wgt-collapse')) return;
+        const parentWidget = e.target.closest('.grid-stack-item');
         const grid = window.gridStackInstance;
         if (!parentWidget || !grid) return;
 
-        // Use requestAnimationFrame for smoother animation after the checkbox toggle
-        // (the checkbox + CSS in Widget.hs own the hide/rotate; this handler only resizes).
         requestAnimationFrame(() => {
-          const isCollapsed = collapseBtn.querySelector('input').checked;
+          const isCollapsed = e.target.checked;
           const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
 
           parentWidget.dataset.collapseAction = 'true';
@@ -1449,7 +1448,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
     , hxTrigger_ "submit"
     , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
     , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
-    , term "hx-on:htmx:after:request" "if (event.detail.ctx.response.status < 400) this.reset()"
+    , Components.resetFormOnSuccessAttr_
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
@@ -1919,7 +1918,7 @@ dashboardsPostH pid form = do
           dir = fromMaybe "" form.fileDir
           filePath = if T.null dir then Nothing else Just $ dashFilePath dir form.title
           dbd =
-            (mkDashboardVM did pid now sess.user.id)
+            (Dashboards.mkDashboardVM did pid now sess.user.id)
               { Dashboards.baseTemplate = if form.file == "" then Nothing else Just form.file
               , Dashboards.tags = V.fromList $ fold $ dashM >>= (.tags)
               , Dashboards.title = form.title
@@ -1930,12 +1929,6 @@ dashboardsPostH pid form = do
       syncDashboardAndQueuePush pid dbd.id
       redirectCS redirectURI
       addRespHeaders DashboardNoContent
-
-
--- | A blank dashboard row; call sites override the fields they actually set.
-mkDashboardVM :: Dashboards.DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> Dashboards.DashboardVM
-mkDashboardVM did pid now uid =
-  Dashboards.DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing}
 
 
 -- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
@@ -1955,7 +1948,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
         did <- UUIDId <$> UUID.genUUID
         _ <-
           Dashboards.insert
-            (mkDashboardVM did pid now sess.user.id)
+            (Dashboards.mkDashboardVM did pid now sess.user.id)
               { Dashboards.baseTemplate = Just baseTemplate
               , Dashboards.starredSince = if shouldBeStarred then Just now else Nothing
               , Dashboards.tags = V.fromList tags

@@ -2401,28 +2401,21 @@ code, pre, .code, .monospace {
   text-wrap-mode: nowrap !important;
 }
 
-/* Group widget collapsed state - header fills space and centers content */
-.grid-stack-item.collapsed .group-header {
+/* Group widget collapsed state - header fills the item. The header checkbox
+   (.wgt-collapse) is the collapse state; chevron rotation and nested-grid hiding
+   are Tailwind variants on it in Widget.hs. */
+.grid-stack-item:has(.wgt-collapse:checked) .group-header {
   flex: 1;
-}
-
-/* Group widget collapsed state - rotate chevron */
-.grid-stack-item.collapsed .collapse-toggle svg {
-  transform: rotate(180deg);
 }
 
 .grid-stack-handle, .nested-grid-stack-handle {
   @apply cursor-move;
 }
 
-/* Group collapse toggles `.hidden` on the nested grid (Widget.hs), i.e. display:none,
-   and a display:none element cannot transition — so the opacity/max-height pair that
-   used to live here never actually ran, and `.collapsed .nested-grid` never took effect
-   because `.hidden` is always applied alongside `.collapsed`. Removed rather than
-   converted to grid-template-rows: gridstack sets an explicit height on this container,
-   so making the collapse animate is a structural change (wrapper element + dropping
-   `.hidden`), not a CSS swap. `overflow: hidden` stays — it clips gridstack children
-   independently of collapse. */
+/* Group collapse hides the nested grid via display:none (a Tailwind variant in
+   Widget.hs), which cannot transition; animating it would be a structural change
+   (wrapper element), not a CSS swap. `overflow: hidden` stays — it clips gridstack
+   children independently of collapse. */
 .nested-grid {
   overflow: hidden;
 }

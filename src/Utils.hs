@@ -6,6 +6,7 @@ module Utils (
   JSONHttpApiData (..),
   parseTime,
   DBField (..),
+  copyToClipboardAttr_,
   faSprite_,
   faSymbolDefs_,
   faUse_,
@@ -351,6 +352,12 @@ truncateMiddle n t
 -- static/public/assets/svgs/fa-sprites/{regular,solid}.svg. The first arg is
 -- the symbol id (e.g. "bucket"). Adding a symbol to either source sheet causes
 -- this module to be recompiled via 'qAddDependentFile'.
+-- | Click-to-copy for the value of the JS expression @valueExpr@: flashes
+-- @.copy-success@ on the trigger and raises the success toast with @msg@.
+copyToClipboardAttr_ :: Text -> Text -> Attribute
+copyToClipboardAttr_ valueExpr msg = term "hx-on:click" $ "navigator.clipboard.writeText(" <> valueExpr <> "); this.classList.add('copy-success'); setTimeout(() => this.classList.remove('copy-success'), 1500); htmx.trigger(document.body, 'successToast', {value: ['" <> msg <> "']})"
+
+
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
   Nothing -> svg_ baseAttributes pass
@@ -536,7 +543,7 @@ jsonValueToHtmlTree val pathM = do
         -- The JSON payload lives once on the container; both buttons read it from there.
         button_
           [ class_ "flex items-center gap-1 cursor-pointer"
-          , term "hx-on:click" "navigator.clipboard.writeText(this.closest('.json-tree-container').dataset.reqjson); htmx.trigger(document.body, 'successToast', {value: ['Json copied to clipboard']})"
+          , copyToClipboardAttr_ "this.closest('.json-tree-container').dataset.reqjson" "Json copied to clipboard"
           ]
           do
             span_ [class_ "underline"] "Copy json"

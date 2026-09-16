@@ -1345,21 +1345,10 @@ autoProvisionDashboards scheduledTime = do
                 did <- UUIDId <$> UUID.genUUID
                 void
                   $ Dashboards.insert
-                    Dashboards.DashboardVM
-                      { id = did
-                      , projectId = pid
-                      , createdAt = scheduledTime
-                      , updatedAt = scheduledTime
-                      , createdBy = userId
-                      , baseTemplate = Just file
-                      , schema = Nothing
-                      , starredSince = Nothing
-                      , homepageSince = Nothing
-                      , tags = V.fromList (fromMaybe [] tpl.tags)
-                      , title = fromMaybe file tpl.title
-                      , teams = V.empty
-                      , filePath = Nothing
-                      , fileSha = Nothing
+                    (Dashboards.mkDashboardVM did pid scheduledTime userId)
+                      { Dashboards.baseTemplate = Just file
+                      , Dashboards.tags = V.fromList (fromMaybe [] tpl.tags)
+                      , Dashboards.title = fromMaybe file tpl.title
                       }
                 void $ Dashboards.markAutoProvisioned pid file
                 Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
@@ -4632,16 +4621,9 @@ processGitSyncAction pid conn sync teamMap = \case
           relativePath = fromMaybe path $ T.stripPrefix prefix path
           teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
           dashboard =
-            Dashboards.DashboardVM
-              { Dashboards.id = dashId
-              , Dashboards.projectId = pid
-              , Dashboards.createdAt = now
-              , Dashboards.updatedAt = now
-              , Dashboards.createdBy = Projects.UserId UUID.nil
-              , Dashboards.baseTemplate = Just path
+            (Dashboards.mkDashboardVM dashId pid now (Projects.UserId UUID.nil))
+              { Dashboards.baseTemplate = Just path
               , Dashboards.schema = Just schema
-              , Dashboards.starredSince = Nothing
-              , Dashboards.homepageSince = Nothing
               , Dashboards.tags = V.fromList $ fold schema.tags
               , Dashboards.title = fromMaybe "Untitled" schema.title
               , Dashboards.teams = V.fromList teamIds
