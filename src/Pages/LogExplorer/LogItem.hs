@@ -203,7 +203,8 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
       ""
   div_
     [ class_
-        $ (memptyIfFalse (layout == IssuesPanel) "peer-checked/open:max-w-full! " ) <> "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
+        $ (memptyIfFalse (layout == IssuesPanel) "peer-checked/open:max-w-full! ")
+        <> "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
         <> "group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto "
         <> "max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase "
         -- Drawer geometry. `!` on width/max-width beats the inline style the

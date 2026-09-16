@@ -83,8 +83,8 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
-import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.LogExplorer.Log (virtualTable)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
@@ -1192,7 +1192,6 @@ investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert
           -- both together, and closeDetailPanel puts them back.
           div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
           LogItem.detailsPanel_ pid Nothing LogItem.IssuesPanel
-
 
 
 -- | Collapsible AI chat, open-state in localStorage and driven by a checkbox +

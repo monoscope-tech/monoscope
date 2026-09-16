@@ -87,7 +87,6 @@ import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((.~), (^.), (^..))
-import Data.Default (def)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -95,6 +94,7 @@ import Data.Aeson.Types (KeyValue (..))
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
+import Data.Default (def)
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified

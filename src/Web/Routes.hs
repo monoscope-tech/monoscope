@@ -160,9 +160,9 @@ type family LogDataField (sym :: Symbol) :: Symbol where
   LogDataField "targetSpans" = "target-spans"
   LogDataField sym = sym
 
+
 data LogDataFieldExp :: Symbol -> Exp Symbol
 type instance Eval (LogDataFieldExp sym) = LogDataField sym
-
 
 
 -- =============================================================================
