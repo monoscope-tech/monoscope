@@ -20,6 +20,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
@@ -47,6 +48,21 @@ spec :: Spec
 -- isolation + parallelism (same as GitSyncSpec).
 spec = sequential $ aroundAll withTestResources do
   describe "Query Log Monitors" do
+    it "keeps Slack error fallbacks concise and metadata subordinate to the exception" \_ -> do
+      let err =
+            def
+              { ErrorPatterns.errorType = "HttpException"
+              , ErrorPatterns.message = T.replicate 50 "HttpExceptionRequest Request { host = api.example.com path = /oauth/token } "
+              , ErrorPatterns.serviceName = Just "monoscope-dev"
+              }
+          (root, reply) = Mail.errorIncidentMessages Mail.NewRuntimeError err frozenTime Nothing "https://example.com" "https://example.com/issues/1" Nothing (Just "1/hr")
+          rootText = decodeUtf8 @Text $ toStrict $ AE.encode root
+          replyText = decodeUtf8 @Text $ toStrict $ AE.encode reply
+      rootText `shouldSatisfy` T.isInfixOf "```HttpExceptionRequest"
+      rootText `shouldSatisfy` T.isInfixOf "monoscope-dev · 1/hr · Observed"
+      rootText `shouldSatisfy` not . T.isInfixOf (ErrorPatterns.message err)
+      replyText `shouldSatisfy` T.isInfixOf "Open issue"
+
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
       let queryMonitor =

@@ -249,7 +249,7 @@ slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> 
 slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   slackAttachment channelId msgs.color
     $ [slackSection title, slackSection body]
-    <> [slackContext meta | not (null meta)]
+    <> maybeToList (slackContext . pure <$> inlineMeta)
     <> maybeToList (slackImage "Error trend" Nothing <$> chartUrlM)
     <> [slackActions buttons]
   where
@@ -261,13 +261,11 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     (titleEmoji, titleLabel) = case ongoingForM of
       Just d -> (":hourglass_flowing_sand:", "Still firing · " <> d)
       Nothing -> (msgs.slackEmoji, msgs.alertLabel)
-    title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> err.errorType <> " in " <> project <> ">"
-    body = "```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```"
+    title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> incidentHeadline err.errorType <> " in " <> slackEscape project <> ">"
+    body = errorSnippet 600 err
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     tidM = err.traceId >>= guarded (not . T.null)
-    meta =
-      (errMetaPairs "First seen" err occTextM firstSeen <> maybeToList (("Trace",) . T.take 16 <$> tidM))
-        <&> \(lbl, v) -> "*" <> lbl <> ":* " <> v
+    inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
     buttons =
       slackButton "🔍 Investigate" (Just "primary") targetUrl
         : maybeToList (tidM <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
@@ -340,25 +338,20 @@ monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl 
     text = "DATA UNAVAILABLE · " <> incidentHeadline monitor.alertConfig.title <> "\n" <> explanation <> " Recovery is unconfirmed.\n" <> previous <> "\nChecked " <> atUtc now
 
 
--- | Error episodes retain the onset/chart while reminders carry current evidence.
+-- | Error episodes retain their onset/chart while reminders carry current evidence.
 errorIncidentMessages :: RuntimeAlertType -> ErrorPatterns.ATError -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occurrence =
-  (incidentMessage text [current, onset, chartBlock, actions], incidentMessage text [current, actions])
+  (incidentMessage fallback [headline, detail, metadata, onset, chartBlock, actions], incidentMessage fallback [headline, detail, metadata, actions])
   where
     label = case alertType of NewRuntimeError -> "ALERTING"; RegressedErrors -> "REGRESSED"; EscalatingErrors -> "ESCALATING"; ErrorSpike -> "ESCALATING"
     title = incidentHeadline err.errorType
-    text =
-      label
-        <> " · "
-        <> title
-        <> "\n"
-        <> slackEscape (T.take 300 err.message)
-        <> "\nObserved "
-        <> atUtc now
-        <> foldMap (" · " <>) occurrence
-        <> foldMap ((" · " <>) . slackEscape) err.serviceName
-        <> foldMap ((" · " <>) . slackEscape) err.environment
-    current = slackSection text
+    -- Slack can expose the top-level text above Block Kit in notifications and
+    -- some clients. Keep it a compact fallback, not a second copy of the
+    -- exception and its metadata.
+    fallback = label <> " · " <> title <> foldMap (" · " <>) err.serviceName
+    headline = slackSection $ "<" <> incidentUrl <> "|:red_circle: *" <> label <> "* · " <> title <> ">"
+    detail = slackSection $ errorSnippet 600 err
+    metadata = slackContext [fromMaybe ("Observed " <> atUtc now) $ errorMetaLine err occurrence ("Observed " <> atUtc now)]
     onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
     chartBlock = tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Occurrences of " <> title) Nothing) chart
     actions =
@@ -418,6 +411,28 @@ resolvedErrorMessage err actor now projectUrl issueUrl =
 
 slackEscape :: Text -> Text
 slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;"
+
+
+-- | Raw exception messages are evidence, not the notification's hierarchy.
+-- Collapse arbitrary whitespace and fence them so a multi-kilobyte HTTP request
+-- or database plan cannot dominate Slack's alert view or escape its code block.
+errorSnippet :: Int -> ErrorPatterns.ATError -> Text
+errorSnippet limit err = "```" <> bounded <> "```"
+  where
+    message = T.unwords $ words $ T.replace "```" "'''" err.message
+    withFrame = maybe message (message <>) $ ("\n" <>) <$> topStackFrame err.stackTrace
+    bounded
+      | T.length withFrame <= limit = withFrame
+      | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"
+
+
+-- | One intentionally quiet context line. Slack lays multiple context elements
+-- out as a grid, which made service, rate, and timestamp compete with the
+-- exception; a single element keeps them secondary and scannable.
+errorMetaLine :: ErrorPatterns.ATError -> Maybe Text -> Text -> Maybe Text
+errorMetaLine err rate observed = case catMaybes [err.serviceName, rate, Just observed, err.environment] of
+  [] -> Nothing
+  parts -> Just $ T.intercalate " · " parts
 
 
 -- | Updating status must not replace the original onset and chart snapshot.

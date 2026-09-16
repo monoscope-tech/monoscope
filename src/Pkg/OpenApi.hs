@@ -21,6 +21,7 @@ import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Data.Yaml.Pretty qualified as YamlP
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude
@@ -102,11 +103,26 @@ jsonSchema fields = wrapArray rootDepth (render tree)
 
     render n
       | M.null n.kids = maybe (AE.object []) leafSchema n.leaf
-      | otherwise =
+      | otherwise = mergeObjectShape n.leaf objectShape
+      where
+        objectShape =
           AE.object
             [ "type" .= ("object" :: Text)
             , "properties" .= AE.object [AEK.fromText k .= wrapArray d (render sub) | (k, (d, sub)) <- M.toList n.kids]
             ]
+
+
+-- | A path can legitimately change shape across observed requests: an older
+-- client might send @metadata: "pending"@ while a newer one sends
+-- @metadata: {state: "pending"}@. Keep both alternatives rather than letting
+-- the nested-object rendering erase the primitive evidence.
+mergeObjectShape :: Maybe Evidence -> AE.Value -> AE.Value
+mergeObjectShape Nothing objectShape = objectShape
+mergeObjectShape (Just (fs, exs, tk)) objectShape
+  | HS.null nonObjectTypes = objectShape
+  | otherwise = AE.object ["anyOf" .= ([objectShape, leafSchema (fs{Catalog.types = nonObjectTypes}, exs, tk)] :: [AE.Value])]
+  where
+    nonObjectTypes = HS.delete Catalog.FTObject fs.types
 
 
 wrapArray :: Int -> AE.Value -> AE.Value
@@ -119,10 +135,18 @@ leafSchema :: Evidence -> AE.Value
 leafSchema (fs, exs, tk) =
   AE.object
     $ typeKV
-    <> maybe [] (\f -> ["format" .= f]) (listToMaybe $ mapMaybe openApiFormat $ sort $ HS.toList fs.formats)
+    <> maybe [] (\f -> ["format" .= f]) singleFormat
+    <> [("x-monoscope-observed-formats" :: AEK.Key) .= sort (HS.toList fs.formats) | not (HS.null fs.formats)]
     <> [("enum" :: AEK.Key) .= sort (HM.keys top) | fs.isEnum, top <- [maybe mempty (.top) tk], not (HM.null top)]
     <> maybe [] (\e -> ["example" .= e]) (exs >>= (\(Catalog.Examples vs) -> viaNonEmpty head (toList vs)))
+    <> [("examples" :: AEK.Key) .= vs | Just (Catalog.Examples vs) <- [exs], not (V.null vs)]
   where
+    -- JSON Schema's @format@ is a single assertion/annotation. When traffic
+    -- has shown several formats, retaining one would assert a false contract;
+    -- the extension above preserves the complete observed vocabulary instead.
+    singleFormat = case HS.toList fs.formats of
+      [f] -> openApiFormat f
+      _ -> Nothing
     typeKV = case L.nub $ sort $ mapMaybe jsonType $ HS.toList fs.types of
       [] -> []
       [t] -> ["type" .= t]

@@ -7,8 +7,10 @@
 -- generator reads.
 module Pages.Endpoints.ApiDocsSpec (spec) where
 
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _Object, _String)
+import Data.HashSet qualified as HS
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -18,11 +20,11 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Control.Lens ((^?))
 import Lucid (renderText, toHtml)
 import Models.Projects.Projects qualified as Projects
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.OpenApi qualified as OpenApi
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
@@ -105,6 +107,25 @@ fetchProjectSpec tr = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid Nothin
 
 spec :: Spec
 spec = sequential $ aroundAll withTestResources $ describe "API catalog – learned OpenAPI" do
+  it "preserves all observed examples and formats, including shape variants" do
+    let stringField formats = Catalog.FieldStruct (HS.singleton Catalog.FTString) formats Catalog.FCRequestBody False
+        evidence fs values = (fs, Just (Catalog.Examples $ V.fromList values), Nothing)
+        schema =
+          OpenApi.jsonSchema
+            [ ("metadata", evidence (stringField $ HS.singleton "{uuid}") [AE.String "legacy-id"])
+            , ("metadata.state", evidence (stringField $ HS.fromList ["text", "{uuid}"]) [AE.String "ready", AE.String "550e8400-e29b-41d4-a716-446655440000"])
+            ]
+        alternatives = fromMaybe V.empty $ schema ^? key "anyOf" . _Array
+        stateSchema = fromMaybe AE.Null $ schema ^? key "anyOf" . _Array >>= find (isJust . (^? key "properties"))
+    -- A primitive-to-object evolution is a union, not a silently discarded
+    -- primitive field. This is common while clients roll out independently.
+    alternatives `shouldSatisfy` any (\v -> v ^? key "type" . _String == Just "string")
+    stateSchema ^? key "properties" . key "state" . key "format" `shouldBe` Nothing
+    stateSchema ^? key "properties" . key "state" . key "x-monoscope-observed-formats" . _Array
+      `shouldBe` Just (V.fromList [AE.String "{uuid}", AE.String "text"])
+    stateSchema ^? key "properties" . key "state" . key "examples" . _Array
+      `shouldBe` Just (V.fromList [AE.String "ready", AE.String "550e8400-e29b-41d4-a716-446655440000"])
+
   it "documents a learned endpoint as a valid-shaped OpenAPI 3.1 operation" \tr -> do
     seed tr
     doc <- fetchSpec tr Nothing
@@ -126,6 +147,10 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
     -- Flattened body paths are rebuilt into nested JSON Schema, arrays included.
     let reqSchema = fromMaybe AE.Null $ op ^? key "requestBody" . key "content" . key "application/json" . key "schema"
     reqSchema ^? key "properties" . key "customer" . key "properties" . key "email" . key "format" . _String `shouldBe` Just "email"
+    reqSchema ^? key "properties" . key "customer" . key "properties" . key "email" . key "x-monoscope-observed-formats" . _Array
+      `shouldBe` Just (V.singleton (AE.String "{email}"))
+    reqSchema ^? key "properties" . key "customer" . key "properties" . key "email" . key "examples" . _Array
+      `shouldBe` Just (V.singleton (AE.String "a@b.co"))
     reqSchema ^? key "properties" . key "items" . key "type" . _String `shouldBe` Just "array"
     reqSchema ^? key "properties" . key "items" . key "items" . key "properties" . key "qty" . key "type" . _String `shouldBe` Just "number"
 
