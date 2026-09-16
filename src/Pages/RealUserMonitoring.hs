@@ -13,7 +13,6 @@ module Pages.RealUserMonitoring (
   classifyVital,
   vitalKey,
   classifyUserAgent,
-  argmaxPayload,
   pageLabel,
 ) where
 
@@ -347,24 +346,11 @@ rumErrors scope =
       )
 
 
--- | The last page is the argmax of timestamp over page views, done portably: both stores
--- render a session's timestamps in one fixed-width lexicographically ordered text form, so
--- @MAX(concat(timestamp, '|', path))@ carries the newest page's path behind the first bar.
--- A plain @MAX(path)@ here picked the alphabetically largest URL over /all/ browser spans —
--- which on real traffic is a third-party font URL from a fetch span, not a page.
---
--- >>> argmaxPayload "2026-09-05 19:33:37.42+00|/checkout"
--- "/checkout"
-argmaxPayload :: Text -> Text
-argmaxPayload = T.drop 1 . T.dropWhile (/= '|')
-
-
 -- Text is matched against complete sessions before LIMIT, preserving their event totals.
 otelSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionRows scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
-    $ map (\s -> s{lastPage = argmaxPayload <$> s.lastPage})
-    <$> Hasql.interp
+    $ Hasql.interp
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
@@ -376,12 +362,10 @@ otelSessionRows scope match sessionFilter =
           <> [HI.sql|)::bigint,
           MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
           MAX(resource___service___name),
-          MAX(concat(CAST(timestamp AS TEXT), '|', |]
-          <> pagePath
-          <> [HI.sql|)) FILTER (WHERE |]
+          first_value(attributes___url___path ORDER BY timestamp) FILTER (WHERE |]
           <> pageViewPredicate
           <> [HI.sql|),
-          MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original)),
+          MAX(attributes___user_agent___original),
           false
         FROM otel_logs_and_spans
         WHERE |]

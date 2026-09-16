@@ -52,7 +52,6 @@ module Pages.Dashboards (
 
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEKey
 import Data.Default
 import Data.Effectful.Hasql qualified
 import Data.Effectful.UUID qualified as UUID
@@ -89,7 +88,6 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.BodyWrapper
@@ -98,7 +96,6 @@ import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..),
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
-import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
@@ -358,7 +355,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
     -- Where a logs widget's row click loads its details. A dashboard has no third
     -- pane to give it, so it is always the drawer.
-    LogItem.detailsPanel_ pid Nothing False
+    LogItem.detailsPanel_ pid Nothing LogItem.DrawerPanel
 
     -- ?expand=<widgetId> opens the widget in the global drawer. drawerLoadAttrs_ already
     -- checks the drawer toggle and fires its change handler (body overflow + focus trap),
@@ -981,30 +978,13 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
         ?~ renderText
           (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
-    -- Fetch table data
-    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
+    let (query, sql) = Widget.tableQuery widget (find ((== "table-sort") . fst) allParams >>= snd)
+    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
     -- Render the table with data server-side
     pure
       $ widget
       & #html
         ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
-  Widget.WTTraces -> do
-    tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
-    let trIds = V.map V.last tracesD.dataText
-    (shapeWithDuration, spanRecords') <-
-      concurrently
-        (Telemetry.getTraceShapes pid trIds)
-        (Telemetry.getSpanRecordsByTraceIds pid trIds Nothing)
-    let grouped = HM.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]
-        spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
-        serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-        colorsJson = encodeText $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
-        spansGrouped = HM.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
-
-    pure
-      $ widget
-      & #html
-        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> fetchWidgetData pid timeRange allParams widget
 
 

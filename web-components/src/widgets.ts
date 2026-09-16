@@ -1127,67 +1127,14 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
 }
 window.bindFunctionsToObjects = bindFunctionsToObjects;
 
-// Table sorting function
-(window as any).sortTable = (tableId: string, col: number, th: HTMLElement) => {
-  const table = document.getElementById(tableId) as HTMLTableElement;
-  if (!table) return;
-
-  const tbody = table.querySelector('tbody');
-  if (!tbody) return;
-
-  const rows = Array.from(tbody.rows);
-  const currentDir = th.dataset.sortDirection;
-  const dir = currentDir === 'asc' ? 'desc' : 'asc';
-
-  // Reset all headers to default state
-  table.querySelectorAll('th').forEach((header) => {
-    const arrow = header.querySelector('.sort-arrow');
-    if (arrow) {
-      header.dataset.sortDirection = 'none';
-      arrow.textContent = '↕';
-      arrow.setAttribute('data-sort', 'none');
-      // Remove opacity-100 and add opacity-0 for non-sorted columns
-      arrow.classList.remove('opacity-100');
-      arrow.classList.add('opacity-0');
-    }
-  });
-
-  // Update clicked header
-  th.dataset.sortDirection = dir;
-  const arrow = th.querySelector('.sort-arrow');
-  if (arrow) {
-    arrow.textContent = dir === 'asc' ? '↑' : '↓';
-    arrow.setAttribute('data-sort', dir);
-    // Make the arrow always visible for sorted column
-    arrow.classList.remove('opacity-0');
-    arrow.classList.add('opacity-100');
-  }
-
-  // Sort rows
-  rows.sort((a, b) => {
-    const aVal = a.cells[col]?.textContent?.trim() || '';
-    const bVal = b.cells[col]?.textContent?.trim() || '';
-
-    // Try numeric comparison first
-    const aNum = parseFloat(aVal.replace(/[^\d.-]/g, ''));
-    const bNum = parseFloat(bVal.replace(/[^\d.-]/g, ''));
-
-    if (!isNaN(aNum) && !isNaN(bNum)) {
-      return dir === 'asc' ? aNum - bNum : bNum - aNum;
-    }
-
-    // Then try date comparison
-    const aDate = new Date(aVal);
-    const bDate = new Date(bVal);
-    if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime())) {
-      return dir === 'asc' ? aDate.getTime() - bDate.getTime() : bDate.getTime() - aDate.getTime();
-    }
-
-    // Fall back to string comparison
-    return dir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-  });
-
-  tbody.append(...rows);
+// Sorting refetches the server's full result set before its LIMIT is applied.
+(window as any).sortTable = (header: HTMLElement) => {
+  const fetcher = header.closest('[data-table-fetch]');
+  const field = header.dataset.sortField;
+  if (!fetcher || !field) return;
+  const sort = (header.dataset.sortDirection === 'asc' ? '-' : '+') + field;
+  fetcher.setAttribute('hx-vals', JSON.stringify({ 'table-sort': sort }));
+  fetcher.dispatchEvent(new CustomEvent('table-sort', { bubbles: true }));
 };
 
 // Global delegated click handler for table rows with on_row_click

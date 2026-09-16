@@ -2070,7 +2070,7 @@ export class LogList extends LitElement {
       if (this.flipDirection) this.shouldScrollToBottom = false;
 
       if (width < 50) {
-        sideView.style.width = `550px`;
+        sideView.style.width = sideView.dataset.inlineWidth || '550px';
         updateUrlState('details_width', '550');
       }
 

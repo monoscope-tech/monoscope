@@ -156,6 +156,15 @@ data KeepPrefixExp :: Symbol -> Exp Symbol
 type instance Eval (KeepPrefixExp sym) = sym
 
 
+type family LogDataField (sym :: Symbol) :: Symbol where
+  LogDataField "targetSpans" = "target-spans"
+  LogDataField sym = sym
+
+data LogDataFieldExp :: Symbol -> Exp Symbol
+type instance Eval (LogDataFieldExp sym) = LogDataField sym
+
+
+
 -- =============================================================================
 -- Custom content types
 -- =============================================================================
@@ -580,7 +589,7 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
   { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
-  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPD "direction" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "sort" :> Get '[JSON] (RespHeaders Log.LogResult)
+  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> RecordParam LogDataFieldExp Log.LogDataQuery :> Get '[JSON] (RespHeaders Log.LogResult)
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
   , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
@@ -1265,7 +1274,7 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
   let widgetWithPid = widget & #_projectId ?~ pid
-      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
+      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
     if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid

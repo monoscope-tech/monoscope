@@ -87,6 +87,7 @@ import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((.~), (^.), (^..))
+import Data.Default (def)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -1573,7 +1574,7 @@ routeRequest tr path params
   | "/log_explorer" `T.isPrefixOf` path = do
       (_, pg) <-
         testServant tr
-          $ Log.logExplorerDataH testPid query Nothing Nothing Nothing since from to source Nothing (lookupParam "sort" params)
+          $ Log.logExplorerDataH testPid def{Log.query = query, Log.since = since, Log.from = from, Log.to = to, Log.source = source, Log.sort = lookupParam "sort" params}
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
       result <-

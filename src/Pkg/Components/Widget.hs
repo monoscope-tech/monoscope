@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -12,7 +12,6 @@ import Data.ByteString.Base16 qualified as B16
 import Data.Char (isDigit)
 import Data.Default
 import Data.Generics.Labels ()
-import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
@@ -112,7 +111,6 @@ data WidgetType
   | WTPieChart
   | WTAnomalies
   | WTTable
-  | WTTraces
   | WTFlamegraph
   | WTServiceMap -- Service dependency graph visualization
   | WTHeatmap -- Latency distribution heatmap
@@ -185,6 +183,7 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
+  , defaultSort :: Maybe Text -- Default ORDER BY for the {{table_sort}} SQL slot
   , rawQuery :: Maybe Text -- Original KQL query with {{const-...}} placeholders (for editor display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
@@ -301,7 +300,7 @@ data WidgetDataset = WidgetDataset
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
 chartQuery w
   | w.wType == WTStat = (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
-  | w.wType `elem` [WTLogs, WTTable, WTTopList, WTTraces] = (w.query, Charts.DTText)
+  | w.wType `elem` [WTLogs, WTTable, WTTopList] = (w.query, Charts.DTText)
   | otherwise = (w.query <&> \q -> if hasSummarize q && hasBinning q then q else q <> " | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
   where
     hasSummarize = T.isInfixOf "summarize" . T.toLower
@@ -337,6 +336,7 @@ data TableColumn = TableColumn
   { field :: Text
   , title :: Text
   , unit :: Maybe Text
+  , sortable :: Maybe Bool
   , clickable :: Maybe Bool
   , link :: Maybe Text
   , width :: Maybe Text
@@ -471,7 +471,6 @@ widget_ w' = case w.wType of
     div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
-  WTTraces -> wgtCard_ $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
@@ -500,7 +499,7 @@ widget_ w' = case w.wType of
                  ]
            ]
     widgetJson = encodeText w
-    autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
+    autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
       if isTrue w.naked
         then Relude.id
@@ -846,7 +845,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     menuItem_ tip extraAttrs = li_ . a_ ([class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" tip] <> extraAttrs)
 
 
--- | Shared card-shell for renderLogsWidget / renderTraceTable / renderTable:
+-- | Shared card-shell for renderLogsWidget / renderTable:
 -- outer flex-col wrapper, optional widget header, flex-1 fill, surface-raised
 -- card with @id="<wid>_bordered"@.  When @flexCol@ is True the inner card adds
 -- @flex flex-col@. Pass @extraAction@ to attach an action button to the header.
@@ -881,55 +880,74 @@ renderLogsWidget widget = do
       ("" :: Text)
 
 
--- | Shared sticky table @thead@ with sortable column headers. Each column is a
--- (title, optional align-class) pair. When @sortable@ is True the @th@ gets the
--- @window.sortTable@ onclick + a hover sort-arrow; otherwise it's a plain header.
-sortableTableHead_ :: Text -> Bool -> [(Text, Maybe Text)] -> Html ()
-sortableTableHead_ tableId sortable cols =
+-- | Sorting is opt-in; handwritten SQL must place the ordering slot before LIMIT.
+sortableColumn :: Widget -> TableColumn -> Bool
+sortableColumn widget col = col.sortable == Just True && maybe True (T.isInfixOf "{{table_sort}}") widget.sql
+
+
+-- | Resolve only a declared field; quote it as an identifier, never as SQL syntax.
+--
+-- >>> tableQuery def{query = Just "foo"} (Just "-unknown")
+-- (Just "foo",Nothing)
+tableQuery :: Widget -> Maybe Text -> (Maybe Text, Maybe Text)
+tableQuery widget sortParam = (query, sql)
+  where
+    selected = do
+      raw <- sortParam
+      (sign, name) <- T.uncons raw
+      guard (sign == '+' || sign == '-')
+      col <- find (\c -> c.field == name && sortableColumn widget c) (fold widget.columns)
+      pure (col.field, if sign == '-' then " DESC" else " ASC")
+    order = maybe (fromMaybe "1" widget.defaultSort) (\(name, direction) -> "\"" <> T.replace "\"" "\"\"" name <> "\"" <> direction <> " NULLS LAST") selected
+    sql = T.replace "{{table_sort}}" order <$> widget.sql
+    query = case (widget.sql, selected) of
+      (Nothing, Just (name, direction)) -> Just $ fromMaybe "" widget.query <> " | sort by " <> name <> T.toLower direction
+      _ -> widget.query
+
+
+sortableTableHead_ :: Widget -> Maybe Text -> Html ()
+sortableTableHead_ widget selected =
   thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
     $ tr_ []
-    $ ifor_ cols \idx (title, align) ->
-      th_
-        ( [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" align
-          , data_ "sort-direction" "none"
-          ]
-            <> [onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)" | sortable]
-        )
-        $ headerRow_ [] do
-          toHtml title
-          when sortable $ span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-
-
-renderTraceTable :: Widget -> Html ()
-renderTraceTable widget = renderTableShell widget [(c, Nothing) | c <- ["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]] []
+    $ forM_ (fold widget.columns) \col -> do
+      let direction = if selected == Just ("+" <> col.field) then "asc" else if selected == Just ("-" <> col.field) then "desc" else "none"
+          sortable = sortableColumn widget col
+      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")] $
+        if sortable
+          then button_ [type_ "button", class_ "w-full text-left cursor-pointer hover:bg-fillWeak group", data_ "sort-field" col.field, data_ "sort-direction" direction, onclick_ "window.sortTable(this)"] $ headerRow_ [] do
+            toHtml col.title
+            span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml (if direction == "asc" then "↑" else if direction == "desc" then "↓" else "↕" :: Text)
+          else headerRow_ [] $ toHtml col.title
 
 
 renderTable :: Widget -> Html ()
-renderTable widget = renderTableShell widget [(col.title, col.align) | col <- fromMaybe [] widget.columns] (rowClickTableAttrs widget)
+renderTable widget = renderTableShell widget (rowClickTableAttrs widget)
 
 
--- | Shared eager-fetch shell for renderTable / renderTraceTable: HTMX-loaded
+-- | Shared eager-fetch shell for renderTable: HTMX-loaded
 -- card whose body is either the already-rendered @widget.html@ or a loading
 -- table whose @thead@ uses the given column headers (+ optional extra @table@
 -- attrs, e.g. row-click data attributes).
-renderTableShell :: Widget -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
-renderTableShell widget headerCols tableAttrs = do
+renderTableShell :: Widget -> [Attribute] -> Html ()
+renderTableShell widget tableAttrs = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   withCardFrame True widget Nothing
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ "intersect once, update-query from:window"
+      , hxTrigger_ "intersect once, update-query from:window, table-sort"
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
       , hxExt_ "forward-page-params"
+      , term "hx-sync" "this:replace"
+      , data_ "table-fetch" ""
       ]
     $ case widget.html of
       Just html -> toHtmlRaw html
       Nothing -> table_ ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> tableAttrs) do
-        sortableTableHead_ tableId True headerCols
+        sortableTableHead_ widget Nothing
         tbody_ []
           $ tr_ []
           $ td_ [colspan_ "100", class_ "text-center py-8"]
@@ -1406,7 +1424,7 @@ renderTableWithDataAndParams widget dataRows params = do
         <> rowClickTableAttrs widget
     )
     do
-      sortableTableHead_ tableId True [(col.title, col.align) | col <- columns]
+      sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
       tbody_ [] do
         let maxValues = calculateMaxValues columns dataRows
             -- max formatted width per progress column, so bars line up
@@ -1433,33 +1451,6 @@ renderTableWithDataAndParams widget dataRows params = do
                   else renderLongTextOr widget col (getRowValue idx row)
 
 
-renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
-renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
-  let columns = fromMaybe [] widget.columns
-      tableId = maybeToMonoid widget.id
-  table_ [class_ "table table-sm w-full relative", id_ tableId] do
-    sortableTableHead_ tableId False [(col.title, col.align) | col <- columns]
-    tbody_ [] do
-      V.forM_ dataRows \row -> do
-        let val = getRowValue (V.length row - 1) row
-            cdrn = fromMaybe [] $ HM.lookup val spGroup
-            spjson = encodeText $ fromMaybe [] (HM.lookup val spansGrouped) <&> \x -> getSpanJson ((\(_, d, c) -> (d, c)) <$> find (\(n, _, _) -> n == x.spanName) cdrn) x
-            clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
-        tr_ [term "_" clcFun, class_ "cursor-pointer"]
-          $ ifor_ columns \idx col ->
-            if col.field == "latency_breakdown"
-              then td_ [class_ "py-2"] $ renderLatencyBreakdown cdrn
-              else td_ [class_ $ cellClass col] $ toHtml $ formatColumnValue col (getRowValue idx row)
-        tr_ [class_ "hidden"] do
-          td_ [colspan_ "100%"] do
-            when (isJust widget._projectId)
-              $ div_
-                [ class_ "w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
-                , id_ $ "flame-graph-container-" <> val
-                ]
-              $ renderFlameGraph val
-
-
 getSpanJson :: Maybe (Int, Int) -> Telemetry.SpanRecord -> AE.Value
 getSpanJson tgtM sp =
   AE.object
@@ -1472,31 +1463,6 @@ getSpanJson tgtM sp =
     , "hasErrors" AE..= spanHasErrors sp
     , "totalSpans" AE..= maybe 1 snd tgtM
     ]
-
-
-renderFlameGraph :: Text -> Html ()
-renderFlameGraph trId = do
-  div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ $ "time-container-" <> trId] pass
-  div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
-  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ $ "time-bar-indicator-" <> trId] do
-    div_ [class_ "relative h-full"] do
-      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> trId] "2 ms"
-      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
-
-
-renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()
-renderLatencyBreakdown groups = div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ "width:150px"] do
-  let durs = [fromIntegral d | (_, d, _) <- groups] :: [Double]
-      colors = getServiceColors $ V.fromList [n | (n, _, _) <- groups]
-      total = max 1 (sum durs) -- max 1 keeps an all-zero breakdown from producing NaN offsets
-      scale d = d / total * 150.0
-  forM_ (zip3 groups durs (scanl (+) 0 durs)) \((name, dur, _), d, offset) ->
-    div_
-      [ class_ $ "h-full absolute top-0 border  " <> fromMaybe "bg-black" (HM.lookup name colors)
-      , title_ $ name <> ": " <> show (dur `div` 1000000) <> " ms"
-      , style_ $ "width:" <> show (scale d) <> "px;" <> "left:" <> show (scale offset) <> "px;"
-      ]
-      pass
 
 
 getRowValue :: Int -> V.Vector Text -> Text

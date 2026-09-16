@@ -83,6 +83,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailTab_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_, untilLabel)
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
@@ -1190,29 +1191,8 @@ investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert
           -- Starts hidden alongside the collapsed pane; the swap handler below reveals
           -- both together, and closeDetailPanel puts them back.
           div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block opacity-0 pointer-events-none", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-          div_
-            [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/3 investigation-details"
-            , id_ "log_details_container"
-            , -- Collapsed until a row is selected: the log explorer's own panel does
-              -- this with `group-has-[#viz-logs:checked]` variants that do not exist
-              -- here, so the width is inline and `lg:w-1/3` is what the two handlers
-              -- below restore.
-              style_ "width:0"
-            , -- Last-click-wins; see the matching note in Pages.LogExplorer.Log.detailsPanel.
-              term "hx-sync" "this:replace"
-            , [__|on closeDetailPanel
-              set my *width to '0px'
-              remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-              add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-              call updateUrlState('details_width', '', 'delete')
-            end
-            on htmx:after:swap if event.target is me
-              set my *width to ''
-              remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
-              if window.innerWidth < 1024 call me.scrollIntoView({behavior:'smooth', block:'start'}) end
-            end|]
-            ]
-            $ htmxOverlayIndicator_ "details_indicator"
+          LogItem.detailsPanel_ pid Nothing LogItem.IssuesPanel
+
 
 
 -- | Collapsible AI chat, open-state in localStorage and driven by a checkbox +

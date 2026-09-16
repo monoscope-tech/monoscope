@@ -10,6 +10,7 @@ module Pages.LogExplorer.LogItem (
   spanHasErrors,
   spanBadge,
   detailsPanel_,
+  DetailsPanelLayout (..),
 ) where
 
 import Control.Lens (filtered, has, (^..), (^?), _Just)
@@ -165,11 +166,15 @@ closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-pane
 --
 -- @canDock@ says the page has an inline layout to offer at all. Pages without
 -- one (a dashboard) pin the mode checkbox on and hide the toggle.
-detailsPanel_ :: Projects.ProjectId -> Maybe Text -> Bool -> Html ()
-detailsPanel_ pid targetEventM canDock = div_ [class_ $ "contents group/details " <> memptyIfFalse canDock "details-dockable", term "hx-ext" "hx-live"] do
+data DetailsPanelLayout = ExplorerPanel | IssuesPanel | DrawerPanel
+  deriving stock (Eq)
+
+
+detailsPanel_ :: Projects.ProjectId -> Maybe Text -> DetailsPanelLayout -> Html ()
+detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details " <> memptyIfFalse (layout /= DrawerPanel) "details-dockable", term "hx-ext" "hx-live"] do
   input_
     $ [type_ "checkbox", class_ "hidden peer/drawer", id_ "details-drawer-mode"]
-    <> if canDock
+    <> if layout /= DrawerPanel
       then
         [ -- Seeded once, not bound: a standing `:checked` binding re-evaluates on the next
           -- DOM mutation and would overwrite the reader's click before its change event
@@ -181,8 +186,8 @@ detailsPanel_ pid targetEventM canDock = div_ [class_ $ "contents group/details 
           -- left at.
           term "hx-on:change"
             $ "localStorage.setItem('log_details_mode', this.checked ? 'drawer' : 'inline');"
-            <> "if (!this.checked) { const w = localStorage.getItem('resizer-details_width') || '550';"
-            <> " document.getElementById('log_details_container').style.width = w.endsWith('px') ? w : w + 'px';"
+            <> "if (!this.checked) { const panel = document.getElementById('log_details_container'); const w = panel.dataset.inlineWidth || localStorage.getItem('resizer-details_width') || '550';"
+            <> " document.getElementById('log_details_container').style.width = /[%a-z]/i.test(w) ? w : w + 'px';"
             <> " document.getElementById('resizer-details_width-wrapper')?.classList.remove('hidden', 'opacity-0', 'pointer-events-none'); }"
         ]
       else [checked_]
@@ -198,7 +203,7 @@ detailsPanel_ pid targetEventM canDock = div_ [class_ $ "contents group/details 
       ""
   div_
     [ class_
-        $ "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
+        $ (memptyIfFalse (layout == IssuesPanel) "peer-checked/open:max-w-full! " ) <> "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden "
         <> "group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto "
         <> "max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase "
         -- Drawer geometry. `!` on width/max-width beats the inline style the
@@ -211,6 +216,7 @@ detailsPanel_ pid targetEventM canDock = div_ [class_ $ "contents group/details 
         <> "peer-checked/drawer:fixed peer-checked/drawer:top-0 peer-checked/drawer:bottom-0 peer-checked/drawer:z-50 peer-checked/drawer:h-full peer-checked/drawer:w-[min(56rem,94vw)]! peer-checked/drawer:max-w-full! peer-checked/drawer:bg-bgBase peer-checked/drawer:border-l peer-checked/drawer:border-strokeWeak peer-checked/drawer:shadow-2xl peer-checked/drawer:overflow-y-auto peer-checked/drawer:transition-[right] peer-checked/drawer:right-[-100vw] "
         -- Open state. Inline mode never positions the panel, so this is inert there.
         <> "peer-checked/open:right-0! peer-checked/open:block!"
+    , data_ "inline-width" (if layout == IssuesPanel then "33.333333%" else "")
     , id_ "log_details_container"
     , -- Detail loads are last-click-wins. htmx's default sync strategy is "queue first",
       -- which drops a click made while another detail request is in flight: the new row

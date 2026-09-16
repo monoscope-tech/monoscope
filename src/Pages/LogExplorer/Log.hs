@@ -1,6 +1,7 @@
 module Pages.LogExplorer.Log (
   apiLogH,
   logExplorerDataH,
+  LogDataQuery (..),
   logExplorerSchemaH,
   logExplorerValidateH,
   QueryValidation (..),
@@ -34,7 +35,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Default (def)
+import Data.Default (Default, def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
@@ -77,6 +78,7 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -927,8 +929,24 @@ withSortSection sortM ast = ast <> maybeToList (parseMaybe pSortSection . ("sort
 
 -- | Log-row data endpoint. The log-list web component fetches this; the shell
 -- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
-logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
-logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM targetSpansM sortM = withSpan_ "log-explorer.data" [] do
+data LogDataQuery = LogDataQuery
+  { query :: Maybe Text
+  , cols :: Maybe Text
+  , cursor :: Maybe UTCTime
+  , direction :: Maybe PageDirection
+  , since :: Maybe Text
+  , from :: Maybe Text
+  , to :: Maybe Text
+  , source :: Maybe Text
+  , targetSpans :: Maybe Text
+  , sort :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromForm)
+
+
+logExplorerDataH :: Projects.ProjectId -> LogDataQuery -> ATAuthCtx (RespHeaders LogResult)
+logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursorM', direction = directionM, since = sinceM, from = fromM, to = toM, source = sourceM, targetSpans = targetSpansM, sort = sortM} = withSpan_ "log-explorer.data" [] do
   (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
@@ -1812,7 +1830,7 @@ apiLogsPage page = do
               on change[#create-alert-toggle.checked] from #create-alert-toggle trigger loadAlertForm on me|]
         ]
 
-    detailsPanel = LogItem.detailsPanel_ page.pid page.targetEvent True
+    detailsPanel = LogItem.detailsPanel_ page.pid page.targetEvent LogItem.ExplorerPanel
 
 
 -- | Inline-expand endpoint for the Sessions and Patterns visualizations. Returns

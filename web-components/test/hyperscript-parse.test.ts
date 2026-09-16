@@ -27,16 +27,10 @@ beforeAll(() => {
   // `processNode`, the path the browser takes — it does not execute `init` features.
   // That matters: running them evaluates real DOM/network code against jsdom.
   //
-  // The tradeoff is that `parse` accepts a single feature, so a legitimate
-  // multi-feature program (`js … end` followed by `on click …`) reports a spurious
-  // "Unexpected Token : <next feature keyword>" at the seam. Drop exactly that shape;
-  // everything else — including a bad token *inside* a feature body, which is the
-  // whole bug class here — still reports.
-  const FEATURE_SEAM = /^Unexpected Token : (on|init|def|js|behavior|worker|eventsource|socket)$/;
   parseErrors = (src: string) => {
     try {
       const result = hs.parse(src) as { errors?: Array<{ message?: string }> };
-      return (result?.errors ?? []).map(e => e?.message ?? String(e)).filter(m => !FEATURE_SEAM.test(m));
+      return (result?.errors ?? []).map(e => e?.message ?? String(e));
     } catch (e) {
       return [String(e)];
     }
@@ -61,6 +55,10 @@ type Snippet = { file: string; line: number; body: string };
  */
 const extractSnippets = (file: string): Snippet[] => {
   const text = readFileSync(file, 'utf8');
+  return extractSource(text, relative(REPO, file));
+};
+
+const extractSource = (text: string, file = 'fixture.hs'): Snippet[] => {
   const out: Snippet[] = [];
   // Both spellings of the same attribute: the `[__|…|]` quasiquoter, and the `_=`
   // attribute written by hand as `term "_" [text|…|]` — which is what every snippet
@@ -68,7 +66,7 @@ const extractSnippets = (file: string): Snippet[] => {
   for (const re of [/\[__\|([\s\S]*?)\|\]/g, /term\s+"_"\s*(?:\$\s*)?\[text\|([\s\S]*?)\|\]/g]) {
     for (let m = re.exec(text); m !== null; m = re.exec(text)) {
       out.push({
-        file: relative(REPO, file),
+        file,
         line: text.slice(0, m.index).split('\n').length,
         // Both NeatInterpolation spellings: `${x}` and the bare `$x` that `[text|…|]`
         // snippets use inside selectors (`#$targetPr-sidebar`).
@@ -88,6 +86,12 @@ describe('hyperscript literals in src/ parse', () => {
     // `-` as subtraction.
     expect(parseErrors('on change send tab-visible to #water_fall')).not.toEqual([]);
     expect(parseErrors('on change send "tab-visible" to #water_fall')).toEqual([]);
+    expect(parseErrors('on click add .foo end on change send tab-visible to #x')).not.toEqual([]);
+    expect(parseErrors('on click add .foo end on change send "tab-visible" to #x')).toEqual([]);
+  });
+
+  it.each(['[__|on click add .foo|]', 'term "_" [text|on click add .foo|]', 'term "_" $ [text|on click add .foo|]'])('extracts %s', source => {
+    expect(extractSource(source).map(s => s.body)).toEqual(['on click add .foo']);
   });
 
   it('every [__|…|] quasiquote in src/ parses', () => {
