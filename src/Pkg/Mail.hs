@@ -380,7 +380,7 @@ impactContext impact = ["Project " <> slackEscape impact.projectName] <> maybe [
 
 impactedUser :: AlertImpact -> [Text]
 impactedUser impact = case (slackEscape <$> impact.userName, slackEscape <$> impact.userEmail) of
-  (Just name, Just email) -> ["User " <> name <> " <" <> email <> ">"]
+  (Just name, Just email) -> ["User " <> name <> " &lt;" <> email <> "&gt;"]
   (Just name, Nothing) -> ["User " <> name]
   (Nothing, Just email) -> ["User " <> email]
   (Nothing, Nothing) -> []
@@ -442,8 +442,8 @@ slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;
 errorSnippet :: Int -> ErrorPatterns.ATError -> Text
 errorSnippet limit err = "```" <> bounded <> "```"
   where
-    message = T.unwords $ words $ T.replace "```" "'''" err.message
-    withFrame = maybe message (message <>) $ ("\n" <>) <$> topStackFrame err.stackTrace
+    message = unwords $ words $ T.replace "```" "'''" err.message
+    withFrame = maybe message ((message <>) . ("\n" <>)) $ topStackFrame err.stackTrace
     bounded
       | T.length withFrame <= limit = withFrame
       | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"

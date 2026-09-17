@@ -747,7 +747,7 @@ spec = around withTestResources do
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "var widgetJSON = {"
       html `shouldSatisfy` T.isInfixOf "\"type\":\"timeseries_line\""
-      find (T.isInfixOf "id=\"visualization-widget-container\"") (T.splitOn "<" html)
+      find (elem "id=\"visualization-widget-container\"" . T.words) (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "hx-vals=\"js:{...widgetJSON}\"")
 
   describe "Trace fullscreen scrolling" do

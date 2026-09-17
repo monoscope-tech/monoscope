@@ -291,7 +291,7 @@ mergeExamples incoming (Examples existing)
   | otherwise =
       let bounded = V.map boundExampleValue incoming
           seen = HS.fromList (V.toList existing)
-          fresh = V.filter (\v -> not (HS.member v seen)) bounded
+          fresh = V.fromList $ ordNub [v | v <- V.toList bounded, not (HS.member v seen)]
           merged = existing V.++ V.take (examplesCap - V.length existing) fresh
        in Examples merged
 
@@ -358,7 +358,7 @@ mergeFullWalk fieldsCap newScope walk now e =
           fs0 = HM.lookupDefault (FieldStruct HS.empty HS.empty cat False) path flds
           fs1 = fs0{types = fs0.types <> kinds, formats = fs0.formats <> fmts, category = cat}
           flds' = HM.insert path fs1 flds
-          vals' = HM.insertWith (\new old -> mergeExamples new.values old) path (Examples bareValues) vals
+          vals' = HM.insertWith (\new old -> mergeExamples new.values old) path (mergeExamples bareValues (Examples V.empty)) vals
           cnts' = HM.alter (Just . bumpTopK bareValues . fromMaybe emptyTopK) path cnts
        in (flds', vals', cnts')
 

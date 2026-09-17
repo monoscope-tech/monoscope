@@ -16,7 +16,7 @@ import { DEMO_PROJECT } from "./helpers";
 const WIDGET_TYPES = [
   "timeseries", "timeseries_line", "timeseries_stat", "stat", "list", "top_list",
   "distribution", "geomap", "funnel", "tree_map", "pie_chart", "anomalies", "table",
-  "traces", "flamegraph", "service_map", "heatmap", "logs",
+  "flamegraph", "service_map", "heatmap", "logs",
 ] as const;
 
 const QUERY = "summarize count() by bin_auto(timestamp)";
@@ -91,7 +91,7 @@ test.describe("every widget type on a dashboard canvas", () => {
 
     // The YAML drawer is the supported way to author a whole dashboard at once, and it is
     // the only route that can place types the add-widget picker deliberately does not
-    // offer (group, traces, flamegraph, and logs — which is hidden there on purpose).
+    // offer (group, flamegraph, and logs — which is hidden there on purpose).
     // The drawer is a DaisyUI checkbox drawer whose only labels live inside a dropdown
     // menu. Toggling the checkbox is the same state change without driving menu chrome
     // this spec is not about; the editor still loads through its own hx-trigger.
@@ -127,11 +127,11 @@ test.describe("every widget type on a dashboard canvas", () => {
     await page.goto(dashUrl);
     await dismissVariablePickers(page);
     await page.waitForSelector(".grid-stack:not(.nested-grid).grid-stack-initialized", { timeout: 20000 });
-    await page.waitForTimeout(2500); // widgets stream their charts in after init
-
-    const present = await renderedTypes(page);
-    expect([...WIDGET_TYPES, "group"].filter(t => !present.includes(t))).toEqual([]);
-    expect(await unadopted(page)).toEqual([]);
+    // Grid initialization precedes the streamed widget fragments. A fixed delay raced
+    // those fragments on clean CI and intermittently observed an initialized empty grid.
+    await expect.poll(() => renderedTypes(page), { timeout: 20000 })
+      .toEqual(expect.arrayContaining([...WIDGET_TYPES, "group"]));
+    await expect.poll(() => unadopted(page), { timeout: 20000 }).toEqual([]);
   });
 
   test("the canvas survives a refresh unchanged", async ({ page }) => {

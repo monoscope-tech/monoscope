@@ -362,10 +362,12 @@ otelSessionRows scope match sessionFilter =
           <> [HI.sql|)::bigint,
           MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
           MAX(resource___service___name),
-          first_value(attributes___url___path ORDER BY timestamp) FILTER (WHERE |]
+          first_value(|]
+          <> pagePath
+          <> [HI.sql| ORDER BY timestamp DESC) FILTER (WHERE |]
           <> pageViewPredicate
           <> [HI.sql|),
-          MAX(attributes___user_agent___original),
+          MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original)),
           false
         FROM otel_logs_and_spans
         WHERE |]
