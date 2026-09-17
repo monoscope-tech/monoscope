@@ -3696,7 +3696,7 @@ autoAckProvenEndpoints pid = do
                   WHERE hash = ANY(#{hashes}::text[])
                   GROUP BY hash, hour_bucket |]
     buckets :: [(Text, Int64, Int64)] <- concat <$> traverse readWindow windows
-    let byHash = Map.fromListWith (<>) [(h, [(b, c)]) | (h, b, c) <- buckets]
+    let byHash = Map.fromListWith (Map.unionWith (+)) [(h, Map.singleton b c) | (h, b, c) <- buckets]
         -- Traffic from the issue's own hour onwards: the endpoint having been
         -- hit before we noticed it is not evidence that it is real. Whole hours,
         -- so up to the creating hour's leading minutes can slip in — immaterial
@@ -3704,8 +3704,8 @@ autoAckProvenEndpoints pid = do
         -- would throw away most of a real endpoint's first hour of traffic.
         issueHour createdAt = floor (utcTimeToPOSIXSeconds createdAt) `div` 3600
         provenSince createdAt h =
-          let after = [c | (b, c) <- Map.findWithDefault [] h byHash, b >= issueHour createdAt]
-           in (sum after, fromIntegral (length after))
+          let after = Map.filterWithKey (\b _ -> b >= issueHour createdAt) $ Map.findWithDefault Map.empty h byHash
+           in (sum after, fromIntegral $ Map.size after)
         proven =
           [ (iid, total, hrs)
           | (iid, h, createdAt) <- candidates

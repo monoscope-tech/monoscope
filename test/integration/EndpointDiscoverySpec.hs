@@ -416,8 +416,8 @@ spec = around withTestResources do
           -- otherwise mint colliding ids. otel_logs_and_spans is NOT cleared between
           -- tests, but every timestamp here is frozenTime-relative, so re-runs land in
           -- the same hour buckets and the hour-spread assertions stay deterministic.
-          seedTrafficAt origin tr key path status n spreadHours =
-            forM_ [1 .. n] \i ->
+          seedTrafficAtTimes tr key path status timestamps =
+            forM_ (zip [1 ..] timestamps) \(i, timestamp) ->
               ingestSpanLinked
                 tr
                 key
@@ -428,7 +428,9 @@ spec = around withTestResources do
                 -- Same attribute pair createOtelSpanAtTime uses (the shape known to
                 -- produce endpoints), plus the status the sweep gates on.
                 [("http.method", "GET"), ("http.route", path), ("http.response.status_code", status), ("server.address", host)]
-                (addUTCTime (fromIntegral ((i `mod` spreadHours) * 3600 + 60)) origin)
+                timestamp
+          seedTrafficAt origin tr key path status n spreadHours =
+            seedTrafficAtTimes tr key path status [addUTCTime (fromIntegral ((i `mod` spreadHours) * 3600 + 60)) origin | i <- [1 .. n]]
           seedTraffic = seedTrafficAt frozenTime
 
       it "acks an endpoint proven by served traffic, and leaves a scanner burst alone" \tr -> do
@@ -481,6 +483,23 @@ spec = around withTestResources do
         runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
 
         queryIssueAcked tr h `shouldReturn` True
+
+      it "counts one UTC hour only once when it crosses a daily scan boundary" \tr -> do
+        clearTestEndpoints tr
+        key <- createTestAPIKey tr pid "auto-ack-same-hour-boundary-key"
+        let path = "/v1/same-hour-boundary"
+            scanNow = addUTCTime (30 * 60) frozenTime
+            boundary = addUTCTime (-24 * 3600) scanNow
+            timestamps = replicate 10 (addUTCTime (-10 * 60) boundary) <> replicate 10 (addUTCTime (10 * 60) boundary)
+        seedTrafficAtTimes tr key path "200" timestamps
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        h <- endpointHashFor tr path
+        pinIssueAt tr (addUTCTime (-26 * 3600) scanNow) h True
+
+        runTestBg scanNow tr $ BackgroundJobs.autoAckProvenEndpoints pid
+
+        queryIssueAcked tr h `shouldReturn` False
 
       it "leaves an un-notified issue alone, so the ack cannot swallow its alert" \tr -> do
         clearTestEndpoints tr
