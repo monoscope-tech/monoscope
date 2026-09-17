@@ -228,13 +228,13 @@ extractBinInterval sqlCfg =
 -- | Generate a cache key from query components
 generateCacheKey :: Projects.ProjectId -> Maybe Sources -> [Section] -> SqlQueryCfg -> CacheKey
 generateCacheKey pid sourceM sections sqlCfg =
-  -- Environment changes the generated WHERE clause while leaving the user's KQL
-  -- untouched. It must therefore participate in the cache identity; otherwise a
-  -- production response can be served after switching the sticky selector to staging.
+  -- Scope changes the generated WHERE clause while leaving the user's KQL untouched.
+  -- It must therefore participate in cache identity; otherwise a production or
+  -- checkout response can be served after switching scope.
   CacheKey
     { projectId = pid
     , source = maybe "spans" toQText sourceM
-    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment
+    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service
     , binInterval = extractBinInterval sqlCfg sections
     }
 

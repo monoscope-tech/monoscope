@@ -432,6 +432,29 @@ spec = sequential $ aroundAll withTestResources do
         Right values -> any (\case AE.Object obj -> KM.lookup "error" obj == Just (AE.String message); _ -> False) values
         Left _ -> False
 
+    it "applies environment and service scope through a raw-SQL template" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "raw-template-scope"
+      let ingest env service traceId spanId =
+            ingestSpanReq tr
+              $ mkSpanRequest
+                traceId
+                spanId
+                Nothing
+                ("GET /raw/" <> service)
+                []
+                Nothing
+                []
+                (mkResource apiKey [mkAttr "deployment.environment.name" env, mkAttr "service.name" service])
+                frozenTime
+          raw = "SELECT resource___service___name FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND name LIKE 'GET /raw/%' ORDER BY 1"
+          scope = [("environment", Just "production"), ("service", Just "checkout")]
+      ingest "production" "checkout" "10000000000000000000000000000001" "1000000000000001"
+      ingest "production" "catalog" "20000000000000000000000000000002" "2000000000000002"
+      ingest "staging" "checkout" "30000000000000000000000000000003" "3000000000000003"
+      scoped <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just raw) (Just "24H") Nothing Nothing Nothing Nothing scope
+      scoped.error `shouldBe` Nothing
+      scoped.dataText `shouldBe` V.singleton (V.singleton "checkout")
+
     -- The same trap one decoder over: a plotted widget's SQL runs as DTMetric, whose leading
     -- column the pivot reads as an epoch number. `time_bucket('1m', timestamp) AS timestamp`
     -- — the obvious way to bucket by hand, and what the KQL builder writes before wrapping it

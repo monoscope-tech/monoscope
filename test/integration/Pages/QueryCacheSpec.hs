@@ -16,14 +16,14 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Charts qualified as Charts
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Parser (dateRange, defSqlQueryCfg, parseQueryToAST)
+import Pkg.Parser (dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Servant.Types.SourceT qualified as Source
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 
 
@@ -122,6 +122,12 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 
 spec :: Spec
 spec = around withTestResources do
+  describe "Chart cache scope" do
+    it "distinguishes service scope in generated cache keys" $ \_ -> do
+      sections <- either (fail . toString) pure $ parseQueryToAST "summarize count(*) by bin(timestamp, 1h)"
+      let cfg service = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just baseTime, Just $ addUTCTime 3600 baseTime), environment = Just "production", service = Just service}
+      QC.generateCacheKey pid Nothing sections (cfg "checkout") `shouldNotBe` QC.generateCacheKey pid Nothing sections (cfg "catalog")
+
   describe "Streaming cache and chunk boundaries" do
     it "recovers a generated chart read when multiple idle pooled connections close" $ \tr -> do
       clearAllTestData tr

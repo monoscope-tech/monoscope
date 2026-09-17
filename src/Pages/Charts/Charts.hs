@@ -155,6 +155,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
       -- browser query parameter. Other callers may leave it absent for deliberately
       -- cross-environment exports and background work.
       environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
+      service = Utils.nonEmptyT $ join $ lookup "service" allParams
   let mappngSQL = variablePresets density pid.toText fromD toD allParams now
       mappngKQL = variablePresetsKQL density pid.toText fromD toD allParams now
   let source = parseMaybe pSource =<< sourceM
@@ -166,28 +167,29 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
   case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source binDensity environment queryAST queryM querySQLM mappngSQL now fromD toD = do
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source binDensity environment service queryAST queryM querySQLM mappngSQL now fromD toD = do
   let sqlQueryCfg =
         (defSqlQueryCfg pid now source Nothing)
           { dateRange = (fromD, toD)
           , binDensity
           , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
           , environment
+          , service
           }
 
   case querySQLM of
     Just querySQL
-      | Just message <- rawSqlScopeError environment querySQL ->
+      | Just message <- rawSqlScopeError environment service querySQL ->
           pure (emptyMetricsFor now fromD toD){error = Just message}
     Just querySQL -> do
       let (_, qc) = queryASTToComponents sqlQueryCfg queryAST
-      let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
+      let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", rawAstFilters sqlQueryCfg qc)]
       let sqlQuery = replacePlaceholders mappngSQL' querySQL
       let tbl = sourceTable source
       convertTimestampsToMs
@@ -212,10 +214,29 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment quer
 -- authenticated route selected an environment, make scope an explicit template
 -- contract instead of silently showing every environment. The generated AST
 -- predicate also includes project and time constraints.
-rawSqlScopeError :: Maybe Text -> Text -> Maybe Text
-rawSqlScopeError environment template
-  | isNothing environment || "{{query_ast_filters}}" `T.isInfixOf` template = Nothing
-  | otherwise = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
+rawSqlScopeError :: Maybe Text -> Maybe Text -> Text -> Maybe Text
+rawSqlScopeError environment service template
+  | isNothing environment && isNothing service = Nothing
+  | "{{query_ast_filters}}" `T.isInfixOf` template = Nothing
+  | isJust environment && isNothing service = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
+  | isNothing environment && isJust service = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected service."
+  | otherwise = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment and service."
+
+
+-- | A raw template chooses its own insertion point, but never its scope. The
+-- placeholder expands to the same project, time, environment, service and KQL
+-- predicates that the generated path uses.
+rawAstFilters :: SqlQueryCfg -> QueryComponents -> Text
+rawAstFilters cfg qc =
+  T.intercalate " AND "
+    $ filter
+      (not . T.null)
+      [ "project_id = '" <> cfg.pid.toText <> "'"
+      , buildDateRange cfg
+      , buildEnvFilter cfg
+      , buildServiceFilter cfg
+      , fromMaybe "TRUE" qc.whereClause
+      ]
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -675,6 +696,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       density = fromMaybe def densityM
       source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
       environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
+      service = Utils.nonEmptyT $ join $ lookup "service" allParams
       mapping = variablePresets density pid.toText fromD toD allParams now
       mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
       raw = Utils.nonEmptyT querySQLM
@@ -682,15 +704,15 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
         maybe
           (first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
           Left
-          (raw >>= rawSqlScopeError environment)
-      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource, environment}
+          (raw >>= rawSqlScopeError environment service)
+      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource, environment, service}
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do
           let (_, components) = queryASTToComponents cfg ast
               actual = if isJust raw then requested else decoderFor requested ast
               sql = case raw of
-                Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) components.whereClause)]) template
+                Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", rawAstFilters cfg components)]) template
                 Nothing -> maybeToMonoid components.finalSummarizeQuery
               convert = convertTimestampsToMs . coerceBinnedScalar requested actual
           let fetch cfg' ast' progress = do
