@@ -3696,7 +3696,7 @@ autoAckProvenEndpoints pid = do
                   WHERE hash = ANY(#{hashes}::text[])
                   GROUP BY hash, hour_bucket |]
     buckets :: [(Text, Int64, Int64)] <- concat <$> traverse readWindow windows
-    let byHash = Map.fromListWith (Map.unionWith (+)) [(h, Map.singleton b c) | (h, b, c) <- buckets]
+    let byHash = Map.fromListWith (Map.unionWith (+)) [(h, one (b, c)) | (h, b, c) <- buckets]
         -- Traffic from the issue's own hour onwards: the endpoint having been
         -- hit before we noticed it is not evidence that it is real. Whole hours,
         -- so up to the creating hour's leading minutes can slip in — immaterial
