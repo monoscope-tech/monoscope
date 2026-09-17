@@ -43,7 +43,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), QueryError (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC

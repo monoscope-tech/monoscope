@@ -248,6 +248,7 @@ jsonArrayRows =
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
 hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"]
   where
+    pidTxt :: Text
     pidTxt = pid.toText
 
 
@@ -603,6 +604,7 @@ fetchLogPatterns
   -> [Section]
   -> (Maybe UTCTime, Maybe UTCTime)
   -> Maybe Sources
+  -> Maybe Text
   -> Maybe Text
   -> Maybe Text
   -> Int

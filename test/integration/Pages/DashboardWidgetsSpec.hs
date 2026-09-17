@@ -434,10 +434,10 @@ spec = sequential $ aroundAll withTestResources do
 
     it "applies environment and service scope through a raw-SQL template" \tr -> do
       apiKey <- createTestAPIKey tr testPid "raw-template-scope"
-      let ingest env service traceId spanId =
+      let ingest env service traceIdValue spanId =
             ingestSpanReq tr
               $ mkSpanRequest
-                traceId
+                traceIdValue
                 spanId
                 Nothing
                 ("GET /raw/" <> service)

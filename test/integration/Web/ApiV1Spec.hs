@@ -3,6 +3,7 @@ module Web.ApiV1Spec (spec) where
 import Control.Lens ((^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
 import Data.Map qualified as Map
@@ -410,8 +411,8 @@ spec = around withTestResources do
 
       it "includes optional environment and service scopes in the EventsQuery schema" $ \_tr -> do
         let bodyProperties = specJson ^? key "components" . key "schemas" . key "EventsQuery" . key "properties" . _Object
-        bodyProperties `shouldSatisfy` maybe False (AEK.member "environment")
-        bodyProperties `shouldSatisfy` maybe False (AEK.member "service")
+        bodyProperties `shouldSatisfy` maybe False (AEKM.member "environment")
+        bodyProperties `shouldSatisfy` maybe False (AEKM.member "service")
 
       it "includes attributes only when requested" $ \tr -> do
         result <-

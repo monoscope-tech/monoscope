@@ -60,7 +60,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (bulkActionSlug)
-import Pkg.Parser (alertLookbackMins, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
+import Pkg.Parser (SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
