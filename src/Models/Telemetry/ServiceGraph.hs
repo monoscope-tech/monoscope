@@ -803,9 +803,13 @@ rollupEndpointDependencyEdges useTf pid lo hi =
           AND kind IN ('server','client','producer','consumer')
       ),
       endpoints AS (
-        SELECT e.tid, e.sid, e.env, endpoint_hash
-        FROM sp e CROSS JOIN UNNEST(e.hashes) AS h(endpoint_hash)
-        WHERE e.knd = 'server' AND endpoint_hash NOT LIKE 'err:%'
+        SELECT tid, sid, env, endpoint_hash
+        FROM (
+          SELECT tid, sid, env, UNNEST(hashes) endpoint_hash
+          FROM sp
+          WHERE knd = 'server'
+        ) expanded
+        WHERE endpoint_hash NOT LIKE 'err:%'
       ),
       hops AS (
         SELECT e.env, e.endpoint_hash, p.tid, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur

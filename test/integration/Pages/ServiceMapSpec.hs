@@ -1,6 +1,7 @@
 module Pages.ServiceMapSpec (spec) where
 
 import Control.Exception (evaluate)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -11,6 +12,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), EndpointRollupEdge (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, endpointDependencyGraphForRange, projectsWithSpansInRange, rollupEndpointDependencyEdges, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertEndpointDependencyEdges, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -20,6 +22,7 @@ import Pkg.TestClock (setTestTime)
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Relude
+import System.Config qualified as Config
 import Test.Hspec
 
 
@@ -262,24 +265,46 @@ spec = around withTestResources do
       g.truncated `shouldBe` False
 
     it "endpointRollup_keepsOnlyTheSelectedEndpointDirectDependency" \tr -> do
-      apiKey <- createTestAPIKey tr testPid "endpoint-dependency-key"
+      pid <- createTestProject tr "endpoint dependency rollup"
+      apiKey <- createTestAPIKey tr pid "endpoint-dependency-key"
       ingestFixture tr apiKey frozenTime
       let endpointHash = "endpoint-checkout"
+          secondEndpointHash = "endpoint-checkout-alias"
+          endpointHashes = [endpointHash, secondEndpointHash, "err:ignored"] :: [Text]
+          expectedEdges =
+            L.sort
+              [ (endpointHash, "checkout", NKService, 1, 1)
+              , (secondEndpointHash, "checkout", NKService, 1, 1)
+              ]
+          relevantEdges edges =
+            L.sort
+              [ (e.endpointHash, e.targetKey, e.targetKind, e.reqCount, e.traceCount)
+              | e <- edges
+              , e.endpointHash `elem` endpointHashes
+              ]
       void
         $ withPool tr.trPool
         $ DBT.execute
-          [sql| UPDATE otel_logs_and_spans SET hashes = ARRAY[?] WHERE project_id = ? AND name = ? |]
-          (endpointHash, testPid, "GET /checkout" :: Text)
+          [sql| UPDATE otel_logs_and_spans SET hashes = ARRAY[?, ?, ?] WHERE project_id = ? AND name = ? |]
+          (endpointHash, secondEndpointHash, "err:ignored" :: Text, pid, "GET /checkout" :: Text)
+      when (Config.enableTimefusionReads $ Config.env tr.trATCtx) do
+        runQueryEffect tr
+          $ Hasql.withHasqlTimefusion True
+          $ Hasql.interpExecute_
+            [HI.sql| UPDATE otel_logs_and_spans SET hashes = #{endpointHashes} WHERE project_id = #{pid.toText} AND name = 'GET /checkout' |]
       edges <- runTestBg frozenTime tr do
-        rolled <- rollupEndpointDependencyEdges False testPid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
-        upsertEndpointDependencyEdges testPid frozenTime rolled
+        rolled <- rollupEndpointDependencyEdges False pid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        upsertEndpointDependencyEdges pid frozenTime rolled
         pure rolled
-      [(e.endpointHash, e.targetKey, e.targetKind, e.reqCount, e.traceCount) | e <- edges, e.endpointHash == endpointHash]
-        `shouldBe` [(endpointHash, "checkout", NKService, 1, 1)]
+      relevantEdges edges `shouldBe` expectedEdges
+      when (Config.enableTimefusionReads $ Config.env tr.trATCtx) do
+        tfEdges <- runTestBg frozenTime tr $ rollupEndpointDependencyEdges True pid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        relevantEdges tfEdges `shouldBe` expectedEdges
+        relevantEdges tfEdges `shouldBe` relevantEdges edges
 
       -- The endpoint map is a rollup read, not another raw-span join. It has one synthetic
       -- entry node and exactly the selected endpoint's direct edge.
-      graph <- runTestBg frozenTime tr $ endpointDependencyGraphForRange testPid endpointHash (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      graph <- runTestBg frozenTime tr $ endpointDependencyGraphForRange pid endpointHash (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
       edgePairs graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
       (nodeBy graph ("endpoint:" <> endpointHash) <&> \n -> (n.label, n.kind, n.inferred))
         `shouldBe` Just ("Selected endpoint", NKEntry, False)
@@ -288,14 +313,14 @@ spec = around withTestResources do
       -- The shareable broader-map URL keeps the endpoint scope rather than falling back to
       -- the project's entire topology, and its empty state says what is absent.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, scopedPage) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
+      (_, scopedPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
       let ServiceMap.ServiceMapPage (PageCtx scopedConf scoped) = scopedPage
           scopedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml scopedPage
       scopedConf.pageTitle `shouldBe` "Endpoint Dependency Map"
       edgePairs scoped.graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
       scopedHtml `shouldContainAll` ["endpoint-service-map-data", "Selected endpoint", "checkout", "Dependencies (1)"]
 
-      (_, emptyPage) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
+      (_, emptyPage) <- testServant tr $ ServiceMap.serviceMapGetH pid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
       let emptyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml emptyPage
       emptyHtml `shouldSatisfy` T.isInfixOf "No direct dependencies in this range"
 
