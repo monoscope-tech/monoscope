@@ -284,6 +284,7 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "from"
           :> QPT "to"
           :> QPT "source"
+          :> QPT "environment"
           :> Get '[JSON] Charts.MetricsData
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
   , facetsGet
@@ -826,8 +827,12 @@ apiV1Server logger env tp pid =
   ApiV1Routes
     { eventsSearch = Log.queryEvents pid
     , eventGet = ApiH.apiEventGet pid
-    , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
-        Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing []
+    , -- API clients have no browser session/environment cookie. Omission is the
+      -- intentional cross-environment default; callers that need prod/staging
+      -- separation state it explicitly and receive the same generated predicate
+      -- as an authenticated chart request.
+      metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM environmentM ->
+        Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing [("environment", environmentM)]
     , -- C1: derive schema from the live introspected column set (seeded at
       -- startup) and decorate with the hand-coded descriptions / examples in
       -- 'Schema.telemetrySchema'. Live entries without a decoration get a
