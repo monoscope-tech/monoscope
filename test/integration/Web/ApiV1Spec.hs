@@ -63,9 +63,12 @@ spec = around withTestResources do
           Just arr -> not (null arr)
           Nothing -> False
 
-      it "makes metrics environment scope an explicit optional parameter" $ \_tr -> do
+      it "makes metrics and events environment scope explicit optional parameters" $ \_tr -> do
         let metricParameters = specJson ^? key "paths" . key "/metrics" . key "get" . key "parameters" . _Array
-        metricParameters `shouldSatisfy` maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just "environment")
+            eventParameters = specJson ^? key "paths" . key "/events" . key "get" . key "parameters" . _Array
+            hasEnvironment = maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just "environment")
+        metricParameters `shouldSatisfy` hasEnvironment
+        eventParameters `shouldSatisfy` hasEnvironment
 
       -- This list doubles as the CLI contract: every path the CLI constructs
       -- (without the /api/v1 prefix the Servant base already provides) must
@@ -192,7 +195,7 @@ spec = around withTestResources do
       it "returns valid LogResult with expected JSON structure" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing
+            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "cols" . _Array) `shouldSatisfy` isJust
@@ -202,7 +205,7 @@ spec = around withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing)
+        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException

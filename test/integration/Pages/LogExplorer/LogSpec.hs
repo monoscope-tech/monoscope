@@ -184,10 +184,19 @@ spec = around withTestResources do
             (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
             let idx = fromMaybe (error "span_name not projected") $ V.elemIndex "span_name" (V.fromList cols)
             pure $ sort [n | r <- V.toList rows, Just (AE.String n) <- [r V.!? idx], "GET /env/" `T.isPrefixOf` n]
+          eventNamesFor envM = do
+            result <-
+              runAsBase tr
+                $ Log.queryEvents pid Nothing Nothing (toText . iso8601Show <$> fst range) (toText . iso8601Show <$> snd range) Nothing Nothing Nothing Nothing envM
+            let idx = fromMaybe (error "span_name not projected") $ HashMap.lookup "span_name" result.colIdxMap
+            pure $ sort [n | r <- V.toList result.logsData, Just (AE.String n) <- [r V.!? idx], "GET /env/" `T.isPrefixOf` n]
 
       eventually (namesFor Nothing) ((== 2) . length) `shouldReturn` ["GET /env/prod", "GET /env/staging"]
       namesFor (Just "prod") `shouldReturn` ["GET /env/prod"]
       namesFor (Just "staging") `shouldReturn` ["GET /env/staging"]
+      eventually (eventNamesFor Nothing) ((== 2) . length) `shouldReturn` ["GET /env/prod", "GET /env/staging"]
+      eventNamesFor (Just "prod") `shouldReturn` ["GET /env/prod"]
+      eventNamesFor (Just "staging") `shouldReturn` ["GET /env/staging"]
       -- An environment nothing reports is empty, not unfiltered — the difference between
       -- "no data here" and "here is everything" is the whole point of the control.
       namesFor (Just "does-not-exist") `shouldReturn` []
@@ -613,7 +622,7 @@ spec = around withTestResources do
       ingestMetric tr apiKey [] [] "summary.pressure" 80 (addUTCTime (-1) now)
       let fromTime = Just $ toText $ iso8601Show $ addUTCTime (-60) now
           toTime = Just $ toText $ iso8601Show $ addUTCTime 60 now
-          query suffix = runAsBase tr $ Log.queryEvents pid (Just $ "metrics | summarize peak=max(value)" <> suffix) Nothing fromTime toTime Nothing Nothing Nothing Nothing
+          query suffix = runAsBase tr $ Log.queryEvents pid (Just $ "metrics | summarize peak=max(value)" <> suffix) Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing
       scalar <- query ""
       scalar.cols `shouldBe` ["peak"]
       scalar.logsData `shouldBe` V.singleton (V.singleton $ AE.Number 80)
@@ -638,7 +647,7 @@ spec = around withTestResources do
           fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-120) frozenTime
           spanNameOf r row = HashMap.lookup "span_name" r.colIdxMap >>= (row V.!?) >>= \case AE.String t -> Just t; _ -> Nothing
           rootsOn r = [t | row <- V.toList r.logsData, Just t <- [spanNameOf r row], "evroot." `T.isPrefixOf` t]
-          runPage toM = runAsBase tr (Log.queryEvents testPid q Nothing fromTime toM Nothing (Just 2) (Just True) Nothing)
+          runPage toM = runAsBase tr (Log.queryEvents testPid q Nothing fromTime toM Nothing (Just 2) (Just True) Nothing Nothing)
           nextTo r = toText . iso8601Show <$> (r.cursor >>= nextCursor)
           drain toM acc pages = do
             r <- runPage toM

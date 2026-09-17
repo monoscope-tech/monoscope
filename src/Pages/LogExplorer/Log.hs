@@ -698,8 +698,8 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Eff es LogResult
-queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM = do
+queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Eff es LogResult
+queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
   queryAST <- case parseQueryToAST queryInput of
@@ -712,7 +712,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   enableTfReads <- useTfReads
-  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing Nothing
+  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.

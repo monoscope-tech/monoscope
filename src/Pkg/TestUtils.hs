@@ -1609,7 +1609,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["events"] ->
     jsonRoute
       tr
-      (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params))
+      (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params) (lookupParam "environment" params))
   ["events", eid, "time", ts] -> jsonRoute tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
   ["facets"] -> jsonRoute tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
   ["metrics"] -> do
