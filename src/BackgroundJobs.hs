@@ -9,6 +9,7 @@ import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (^.), (^..), (^?), _1, _3)
+import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
@@ -48,7 +49,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (concurrently_, forConcurrently, forConcurrently_)
+import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -129,7 +130,8 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
-import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
+import UnliftIO qualified as UIO
+import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
 
 
@@ -3760,24 +3762,30 @@ autoAckProvenEndpoints pid = do
       Log.logInfo "Endpoint auto-ack sweep deferred" eventFields
 
 
--- The session that owns this lock stays checked out for the whole TimeFusion
--- traversal. Acquiring and releasing through the Hasql effect could use two
--- pooled sessions and strand a session-level advisory lock.
+-- Keep an explicit PostgreSQL transaction open for the whole TimeFusion
+-- traversal. Production uses a transaction-pooling proxy, so retaining one
+-- client connection does not retain one server session between statements.
+-- The transaction pins the server session and releases this xact-scoped lock
+-- on commit or rollback, including when the traversal throws.
 withEndpointAutoAckLease :: Config.AuthContext -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe a)
 withEndpointAutoAckLease authCtx action = withRunInIO \run ->
   withResource authCtx.pool \conn ->
-    bracket
-      (acquire conn)
-      (release conn)
-      (\acquired -> if acquired then Just <$> run action else pure Nothing)
-  where
-    acquire conn = do
-      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
-      pure acquired
-    release _ False = pass
-    release conn True = do
-      [SimplePG.Only released] <- SimplePG.query conn [sql|SELECT pg_advisory_unlock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
-      unless released $ throwIO $ CE.ErrorCall "endpoint auto-ack advisory lock was not held by its session"
+    SimplePG.withTransaction conn do
+      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_xact_lock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
+      if not acquired
+        then pure Nothing
+        else do
+          stopped <- newEmptyMVar
+          (_, outcome) <-
+            run
+              $ concurrently
+                ( liftIO $ whileM do
+                    running <- isNothing <$> UIO.timeout 5_000_000 (readMVar stopped)
+                    when running $ void (SimplePG.query_ conn "SELECT 1" :: IO [SimplePG.Only Int])
+                    pure running
+                )
+                (tryAny action `finally` putMVar stopped ())
+          either throwIO (pure . Just) outcome
 
 
 endpointAutoAckLockName :: Text
