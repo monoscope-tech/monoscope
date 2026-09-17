@@ -1,25 +1,25 @@
 module Web.AuthSpec (spec) where
 
 import Data.Effectful.Hasql qualified as Hasql
-import Data.UUID qualified as UUID
 import Data.List qualified as L
 import Data.Text qualified as T
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
+import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
+import Network.Wai qualified as Wai
 import Pkg.TestUtils
 import Relude
-import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
-import Models.Projects.Projects qualified as Projects
-import Network.Wai qualified as Wai
 import Servant.API (Header, Headers, ResponseHeader (..), getResponse, lookupResponseHeader)
-import Servant.Server qualified as Servant
 import Servant.Server (ServerError (..))
+import Servant.Server qualified as Servant
 import Servant.Server.Experimental.Auth (unAuthHandler)
 import System.Config (AuthContext (hasqlPool))
 import System.Config qualified as Config
-import Web.Cookie (SetCookie)
 import Test.Hspec
 import Web.Auth qualified as Auth
+import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
 
 
@@ -32,7 +32,7 @@ spec = aroundAll withTestResources do
   describe "unauthenticated challenge" do
     let challengeOf tr chal =
           runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider
-            $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing (Just "/chart_data?pid=p&since=1H") chal
+            $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing (Just "/chart_data?pid=p&since=1H") chal
 
     it "answers a data request with 401 JSON, and a navigation with the usual redirect" \tr -> do
       Left json <- challengeOf tr Auth.ChallengeJson
@@ -67,7 +67,7 @@ spec = aroundAll withTestResources do
     let demoUrl = Just "/p/00000000-0000-0000-0000-000000000000/log_explorer"
         guestOf tr =
           runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider
-            $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing demoUrl Auth.ChallengeRedirect
+            $ Auth.sessionByID Nothing "requestID" False "light" I18n.En Nothing Nothing demoUrl Auth.ChallengeRedirect
         guestRows tr = do
           rows :: V.Vector Int <-
             runQueryEffect tr

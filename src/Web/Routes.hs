@@ -1280,7 +1280,7 @@ chartScopeParams pid params = case pid of
   Nothing -> pure params
   Just projectId -> do
     (session, _) <- Projects.sessionAndProject projectId
-    pure $ ("environment", session.environment) : filter ((/= "environment") . fst) params
+    pure $ [("environment", session.environment), ("service", session.service)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
 
 
 -- Widget GET handler that accepts dashboard parameters

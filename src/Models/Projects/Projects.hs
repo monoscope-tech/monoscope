@@ -1565,6 +1565,9 @@ data Session = Session
   -- Datadog's Env selector behaves. 'Nothing' is every environment, and it is the default:
   -- rows predating the promoted column report no environment, so choosing one for the user
   -- would silently hide their history.
+  , service :: Maybe Text
+  -- ^ Sticky service selection, read from the @service@ cookie. 'Nothing' means every
+  -- service, including rows without a promoted service column.
   }
   deriving stock (Generic, Show)
 

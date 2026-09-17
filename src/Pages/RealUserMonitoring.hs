@@ -740,7 +740,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       window = TimePicker.mkTimeWindow now fromM toM since
       environment = session.environment
       -- An empty select option clears the filter, and "" is not a service name.
-      serviceFilter = find (not . T.null) serviceM
+      serviceFilter = session.service <|> find (not . T.null) serviceM
       scope = RumScope{useTf = appCtx.env.enableTimefusionReads, pid, fromTime = window.fromTime, toTime = window.toTime, environment, service = serviceFilter}
       links = RumLinks{pid, window, service = serviceFilter}
       bucket

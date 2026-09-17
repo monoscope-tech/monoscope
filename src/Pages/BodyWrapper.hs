@@ -46,11 +46,11 @@ mkPageCtx pid = do
     if V.elem "checklist_dismissed" project.onboardingStepsCompleted
       then pure Nothing
       else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted)
-  let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, envOptions, needsTagify = True})
+  let envOptions = maybe V.empty (facetValues "resource.deployment.environment.name" . (.facetJson)) facetsM
+      serviceOptions = maybe V.empty (facetValues "resource.service.name" . (.facetJson)) facetsM
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, envOptions, serviceOptions, needsTagify = True})
   where
-    envValues (SchemaCatalog.FacetData m) =
-      V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
+    facetValues field (SchemaCatalog.FacetData m) = V.fromList $ sort [v.value | v <- HM.findWithDefault [] field m, not (T.null v.value)]
 
 
 -- | The checklist is a statement of customer value, not of which links someone clicked.
@@ -202,6 +202,7 @@ data BWConfig = BWConfig
   -- ^ Deployment environments this project has actually reported, for the app-wide picker.
   -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
   -- Explorer's facet sidebar offers and it costs one indexed row read.
+  , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
   }
   deriving stock (Generic, Show)
@@ -802,6 +803,7 @@ navbar bcfg menuL =
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
       envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
+      servicePicker_ (bcfg.sessM >>= (.service)) bcfg.serviceOptions
       fold bcfg.pageActions
 
 
@@ -846,6 +848,19 @@ envPicker_ selected options =
             ]
           $ toHtml
           $ fromMaybe "All environments" opt
+
+
+servicePicker_ :: Maybe Text -> V.Vector Text -> Html ()
+servicePicker_ selected options =
+  unless (V.null options) $ div_ [class_ "relative"] do
+    button_ ([class_ "inline-flex items-center gap-1.5 rounded-lg border border-strokeWeak px-2 py-1 hover:bg-fillWeak cursor-pointer", type_ "button", Aria.label_ "Service", term "data-tippy-content" "Scope every page to one service"] <> popoverTrigger_ "service-picker") do
+      faSprite_ "cube" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      span_ [class_ "font-medium"] $ toHtml $ fromMaybe "All services" selected
+      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
+    ul_ (popoverPanel_ "service-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+      $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
+        let cookieVal = fromMaybe "" opt
+        li_ $ button_ [class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected), type_ "button", term "aria-pressed" (bool "false" "true" (opt == selected)), term "_" [text|on click set document.cookie to 'service=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]] $ toHtml $ fromMaybe "All services" opt
 
 
 globalTemplates_ :: Html ()

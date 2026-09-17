@@ -150,7 +150,7 @@ authHandler logger env =
               sessId <- case existing of
                 Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
                 _ -> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
-              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (serviceFromCookie cookies) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -174,7 +174,7 @@ authHandler logger env =
             pure $ Projects.PersistentSessionId uuid
       let cookies = getCookies req
       requestID <- liftIO $ getRequestID req
-      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (serviceFromCookie cookies) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
 
 
 -- | How to tell an unauthenticated request to authenticate.
@@ -226,8 +226,8 @@ challengeFor basicAuthEnabled headers
   | otherwise = ChallengeRedirect
 
 
-sessionByID :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment url challenge = do
+sessionByID :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment service url challenge = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -322,6 +322,13 @@ sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
 envFromCookie :: Cookies -> Maybe Text
 envFromCookie cookies = do
   raw <- L.lookup "env" cookies
+  guard (raw /= "")
+  pure (decodeUtf8 raw)
+
+
+serviceFromCookie :: Cookies -> Maybe Text
+serviceFromCookie cookies = do
+  raw <- L.lookup "service" cookies
   guard (raw /= "")
   pure (decodeUtf8 raw)
 

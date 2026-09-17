@@ -900,13 +900,13 @@ logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-c
 -- the @env@ cookie at auth time), so every data endpoint that already resolves the session
 -- gets it here rather than declaring a query parameter it would have to be handed on every
 -- link in the app.
-logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime, Maybe Text)
+logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime, Maybe Text, Maybe Text)
 logDataEnv pid sinceM fromM toM = do
   (sess, _) <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  pure (authCtx, now, fromD, toD, sess.environment)
+  pure (authCtx, now, fromD, toD, sess.environment, sess.service)
 
 
 -- | A column header the reader clicked, folded into the query as the very
@@ -947,7 +947,7 @@ data LogDataQuery = LogDataQuery
 
 logExplorerDataH :: Projects.ProjectId -> LogDataQuery -> ATAuthCtx (RespHeaders LogResult)
 logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursorM', direction = directionM, since = sinceM, from = fromM, to = toM, source = sourceM, targetSpans = targetSpansM, sort = sortM} = withSpan_ "log-explorer.data" [] do
-  (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
       removeCols = map (T.drop 1) removeToks
@@ -959,7 +959,7 @@ logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursor
     Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
     Right (withSortSection sortM -> queryAST) -> do
       resultE <-
-        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM Nothing
+        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM serviceM
       case resultE of
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
@@ -1045,7 +1045,7 @@ logExplorerSchemaH pid = do
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
 logPatternsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders PatternsView)
 logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
-  (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD, envM, _serviceM) <- logDataEnv pid sinceM fromM toM
   -- Start (epoch seconds) of the earliest of the 24 hourly volume slots, so the
   -- client can map bar i to the clock hour @baseHourEpoch + i*3600@ (see buildHourlyBuckets).
   let baseHourEpoch = (floor (utcTimeToPOSIXSeconds now) `div` 3600 - 23) * 3600 :: Int
@@ -1059,7 +1059,7 @@ logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
 logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
 logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
-  (authCtx, _, fromD, toD, _) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, _, _serviceM) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
@@ -1838,7 +1838,7 @@ apiLogsPage page = do
 -- (@kind=pattern@), plus a @hasMore@ flag for pagination.
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
-  (authCtx, _, fromD, toD, _) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, _, _serviceM) <- logDataEnv pid sinceM fromM toM
   let key = maybeToMonoid keyM
   when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
   -- Sessions render a trace tree (hence the child-span fetch and larger page);

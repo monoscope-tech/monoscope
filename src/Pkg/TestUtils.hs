@@ -496,7 +496,7 @@ testSessionHeader pool hpool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" I18n.En Nothing Nothing Auth.ChallengeRedirect)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" I18n.En Nothing Nothing Nothing Auth.ChallengeRedirect)
     & liftIO
     <&> fromRightShow
 
@@ -508,7 +508,7 @@ refreshSession pool hpool sessionHeaders = do
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme session.lang session.environment Nothing Auth.ChallengeRedirect)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme session.lang session.environment session.service Nothing Auth.ChallengeRedirect)
     & liftIO
     <&> fromRightShow
 

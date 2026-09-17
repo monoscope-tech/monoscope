@@ -1200,7 +1200,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
   (session, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      scopedParams = dashboardScopedParams session.environment allParams
+      scopedParams = dashboardScopedParams session.environment session.service allParams
 
   (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -2409,7 +2409,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
   (session, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      scopedParams = dashboardScopedParams session.environment allParams
+      scopedParams = dashboardScopedParams session.environment session.service allParams
 
   (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -2442,8 +2442,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
 -- | Dashboard URLs carry variables and time, not a second environment authority. Internal
 -- prefill reads use the sticky session scope, matching @/chart_data@, and discard a stale
 -- @environment@ query parameter before it can affect generated KQL or a cache key.
-dashboardScopedParams :: Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
-dashboardScopedParams environment params = ("environment", environment) : filter ((/= "environment") . fst) params
+dashboardScopedParams :: Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
+dashboardScopedParams environment service params = [("environment", environment), ("service", service)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
 
 
 -- | Render a single tab content panel.
