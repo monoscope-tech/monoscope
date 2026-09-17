@@ -21,8 +21,8 @@ import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
-import Pages.Issues qualified as IssuesPage
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Issues qualified as IssuesPage
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
@@ -522,8 +522,8 @@ spec = sequential $ aroundAll withTestResources do
           . listToMaybe
           =<< PGS.query
             conn
-            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
-                  VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', 'production', ?, ?) RETURNING id |]
             (testPid, noTraceHash, frozenTime, frozenTime)
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
@@ -532,6 +532,7 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden"
       html `shouldSatisfy` not . T.isInfixOf "context___trace_id%3D%3D%22%22"
       html `shouldSatisfy` T.isInfixOf "service%3D%3D%22checkout%22"
+      html `shouldSatisfy` T.isInfixOf "resource.deployment.environment.name%3D%3D%22production%22"
       -- Lucid escapes the attribute, so the separators render as &amp; — assert on both
       -- ends of the window: an unbounded fallback would carry neither.
       html `shouldSatisfy` T.isInfixOf "&amp;from="

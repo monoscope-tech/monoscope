@@ -100,7 +100,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -1162,15 +1162,24 @@ investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert
               -- `traceRef`, not the error pattern's recentTraceId: it is the trace the
               -- rest of the page shows (it honours First/Recent) and it carries the
               -- timestamp the window needs.
+              -- An issue is a record of an occurrence, so its own service and
+              -- environment are stronger context than whatever the reader last
+              -- selected globally. Quote each value: issue fields are telemetry
+              -- inputs, not trusted KQL fragments.
+              issueScope =
+                foldMap (\s -> " AND service==" <> kqlQuoted s) (nonBlank issue.service)
+                  <> foldMap (\e -> " AND resource.deployment.environment.name==" <> kqlQuoted e) (nonBlank issue.environment)
+              nonBlank = mfilter (not . T.null . T.strip)
+              scoped query = query <> issueScope
               (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, traceRef) of
-                (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", TimePicker.rangeQuery tp)
+                (Just prefix, _) | isLogPatternIssue -> (scoped $ "hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", TimePicker.rangeQuery tp)
                 (_, Just (tId, tTs)) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
                 -- ~24% of error patterns never captured a trace id (log records carry
                 -- no trace context; spans always do). The old empty-string fallback
                 -- rendered `context___trace_id==""`, which filters nothing and dumped
                 -- the project's entire retention window.
                 _ ->
-                  ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
+                  ( scoped "kind==\"log\""
                   , around $ zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
                   )
           div_ [class_ "grow-1 min-w-0 h-full flex flex-col"] do
