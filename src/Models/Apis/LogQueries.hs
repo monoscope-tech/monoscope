@@ -268,10 +268,10 @@ validateSqlQuery query =
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
 -- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
 -- because callers that forgot it silently read the empty Postgres side.
-selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
-selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment = do
+selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
   now <- Time.currentTime
-  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment, metricJsonAsVariant = useTimefusion}) queryAST
+  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment, service, metricJsonAsVariant = useTimefusion}) queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
   Log.logTrace

@@ -555,7 +555,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
             Nothing -> case parseQueryToAST query of
               Left _ -> send $ ReplyText $ formatBotError target (QueryParseError query)
               Right query' -> do
-                tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
+                tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing Nothing
                 send $ ReplyText $ handleTableResponse target tableAsVecE envCfg pid query
           whenJust resp.explanation (send . ReplyText . formatTextResponse target)
 

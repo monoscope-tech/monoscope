@@ -313,6 +313,8 @@ data EventsQuery = EventsQuery
   , environment :: Maybe Text
   -- ^ Optional deployment environment. Absent deliberately means all environments,
   -- matching the API-key (non-session) GET endpoints.
+  , service :: Maybe Text
+  -- ^ Optional service. Like environment, this is compiled into the generated SQL.
   , limit :: Maybe Int
   , withChildren :: Maybe Bool
   -- ^ When true, also return descendants of each matched span (the

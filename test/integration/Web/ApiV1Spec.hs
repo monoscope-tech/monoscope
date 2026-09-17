@@ -63,13 +63,14 @@ spec = around withTestResources do
           Just arr -> not (null arr)
           Nothing -> False
 
-      it "makes metrics environment/service and event environment scope explicit optional parameters" $ \_tr -> do
+      it "makes metrics and event environment/service scopes explicit optional parameters" $ \_tr -> do
         let metricParameters = specJson ^? key "paths" . key "/metrics" . key "get" . key "parameters" . _Array
             eventParameters = specJson ^? key "paths" . key "/events" . key "get" . key "parameters" . _Array
             hasParameter name = maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just name)
         metricParameters `shouldSatisfy` hasParameter "environment"
         metricParameters `shouldSatisfy` hasParameter "service"
         eventParameters `shouldSatisfy` hasParameter "environment"
+        eventParameters `shouldSatisfy` hasParameter "service"
 
       -- This list doubles as the CLI contract: every path the CLI constructs
       -- (without the /api/v1 prefix the Servant base already provides) must
@@ -196,7 +197,7 @@ spec = around withTestResources do
       it "returns valid LogResult with expected JSON structure" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "cols" . _Array) `shouldSatisfy` isJust
@@ -206,7 +207,7 @@ spec = around withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException
@@ -407,9 +408,10 @@ spec = around withTestResources do
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
 
-      it "includes optional environment scope in the EventsQuery schema" $ \_tr -> do
+      it "includes optional environment and service scopes in the EventsQuery schema" $ \_tr -> do
         let bodyProperties = specJson ^? key "components" . key "schemas" . key "EventsQuery" . key "properties" . _Object
         bodyProperties `shouldSatisfy` maybe False (AEK.member "environment")
+        bodyProperties `shouldSatisfy` maybe False (AEK.member "service")
 
       it "includes attributes only when requested" $ \tr -> do
         result <-
