@@ -2,6 +2,12 @@
 -- Recurse through tabs and groups without depending on a dashboard's layout.
 CREATE FUNCTION migrate_trace_widgets(value jsonb) RETURNS jsonb
 LANGUAGE plpgsql AS $$
+DECLARE
+  default_columns CONSTANT jsonb := '[
+    {"field":"resource_name","title":"Resource"},
+    {"field":"span_name","title":"Span name"},
+    {"field":"total_time","title":"Duration","column_type":"duration","unit":"ms"}
+  ]'::jsonb;
 BEGIN
   IF jsonb_typeof(value) = 'array' THEN
     RETURN COALESCE((SELECT jsonb_agg(migrate_trace_widgets(item) ORDER BY ordinal)
@@ -14,7 +20,9 @@ BEGIN
           SELECT jsonb_agg(col ORDER BY ordinal)
           FROM jsonb_array_elements(value -> 'columns') WITH ORDINALITY AS cols(col, ordinal)
           WHERE col ->> 'field' IS DISTINCT FROM 'latency_breakdown'
-        ), '[]'::jsonb));
+        ), default_columns));
+      ELSE
+        value := jsonb_set(value, '{columns}', default_columns);
       END IF;
     END IF;
     RETURN COALESCE((SELECT jsonb_object_agg(key, migrate_trace_widgets(val))

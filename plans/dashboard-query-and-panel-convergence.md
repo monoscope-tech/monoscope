@@ -39,7 +39,9 @@ outstanding checks here; never attest a failed or unavailable check.
 
 ## Results
 
-Research complete; implementation and measurements in progress.
+Research and implementation are complete. The proposed endpoint-ID constant was
+rejected after measurement because it truncates and changes the data contract;
+the safe server-side cache/rollup follow-up is recorded below.
 
 ## Implemented behavior
 
@@ -61,6 +63,13 @@ Research complete; implementation and measurements in progress.
   JavaScript feature and later event handlers. Regression fixtures cover the
   supported literal forms. CI fingerprints now include the vendored parser and
   Makefile. The doctest Makefile target disables the separate dev-test target.
+- Duration table cells now convert their declared source unit before formatting;
+  millisecond SQL values no longer render as nanoseconds. The retired trace-widget
+  migration supplies usable columns when a saved widget had none, or only the
+  removed latency column.
+- Endpoint Analytics uses supported single-stage KQL for browser request/error
+  series and per-bucket distinct sessions. The previous inline expression group
+  and chained summaries parsed but silently discarded part of their query.
 
 ## Endpoint measurements and advisor decision
 
@@ -108,14 +117,24 @@ are lazy, so it does not solve their scan cost.
   `web-components`: another 41 tests. Total: 943 passing tests.
 - `make ci-selftest`: passed, including the vendored-parser fingerprint test.
 - UI detector: no findings in changed UI source.
-- Initial `make test-doctests`: ran all 1,611 examples; one new example produced
-  an ambiguity warning. The example was annotated and a final run is pending.
-- Unit tests found an exact-trigger assertion that excluded the new sort event.
-  The assertion now permits extra events and checks that eager tables do not
-  refetch on intersection. Final rerun pending.
-- Local CI signoff built and attested frontend, then stopped on a compile error
-  in concurrently edited OpenAPI code. That error was fixed in the workspace;
-  final signoff is in progress. No failed check was attested.
+- Final `make test-doctests`: 1,614 examples, 0 errors, 0 failures.
+- Unit tests: 314 examples, 0 failures. This includes duration-unit rendering
+  and the Endpoint Analytics KQL forms. The run first exposed two invalid query
+  expectations; the template and assertions were corrected before the passing run.
+- Focused frontend validation: hyperscript parsing, table navigation/sort, and
+  detail-panel row selection — 17 tests, all passing.
+- Migration 0184 executed in a rolled-back PostgreSQL transaction. Trace widgets
+  with missing columns, latency-only columns, and nested placement all converted.
+- `make ci-selftest`: all checks passed, including parser fingerprints and refusal
+  to attest a check whose inputs changed while it ran.
+- `make ci-signoff CHECKS='frontend doctests unit-tests ui-tests hlint'`:
+  frontend, doctests, unit tests, and UI tests passed and were attested. The
+  container UI run passed 946 tests in 57 files. HLint was unavailable in the
+  local runner and was not attested.
+- GitHub still needs to run build, CLI tests, integration tests, Weeder, and
+  HLint. TimeFusion's amd64 image cannot run on this arm64 laptop; the focused
+  dashboard integration suite had already passed against the available local
+  services. No failed or unavailable check was attested.
 
 Concurrent work committed part of this implementation while execution continued.
 Other changes in the workspace were retained. Two subsequent test compilation

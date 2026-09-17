@@ -59,6 +59,15 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
     selfFetches (def & #wType .~ Widget.WTTable & #id ?~ "w2") `shouldBe` True
     selfFetches (def & #wType .~ Widget.WTTable & #id ?~ "w2" & #html ?~ "<table></table>") `shouldBe` False
 
+  it "renders table durations in their declared source unit" do
+    let widget =
+          (def :: Widget.Widget)
+            & #wType .~ Widget.WTTable
+            & #id ?~ "duration-table"
+            & #columns ?~ [def{Widget.field = "duration", Widget.title = "Duration", Widget.columnType = Just "duration", Widget.unit = Just "ms"}]
+        html = toText . TL.toStrict . renderText $ Widget.renderTableWithDataAndParams widget [["1.25"]] []
+    html `shouldSatisfy` T.isInfixOf ">1.2 ms<"
+
   -- The trap this guards. renderStatContent reads `eager` as "data is present" and
   -- drops `load` from the trigger, so clearing html/dataset but LEAVING the flag
   -- renders a spinner that nothing ever resolves. A blown budget would then show a

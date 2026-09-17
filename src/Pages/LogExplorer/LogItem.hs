@@ -234,7 +234,9 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
             send checkMobileOpen to me
             set queryWidth to params().details_width
             set storedWidth to localStorage.getItem('resizer-details_width')
-            if queryWidth set my *width to queryWidth + 'px'
+            if queryWidth and queryWidth.endsWith('%') set my *width to queryWidth
+            else if queryWidth and queryWidth.endsWith('px') set my *width to queryWidth
+            else if queryWidth set my *width to queryWidth + 'px'
             else if storedWidth and not storedWidth.endsWith('px') set my *width to storedWidth + 'px'
             else if storedWidth set my *width to storedWidth
             else set my *width to '30%'

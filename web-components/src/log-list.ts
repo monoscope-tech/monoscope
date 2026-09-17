@@ -2069,9 +2069,13 @@ export class LogList extends LitElement {
       // on row click after load-more, which is the direct trigger for the blank runway.
       if (this.flipDirection) this.shouldScrollToBottom = false;
 
-      if (width < 50) {
-        sideView.style.width = sideView.dataset.inlineWidth || '550px';
-        updateUrlState('details_width', '550');
+      // Issues can be reopened while mobile CSS supplies the visible full width.
+      // Restore its inline desktop width now so growing past lg cannot expose the
+      // close handler's stale 0px width and collapse an otherwise-open panel.
+      if (width < 50 || (sideView.dataset.inlineWidth && sideView.style.width === '0px')) {
+        const inlineWidth = sideView.dataset.inlineWidth || '550px';
+        sideView.style.width = inlineWidth;
+        updateUrlState('details_width', inlineWidth);
       }
 
       // Always show the resizer when a log row is clicked

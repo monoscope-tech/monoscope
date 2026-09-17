@@ -1573,7 +1573,7 @@ cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " mon
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case col.columnType of
   Just "number" -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
-  Just "duration" -> maybe (value <> unitSuffix) (\v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))) (readMaybe (toString value) :: Maybe Double)
+  Just "duration" -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
   _ -> fromMaybe value (formatTimestampValue value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
@@ -1581,6 +1581,19 @@ formatColumnValue col value = case col.columnType of
     fmtNumber n
       | n < 100, n /= fromIntegral (round n :: Int) = toText (printf "%.2g" n :: String)
       | otherwise = prettyPrintCount (round n)
+
+
+durationNanoseconds :: Maybe Text -> Double -> Maybe Integer
+durationNanoseconds unit value =
+  round . (value *) <$> case unit of
+    Nothing -> Just 1
+    Just "ns" -> Just 1
+    Just "us" -> Just 1e3
+    Just "µs" -> Just 1e3
+    Just "ms" -> Just 1e6
+    Just "s" -> Just 1e9
+    Just "m" -> Just 6e10
+    _ -> Nothing
 
 
 -- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"

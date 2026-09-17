@@ -458,14 +458,12 @@ tabs:
         children:
           - type: timeseries_stat
             title: Browser Sessions
-            description: Each session is counted once, at its first browser event within this range.
+            description: Distinct browser sessions active in each time bucket.
             icon: users
             query: |
               hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null
-              | summarize started_at=min(timestamp) by attributes.session.id
-              | summarize count() by bin_auto(started_at)
+              | summarize dcount(attributes.session.id) by bin_auto(timestamp)
             unit: sessions
-            summarize_by: sum
             layout: { w: 3, h: 2 }
 
           - type: timeseries_stat
@@ -488,22 +486,20 @@ tabs:
 
           - type: timeseries_stat
             title: Sessions with Errors
-            description: Distinct browser sessions that saw an error on this endpoint.
+            description: Distinct browser sessions with an error in each time bucket.
             icon: triangle-exclamation
             query: |
               hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null AND (status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null)
-              | summarize first_error=min(timestamp) by attributes.session.id
-              | summarize count() by bin_auto(first_error)
+              | summarize dcount(attributes.session.id) by bin_auto(timestamp)
             unit: sessions
-            summarize_by: sum
             layout: { w: 3, h: 2 }
 
       - type: timeseries
-        title: Browser Request Outcomes
-        description: Requests made by real browsers, split into non-error requests and errors so a traffic change is not mistaken for an error change.
+        title: Browser Requests and Errors
+        description: Total requests made by real browsers alongside the error count, so a traffic change is not mistaken for an error change.
         query: |
           hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ")
-          | summarize count() by bin_auto(timestamp), iff(status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null, "Errors", "Non-error requests")
+          | summarize requests=count(), errors=countif(status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null) by bin_auto(timestamp)
           | order by timestamp desc
           | limit 10000
         unit: requests

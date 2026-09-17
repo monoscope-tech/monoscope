@@ -141,3 +141,14 @@ test.each([false, true])('Issues panel keeps fractional inline sizing; drawer=%s
   expect(document.querySelector<HTMLInputElement>('#details-open')!.checked).toBe(true);
   await vi.waitFor(() => expect(panel.style.width).toBe(drawer ? '0px' : '33.333333%'));
 });
+
+test('restores the Issues desktop width after reopening under the mobile layout', async () => {
+  const panel = document.querySelector<HTMLElement>('#log_details_container')!;
+  panel.dataset.inlineWidth = '33.333333%';
+  panel.style.width = '0px';
+  Object.defineProperty(panel, 'offsetWidth', { value: 400 });
+  document.body.insertAdjacentHTML('beforeend', '<input type="checkbox" id="details-open"><input type="checkbox" id="details-drawer-mode">');
+  const el = await mountList();
+  clickRow(el, buildRows(1)[0].tr, 'r0');
+  await vi.waitFor(() => expect(panel.style.width).toBe('33.333333%'));
+});
