@@ -986,7 +986,7 @@ endpointDependencyGraphForRange pid endpoint lo hi = do
         [ EdgeSample entry (target, parseNodeKind targetKind) requests errors (histFromObject hist) duration
         | (target, targetKind, requests, errors, duration, AesonText hist) <- rows
         ]
-  pure $ buildServiceGraphWithLabels (Map.singleton (fst entry) "Selected endpoint") rangeSecs serviceMapNodeCap CollapseOff Nothing samples
+  pure $ buildServiceGraphWithLabels (one (fst entry, "Selected endpoint")) rangeSecs serviceMapNodeCap CollapseOff Nothing samples
 
 
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or
