@@ -132,7 +132,8 @@ instance Exception HasqlException where
     SessionUsageError e -> "Hasql session error: " <> toString (toDetailedText e)
 
 
--- | True for transient infra failures (acquisition timeout, dropped connection).
+-- | True for transient infra failures (acquisition timeout, dropped connection,
+-- or a database temporarily refusing work during startup/deployment).
 -- ConnectionUsageError is *always* transient: the server never saw the row, so
 -- it can't be a data/poison fault — hasql's IsError.isTransient returns False
 -- for the free-form @OtherConnectionError@ bucket (e.g. "the database system
@@ -164,7 +165,14 @@ isTransientUsageError = \case
       StatementSessionError _ _ _ _ _ (ServerStatementError err) -> transientServerError err
       ScriptSessionError _ err -> transientServerError err
       _ -> False
-    -- An empty code is infra (see above). TimeFusion's momentary query-pool
+    -- An empty code is infra (see above). SQLSTATE 57P03 is PostgreSQL's
+    -- cannot-connect-now response and is emitted by TimeFusion while its early
+    -- listener owns the port. During graceful replacement the ready process
+    -- returns the same retry contract as an XX000 ApiError with a distinctive
+    -- message. Both are bounded deployment states, so writes must wait for the
+    -- replacement rather than going directly to the DLQ.
+    --
+    -- TimeFusion's momentary query-pool
     -- exhaustion arrives as XX000 with a distinctive message: the pool is
     -- shared process-wide and its sort reservations are unspillable, so a
     -- burst of concurrent widgets can starve one query that succeeds seconds
@@ -173,7 +181,19 @@ isTransientUsageError = \case
     -- retryOnPoolExhaustion; here it reaches the log explorer's
     -- retryTransientEff site).
     transientServerError (ServerError code message _ _ _) =
-      code == "" || (code == "XX000" && any (`T.isInfixOf` message) ["Resources exhausted", "Not enough memory to continue external sort"])
+      code
+        == ""
+        || code
+        == "57P03"
+        || ( code
+               == "XX000"
+               && any
+                 (`T.isInfixOf` message)
+                 [ "Resources exhausted"
+                 , "Not enough memory to continue external sort"
+                 , "TimeFusion is draining for deployment; retry on the replacement"
+                 ]
+           )
 
 
 isTransientHasqlError :: HasqlException -> Bool
