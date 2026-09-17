@@ -565,6 +565,7 @@ data IssueFilters = IssueFilters
   { ack :: NullFilter
   , archive :: NullFilter
   , services :: [Text]
+  , environment :: Maybe Text
   , types :: [Text]
   , timeRange :: Maybe (UTCTime, UTCTime)
   , order :: Maybe Text
@@ -585,6 +586,7 @@ defIssueFilters =
     { ack = AnyValue
     , archive = AnyValue
     , services = []
+    , environment = Nothing
     , types = []
     , timeRange = Nothing
     , order = Nothing
@@ -613,6 +615,7 @@ selectIssues pid projection f = do
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
           <> arrF pfx [HI.sql|service|] f.services
+          <> foldMap (\environment -> [HI.sql| AND ^{pfx}environment = #{environment}|]) f.environment
           <> arrF pfx [HI.sql|issue_type::text|] f.types
       iFilters = mkFilters [HI.sql|i.|]
       cFilters = mkFilters mempty
@@ -632,7 +635,7 @@ selectIssues pid projection f = do
           i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
           i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
           NULL::timestamp with time zone, NULL::bigint,
-          i.target_hash, NULL::text, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until,
+          i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)

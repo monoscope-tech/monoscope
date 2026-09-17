@@ -930,6 +930,27 @@ spec = sequential $ aroundAll withTestResources do
           $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
       whenJust (find (\r -> r.base.id == iid) after) \row ->
         V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
+    it "selectIssues environment scope excludes issues from another deployment" \tr -> do
+      prodId <- UUIDId <$> UUID.nextRandom
+      stagingId <- UUIDId <$> UUID.nextRandom
+      let insertIssue iid environment target =
+            withResource tr.trPool \conn ->
+              void
+                $ PGS.execute
+                  conn
+                  [sql| INSERT INTO apis.issues
+                        (id, project_id, issue_type, target_hash, endpoint_hash, title, service, environment,
+                         severity, critical, affected_requests, affected_clients, issue_data, created_at, updated_at)
+                      VALUES (?, ?, 'runtime_exception', ?, ?, ?, 'scope-test', ?,
+                              'warning', false, 1, 1, '{}'::jsonb, ?, ?) |]
+                  (iid, testPid, target, target, target, environment, frozenTime, frozenTime)
+      insertIssue prodId "production" "issue-scope-production"
+      insertIssue stagingId "staging" "issue-scope-staging"
+      (prod, _) <-
+        runHasqlEffect tr
+          $ Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.services = ["scope-test"], Issues.environment = Just "production", Issues.limit = 100}
+      map (.id) prod `shouldBe` [prodId]
+      map (.environment) prod `shouldBe` [Just "production"]
 
     -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
     -- adjacent handler. `errorGroupMembersGetH` checks the caller may access `pid`, then

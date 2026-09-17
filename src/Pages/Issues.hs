@@ -1830,7 +1830,7 @@ issueListGetH
   -> [Text]
   -> ATAuthCtx (RespHeaders IssueListGet)
 issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
-  (_, project, bw) <- mkPageCtx pid
+  (session, project, bw) <- mkPageCtx pid
   let tab = parseTab filterTM
       currentFilterTab = tabParam tab
       tabFilters = tabIssueFilters tab
@@ -1852,11 +1852,12 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
             , Issues.order = Just currentSort
             , Issues.period = period
             , Issues.services = serviceFilters
+            , Issues.environment = session.environment
             , Issues.types = typeFilters
             }
       )
       ( concurrently
-          (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL |])
+          (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL AND (#{session.environment}::text IS NULL OR environment = #{session.environment}) |])
           (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])
       )
 
