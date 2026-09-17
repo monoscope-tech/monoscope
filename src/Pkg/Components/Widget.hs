@@ -193,7 +193,7 @@ instance AE.FromJSON SqlOrder where
 
 
 instance FromHttpApiData SqlOrder where
-  parseQueryParam = maybe (Left "SQL order must not be empty") Right . mkSqlOrder
+  parseQueryParam = maybeToRight "SQL order must not be empty" . mkSqlOrder
 
 
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
@@ -952,7 +952,10 @@ sortableTableHead_ widget selected =
   thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
     $ tr_ []
     $ forM_ (fold widget.columns) \col -> do
-      let direction = if selected == Just ("+" <> col.field) then "asc" else if selected == Just ("-" <> col.field) then "desc" else "none"
+      let direction
+            | selected == Just ("+" <> col.field) = "asc"
+            | selected == Just ("-" <> col.field) = "desc"
+            | otherwise = "none"
           sortable = sortableColumn widget col
       th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")]
         $ if sortable

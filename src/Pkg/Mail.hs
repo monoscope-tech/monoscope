@@ -442,8 +442,8 @@ slackEscape = T.replace ">" "&gt;" . T.replace "<" "&lt;" . T.replace "&" "&amp;
 errorSnippet :: Int -> ErrorPatterns.ATError -> Text
 errorSnippet limit err = "```" <> bounded <> "```"
   where
-    message = T.unwords $ words $ T.replace "```" "'''" err.message
-    withFrame = maybe message (message <>) $ ("\n" <>) <$> topStackFrame err.stackTrace
+    message = unwords $ words $ T.replace "```" "'''" err.message
+    withFrame = maybe message ((message <>) . ("\n" <>)) $ topStackFrame err.stackTrace
     bounded
       | T.length withFrame <= limit = withFrame
       | otherwise = T.take (max 0 $ limit - 1) withFrame <> "…"

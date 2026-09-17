@@ -410,8 +410,9 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "endpoint analytics query forms" do
     it "keeps a named average available to order by" do
-      let (sql, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name != null and duration != null | summarize avg_latency=avg(duration) by name | order by avg_latency desc"
-      sql `shouldSatisfy` T.isInfixOf "AS avg_latency"
+      let (sql, query) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name != null and duration != null | summarize avg_latency=avg(duration) by name | order by avg_latency desc"
+      query.toColNames `shouldBe` ["name", "avg_latency"]
+      sql `shouldSatisfy` T.isInfixOf "ORDER BY avg((duration)::float) desc"
       sql `shouldNotSatisfy` T.isInfixOf "ORDER BY avg_"
 
     it "compiles browser error predicates and outcome grouping" do
@@ -419,12 +420,12 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
           errorPredicate = "status_code == \"ERROR\" or level in (\"ERROR\", \"FATAL\", \"error\", \"fatal\") or attributes.exception.type != null"
           parse q = fst $ fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) q
           errorSql = parse $ browserContext <> " AND (" <> errorPredicate <> ") | summarize count() by bin_auto(timestamp)"
-          outcomeSql = parse $ browserContext <> " | summarize count() by bin_auto(timestamp), iff(" <> errorPredicate <> ", \"Errors\", \"Non-error requests\")"
-          sessionSql = parse $ browserContext <> " AND attributes.session.id != null | summarize started_at=min(timestamp) by attributes.session.id | summarize count() by bin_auto(started_at)"
+          outcomeSql = parse $ browserContext <> " | summarize requests=count(), errors=countif(" <> errorPredicate <> ") by bin_auto(timestamp)"
+          sessionSql = parse $ browserContext <> " AND attributes.session.id != null | summarize dcount(attributes.session.id) by bin_auto(timestamp)"
           p75Sql = parse $ browserContext <> " AND duration != null | summarize p75(duration) / 1000000 by bin_auto(timestamp)"
       errorSql `shouldSatisfy` T.isInfixOf "status_code = 'ERROR'"
-      outcomeSql `shouldSatisfy` T.isInfixOf "CASE WHEN"
-      sessionSql `shouldSatisfy` T.isInfixOf "min(timestamp)"
+      outcomeSql `shouldSatisfy` T.isInfixOf "FILTER (WHERE"
+      sessionSql `shouldSatisfy` T.isInfixOf "distinct_count(approx_count_distinct(attributes___session___id))"
       p75Sql `shouldSatisfy` T.isInfixOf "approx_percentile(0.75"
 
   describe "edge cases and validation" do
