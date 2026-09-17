@@ -1045,21 +1045,21 @@ logExplorerSchemaH pid = do
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
 logPatternsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders PatternsView)
 logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
-  (authCtx, now, fromD, toD, envM, _serviceM) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
   -- Start (epoch seconds) of the earliest of the 24 hourly volume slots, so the
   -- client can map bar i to the clock hour @baseHourEpoch + i*3600@ (see buildHourlyBuckets).
   let baseHourEpoch = (floor (utcTimeToPOSIXSeconds now) `div` 3600 - 23) * 3600 :: Int
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer patterns: rejected invalid KQL query" err >> addRespHeaders (PatternsView 0 V.empty False 0)
     Right queryAST -> do
-      (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM envM (fromMaybe 0 skipM)
+      (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM envM serviceM (fromMaybe 0 skipM)
       addRespHeaders $ PatternsView total (V.fromList rows) (fromMaybe 0 skipM == 0) baseHourEpoch
 
 
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
 logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
 logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
-  (authCtx, _, fromD, toD, _, _serviceM) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
@@ -1067,7 +1067,7 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (rightToMaybe . parseUrlPiece =<< sortByM) skip
+      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip
       -- Summary only rides the first page; later load-more pages don't need it.
       addRespHeaders $ SessionsView total (V.fromList rows) (guard (skip == 0) $> summ)
 

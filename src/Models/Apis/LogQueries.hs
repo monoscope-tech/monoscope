@@ -570,11 +570,11 @@ scopedWhere pidTxt mUser dateClause envClause =
 -- | Parse @queryAST@ against a fresh 'defSqlQueryCfg' and build its scoped WHERE
 -- clause in one step. Shared by 'fetchLogPatterns', 'fetchSessions', and
 -- 'fetchEventExamples', which all otherwise repeat this three-line dance.
-scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> [Section] -> Text
-scopedQueryWhere pid now source dateRange environment queryAST =
-  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange, environment}
+scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> [Section] -> Text
+scopedQueryWhere pid now source dateRange environment service queryAST =
+  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange, environment, service}
       (_, qc) = queryASTToComponents sqlCfg queryAST
-   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg) (buildEnvFilter sqlCfg)
+   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg) $ T.intercalate " AND " $ filter (not . T.null) [buildEnvFilter sqlCfg, buildServiceFilter sqlCfg]
 
 
 -- | One row of the precomputed patterns query in 'fetchLogPatterns' (persisted
@@ -607,10 +607,10 @@ fetchLogPatterns
   -> Maybe Text
   -> Int
   -> Eff es (Int, [PatternRow])
-fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environment skip = do
+fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environment service skip = do
   now <- Time.currentTime
   let pidTxt = pid.toText
-      fullWhere = scopedQueryWhere pid now sourceM dateRange environment queryAST
+      fullWhere = scopedQueryWhere pid now sourceM dateRange environment service queryAST
       target = fromMaybe "summary" targetM
   Log.logTrace "fetchLogPatterns: start"
     $ AE.object
@@ -768,10 +768,10 @@ sessionSortLabel = \case
   SortEvents -> "Events"
 
 
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
-fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
+fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip = do
   now <- Time.currentTime
-  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
+  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange environment service queryAST
       bucketW = bucketWidthSecs dateRange now
       sortCol = sessionSortColumn $ fromMaybe SortLastSeen sortByM
   Log.logTrace "fetchSessions: start"
@@ -980,7 +980,7 @@ fetchEventExamples
   -> Eff es (V.Vector (V.Vector AE.Value), [Text])
 fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
   now <- Time.currentTime
-  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
+  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange Nothing Nothing queryAST
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND |] <> rawSql sessionKeyExpr <> [HI.sql| = #{sid}|]
         -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags
