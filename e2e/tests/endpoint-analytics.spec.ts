@@ -17,7 +17,7 @@ test("Endpoint Analytics exposes real-user impact and direct dependency investig
   await page.getByText("Experience", { exact: true }).click();
   await expect(page.getByText("Real-user impact", { exact: true })).toBeVisible();
   await expect(page.getByText("Endpoint Sessions", { exact: true })).toBeVisible();
-  await expect(page.getByText("Browser Request Outcomes", { exact: true })).toBeVisible();
+  await expect(page.getByText("Browser Requests and Errors", { exact: true })).toBeVisible();
 
   await page.getByText("Dependencies", { exact: true }).click();
   await expect(page.getByText("Downstream health", { exact: true })).toBeVisible();
