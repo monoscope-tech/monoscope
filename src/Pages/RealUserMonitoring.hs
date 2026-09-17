@@ -347,8 +347,16 @@ rumErrors scope =
 
 
 -- Text is matched against complete sessions before LIMIT, preserving their event totals.
+-- That path stays raw because page text participates in HAVING. The common list,
+-- error list and exact-id reads use a mergeable core, then enrich only the at-most
+-- 200 selected ids with page and user-agent expressions.
 otelSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
-otelSessionRows scope match sessionFilter =
+otelSessionRows scope match@(SessionText (Just _)) sessionFilter = otelSessionRowsRaw scope match sessionFilter
+otelSessionRows scope match sessionFilter = otelSessionCoreRows scope match sessionFilter >>= enrichSessionRows scope
+
+
+otelSessionRowsRaw :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
+otelSessionRowsRaw scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
     $ Hasql.interp
       ( [HI.sql|
@@ -378,6 +386,68 @@ otelSessionRows scope match sessionFilter =
           <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
           <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
       )
+
+
+otelSessionCoreRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
+otelSessionCoreRows scope match sessionFilter =
+  Hasql.withHasqlTimefusion scope.useTf
+    $ Hasql.interp
+      ( [HI.sql|
+        SELECT attributes___session___id,
+          MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
+          COUNT(*) FILTER (WHERE |]
+          <> errorPredicate
+          <> [HI.sql|)::bigint,
+          COUNT(*) FILTER (WHERE |]
+          <> pageViewPredicate
+          <> [HI.sql|)::bigint,
+          MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
+          MAX(resource___service___name),
+          NULL::text, NULL::text, false
+        FROM otel_logs_and_spans
+        WHERE |]
+          <> browserScope scope
+          <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''|]
+          <> sessionCoreWhere match
+          <> [HI.sql|
+        GROUP BY attributes___session___id HAVING true|]
+          <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
+          <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
+      )
+
+
+sessionCoreWhere :: SessionMatch -> HI.Sql
+sessionCoreWhere (SessionIds ids) = [HI.sql| AND attributes___session___id = ANY(#{ids})|]
+sessionCoreWhere (SessionText Nothing) = mempty
+sessionCoreWhere (SessionText (Just _)) = error "text search must use the raw session query"
+
+
+enrichSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> [RumSession] -> Eff es [RumSession]
+enrichSessionRows _ [] = pure []
+enrichSessionRows scope rows = do
+  let ids = map (.id) rows
+  details :: [(Text, Maybe Text, Maybe Text)] <-
+    Hasql.withHasqlTimefusion scope.useTf
+      $ Hasql.interp
+        ( [HI.sql|
+          SELECT attributes___session___id,
+            first_value(|]
+            <> pagePath
+            <> [HI.sql| ORDER BY timestamp DESC, id DESC) FILTER (WHERE |]
+            <> pageViewPredicate
+            <> [HI.sql|),
+            MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original))
+          FROM otel_logs_and_spans
+          WHERE |]
+            <> browserScope scope
+            <> [HI.sql| AND attributes___session___id = ANY(#{ids})
+          GROUP BY attributes___session___id|]
+        )
+  let byId = M.fromList [(sid, (lastPage, userAgent)) | (sid, lastPage, userAgent) <- details]
+  pure
+    [ maybe row (\(lastPage, userAgent) -> row{lastPage, userAgent}) $ M.lookup row.id byId
+    | row <- rows
+    ]
 
 
 -- The same lookup mode is used for both stores so recordings can enrich matched
