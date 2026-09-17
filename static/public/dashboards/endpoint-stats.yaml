@@ -116,19 +116,15 @@ tabs:
         layout: { w: 6, h: 4 }
         columns:
           - field: status_code
-            sortable: true
             title: Status Code
           - field: count
-            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: pct
-            sortable: true
             title: '% of Total'
             progress: value_percent
           - field: avg_latency
-            sortable: true
             title: Avg Latency
             columnType: duration
             unit: ms
@@ -136,68 +132,56 @@ tabs:
         sql: |
           SELECT
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
-            COUNT(*) as count,
-            ROUND((COUNT(*)::float * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ())::float)::numeric, 1)::float as pct,
-            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_latency
+            COUNT(*)::text as count,
+            ROUND((COUNT(*)::float * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ())::float)::numeric, 1)::float::text as pct,
+            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             {{time_filter}}
           GROUP BY attributes___http___response___status_code
-          ORDER BY {{table_sort}}
+          ORDER BY COUNT(*) DESC
           LIMIT 20
-        default_sort: "COUNT(*) DESC"
 
       # Downstream dependencies table
       - type: table
         title: 'Downstream Dependencies'
-        description: 'Services and operations called by this endpoint. High latency or error rates here often explain endpoint slowness.'
+        description: 'Direct service, database, queue, and external dependencies. Served from five-minute dependency rollups; recent telemetry can take one rollup interval to appear.'
+        db_source: postgres
         layout: { w: 6, h: 4 }
         columns:
           - field: operation
-            sortable: true
             title: Operation
           - field: calls
-            sortable: true
             title: Calls
             columnType: number
             progress: column_percent
           - field: avg_latency
-            sortable: true
             title: Avg Latency
             columnType: duration
             unit: ms
             progress: column_percent
           - field: error_rate
-            sortable: true
             title: Error Rate
             unit: '%'
             progress: value_percent
             progress_variant: error
         sql: |
-          WITH endpoint_spans AS (
-            SELECT context___span_id as span_id, context___trace_id as trace_id
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}'
-              AND hashes @> ARRAY['{{var-endpointHash}}']
-              {{time_filter}}
+          WITH rollup AS (
+            SELECT bucket AS timestamp, target_key, req_count, error_count, sum_duration_ns
+            FROM apis.endpoint_dependency_edges
+            WHERE project_id='{{project_id}}' AND endpoint_hash='{{var-endpointHash}}'
           )
           SELECT
-            o.name as operation,
-            COUNT(*) as calls,
-            ROUND((AVG(o.duration) / 1e6)::numeric, 2) as avg_latency,
-            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
-          FROM otel_logs_and_spans o
-          INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-          WHERE o.project_id='{{project_id}}'
-            AND o.parent_id = es.span_id
-            AND o.name IS NOT NULL
-            AND o.duration IS NOT NULL
-            {{time_filter}}
-          GROUP BY o.name
-          ORDER BY {{table_sort}}
+            target_key as operation,
+            SUM(req_count)::text as calls,
+            ROUND((SUM(sum_duration_ns)::numeric / NULLIF(SUM(req_count), 0) / 1e6), 2)::text as avg_latency,
+            ROUND((SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric, 2)::text as error_rate
+          FROM rollup
+          WHERE 1=1 {{time_filter}}
+          GROUP BY target_key
+          ORDER BY SUM(req_count) DESC
           LIMIT 20
-        default_sort: "COUNT(*) DESC"
 
       # Traces — the log explorer's own list, so rows expand into their span tree
       # and click through to the full detail panel.
@@ -284,6 +268,7 @@ tabs:
             query: |
               hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p50(duration) / 1000000 by bin_auto(timestamp)
+            summarize_by: mean
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -293,6 +278,7 @@ tabs:
             query: |
               hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p75(duration) / 1000000 by bin_auto(timestamp)
+            summarize_by: mean
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -302,6 +288,7 @@ tabs:
             query: |
               hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
+            summarize_by: mean
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -311,6 +298,7 @@ tabs:
             query: |
               hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p99(duration) / 1000000 by bin_auto(timestamp)
+            summarize_by: mean
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -322,6 +310,7 @@ tabs:
           hashes[*]=="{{var-endpointHash}}" AND duration != null
           | summarize percentiles(duration / 1e6, 50, 75, 90, 95, 99) by bin_auto(timestamp)
           | order by timestamp desc
+        unit: ms
         layout: { w: 12, h: 5 }
 
       - type: 'timeseries'
@@ -458,12 +447,13 @@ tabs:
         children:
           - type: timeseries_stat
             title: Browser Sessions
-            description: Distinct browser sessions active in each time bucket.
+            description: Estimated unique browser sessions observed in each time bucket. Use Endpoint Sessions below for the exact session list.
             icon: users
             query: |
               hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null
               | summarize dcount(attributes.session.id) by bin_auto(timestamp)
             unit: sessions
+            summarize_by: sum
             layout: { w: 3, h: 2 }
 
           - type: timeseries_stat
@@ -486,20 +476,21 @@ tabs:
 
           - type: timeseries_stat
             title: Sessions with Errors
-            description: Distinct browser sessions with an error in each time bucket.
+            description: Estimated unique browser sessions that saw an error in each time bucket.
             icon: triangle-exclamation
             query: |
               hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ") AND attributes.session.id != null AND (status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null)
               | summarize dcount(attributes.session.id) by bin_auto(timestamp)
             unit: sessions
+            summarize_by: sum
             layout: { w: 3, h: 2 }
 
       - type: timeseries
-        title: Browser Requests and Errors
-        description: Total requests made by real browsers alongside the error count, so a traffic change is not mistaken for an error change.
+        title: Browser Request Outcomes
+        description: Requests made by real browsers, split into non-error requests and errors so a traffic change is not mistaken for an error change.
         query: |
           hashes[*]=="{{var-endpointHash}}" AND (resource.telemetry.sdk.language in ("webjs", "javascript", "js") or resource.user_agent.original != "" or name in ("documentLoad", "documentFetch") or name startswith "Pageview ")
-          | summarize requests=count(), errors=countif(status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null) by bin_auto(timestamp)
+          | summarize count() by bin_auto(timestamp), iff(status_code == "ERROR" or level in ("ERROR", "FATAL", "error", "fatal") or attributes.exception.type != null, "Errors", "Non-error requests")
           | order by timestamp desc
           | limit 10000
         unit: requests
@@ -541,6 +532,7 @@ tabs:
       - type: table
         title: Endpoint Sessions
         description: Select a session to inspect its correlated OpenTelemetry events in Real User Monitoring; the replay workspace opens when a recording is available.
+        db_source: postgres
         layout: { w: 12, h: 6 }
         columns:
           - field: session_id
@@ -548,6 +540,8 @@ tabs:
             link: '/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}'
           - field: last_page
             title: Last Page
+          - field: replay
+            title: Replay
           - field: errors
             title: Errors
             columnType: number
@@ -557,19 +551,120 @@ tabs:
             title: Last Seen
         sql: |
           SELECT
-            attributes___session___id AS session_id,
-            COALESCE(MAX(NULLIF(attributes___url___path, '')), MAX(NULLIF(attributes___url___full, '')), MAX(NULLIF(replace(name, 'Pageview · ', ''), '')), 'Unknown page') AS last_page,
+            browser.attributes___session___id AS session_id,
+            COALESCE(MAX(NULLIF(browser.attributes___url___path, '')), MAX(NULLIF(browser.attributes___url___full, '')), MAX(NULLIF(replace(browser.name, 'Pageview · ', ''), '')), 'Unknown page') AS last_page,
+            CASE WHEN BOOL_OR(replay.session_id IS NOT NULL) THEN 'Available' ELSE 'Not recorded' END AS replay,
+            COUNT(*) FILTER (WHERE browser.status_code = 'ERROR' OR lower(COALESCE(browser.level, '')) = 'error' OR browser.attributes___exception___type IS NOT NULL)::text AS errors,
+            MAX(browser.timestamp)::text AS last_seen
+          FROM otel_logs_and_spans browser
+          LEFT JOIN projects.replay_sessions replay
+            ON CAST(replay.project_id AS TEXT) = browser.project_id
+            AND CAST(replay.session_id AS TEXT) = browser.attributes___session___id
+            AND (replay.event_file_count > 0 OR cardinality(replay.file_keys) > 0 OR cardinality(replay.shard_keys) > 0)
+          WHERE browser.project_id='{{project_id}}'
+            AND browser.hashes @> ARRAY['{{var-endpointHash}}']
+            AND (browser.resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(browser.resource___user_agent___original, '') <> '' OR browser.name IN ('documentLoad', 'documentFetch') OR browser.name LIKE 'Pageview %')
+            AND browser.attributes___session___id IS NOT NULL
+            AND browser.attributes___session___id <> ''
+            {{time_filter}}
+          GROUP BY browser.attributes___session___id
+          ORDER BY MAX(browser.timestamp) DESC LIMIT 50
+
+      - type: table
+        title: Browser Cohorts
+        description: Browser identities observed on requests to this endpoint. Unknown means the browser SDK did not provide a user-agent identity; it is not a separate user cohort.
+        db_source: postgres
+        layout: { w: 12, h: 5 }
+        columns:
+          - field: browser
+            title: Browser
+          - field: sessions
+            title: Sessions
+            columnType: number
+            progress: column_percent
+          - field: requests
+            title: Requests
+            columnType: number
+            progress: column_percent
+          - field: errors
+            title: Errors
+            columnType: number
+            progress: column_percent
+            progress_variant: error
+          - field: p75_ms
+            title: P75
+            columnType: duration
+            unit: ms
+        sql: |
+          SELECT
+            CASE
+              WHEN resource___user_agent___original IS NULL OR resource___user_agent___original = '' THEN 'Unknown browser'
+              WHEN lower(resource___user_agent___original) LIKE '%edg/%' THEN 'Edge'
+              WHEN lower(resource___user_agent___original) LIKE '%opr/%' OR lower(resource___user_agent___original) LIKE '%opera%' THEN 'Opera'
+              WHEN lower(resource___user_agent___original) LIKE '%firefox/%' THEN 'Firefox'
+              WHEN lower(resource___user_agent___original) LIKE '%chrome/%' OR lower(resource___user_agent___original) LIKE '%crios/%' THEN 'Chrome'
+              WHEN lower(resource___user_agent___original) LIKE '%safari/%' THEN 'Safari'
+              ELSE 'Other browser'
+            END AS browser,
+            COUNT(DISTINCT NULLIF(attributes___session___id, ''))::text AS sessions,
+            COUNT(*)::text AS requests,
             COUNT(*) FILTER (WHERE status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)::text AS errors,
-            MAX(timestamp)::text AS last_seen
+            ROUND((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::numeric, 1)::text AS p75_ms
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(resource___user_agent___original, '') <> '' OR name IN ('documentLoad', 'documentFetch') OR name LIKE 'Pageview %')
-            AND attributes___session___id IS NOT NULL
-            AND attributes___session___id <> ''
             {{time_filter}}
-          GROUP BY attributes___session___id
-          ORDER BY MAX(timestamp) DESC LIMIT 50
+          GROUP BY browser
+          ORDER BY COUNT(*) DESC LIMIT 20
+
+      - type: table
+        title: Request-linked Web Vitals
+        description: Web Vitals are shown only when the browser SDK puts the same session ID on both an endpoint request and a vital sample. Empty results mean this correlation attribute is not being emitted; use the RUM dashboard for page-level vitals.
+        db_source: postgres
+        layout: { w: 12, h: 5 }
+        columns:
+          - field: vital
+            title: Vital
+          - field: p75
+            title: P75
+            columnType: number
+          - field: samples
+            title: Correlated Samples
+            columnType: number
+          - field: sessions
+            title: Affected Sessions
+            columnType: number
+        sql: |
+          WITH endpoint_sessions AS (
+            SELECT DISTINCT attributes___session___id AS session_id
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND hashes @> ARRAY['{{var-endpointHash}}']
+              AND attributes___session___id IS NOT NULL
+              AND attributes___session___id <> ''
+              AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR COALESCE(resource___user_agent___original, '') <> '' OR name IN ('documentLoad', 'documentFetch') OR name LIKE 'Pageview %')
+              {{time_filter}}
+          ), vital_samples AS (
+            SELECT
+              metric_name,
+              COALESCE(attributes->>'session.id', attributes->>'session_id') AS session_id,
+              COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) AS vital_value
+            FROM otel_metrics
+            WHERE project_id='{{project_id}}'
+              AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.cls', 'browser.web_vital.fcp', 'browser.web_vital.ttfb', 'k6.browser_web_vital_lcp', 'k6.browser_web_vital_inp', 'k6.browser_web_vital_cls', 'k6.browser_web_vital_fcp', 'k6.browser_web_vital_ttfb')
+              {{time_filter}}
+          )
+          SELECT
+            replace(replace(metric_name, 'browser.web_vital.', ''), 'k6.browser_web_vital_', '') AS vital,
+            ROUND((approx_percentile(0.75, percentile_agg(vital_value)))::numeric, 2)::text AS p75,
+            COUNT(*)::text AS samples,
+            COUNT(DISTINCT vital_samples.session_id)::text AS sessions
+          FROM vital_samples
+          INNER JOIN endpoint_sessions ON endpoint_sessions.session_id = vital_samples.session_id
+          WHERE vital_value IS NOT NULL
+          GROUP BY metric_name
+          ORDER BY COUNT(*) DESC
 
       - type: logs
         title: Browser Traces for This Endpoint
@@ -581,9 +676,16 @@ tabs:
   - name: Dependencies
     icon: sitemap
     widgets:
+      - type: service_map
+        id: endpoint-dependency-map
+        title: Endpoint Dependency Map
+        description: Direct downstream services, databases, queues, and external calls for this endpoint. Health bars show errors; node cards show call rate and tail latency. Select a node to inspect its traces or open the scoped Service Map.
+        layout: { w: 12, h: 10 }
+
       - type: table
         title: Downstream health
-        description: Direct child spans of this endpoint. One aggregate query keeps the tab responsive; child time can exceed request time when work runs in parallel.
+        description: Direct dependencies, including inferred databases, queues, and external services. The five-minute rollup keeps this tab bounded; its latency is cumulative call time.
+        db_source: postgres
         layout: { w: 12, h: 3 }
         columns:
           - field: operations
@@ -594,30 +696,31 @@ tabs:
             unit: '%'
             progress: value_percent
             progress_variant: error
-          - field: p95_ms
-            title: P95 Time
+          - field: avg_ms
+            title: Avg Call Time
             columnType: duration
             unit: ms
           - field: traces
             title: Affected Traces
             columnType: number
         sql: |
-          WITH endpoint_spans AS (
-            SELECT context___span_id AS span_id, context___trace_id AS trace_id
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
+          WITH rollup AS (
+            SELECT bucket AS timestamp, target_key, req_count, trace_count, error_count, sum_duration_ns
+            FROM apis.endpoint_dependency_edges
+            WHERE project_id='{{project_id}}' AND endpoint_hash='{{var-endpointHash}}'
           )
           SELECT
-            COUNT(DISTINCT o.name)::text AS operations,
-            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text AS error_rate,
-            ROUND((approx_percentile(0.95, percentile_agg(o.duration)) / 1000000.0)::numeric, 1)::text AS p95_ms,
-            COUNT(DISTINCT o.context___trace_id)::text AS traces
-          FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-          WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id {{time_filter}}
+            COUNT(DISTINCT target_key)::text AS operations,
+            ROUND((SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric, 2)::text AS error_rate,
+            ROUND((SUM(sum_duration_ns)::numeric / NULLIF(SUM(req_count), 0) / 1e6), 1)::text AS avg_ms,
+            SUM(trace_count)::text AS traces
+          FROM rollup
+          WHERE 1=1 {{time_filter}}
 
       - type: table
         title: Dependency Regressions
-        description: Prioritize dependencies by server failures, tail latency, and the number of endpoint traces they affect.
+        description: Prioritize direct dependencies by failures, average call time, and affected traces. Open a trace below for source evidence.
+        db_source: postgres
         layout: { w: 12, h: 6 }
         columns:
           - field: operation
@@ -633,7 +736,7 @@ tabs:
             progress: value_percent
             progress_variant: error
           - field: p95_ms
-            title: P95
+            title: P95 Call Time
             columnType: duration
             unit: ms
           - field: avg_ms
@@ -641,37 +744,50 @@ tabs:
             columnType: duration
             unit: ms
         sql: |
-          WITH endpoint_spans AS (
-            SELECT context___span_id AS span_id, context___trace_id AS trace_id
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
+          WITH rollup AS (
+            SELECT bucket AS timestamp, target_key, req_count, trace_count, error_count, sum_duration_ns, lat_hist
+            FROM apis.endpoint_dependency_edges
+            WHERE project_id='{{project_id}}' AND endpoint_hash='{{var-endpointHash}}'
+          ), totals AS (
+            SELECT target_key, SUM(req_count) AS req_count, SUM(trace_count) AS trace_count,
+              SUM(error_count) AS error_count, SUM(sum_duration_ns) AS sum_duration_ns
+            FROM rollup WHERE 1=1 {{time_filter}} GROUP BY target_key
+          ), hist AS (
+            SELECT target_key, key::int AS bucket, SUM(value::bigint) AS n
+            FROM rollup CROSS JOIN LATERAL jsonb_each_text(lat_hist)
+            WHERE 1=1 {{time_filter}} GROUP BY target_key, key
+          ), ranked AS (
+            SELECT target_key, bucket, SUM(n) OVER (PARTITION BY target_key ORDER BY bucket) AS cumulative,
+              SUM(n) OVER (PARTITION BY target_key) AS total
+            FROM hist
+          ), p95 AS (
+            SELECT DISTINCT ON (target_key) target_key,
+              ROUND((1000 * POWER(2, (bucket + 1) / 4.0) / 1000000.0)::numeric, 1)::text AS p95_ms
+            FROM ranked WHERE cumulative >= total * 0.95 ORDER BY target_key, bucket
           )
           SELECT
-            o.name AS operation,
-            COUNT(DISTINCT o.context___trace_id)::text AS traces,
-            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text AS error_rate,
-            ROUND((approx_percentile(0.95, percentile_agg(o.duration)) / 1000000.0)::numeric, 1)::text AS p95_ms,
-            ROUND((AVG(o.duration) / 1000000.0)::numeric, 1)::text AS avg_ms
-          FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-          WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id AND o.name IS NOT NULL AND o.duration IS NOT NULL {{time_filter}}
-          GROUP BY o.name
-          ORDER BY COUNT(*) FILTER (WHERE o.status_code = 'ERROR') DESC, approx_percentile(0.95, percentile_agg(o.duration)) DESC
+            t.target_key AS operation, t.trace_count::text AS traces,
+            ROUND((t.error_count * 100.0 / GREATEST(1, t.req_count))::numeric, 2)::text AS error_rate,
+            p.p95_ms,
+            ROUND((t.sum_duration_ns::numeric / NULLIF(t.req_count, 0) / 1000000.0)::numeric, 1)::text AS avg_ms
+          FROM totals t LEFT JOIN p95 p USING (target_key)
+          ORDER BY t.error_count DESC, t.sum_duration_ns / NULLIF(t.req_count, 0) DESC
           LIMIT 30
 
       - type: timeseries
         title: Downstream Time by Operation
-        description: Cumulative child-span time by operation. Use the trace list to confirm whether calls are sequential or parallel.
+        description: Cumulative direct-dependency call time. Parallel calls can make this exceed endpoint wall-clock time.
+        db_source: postgres
         sql: |
-          WITH endpoint_spans AS (
-            SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-              context___span_id AS span_id, context___trace_id AS trace_id
-            FROM otel_logs_and_spans
-            WHERE project_id='{{project_id}}' AND hashes @> ARRAY['{{var-endpointHash}}'] {{time_filter}}
+          WITH rollup AS (
+            SELECT bucket AS timestamp, bucket, target_key, sum_duration_ns
+            FROM apis.endpoint_dependency_edges
+            WHERE project_id='{{project_id}}' AND endpoint_hash='{{var-endpointHash}}'
           )
-          SELECT es.time, o.name AS operation, SUM(o.duration)::float AS value
-          FROM otel_logs_and_spans o INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
-          WHERE o.project_id='{{project_id}}' AND o.parent_id = es.span_id AND o.duration IS NOT NULL AND o.name IS NOT NULL {{time_filter}}
-          GROUP BY es.time, o.name ORDER BY es.time DESC LIMIT 10000
+          SELECT extract(epoch from bucket)::integer AS time, target_key AS operation, SUM(sum_duration_ns)::float AS value
+          FROM rollup
+          WHERE 1=1 {{time_filter}}
+          GROUP BY bucket, target_key ORDER BY bucket DESC LIMIT 10000
         unit: ns
         layout: { w: 12, h: 5 }
 

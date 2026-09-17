@@ -62,7 +62,7 @@ COPY package.json package-lock.json ./
 COPY web-components/package.json web-components/package-lock.json ./web-components/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --prefer-offline --no-audit && \
-    npm ci --prefix web-components --prefer-offline --no-audit
+    npm ci --prefix web-components --prefer-online --no-audit
 
 # Copy source code
 COPY package.yaml ./

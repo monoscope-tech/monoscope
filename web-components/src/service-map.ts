@@ -692,9 +692,13 @@ async function render(
     menu.dataset.nodeKey = key;
     const title = menu.querySelector<HTMLElement>('[data-menu-title]');
     if (title) title.textContent = label;
+    const endpointEntry = key.startsWith('endpoint:');
     for (const a of menu.querySelectorAll<HTMLAnchorElement>('[data-menu-action]')) {
       const action = a.dataset.menuAction!;
-      a.classList.toggle('hidden', inferred && action !== 'inspect' && action !== 'focus');
+      // A synthetic endpoint entry is a graph anchor, not a service whose resource.name can
+      // be searched. Keep only graph-local actions; real downstream nodes keep their normal
+      // trace/log/metric investigation links.
+      a.classList.toggle('hidden', (inferred || endpointEntry) && action !== 'inspect' && action !== 'focus');
       a.href = menuHref(pid, action, key);
     }
     menu.style.left = `${x}px`;

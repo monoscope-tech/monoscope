@@ -5,7 +5,7 @@
 -- The canvas is never the only representation: the same payload is rendered as a
 -- semantic dependency table underneath, which is what makes the map readable on a phone,
 -- keyboard-navigable, and functional in a shared link with no JS.
-module Pkg.Components.ServiceMap (serviceMapPanel_) where
+module Pkg.Components.ServiceMap (serviceMapPanel_, endpointDependencyMapPanel_) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
@@ -25,11 +25,27 @@ import Utils (faSprite_, getDurationNSMS, prettyPrintCount)
 -- as an embedded @application/json@ payload rather than an HTMX swap: HTMX swaps HTML,
 -- and a canvas renderer needs a model, not markup.
 serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Maybe Text -> Html ()
-serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex flex-col gap-3 relative"] do
+serviceMapPanel_ pid elId graph colors selectedEnv = serviceMapPanelWith_ (GlobalPanel selectedEnv) pid elId graph colors
+
+
+-- | An endpoint has no downstream edges for two very different reasons: it genuinely does
+-- not call anything, or its instrumentation has not emitted child spans yet.  Name that
+-- distinction here instead of reusing the global map's vague "No service activity" state.
+endpointDependencyMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
+endpointDependencyMapPanel_ = serviceMapPanelWith_ EndpointPanel
+
+
+data ServiceMapPanel = GlobalPanel (Maybe Text) | EndpointPanel
+
+
+serviceMapPanelWith_ :: ServiceMapPanel -> Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
+serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex flex-col gap-3 relative"] do
   case graph.error of
     Just msg -> mapEmpty_ "triangle-exclamation" "Couldn't load the service map" msg
     Nothing
-      | V.null graph.nodes -> mapEmpty_ "diagram-project" "No service activity in this range" "Once traced requests arrive, the services they touch and the calls between them appear here."
+      | V.null graph.nodes -> case panel of
+          EndpointPanel -> mapEmpty_ "diagram-project" "No direct dependencies in this range" "This endpoint has not made an instrumented downstream call in the selected period. Add client or producer spans to reveal databases, queues, external services, and child services."
+          GlobalPanel{} -> mapEmpty_ "diagram-project" "No service activity in this range" "Once traced requests arrive, the services they touch and the calls between them appear here."
       | otherwise -> do
           when graph.truncated
             $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak px-1"]
@@ -40,7 +56,7 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
                 <> show (V.length (drawnNodes graph))
                 <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
-          envFacet_ pid graph selectedEnv
+          envFacet_ pid graph (case panel of GlobalPanel selectedEnv -> selectedEnv; EndpointPanel -> Nothing)
           scopeChip_
           -- A React-Flow-shaped canvas, without React: a clipping viewport, one pane that the
           -- renderer translates and scales, an SVG layer for the edges, and the nodes as real

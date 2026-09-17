@@ -1,9 +1,12 @@
 module Pages.Dashboards (
   dashboardGetH,
   dashboardTabGetH,
+  dashboardSettledPostH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
   DashboardGet (..),
+  DashboardSettleSample (..),
+  DashboardNavigation (..),
   dashboardsGetH,
   DashboardsGet (..),
   DashboardFilters (..),
@@ -52,6 +55,7 @@ module Pages.Dashboards (
 
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Default
 import Data.Effectful.Hasql qualified
 import Data.Effectful.UUID qualified as UUID
@@ -69,7 +73,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (pooledForConcurrently)
+import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled qualified
 import Effectful.Log (Log)
@@ -88,32 +92,38 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), endpointDependencyGraphForRange)
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
+import OpenTelemetry.Attributes qualified as OA
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), emptyState_, filterInputAttr_, formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
+import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.ServiceMap (endpointDependencyMapPanel_)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
-import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
+import Servant (NoContent (..), ServerError, err302, err400, err404, errBody, errHeaders)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.FilePath.Posix (takeDirectory)
 import System.Logging qualified as Log
-import System.Tracing (Tracing)
+import System.Tracing (Tracing, withSpan_)
 import System.Types
 import Text.Slugify (slugify)
 import UnliftIO qualified
@@ -196,6 +206,38 @@ instance ToHtml DashboardGet where
   toHtmlRaw = toHtml
 
 
+-- | A bounded, client-measured dashboard completion sample. The handler verifies the
+-- dashboard belongs to the active project; dimensions intentionally exclude both ids.
+data DashboardSettleSample = DashboardSettleSample
+  { durationMs :: Int
+  , responseBytes :: Int
+  , navigation :: DashboardNavigation
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON) via DAE.Snake DashboardSettleSample
+
+
+data DashboardNavigation = DashboardInitial | DashboardTab
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON) via WrappedEnumSC 'Nothing "Dashboard" DashboardNavigation
+
+
+dashboardSettledPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardSettleSample -> ATAuthCtx NoContent
+dashboardSettledPostH pid dashId sample = do
+  _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404
+  let valid = sample.durationMs >= 0 && sample.durationMs <= 600000 && sample.responseBytes >= 0 && sample.responseBytes <= 50000000
+      -- Experience budgets, not request timeouts: tabs must paint quickly, while an
+      -- initial dashboard gets enough room for grid hydration and its first widget wave.
+      (mode, budgetMs) = case sample.navigation of
+        DashboardInitial -> ("initial" :: Text, 8000)
+        DashboardTab -> ("tab", 1500)
+  unless valid $ throwError err400{errBody = "invalid dashboard performance sample"}
+  Metrics.recordMs Metrics.dashboardTimeToSettled (fromIntegral sample.durationMs) [("navigation", OA.toAttribute mode)]
+  Metrics.recordMs Metrics.dashboardResponseBytes (fromIntegral sample.responseBytes) [("navigation", OA.toAttribute mode)]
+  when (sample.durationMs > budgetMs) $ Metrics.bump Metrics.dashboardSettlementBudgetExceeded [("navigation", OA.toAttribute mode)]
+  pure NoContent
+
+
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
   let pidText = pid.toText
@@ -240,29 +282,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust dash.tabs \tabs -> do
       -- Build query string from current params (excluding internal keys and expand param)
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload:inherited" "mouseover"] do
-        forM_ (zip [0 ..] tabs) \(idx, tab) -> do
-          let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
-          -- Project tab/nav swap pattern (CLAUDE.md): fetch the *full page* and select the
-          -- content container out of it, morphing the tab strip out-of-band. Morphing carries
-          -- `tab-active` across for free, so no hyperscript manages the active class.
-          a_
-            [ role_ "tab"
-            , href_ tabUrl
-            , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-            , hxGet_ tabUrl
-            , hxTarget_ "#dashboard-tabs-content"
-            , hxSelect_ "#dashboard-tabs-content"
-            , term "hx-select-oob" "#dashboard-tabs-container:outerMorph"
-            , hxSwap_ "outerMorph"
-            , hxPushUrl_ "true"
-            , [__|on click set my.preloadState to 'DONE'|]
-            ]
-            do
-              -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
-              whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
-              span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
-              toHtml tab.name
+      dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr []
 
     -- Variables section (pushed to the right, collapsible on mobile)
     whenJust dash.variables \variables -> do
@@ -314,7 +334,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       constantsJson = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
   let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount)] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/settled")] do
     -- Only warn when a constant actually ran and returned zero rows (Just []).
     -- result == Nothing means the query was skipped (nothing references it) or
     -- failed (logged separately) — neither is a "no data" condition.
@@ -366,6 +386,25 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     script_
       [text|
       document.addEventListener('DOMContentLoaded', () => {
+        // Measure the experience that matters: the shell, its swap (if any), and grid
+        // hydration have all completed. This is deliberately a same-origin, bounded
+        // aggregate; dashboard/project ids are validated server-side but never become
+        // metric dimensions.
+        let dashboardStartedAt = performance.now();
+        let dashboardSettledSent = false;
+        function reportDashboardSettled(navigation, responseBytes) {
+          if (dashboardSettledSent) return;
+          const page = document.getElementById('dashboardPage');
+          const url = page?.dataset.settledUrl;
+          if (!url) return;
+          dashboardSettledSent = true;
+          const body = JSON.stringify({
+            navigation,
+            duration_ms: Math.round(performance.now() - dashboardStartedAt),
+            response_bytes: Math.max(0, Math.round(responseBytes || 0))
+          });
+          fetch(url, { method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/json'}, body }).catch(() => {});
+        }
         window.interpolateVarTemplates = window.interpolateVarTemplates || function() {};
         // Local, not window.debounce: that global is published by the lazily-imported
         // widgets chunk, so initializeGrids raced it and threw "debounce is not defined"
@@ -504,7 +543,11 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
         // The page shell resolves this promise from the GridStack script's load
         // event. No polling and no timer-dependent hydration ordering.
-        window.gridStackReady.then(initializeGrids);
+        window.gridStackReady.then(function() {
+          initializeGrids();
+          const navigation = performance.getEntriesByType('navigation')[0];
+          requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('initial', navigation?.transferSize || navigation?.encodedBodySize || 0)));
+        });
 
         // Keep attributed dashboard CLS samples available to browser telemetry
         // and tests. User-initiated shifts are excluded by the web-vitals spec.
@@ -544,6 +587,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 window.initializeGrids();
                 window.interpolateVarTemplates();
               });
+            });
+          });
+          document.addEventListener('htmx:before:request', function(event) {
+            const trigger = event.detail?.elt;
+            if (!(trigger instanceof Element) || !trigger.closest('#dashboard-tabs-container')) return;
+            dashboardStartedAt = performance.now();
+            dashboardSettledSent = false;
+          });
+          document.addEventListener('htmx:after:settle', function(event) {
+            const target = event.detail?.target;
+            if (!(target instanceof Element) || target.id !== 'dashboard-tabs-content') return;
+            const resource = performance.getEntriesByType('resource').filter(entry => entry.name.includes('/dashboards/') && entry.name.includes('/tab/')).at(-1);
+            const bytes = resource?.transferSize || resource?.encodedBodySize || 0;
+            window.gridStackReady.then(() => {
+              window.initializeGrids();
+              requestAnimationFrame(() => requestAnimationFrame(() => reportDashboardSettled('tab', bytes)));
             });
           });
         }
@@ -910,22 +969,25 @@ processWidget prefill pid now timeRange allParams widgetBase = do
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
   -- emits a spinner plus a self-fetch.
   widget' <-
-    if
-      -- Anomalies first, ahead of the `eager` check. They read Postgres rather than
-      -- TF, and `widget_` renders `whenJust w.html toHtmlRaw` — nothing at all
-      -- without html — so there is no client-side fetch to degrade to and a blown
-      -- budget would blank the card. `eager` is a free `Maybe Bool` with no
-      -- type-level tie to `wType`, so a custom dashboard can set both; ordering the
-      -- guard this way makes the exclusion hold for every input, not just the
-      -- built-in templates.
-      | widget.wType == Widget.WTAnomalies -> processEagerWidget pid now timeRange allParams widget
-      -- Label by id, not title: untitled widgets would all log the same string.
-      | widget.eager == Just True
-      , prefill == PrefillWidgets ->
-          withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
-            $ processEagerWidget pid now timeRange allParams widget
-      | widget.eager == Just True -> pure $ lazyWidget widget
-      | otherwise -> pure widget
+    Metrics.timed Metrics.dashboardWidgetDuration [("type", OA.toAttribute $ toText $ show widgetBase.wType), ("prefill", OA.toAttribute $ if prefill == PrefillWidgets then ("server" :: Text) else "client")]
+      $ withSpan_
+        "dashboard.widget.render"
+        [("monoscope.dashboard.widget.type", OA.toAttribute $ toText $ show widgetBase.wType)]
+        if
+          -- Server-rendered widgets first, ahead of the `eager` check. They read Postgres rather
+          -- than TF, and their renderer consumes `html` directly — without it there is no
+          -- client-side fetch to degrade to and a blown budget would blank the card. `eager` is a free `Maybe Bool` with no
+          -- type-level tie to `wType`, so a custom dashboard can set both; ordering the
+          -- guard this way makes the exclusion hold for every input, not just the
+          -- built-in templates.
+          | widget.wType `elem` [Widget.WTAnomalies, Widget.WTServiceMap] -> processEagerWidget pid now timeRange allParams widget
+          -- Label by id, not title: untitled widgets would all log the same string.
+          | widget.eager == Just True
+          , prefill == PrefillWidgets ->
+              withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
+                $ processEagerWidget pid now timeRange allParams widget
+          | widget.eager == Just True -> pure $ lazyWidget widget
+          | otherwise -> pure widget
 
   -- Recursively process child widgets concurrently, inheriting the parent's dashboard id
   forOf (#children . _Just) widget' \kids ->
@@ -953,10 +1015,9 @@ widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text,
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
   -- Bin at the density the widget renders at, so a server-prefilled chart and the
   -- browser's later /chart_data refetch agree on bucket width (and on cache key).
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
-    (chartQuery, dataType) = Widget.chartQuery widget
-    (query, sql) = if widget.wType == Widget.WTTable then Widget.tableQuery widget (join $ lookup "table-sort" allParams) else (chartQuery, widget.sql)
+    (query, dataType) = Widget.chartQuery widget
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
@@ -979,13 +1040,35 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
         ?~ renderText
           (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
-    let (query, sql) = Widget.tableQuery widget (find ((== "table-sort") . fst) allParams >>= snd)
-    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
+    -- Fetch table data
+    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
     -- Render the table with data server-side
     pure
       $ widget
       & #html
         ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+  Widget.WTServiceMap -> do
+    let (fromM, toM, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+        endpointM = join $ lookup "var-endpointHash" allParams
+        mapId = fromMaybe "endpoint-dependency-map" widget.id <> "-map"
+    case endpointM of
+      Nothing -> pure widget
+      Just endpoint -> do
+        graph <- endpointDependencyGraphForRange pid endpoint (fromMaybe now fromM) (fromMaybe now toM)
+        let serviceColors = getServiceColors $ V.map (.label) $ V.filter (not . (.inferred)) graph.nodes
+            serviceMapUrl =
+              "/p/"
+                <> pid.toText
+                <> "/service_map"
+                <> queryStringFrom
+                  ( filter
+                      (isJust . snd)
+                      [("endpoint_hash", Just endpoint), ("since", sinceStr), ("from", fromDStr), ("to", toDStr)]
+                  )
+        pure
+          $ widget
+          & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
+          & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
   _ -> fetchWidgetData pid timeRange allParams widget
 
 
@@ -1077,7 +1160,7 @@ syncWidgetAlert pid widgetId widget = do
   whenJust existingMonitor \monitor -> do
     let newQuery = fromMaybe "" widget.query
     when (monitor.logQuery /= newQuery) do
-      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins, environment = monitor.environment, service = monitor.service}
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
@@ -1196,31 +1279,34 @@ dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
-  let prefill = prefillFor hxRequest
-  (session, project, bw) <- mkPageCtx pid
-  now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      scopedParams = dashboardScopedParams session.environment session.service allParams
+  Metrics.timed Metrics.dashboardShellDuration [("navigation", OA.toAttribute ("initial" :: Text))]
+    $ withSpan_ "dashboard.render" [("monoscope.dashboard.navigation", OA.toAttribute ("initial" :: Text))]
+    $ do
+      let prefill = prefillFor hxRequest
+      (session, project, bw) <- mkPageCtx pid
+      now <- Time.currentTime
+      let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+          scopedParams = dashboardScopedParams session.environment session.service allParams
 
-  (dashVM, dash) <- getDashAndVM pid dashId fileM
+      (dashVM, dash) <- getDashAndVM pid dashId fileM
 
-  -- If the dashboard has tabs, redirect to the first tab's URL
-  -- This ensures users always land on a tab-based URL for dashboards with tabs
-  case getDefaultTabSlug dash.tabs of
-    Just firstTabSlug -> do
-      let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> queryStringFrom allParams
-      throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
-    Nothing -> do
-      -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
-      let timeParams = (sinceStr, fromDStr, toDStr)
-      (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
-      dash'' <-
-        if isJust $ findVarToPrompt Nothing (fold dash'.variables)
-          then pure dash'
-          else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants dash'.widgets
+      -- If the dashboard has tabs, redirect to the first tab's URL
+      -- This ensures users always land on a tab-based URL for dashboards with tabs
+      case getDefaultTabSlug dash.tabs of
+        Just firstTabSlug -> do
+          let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> firstTabSlug <> queryStringFrom allParams
+          throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
+        Nothing -> do
+          -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
+          let timeParams = (sinceStr, fromDStr, toDStr)
+          (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
+          dash'' <-
+            if isJust $ findVarToPrompt Nothing (fold dash'.variables)
+              then pure dash'
+              else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants dash'.widgets
 
-      bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
-      addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
+          bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
+          addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
 
 
 numberedStep_ :: Int -> Text -> Html () -> Html ()
@@ -1500,7 +1586,7 @@ data WidgetAlertForm = WidgetAlertForm
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
-  _ <- Projects.sessionAndProject pid
+  (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
 
   -- Reuse the widget's existing monitor id when there is one
@@ -1556,8 +1642,8 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , notifyAfter = Nothing
               , stopAfterCheck = Nothing
               , stopAfter = Nothing
-              , environment = Nothing
-              , service = Nothing
+              , environment = session.environment
+              , service = session.service
               }
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
@@ -2403,40 +2489,54 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
-dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
-dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest allParams = do
-  let prefill = prefillFor hxRequest
-  (session, project, bw) <- mkPageCtx pid
-  now <- Time.currentTime
-  let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      scopedParams = dashboardScopedParams session.environment session.service allParams
+dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (NavigationResponse DashboardGet))
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest allParams =
+  Metrics.timed Metrics.dashboardShellDuration [("navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
+    $ withSpan_ "dashboard.tab.render" [("monoscope.dashboard.navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
+    $ do
+      let prefill = prefillFor hxRequest
+      (session, project, bw) <- mkPageCtx pid
+      now <- Time.currentTime
+      let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+          scopedParams = dashboardScopedParams session.environment session.service allParams
 
-  (dashVM, dash) <- getDashAndVM pid dashId fileM
+      (dashVM, dash) <- getDashAndVM pid dashId fileM
 
-  -- Find the active tab by slug
-  let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
-      activeTabIdx = maybe 0 fst activeTabInfo
-      activeTabName = fmap ((.name) . snd) activeTabInfo
-      timeParams = (sinceStr, fromDStr, toDStr)
+      -- Find the active tab by slug
+      let activeTabInfo = dash.tabs >>= (`findTabBySlug` tabSlug)
+          activeTabIdx = maybe 0 fst activeTabInfo
+          activeTabName = fmap ((.name) . snd) activeTabInfo
+          timeParams = (sinceStr, fromDStr, toDStr)
 
-  (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
+      (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
 
-  -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx).
-  -- Note: We don't process dash.widgets here since this is a tab-based dashboard
-  dash'' <-
-    if isJust $ findVarToPrompt (snd <$> activeTabInfo) (fold dash'.variables)
-      then pure dash'
-      else forOf (#tabs . _Just) dash' \tabs ->
-        forM (zip [0 ..] tabs) \(idx, tab) ->
-          if idx == activeTabIdx
-            then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
-            else pure tab
+      -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx).
+      -- Note: We don't process dash.widgets here since this is a tab-based dashboard
+      dash'' <-
+        if isJust $ findVarToPrompt (snd <$> activeTabInfo) (fold dash'.variables)
+          then pure dash'
+          else forOf (#tabs . _Just) dash' \tabs ->
+            forM (zip [0 ..] tabs) \(idx, tab) ->
+              if idx == activeTabIdx
+                then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
+                else pure tab
 
-  bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
-  -- Pass the active tab slug and computed constants in params for rendering
-  -- Including constants allows HTMX tab switches to skip re-executing constant queries
-  let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
-  addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
+      bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
+      -- Pass the active tab slug and computed constants in params for rendering
+      -- Including constants allows HTMX tab switches to skip re-executing constant queries
+      let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
+      let page = PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
+          queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) paramsWithTab
+          fragment = do
+            dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
+            div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"]
+              $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
+                Just v -> do
+                  whenJust activeTabName breadcrumbSuffixOob_
+                  variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v False
+                Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab ->
+                  tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True
+      addRespHeaders $ navigationResponse hxRequest page fragment
 
 
 -- | Dashboard URLs carry variables and time, not a second environment authority. Internal
@@ -2444,6 +2544,38 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
 -- @environment@ query parameter before it can affect generated KQL or a cache key.
 dashboardScopedParams :: Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
 dashboardScopedParams environment service params = [("environment", environment), ("service", service)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
+
+
+-- | The tab strip is rendered both in the full page and as an OOB replacement in a
+-- partial navigation response.  Its URL is always the canonical document URL; htmx
+-- merely asks for the shared fragment contract and preserves browser history/preload.
+dashboardTabStrip_ :: Text -> Text -> Int -> [Dashboards.Tab] -> Text -> [Attribute] -> Html ()
+dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
+  div_
+    ( [ role_ "tablist"
+      , class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]"
+      , id_ "dashboard-tabs-container"
+      , term "hx-preload:inherited" "mouseover"
+      ]
+        <> extraAttrs
+    )
+    $ forM_ (zip [0 ..] tabs) \(idx, tab) -> do
+      let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
+      a_
+        [ role_ "tab"
+        , href_ tabUrl
+        , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
+        , hxGet_ tabUrl
+        , hxTarget_ "#dashboard-tabs-content"
+        , hxSwap_ "outerMorph"
+        , hxPushUrl_ "true"
+        , [__|on click set my.preloadState to 'DONE'|]
+        ]
+        do
+          -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
+          whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
+          span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
+          toHtml tab.name
 
 
 -- | Render a single tab content panel.

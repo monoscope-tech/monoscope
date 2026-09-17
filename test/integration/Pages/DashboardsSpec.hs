@@ -94,11 +94,10 @@ spec = sequential $ aroundAll withTestResources do
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
 
-    -- CLAUDE.md's tab/nav swap rule: fetch the full page URL and hx-select the content
-    -- container out of it, morphing the tab strip out-of-band so the active class comes
-    -- across for free. These tabs had drifted to a separate /content partial endpoint plus
-    -- hyperscript that hand-moved .tab-active -- the exact pattern the rule forbids.
-    it "dashboardTabs_followTheProjectSwapPattern_notAContentPartial" \_ -> do
+    -- The canonical tab URL stays a normal full-document URL, but its htmx response is
+    -- supplied by the shared BodyWrapper navigation contract.  There is no synthetic
+    -- /content route or imperative active-tab mutation.
+    it "dashboardTabs_useTheSharedNavigationContract_notAContentEndpoint" \_ -> do
       let mkTab n = (def :: DashboardModel.Tab){DashboardModel.name = n}
           dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [mkTab "Overview", mkTab "Errors"]}
           vm =
@@ -121,12 +120,46 @@ spec = sequential $ aroundAll withTestResources do
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       -- `morph`/`:morph` are htmx 2 + idiomorph names; htmx 4 calls them outerMorph/innerMorph
       -- and throws "Unknown swap style: morph" at swap time, so the names are asserted here.
-      for_ ["hx-select=\"#dashboard-tabs-content\"", "hx-select-oob=\"#dashboard-tabs-container:outerMorph\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
+      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
         html `shouldSatisfy` T.isInfixOf attr
-      html `shouldSatisfy` (not . T.isInfixOf "\"morph\"")
+      html `shouldSatisfy` (not . T.isInfixOf "hx-select=\"")
       -- No /content partial, and no hyperscript managing the active class.
       html `shouldSatisfy` (not . T.isInfixOf "/content")
       html `shouldSatisfy` (not . T.isInfixOf "remove .tab-active")
+
+    it "reports a bounded dashboard-settlement sample after initial and tab renders" \_ -> do
+      let dash = (def :: DashboardModel.Dashboard){DashboardModel.tabs = Just [(def :: DashboardModel.Tab){DashboardModel.name = "Overview"}]}
+          vm =
+            DashboardVM
+              { id = UUIDId UUID.nil
+              , projectId = testPid
+              , createdAt = frozenTime
+              , updatedAt = frozenTime
+              , createdBy = Projects.UserId UUID.nil
+              , baseTemplate = Nothing
+              , schema = Just dash
+              , starredSince = Nothing
+              , homepageSince = Nothing
+              , tags = V.empty
+              , title = "Performance sample"
+              , teams = V.empty
+              , filePath = Nothing
+              , fileSha = Nothing
+              }
+          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
+      html `shouldSatisfy` T.isInfixOf "/dashboards/00000000-0000-0000-0000-000000000000/settled"
+      for_ ["duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"] \needle ->
+        html `shouldSatisfy` T.isInfixOf needle
+
+    it "accepts only the closed dashboard navigation vocabulary" \_ -> do
+      let sample navigation =
+            AE.eitherDecode @Dashboards.DashboardSettleSample
+              $ "{\"duration_ms\":1,\"response_bytes\":2,\"navigation\":\""
+              <> navigation
+              <> "\"}"
+      sample "initial" `shouldBe` Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
+      sample "tab" `shouldBe` Right (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardTab)
+      sample "typo" `shouldSatisfy` isLeft
 
     -- Dashboard variables are backend-persisted schema, but their live values come from
     -- the URL. The precedence rule is what makes a dashboard shareable: a link carries the

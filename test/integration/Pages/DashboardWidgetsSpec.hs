@@ -22,7 +22,7 @@ import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (NavigationResponse (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
@@ -45,6 +45,12 @@ renderedWidgets :: Dashboards.DashboardGet -> [Widget.Widget]
 renderedWidgets (Dashboards.DashboardGet _ _ dash _ _) = foldMap (foldMap (concatMap flatten . (.widgets))) dash.tabs
   where
     flatten w = w : concatMap flatten (fold w.children)
+
+
+tabDashboard :: NavigationResponse Dashboards.DashboardGet -> Dashboards.DashboardGet
+tabDashboard = \case
+  NavigationFull (PageCtx _ dashboard) -> dashboard
+  NavigationPartial dashboard _ -> dashboard
 
 
 allWidgetTypes :: [Widget.WidgetType]
@@ -598,6 +604,30 @@ spec = sequential $ aroundAll withTestResources do
           html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
       html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/rum?tab=sessions&amp;session=session%20%2F%20id")
 
+    it "renders a scoped dependency map with an endpoint-preserving Service Map link" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint dependency map"
+      dg <-
+        (tabDashboard . snd)
+          <$> testServant
+            tr
+            ( Dashboards.dashboardTabGetH
+                testPid
+                dashId
+                "dependencies"
+                Nothing
+                Nothing
+                Nothing
+                (Just "24H")
+                Nothing
+                [ ("var-host", Just "dellyman.com")
+                , ("var-endpointHash", Just "endpoint / hash")
+                ]
+            )
+      let mapWidget = find ((== Widget.WTServiceMap) . (.wType)) (renderedWidgets dg)
+      (mapWidget >>= (.cta) <&> (.title)) `shouldBe` Just "Open Service Map"
+      (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
+      (mapWidget >>= (.html)) `shouldSatisfy` maybe False (T.isInfixOf "No direct dependencies in this range" . toStrict)
+
   -- The variable picker replaces the tab's content, so every widget the render produced
   -- was thrown away. The gate lived in the view, so the handler ran the whole widget
   -- phase first — with the required variable interpolated to '', which for Endpoint
@@ -611,8 +641,7 @@ spec = sequential $ aroundAll withTestResources do
       prefilled :: Widget.Widget -> Bool
       prefilled w = isJust w.html || isJust w.dataset
       openTab tr dashId params = do
-        (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params
-        pure dg
+        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params)
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
@@ -631,7 +660,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dependent variable keeps a live template" do
     it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
-      (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")]
+      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")])
       let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
       html `shouldSatisfy` T.isInfixOf "{{var-host}}"
       html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
@@ -640,8 +669,7 @@ spec = sequential $ aroundAll withTestResources do
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
     let openTab tr dashId hx = do
-          (_, PageCtx _ dg) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
-          pure dg
+          (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
@@ -657,3 +685,30 @@ spec = sequential $ aroundAll withTestResources do
       -- lazyWidget strips `eager` too: renderStatContent reads the flag as "data is here"
       -- and would otherwise spin forever.
       map (fromMaybe "<untitled>" . (.title)) (eagerOnes ws) `shouldBe` []
+
+    it "returns the shared fragment contract for an htmx tab navigation" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Partial navigation"
+      (_, response) <-
+        testServant tr
+          $ Dashboards.dashboardTabGetH
+            testPid
+            dashId
+            "errors"
+            Nothing
+            Nothing
+            Nothing
+            (Just "24H")
+            (Just "true")
+            [ ("var-host", Just "dellyman.com")
+            , ("var-endpointHash", Just "ba3431d5")
+            ]
+      case response of
+        NavigationFull _ -> expectationFailure "htmx navigation returned a full document"
+        NavigationPartial _ fragment -> do
+          let html = toStrict $ renderText fragment
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-container\""
+          html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"outerMorph\""
+          html `shouldSatisfy` T.isInfixOf "tab-active"
+          html `shouldSatisfy` T.isInfixOf "hx-push-url=\"true\""
+          html `shouldNotSatisfy` T.isInfixOf "<html"

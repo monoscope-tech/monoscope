@@ -36,6 +36,7 @@ spec :: Spec
 spec = describe "dashboard templates" do
   files <- runIO $ sort . filter (".yaml" `L.isSuffixOf`) <$> listDirectory templatesDir
   templates <- runIO $ Dashboards.readDashboardsFromDisk templatesDir
+  let withEndpointTemplate action = maybe (expectationFailure "missing template: endpoint-stats.yaml") action $ find (\d -> d.file == Just "endpoint-stats.yaml") templates
 
   it "every template YAML parses into a Dashboard" do
     map (.file) templates `shouldBe` map (Just . fromString) files
@@ -69,3 +70,40 @@ spec = describe "dashboard templates" do
         metricSql `shouldSatisfy` (not . null)
         forM_ metricSql (`shouldSatisfy` T.isInfixOf "resource___service___name = '{{var-app}}'")
         sessionQueries `shouldSatisfy` (not . any (T.isInfixOf "dcount"))
+
+  it "endpoint latency summaries average percentile buckets and declare milliseconds" $ withEndpointTemplate \d -> do
+    let flatten w = w : maybe [] (concatMap flatten) w.children
+        latencyWidgets = maybe [] (concatMap flatten . (.widgets)) $ find ((== "Latency") . (.name)) (fromMaybe [] d.tabs)
+        summaryTitles = ["P50 Latency", "P75 Latency", "P95 Latency", "P99 Latency"]
+        summaries = filter (\w -> w.title `elem` (Just <$> summaryTitles)) latencyWidgets
+        trend = find (\w -> w.title == Just "Latency Percentiles Over Time") latencyWidgets
+    length summaries `shouldBe` length summaryTitles
+    forM_ summaries \w -> do
+      w.summarizeBy `shouldBe` Just Widget.SBMean
+      w.unit `shouldBe` Just "ms"
+    (trend >>= (.unit)) `shouldBe` Just "ms"
+
+  it "endpoint analytics ships a direct-dependency investigation map" $ withEndpointTemplate \d -> do
+    let maps = filter (\w -> w.wType == Widget.WTServiceMap) (allWidgets d)
+    maps `shouldSatisfy` (not . null)
+    forM_ maps \w -> do
+      w.title `shouldBe` Just "Endpoint Dependency Map"
+      (w.layout >>= (.w)) `shouldBe` Just 12
+
+  it "endpoint analytics only advertises replay when its session index has a recording" $ withEndpointTemplate \d -> do
+    let sessionWidget = find (\w -> w.title == Just "Endpoint Sessions") (allWidgets d)
+    (sessionWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "projects.replay_sessions")
+    (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "'Available'")
+
+  it "endpoint analytics only joins Web Vitals with an explicit browser session correlation" $ withEndpointTemplate \d -> do
+    let vitalsWidget = find (\w -> w.title == Just "Request-linked Web Vitals") (allWidgets d)
+    (vitalsWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions")
+    (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions.session_id = vital_samples.session_id")
+
+  it "endpoint analytics derives browser cohorts only from observed browser telemetry" $ withEndpointTemplate \d -> do
+    let cohortWidget = find (\w -> w.title == Just "Browser Cohorts") (allWidgets d)
+    (cohortWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "resource___user_agent___original")
+    (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "COUNT(DISTINCT NULLIF(attributes___session___id, ''))")

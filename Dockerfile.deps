@@ -69,7 +69,7 @@ COPY package*.json ./
 RUN npm ci --prefer-offline --no-audit
 
 COPY web-components/package*.json ./web-components/
-RUN cd web-components && npm ci --prefer-offline --no-audit
+RUN cd web-components && npm ci --prefer-online --no-audit
 
 # Build chart-cli (pre-compiled for faster deployments)
 COPY web-components ./web-components

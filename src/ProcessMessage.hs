@@ -15,7 +15,6 @@ module ProcessMessage (
   RequestMessage (..),
   valueToFormatStr,
   valueToFields,
-  redactJSON,
   ensureUrlParams,
   ensureUrlParamsWith,
   dynSegmentLabel,
@@ -76,7 +75,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.DeterministicId qualified as DeterministicId
-import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
+import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary, ingestionRedactionPaths, redactJSON)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.Metrics qualified as Metrics
@@ -340,9 +339,9 @@ extractObservation canonicalTemplates otelSpan =
       !attrMap = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !resMap = maybeToMonoid (unAesonTextMaybe otelSpan.resource)
       !attrValue = AE.Object $ AEKM.fromMapText attrMap
-      -- Hard-coded ingestion-time redaction. Per-project rules were removed
-      -- with `projects.redacted_fields`; the management UI is gone.
-      !redacted = redactJSON $ V.fromList [".set-cookie", ".password"]
+      -- The shared storage boundary applies the baseline redaction policy;
+      -- catalogue learning mirrors it so a secret cannot become a facet.
+      !redacted = redactJSON ingestionRedactionPaths
 
       -- Shared HTTP-key derivation with 'processSpanToEntities'. Must stay
       -- byte-identical or the schema-learning AKEndpoint target_hash won't
@@ -640,52 +639,6 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
     _ -> fail "Expected either a single string or an array of strings"
 
 
--- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
---
--- Empty paths short-circuits to structural sharing: subtrees with no live path
--- are returned by pointer instead of rebuilt. Key matching requires a @.@
--- boundary (tightening over a prior prefix-match implementation).
---
--- >>> redactJSON (V.fromList ["menu.id."]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
---
--- >>> redactJSON (V.fromList ["menu.id"]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
---
--- >>> redactJSON (V.fromList ["menu.id", "menu.name"]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
--- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "[REDACTED]")]))])
---
--- >>> redactJSON (V.fromList ["menu.[].id", "menu.[].names.[]"]) [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
--- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
---
--- Prefix without a path-boundary does NOT match:
---
--- >>> redactJSON (V.fromList ["password"]) [aesonQQ| {"pass":{"word":"secret"}} |]
--- Object (fromList [("pass",Object (fromList [("word",String "secret")]))])
-redactJSON :: V.Vector Text -> AE.Value -> AE.Value
-redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
-  where
-    go [] v = v
-    go ps v = case v of
-      AE.Object om -> AE.Object $ AEKM.mapWithKey (\k -> go (mapMaybe (matchKey (AEK.toText k)) ps)) om
-      AE.Array xs
-        | null cps -> v
-        | otherwise -> AE.Array $ V.map (go cps) xs
-        where
-          cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
-      AE.String{} | "" `elem` ps -> AE.String "[REDACTED]"
-      AE.Number{} | "" `elem` ps -> AE.String "[REDACTED]"
-      _ -> v
-
-    -- Match @k@ against a path on a @.@ boundary, returning the remainder.
-    -- Avoids allocating @k <> "."@ per (key, path) pair.
-    matchKey !k path =
-      T.stripPrefix k path >>= \rest -> case T.uncons rest of
-        Nothing -> Just ""
-        Just ('.', rest') -> Just rest'
-        _ -> Nothing
-
-
 -- valueToFields takes an aeson object and converts it into a vector of paths to
 -- each primitive value in the json and the values.
 --
@@ -716,7 +669,10 @@ redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
 -- >>> valueToFields [aesonQQ|{"menu":[{"c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd":"text"},{"id":123}]}|]
 -- V.fromList [(".menu[*].id", V.fromList [Number 123.0]), (".menu[*].{uuid}", V.fromList [String "text"])]
 --
--- FIXME: value To Fields should use the redact fields list to actually redact fields
+-- Redaction happens at the shared storage boundary in
+-- 'Telemetry.insertAndHandOff', before this projection produces searchable fields.
+-- Keeping this pure projection policy-free prevents a raw value reaching a derived
+-- field through one ingestion transport but not another.
 valueToFields :: AE.Value -> V.Vector (Text, V.Vector AE.Value)
 valueToFields value = dedupFields $ removeBlacklistedFields $ V.fromList $ valueToFields' value "" []
   where

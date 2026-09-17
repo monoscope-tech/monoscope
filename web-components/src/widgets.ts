@@ -451,9 +451,10 @@ export const chartDataUrl = ({
   querySQL,
   pid,
   chartType,
+  dbSource,
   timeFrom,
   timeTo,
-}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'timeFrom' | 'timeTo'>): string => {
+}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   // A widget carrying its own window is about that window, not the page's. `since`
@@ -472,6 +473,10 @@ export const chartDataUrl = ({
   // Lets the server size bin_auto buckets for how this widget renders: a line
   // chart carries twice the points a bar chart can show legibly.
   if (chartType) params.set('chart_type', chartType);
+  // SQL widgets can explicitly target Postgres. Leaving this out makes the
+  // server select TimeFusion by default, where application rollup tables do
+  // not exist.
+  if (dbSource) params.set('db_source', dbSource);
 
   // Add dashboard constants (from data-constants attribute)
   const constants = window.getDashboardConstants?.() ?? {};
@@ -724,6 +729,7 @@ type WidGetData = {
   query: string;
   sql: string;
   querySQL: string;
+  dbSource?: string | null;
   theme: string;
   yAxisLabel: string;
   pid: string;

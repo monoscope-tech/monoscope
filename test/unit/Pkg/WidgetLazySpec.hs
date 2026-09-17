@@ -16,6 +16,7 @@ import Data.Generics.Labels ()
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Lucid (renderText, toHtml)
+import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (lazyWidget)
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -74,3 +75,15 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
   -- permanently-loading dashboard instead of a slow one.
   it "would hang if the eager flag were left set" do
     selfFetches (statWidget & #eager ?~ True & #html .~ Nothing & #dataset .~ Nothing) `shouldBe` False
+
+  it "uses the configured aggregate for server-rendered timeseries stats" do
+    let stats = Charts.MetricsStats 5000 7000 59000 10 5900 5000 7000
+        latency =
+          statWidget
+            & #wType .~ Widget.WTTimeseriesStat
+            & #unit ?~ "ms"
+            & #summarizeBy ?~ Widget.SBMean
+            & #dataset ?~ (def & #value ?~ 59000 & #from ?~ 0 & #to ?~ 600000 & #stats ?~ stats)
+        html = render latency
+    html `shouldSatisfy` T.isInfixOf ">5.9s<"
+    html `shouldNotSatisfy` T.isInfixOf "59.0K ms"

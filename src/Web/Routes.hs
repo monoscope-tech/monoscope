@@ -83,7 +83,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
@@ -498,6 +498,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QPUUId "source_dashboard_id" :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
+  , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "settled" :> ReqBody '[JSON] Dashboards.DashboardSettleSample :> Post '[JSON] NoContent
   , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
   , dashboardDelete :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders Dashboards.DashboardRes)
@@ -512,7 +513,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> Delete '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
-    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
+    dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
   , dashboardTabRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.TabRenameForm :> Patch '[HTML] (RespHeaders Dashboards.TabRenameRes)
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
@@ -668,7 +669,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
     -- one query, so the list and the markers can't disagree.
     metricExemplarsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "exemplars" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML, JSON] (RespHeaders Metrics.MetricExemplarsGet)
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
-  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
+  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> QPT "endpoint_hash" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "service_search" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
@@ -956,6 +957,7 @@ cookieProtectedServer =
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH
+    , dashboardSettledPost = Dashboards.dashboardSettledPostH
     , dashboardWidgetPut = Dashboards.dashboardWidgetPutH
     , dashboardWidgetReorderPatchH = Dashboards.dashboardWidgetReorderPatchH
     , dashboardDelete = Dashboards.dashboardDeleteH

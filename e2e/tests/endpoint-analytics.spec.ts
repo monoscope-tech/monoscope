@@ -17,9 +17,32 @@ test("Endpoint Analytics exposes real-user impact and direct dependency investig
   await page.getByText("Experience", { exact: true }).click();
   await expect(page.getByText("Real-user impact", { exact: true })).toBeVisible();
   await expect(page.getByText("Endpoint Sessions", { exact: true })).toBeVisible();
-  await expect(page.getByText("Browser Requests and Errors", { exact: true })).toBeVisible();
+  await expect(page.getByText("Browser Request Outcomes", { exact: true })).toBeVisible();
 
-  await page.getByText("Dependencies", { exact: true }).click();
+  // The tab remains a normal document URL, but HTMX must use the shared fragment
+  // response, update the active tab, and preserve the browser's investigation history.
+  const switchStartedAt = performance.now();
+  await page.getByRole("tab", { name: "Dependencies" }).click();
   await expect(page.getByText("Downstream health", { exact: true })).toBeVisible();
   await expect(page.getByText("Dependency Regressions", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Dependencies" })).toHaveClass(/tab-active/);
+  expect(page.url()).toMatch(/\/tab\/dependencies/);
+  expect(performance.now() - switchStartedAt).toBeLessThan(1_500);
+
+  // Dependency rollups live in Postgres. This widget is lazy, so scroll it into
+  // view and pin its actual browser request: losing db_source here silently
+  // defaults SQL to TimeFusion, where the rollup table is not present.
+  const downstreamRequest = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.pathname === "/chart_data/stream" && url.searchParams.get("query_sql")?.includes("endpoint_dependency_edges") === true;
+  });
+  await page.getByText("Downstream Time by Operation", { exact: true }).scrollIntoViewIfNeeded();
+  const downstreamUrl = new URL((await downstreamRequest).url());
+  expect(downstreamUrl.searchParams.get("db_source")).toBe("postgres");
+  await expect(page.locator("#downstream-time-by-operation_error")).toBeHidden();
+
+  await page.goBack();
+  await expect(page.getByRole("tab", { name: "Experience" })).toHaveClass(/tab-active/);
+  await expect(page.getByText("Real-user impact", { exact: true })).toBeVisible();
+  expect(page.url()).toMatch(/\/tab\/experience/);
 });

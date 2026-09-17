@@ -39,6 +39,13 @@ module Pkg.Metrics (
 
   -- * Dashboards
   widgetSqlErrors,
+  dashboardShellDuration,
+  dashboardWidgetDuration,
+  dashboardQueryDuration,
+  dashboardQueryCacheOutcomes,
+  dashboardResponseBytes,
+  dashboardTimeToSettled,
+  dashboardSettlementBudgetExceeded,
 ) where
 
 import Effectful (Eff, IOE, (:>))
@@ -305,3 +312,30 @@ drainPatternsPersisted = mkCounter "monoscope.drain.patterns.persisted" Nothing
 widgetSqlErrors :: Counter Int64
 widgetSqlErrors = mkCounter "monoscope.dashboard.widget.sql_errors" Nothing
 {-# NOINLINE widgetSqlErrors #-}
+
+
+-- Dashboard dimensions are deliberately closed vocabularies. Dashboard and project ids
+-- belong on the trace, never on a metric time series.
+dashboardShellDuration, dashboardWidgetDuration, dashboardQueryDuration, dashboardResponseBytes, dashboardTimeToSettled :: Histogram
+dashboardShellDuration = mkHist "monoscope.dashboard.shell.duration" (Just "ms")
+dashboardWidgetDuration = mkHist "monoscope.dashboard.widget.duration" (Just "ms")
+dashboardQueryDuration = mkHist "monoscope.dashboard.query.duration" (Just "ms")
+dashboardResponseBytes = mkHist "monoscope.dashboard.response.size" (Just "By")
+dashboardTimeToSettled = mkHist "monoscope.dashboard.time_to_settled" (Just "ms")
+{-# NOINLINE dashboardShellDuration #-}
+{-# NOINLINE dashboardWidgetDuration #-}
+{-# NOINLINE dashboardQueryDuration #-}
+{-# NOINLINE dashboardResponseBytes #-}
+{-# NOINLINE dashboardTimeToSettled #-}
+
+
+dashboardQueryCacheOutcomes :: Counter Int64
+dashboardQueryCacheOutcomes = mkCounter "monoscope.dashboard.query.cache_outcomes" Nothing
+{-# NOINLINE dashboardQueryCacheOutcomes #-}
+
+
+-- | One sample above the user-facing dashboard budget. The @navigation@ label is
+-- either @initial@ or @tab@, keeping a single alert target low-cardinality.
+dashboardSettlementBudgetExceeded :: Counter Int64
+dashboardSettlementBudgetExceeded = mkCounter "monoscope.dashboard.time_to_settled.budget_exceeded" Nothing
+{-# NOINLINE dashboardSettlementBudgetExceeded #-}

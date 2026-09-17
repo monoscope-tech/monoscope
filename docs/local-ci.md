@@ -91,6 +91,9 @@ Two deliberate differences from your normal `make test`:
   run. Start it and go do something else; every run after that is incremental.
   `make ci-down` keeps them; `make ci-clean` deletes them and buys you the cold
   build back.
+  Each `integration-tests` invocation recreates only the ephemeral Postgres,
+  MinIO, and TimeFusion service containers, so deterministic fixture IDs and
+  telemetry rows never leak into the next run. The build-cache volumes remain.
 
 **TimeFusion publishes no arm64 image**, and the amd64 one segfaults under
 emulation on Apple Silicon. Build one for this machine, once:
@@ -231,6 +234,7 @@ QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
 | `CI_SHARDS=n` | integration-test shard count (CI uses 4; more needs more `max_connections`) |
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
 | `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
+| `TF_TARGET_CPU` | CPU baseline used by `make tf-image`; defaults to `neoverse-n1` on arm64 and `x86-64-v3` on amd64. Override only for a known compatible target. |
 | `BUILD_HOST` / `BUILD_CPUS` / `BUILD_MEMORY` | the native amd64 build host and its caps (`make builder-setup`) |
 | `MONOSCOPE_BUILDER` | buildx builder to build the image with; falls back to the default builder if absent |
 | `SHIP_ANY_BRANCH=1` | let `make ship` deploy something other than master |

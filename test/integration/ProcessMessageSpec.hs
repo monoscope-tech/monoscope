@@ -1,7 +1,9 @@
 module ProcessMessageSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
 import Data.HashMap.Strict qualified as HM
+import Data.Map qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -18,7 +20,7 @@ import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
+import Test.Hspec (Spec, SpecWith, around, describe, expectationFailure, it, shouldBe, shouldContain)
 import Utils (toXXHash)
 
 
@@ -60,7 +62,32 @@ emptySpan now =
 
 
 spec :: Spec
-spec = around withTestResources do
+spec = do
+  describe "ingestion redaction" do
+    it "redacts every persisted payload field" do
+      now <- getCurrentTime
+      let otelSpan =
+            (emptySpan now)
+              { Telemetry.attributes = Just $ AesonText $ Map.singleton "http.request.headers.authorization" (AE.Array $ V.singleton $ AE.String "Bearer secret")
+              , Telemetry.resource = Just $ AesonText $ Map.singleton "cookie" (AE.String "session-secret")
+              , Telemetry.body = Just $ AesonText $ AE.object ["password" AE..= ("secret" :: Text)]
+              , Telemetry.events = Just $ AesonText $ AE.object ["set-cookie" AE..= ("session-secret" :: Text)]
+              }
+          redacted = Telemetry.redactOtelSpan otelSpan
+          header = redacted.attributes >>= \(AesonText fields) -> Map.lookup "http.request.headers.authorization" fields
+          resourceCookie = redacted.resource >>= \(AesonText fields) -> Map.lookup "cookie" fields
+          body = redacted.body <&> \(AesonText value) -> value
+          events = redacted.events <&> \(AesonText value) -> value
+      header `shouldBe` Just (AE.Array $ V.singleton $ AE.String "[REDACTED]")
+      resourceCookie `shouldBe` Just (AE.String "[REDACTED]")
+      body `shouldBe` Just (AE.object ["password" AE..= ("[REDACTED]" :: Text)])
+      events `shouldBe` Just (AE.object ["set-cookie" AE..= ("[REDACTED]" :: Text)])
+
+  around withTestResources resourceSpec
+
+
+resourceSpec :: SpecWith TestResources
+resourceSpec = do
   describe "processSpanToEntities" do
     -- Regression: an unparseable project_id used to be `Unsafe.fromJust . UUID.fromText`,
     -- crashing the whole ingestion batch. The owning ProjectId is now threaded in typed,
@@ -172,6 +199,24 @@ spec = around withTestResources do
       fwHashOf emptyPathClassifier Projects.defaultProjectCache sp `shouldBe` Nothing
 
   describe "process request to db" do
+    it "does not persist an authorization header's raw secret" $ \tr -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+          secret = "Bearer must-not-reach-storage" :: Text
+          message = case testRequestMsgs.reqMsg1 nowTxt of
+            AE.Object fields -> AE.Object $ KEM.insert "request_headers" (AE.object ["authorization" AE..= ([secret] :: [Text])]) fields
+            value -> value
+      resp <- runTestBg frozenTime tr $ processMessages [("redaction", toStrict $ AE.encode message)] HM.empty
+      whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
+      stored <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT attributes #>> '{http,request,headers,authorization}', attributes::text LIKE ?
+                  FROM otel_logs_and_spans WHERE project_id = ? |]
+            ("%" <> secret <> "%", pid)
+          :: IO (V.Vector (Text, Bool))
+      stored `shouldBe` V.singleton ("[\"[REDACTED]\"]", False)
+
     it "test processing raw request message string" $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime

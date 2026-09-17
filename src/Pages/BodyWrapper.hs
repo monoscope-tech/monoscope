@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -172,6 +172,30 @@ instance ToHtml a => ToHtml (PageCtx a) where
   toHtml (PageCtx bwcfg child) = toHtmlRaw $ bodyWrapper bwcfg (toHtml child)
   {-# INLINE toHtmlRaw #-}
   toHtmlRaw (PageCtx bwcfg child) = toHtmlRaw $ bodyWrapper bwcfg (toHtmlRaw child)
+
+
+-- | A page URL can remain a normal, shareable document URL while an htmx navigation
+-- receives only the part it is going to swap.  The fragment is intentionally supplied
+-- by the page, rather than inferred from a CSS selector: callers can include the
+-- corresponding OOB navigation/breadcrumb updates in the same response.
+--
+-- Keeping this contract here prevents every tabbed page from inventing a separate
+-- @/content@ endpoint or weakening its full-page fallback.
+data NavigationResponse a
+  = NavigationFull (PageCtx a)
+  | NavigationPartial a (Html ())
+
+
+instance ToHtml a => ToHtml (NavigationResponse a) where
+  toHtml = \case
+    NavigationFull page -> toHtml page
+    NavigationPartial _ fragment -> toHtmlRaw fragment
+  toHtmlRaw = toHtml
+
+
+navigationResponse :: Maybe Text -> PageCtx a -> Html () -> NavigationResponse a
+navigationResponse hxRequest page fragment =
+  maybe (NavigationFull page) (const $ NavigationPartial page.content fragment) hxRequest
 
 
 -- TODO: Rename to pageCtx

@@ -8,8 +8,11 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid qualified
-import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertServiceDependencyEdges)
+import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), EndpointRollupEdge (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, endpointDependencyGraphForRange, projectsWithSpansInRange, rollupEndpointDependencyEdges, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertEndpointDependencyEdges, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Telemetry qualified as Trace
@@ -218,7 +221,7 @@ spec = around withTestResources do
       -- advances first for the same reason the page test does it: the handler's 1H window is
       -- relative to now, and a bucket sitting exactly at now falls outside a half-open range.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod") Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
 
@@ -257,6 +260,44 @@ spec = around withTestResources do
       -- The prefix keeps two systems from colliding on a bare name; the label drops it.
       (L.sort [n.label | n <- V.toList g.nodes, n.inferred]) `shouldBe` ["orders", "orders.v1"]
       g.truncated `shouldBe` False
+
+    it "endpointRollup_keepsOnlyTheSelectedEndpointDirectDependency" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "endpoint-dependency-key"
+      ingestFixture tr apiKey frozenTime
+      let endpointHash = "endpoint-checkout"
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql| UPDATE otel_logs_and_spans SET hashes = ARRAY[?] WHERE project_id = ? AND name = ? |]
+          (endpointHash, testPid, "GET /checkout" :: Text)
+      edges <- runTestBg frozenTime tr do
+        rolled <- rollupEndpointDependencyEdges False testPid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        upsertEndpointDependencyEdges testPid frozenTime rolled
+        pure rolled
+      [(e.endpointHash, e.targetKey, e.targetKind, e.reqCount, e.traceCount) | e <- edges, e.endpointHash == endpointHash]
+        `shouldBe` [(endpointHash, "checkout", NKService, 1, 1)]
+
+      -- The endpoint map is a rollup read, not another raw-span join. It has one synthetic
+      -- entry node and exactly the selected endpoint's direct edge.
+      graph <- runTestBg frozenTime tr $ endpointDependencyGraphForRange testPid endpointHash (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      edgePairs graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
+      (nodeBy graph ("endpoint:" <> endpointHash) <&> \n -> (n.label, n.kind, n.inferred))
+        `shouldBe` Just ("Selected endpoint", NKEntry, False)
+      (nodeBy graph "checkout" <&> (.stats.p95Ns)) `shouldSatisfy` maybe False (> 0)
+
+      -- The shareable broader-map URL keeps the endpoint scope rather than falling back to
+      -- the project's entire topology, and its empty state says what is absent.
+      setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
+      (_, scopedPage) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing (Just endpointHash)
+      let ServiceMap.ServiceMapPage (PageCtx scopedConf scoped) = scopedPage
+          scopedHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml scopedPage
+      scopedConf.pageTitle `shouldBe` "Endpoint Dependency Map"
+      edgePairs scoped.graph `shouldBe` [("endpoint:" <> endpointHash, "checkout")]
+      scopedHtml `shouldContainAll` ["endpoint-service-map-data", "Selected endpoint", "checkout", "Dependencies (1)"]
+
+      (_, emptyPage) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing (Just "no-such-endpoint")
+      let emptyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml emptyPage
+      emptyHtml `shouldSatisfy` T.isInfixOf "No direct dependencies in this range"
 
     -- The hourly catch-up pass and DLQ replays re-roll buckets that already exist, so the
     -- upsert must replace rather than accumulate.
@@ -312,7 +353,7 @@ spec = around withTestResources do
       -- Rolled buckets are always in the past (the dispatcher lags 10 minutes), and the read
       -- range is half-open, so advance the clock rather than querying a bucket at exactly now.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       conf.pageTitle `shouldBe` "Service Map"
@@ -339,7 +380,7 @@ spec = around withTestResources do
     -- prod. The input now calls the filter directly from hx-on:input; keep asserting no
     -- dashed send can sneak back in.
     it "serviceMapFilter_wiresTheInputWithoutADashedSend" \tr -> do
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["window.serviceMapFilter(this.value)", "aria-label=\"Filter services\""]
       T.isInfixOf "service-map-filter&quot;(" html `shouldBe` False

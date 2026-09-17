@@ -13,6 +13,15 @@ describe('chartDataUrl', () => {
 
     expect(url.searchParams.get('since')).toBe('5M');
   });
+
+  test('preserves a SQL widget\'s declared database source', () => {
+    const url = new URL(
+      chartDataUrl({ query: '', querySQL: 'SELECT 1', pid: 'proj', chartType: 'timeseries', dbSource: 'postgres' }),
+      window.location.origin
+    );
+
+    expect(url.searchParams.get('db_source')).toBe('postgres');
+  });
 });
 
 describe('chart empty state', () => {

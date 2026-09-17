@@ -25,9 +25,13 @@ module Models.Telemetry.ServiceGraph (
   drawnEdges,
   serviceMapNodeCap,
   RollupEdge (..),
+  EndpointRollupEdge (..),
   projectsWithSpansInRange,
   rollupServiceEdges,
+  rollupEndpointDependencyEdges,
   upsertServiceDependencyEdges,
+  upsertEndpointDependencyEdges,
+  endpointDependencyGraphForRange,
   serviceGraphForRange,
 ) where
 
@@ -350,7 +354,13 @@ data EdgeSample = EdgeSample
 -- — what that service took to serve the call — so a node's latency is just the merge of
 -- what its callers observed, with no second measurement to keep in sync.
 buildServiceGraph :: Double -> Int -> Collapse -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
-buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
+buildServiceGraph = buildServiceGraphWithLabels Map.empty
+
+
+-- | Build a graph with explicit labels for synthetic nodes whose display identity is not
+-- encoded in their storage key. Ordinary service/dependency nodes use 'nodeLabel'.
+buildServiceGraphWithLabels :: Map Text Text -> Double -> Int -> Collapse -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
+buildServiceGraphWithLabels labelOverrides rangeSecs nodeCap collapse totalDurationM samples =
   ServiceGraph
     { nodes = V.fromList (topNodes <> memberNodes)
     , edges = V.fromList keptEdges
@@ -435,7 +445,7 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     mkNode key agg =
       ServiceNode
         { key
-        , label = bool (nodeLabel key) (show (length (childrenAt key)) <> " more dependencies") (key `S.member` restHeads)
+        , label = bool (Map.findWithDefault (nodeLabel key) key labelOverrides) (show (length (childrenAt key)) <> " more dependencies") (key `S.member` restHeads)
         , kind = kindAt key
         , inferred = inferredKind (kindAt key)
         , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
@@ -552,6 +562,24 @@ data RollupEdge = RollupEdge
   deriving stock (Generic, Show)
 
 
+-- | A direct dependency made by one endpoint.  The endpoint is deliberately the
+-- /caller/ identity rather than a service name: the same service can use a database
+-- very differently for two routes, which is the distinction an endpoint investigation
+-- needs to preserve.
+data EndpointRollupEdge = EndpointRollupEdge
+  { env :: !(Maybe Text)
+  , endpointHash :: !Text
+  , targetKey :: !Text
+  , targetKind :: !NodeKind
+  , reqCount :: !Int64
+  , traceCount :: !Int64
+  , errorCount :: !Int64
+  , sumDurationNs :: !Int64
+  , latHist :: !LatencyHist
+  }
+  deriving stock (Generic, Show)
+
+
 -- | One @(edge, latency bucket)@ group as the slice query returns it. Assembling the
 -- histogram in Haskell instead of in SQL keeps the statement to plain aggregates that
 -- Postgres and DataFusion both plan the same way — no JSON construction, no array_agg of
@@ -564,6 +592,24 @@ data SliceRow = SliceRow
   , tgtKind :: !Text
   , latBucket :: !Int64
   , n :: !Int64
+  , errs :: !Int64
+  , durNs :: !Int64
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | A histogram row repeats the exact distinct-trace total for its edge.  Keeping it
+-- separate from call buckets avoids the classic retry overcount: summing distinct traces
+-- once per latency bucket reports calls, not traces.
+data EndpointSliceRow = EndpointSliceRow
+  { env :: !Text
+  , endpointHash :: !Text
+  , tgt :: !Text
+  , tgtKind :: !Text
+  , latBucket :: !Int64
+  , n :: !Int64
+  , traces :: !Int64
   , errs :: !Int64
   , durNs :: !Int64
   }
@@ -601,6 +647,30 @@ sliceRowsToEdges rows =
         [ ((envFromColumn r.env, r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
         | r <- rows
         ]
+
+
+endpointSliceRowsToEdges :: [EndpointSliceRow] -> [EndpointRollupEdge]
+endpointSliceRowsToEdges rows =
+  [ EndpointRollupEdge ev h tk (parseNodeKind tkk) aggregate.reqs aggregate.traces aggregate.errs aggregate.durNs aggregate.hist
+  | ((ev, h, tk, tkk), aggregate) <- Map.toList grouped
+  ]
+  where
+    grouped = Map.fromListWith (<>) [(key r, agg r) | r <- rows]
+    key r = (envFromColumn r.env, r.endpointHash, r.tgt, r.tgtKind)
+    agg r = EndpointAgg r.n r.traces r.errs r.durNs (LatencyHist $ one (fromIntegral r.latBucket, r.n))
+
+
+data EndpointAgg = EndpointAgg
+  { reqs :: !Int64
+  , traces :: !Int64
+  , errs :: !Int64
+  , durNs :: !Int64
+  , hist :: !LatencyHist
+  }
+
+
+instance Semigroup EndpointAgg where
+  EndpointAgg r t e d h <> EndpointAgg r' t' e' d' h' = EndpointAgg (r + r') (max t t') (e + e') (d + d') (h <> h')
 
 
 -- | Which projects sent a span this slice that could form an edge. The dispatcher fans the
@@ -708,6 +778,74 @@ rollupServiceEdges useTf pid lo hi =
       LIMIT 20000|]
 
 
+-- | Direct endpoint dependencies for one closed slice.  This has the same bounded,
+-- scheduled raw-span join as the service map; endpoint pages read the compact Postgres
+-- result instead of repeating it for every tab visit.  Error hashes share the span's
+-- @hashes@ array, so they must be excluded before exploding endpoint identity.
+rollupEndpointDependencyEdges :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [EndpointRollupEdge]
+rollupEndpointDependencyEdges useTf pid lo hi =
+  fmap endpointSliceRowsToEdges
+    $ Hasql.withHasqlTimefusion useTf
+    $ Hasql.interp
+      [HI.sql|
+      WITH sp AS (
+        SELECT context___trace_id tid, context___span_id sid, parent_id par, hashes,
+               COALESCE(resource___service___name, 'unknown') svc,
+               COALESCE(resource->'deployment'->'environment'->>'name',
+                        resource->'deployment'->>'environment',
+                        resource->'service'->>'namespace',
+                        resource->'k8s'->'namespace'->>'name', '') env,
+               kind knd, status_code stc, duration dur, name nm,
+               attributes___db___system___name db_sys, attributes___db___namespace db_ns,
+               attributes___server___address srv, attributes___network___peer___address peer
+        FROM otel_logs_and_spans
+        WHERE project_id = #{pid.toText} AND timestamp >= #{lo} AND timestamp < #{hi}
+          AND kind IN ('server','client','producer','consumer')
+      ),
+      endpoints AS (
+        SELECT e.tid, e.sid, e.env, endpoint_hash
+        FROM sp e CROSS JOIN UNNEST(e.hashes) AS h(endpoint_hash)
+        WHERE e.knd = 'server' AND endpoint_hash NOT LIKE 'err:%'
+      ),
+      hops AS (
+        SELECT e.env, e.endpoint_hash, p.tid, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
+        FROM endpoints e JOIN sp p ON e.tid = p.tid AND p.par = e.sid
+        JOIN sp c ON c.tid = p.tid AND c.par = p.sid
+        WHERE p.knd IN ('client','producer') AND c.knd IN ('server','consumer')
+        UNION ALL
+        SELECT e.env, e.endpoint_hash, p.tid,
+               CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
+                    WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
+                    WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
+                    WHEN p.knd = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.nm)
+                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.nm) END,
+               CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
+                    WHEN p.knd = 'producer' THEN 'queue' ELSE 'external' END,
+               p.stc, p.dur
+        FROM endpoints e JOIN sp p ON e.tid = p.tid AND p.par = e.sid
+        WHERE p.knd IN ('client','producer')
+          AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
+      ),
+      bucketed AS (
+        SELECT env, endpoint_hash, tgt, tgt_kind, tid, st, dur,
+               CAST(FLOOR(4 * LOG(2, GREATEST(COALESCE(dur, 0) / 1000, 1))) AS int8) bkt
+        FROM hops
+      ),
+      trace_counts AS (
+        SELECT env, endpoint_hash, tgt, tgt_kind, COUNT(DISTINCT tid)::int8 trace_count
+        FROM bucketed GROUP BY env, endpoint_hash, tgt, tgt_kind
+      )
+      SELECT b.env, b.endpoint_hash, b.tgt, b.tgt_kind, b.bkt,
+             COUNT(*)::int8, t.trace_count,
+             COUNT(*) FILTER (WHERE b.st = 'ERROR')::int8,
+             COALESCE(SUM(b.dur), 0)::int8
+      FROM bucketed b JOIN trace_counts t
+        ON t.env = b.env AND t.endpoint_hash = b.endpoint_hash AND t.tgt = b.tgt AND t.tgt_kind = b.tgt_kind
+      GROUP BY b.env, b.endpoint_hash, b.tgt, b.tgt_kind, b.bkt, t.trace_count
+      ORDER BY COUNT(*) DESC
+      LIMIT 20000|]
+
+
 -- | Replace-on-conflict so re-rolling a bucket (the hourly catch-up pass, or a DLQ replay
 -- landing late) is idempotent rather than double-counting.
 -- | Writes the env-dimensioned rollup only. The original table is no longer written: nothing
@@ -739,6 +877,36 @@ upsertServiceDependencyEdges pid bucket es =
     tgts = V.fromList $ (.targetKey) <$> es
     tgtKinds = V.fromList $ kindText . (.targetKind) <$> es
     reqs = V.fromList $ (.reqCount) <$> es
+    errsV = V.fromList $ (.errorCount) <$> es
+    durs = V.fromList $ (.sumDurationNs) <$> es
+    hists = V.fromList $ decodeUtf8 @Text . AE.encode . histObject . (.latHist) <$> es
+
+
+-- | Replace a bucket atomically so delayed spans can be safely re-rolled without
+-- double-counting endpoint calls or traces.
+upsertEndpointDependencyEdges :: DB es => Projects.ProjectId -> UTCTime -> [EndpointRollupEdge] -> Eff es ()
+upsertEndpointDependencyEdges _ _ [] = pass
+upsertEndpointDependencyEdges pid bucket es =
+  Hasql.interpExecute_
+    [HI.sql|
+    INSERT INTO apis.endpoint_dependency_edges
+      (project_id, bucket, env, endpoint_hash, target_key, target_kind,
+       req_count, trace_count, error_count, sum_duration_ns, lat_hist)
+    SELECT #{pid.unUUIDId}, #{bucket}, ev, eh, t, tk, r, tc, e, d, h::jsonb
+    FROM unnest(#{envs}::text[], #{endpointHashes}::text[], #{tgts}::text[], #{tgtKinds}::text[],
+                #{reqs}::int8[], #{traceCounts}::int8[], #{errsV}::int8[], #{durs}::int8[], #{hists}::text[])
+         AS u(ev, eh, t, tk, r, tc, e, d, h)
+    ON CONFLICT (project_id, bucket, env, endpoint_hash, target_key, target_kind)
+    DO UPDATE SET req_count = EXCLUDED.req_count, trace_count = EXCLUDED.trace_count,
+                  error_count = EXCLUDED.error_count, sum_duration_ns = EXCLUDED.sum_duration_ns,
+                  lat_hist = EXCLUDED.lat_hist, updated_at = now()|]
+  where
+    envs = V.fromList $ envToColumn . (.env) <$> es
+    endpointHashes = V.fromList $ (.endpointHash) <$> es
+    tgts = V.fromList $ (.targetKey) <$> es
+    tgtKinds = V.fromList $ kindText . (.targetKind) <$> es
+    reqs = V.fromList $ (.reqCount) <$> es
+    traceCounts = V.fromList $ (.traceCount) <$> es
     errsV = V.fromList $ (.errorCount) <$> es
     durs = V.fromList $ (.sumDurationNs) <$> es
     hists = V.fromList $ decodeUtf8 @Text . AE.encode . histObject . (.latHist) <$> es
@@ -791,6 +959,34 @@ serviceGraphForRange pid envM lo hi = do
       seen = ordNub [e | (ev, _, _, _, _, _, _, _, _) <- rows, Just e <- [envFromColumn ev]]
       graph = buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
   pure graph{environments = V.fromList (sort seen)}
+
+
+-- | The investigation map for one endpoint.  Its entry node is deliberately synthetic:
+-- endpoint hashes are storage identity, while the graph must answer "what does this route
+-- call?" without claiming that a route is an instrumented service.  The remaining nodes and
+-- their health are built by the same graph fold as the global map, so percentile and error
+-- semantics cannot drift between the two views.
+--
+-- This reads the five-minute rollup only.  In particular, do not replace it with the raw-span
+-- join used to populate that rollup: dashboard navigation is the hot path that motivated the
+-- rollup in the first place.
+endpointDependencyGraphForRange :: DB es => Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es ServiceGraph
+endpointDependencyGraphForRange pid endpoint lo hi = do
+  rows <-
+    Hasql.interp
+      [HI.sql|
+      SELECT target_key, target_kind, req_count, error_count, sum_duration_ns, lat_hist
+      FROM apis.endpoint_dependency_edges
+      WHERE project_id = #{pid.unUUIDId}
+        AND endpoint_hash = #{endpoint}
+        AND bucket >= #{lo} AND bucket < #{hi}|]
+  let rangeSecs = realToFrac (diffUTCTime hi lo)
+      entry = ("endpoint:" <> endpoint, NKEntry)
+      samples =
+        [ EdgeSample entry (target, parseNodeKind targetKind) requests errors (histFromObject hist) duration
+        | (target, targetKind, requests, errors, duration, AesonText hist) <- rows
+        ]
+  pure $ buildServiceGraphWithLabels (Map.singleton (fst entry) "Selected endpoint") rangeSecs serviceMapNodeCap CollapseOff Nothing samples
 
 
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or

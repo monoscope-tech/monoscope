@@ -4803,11 +4803,13 @@ rollUpServiceMap :: Config.AuthContext -> Projects.ProjectId -> UTCTime -> ATBac
 rollUpServiceMap authCtx pid bucket = withSpan_ "service_map.rollup" [("monoscope.project.id", OA.toAttribute pid.toText)] do
   result <- tryAny do
     edges <- ServiceGraph.rollupServiceEdges authCtx.env.enableTimefusionReads pid bucket (addUTCTime 300 bucket)
+    endpointEdges <- ServiceGraph.rollupEndpointDependencyEdges authCtx.env.enableTimefusionReads pid bucket (addUTCTime 300 bucket)
     ServiceGraph.upsertServiceDependencyEdges pid bucket edges
-    pure $ length edges
+    ServiceGraph.upsertEndpointDependencyEdges pid bucket endpointEdges
+    pure (length edges, length endpointEdges)
   case result of
     Left err -> Log.logAttention "Service-map rollup failed — dependency data missing for this bucket" (pid.toText, show @Text bucket, displayException err)
-    Right n -> when (n >= serviceMapEdgeLimit) $ Log.logAttention "Service-map rollup hit its edge limit — the map for this bucket is incomplete" (pid.toText, n)
+    Right (n, endpointN) -> when (n >= serviceMapEdgeLimit || endpointN >= serviceMapEdgeLimit) $ Log.logAttention "Service-map rollup hit its edge limit — dependency data is incomplete" (pid.toText, n, endpointN)
 
 
 -- | Mirrors the LIMIT in 'ServiceGraph.rollupServiceEdges'; hitting it means edges were

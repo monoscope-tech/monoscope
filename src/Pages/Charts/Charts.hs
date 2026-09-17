@@ -352,6 +352,7 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
         QC.CacheHit entry -> do
+          recordCacheOutcome "hit"
           let trimmed = trimCached cacheKey entry.cachedData reqFrom reqTo
               fixed = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
               refresh value lower upper endMode = do
@@ -369,6 +370,7 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
               else pure leading
           pure $ trimCached cacheKey result reqFrom reqTo
         QC.PartialHit entry -> do
+          recordCacheOutcome "partial"
           -- Re-read a trailing overlap, not just [cachedTo, reqTo]: a bin read
           -- once and never revisited freezes a bad read into the chart forever.
           let deltaFromTime = max reqFrom $ QC.bucketStart cacheKey.binInterval $ addUTCTime (negate $ fromIntegral $ QC.deltaOverlapSeconds cacheKey.binInterval) entry.cachedTo
@@ -404,9 +406,10 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
                     $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
                   let result = trimCached cacheKey trimmed reqFrom reqTo
                   refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
-        QC.CacheMiss -> fetchAndCache cacheKey (reqFrom, reqTo)
-        QC.CacheBypassed _ -> fetchAndCache cacheKey (reqFrom, reqTo)
+        QC.CacheMiss -> recordCacheOutcome "miss" *> fetchAndCache cacheKey (reqFrom, reqTo)
+        QC.CacheBypassed _ -> recordCacheOutcome "bypassed" *> fetchAndCache cacheKey (reqFrom, reqTo)
   where
+    recordCacheOutcome outcome = Metrics.bump Metrics.dashboardQueryCacheOutcomes [("outcome", OA.toAttribute (outcome :: Text))]
     trimCached key value a b = (QC.trimToRange value (QC.bucketStart key.binInterval a) b){from = Just $ floor $ utcTimeToPOSIXSeconds a}
     fetchAndCache cacheKey range = do
       result <- executeQueryWith sqlQueryCfg queryAST
@@ -465,17 +468,21 @@ withChartSpan
   -> Eff es MetricsData
   -> Eff es MetricsData
 withChartSpan tbl attrs sqlQuery fallback action =
-  withSpan_ ("SELECT " <> tbl) attrs action `catch` \(e :: SomePostgreSqlException) -> do
-    -- sanitizeBackendError covers both Postgres ("column \"x\" does not exist") and
-    -- TimeFusion's wrapped form; the raw error stays on the span + log line.
-    let userMsg = Utils.sanitizeBackendError . toText $ displayException e
-    -- Unlabelled on purpose — project id and the sanitised error text are both unbounded, and
-    -- both are already on the span and the log line below. See 'Metrics.widgetSqlErrors'.
-    Metrics.count Metrics.widgetSqlErrors 1 []
-    Log.logAttention
-      "widget SQL execution failed; rendering error overlay"
-      (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "error_message" AE..= userMsg])
-    pure fallback{error = Just userMsg}
+  Metrics.timed
+    Metrics.dashboardQueryDuration
+    [("backend", OA.toAttribute ("chart" :: Text))]
+    (withSpan_ ("SELECT " <> tbl) attrs action)
+    `catch` \(e :: SomePostgreSqlException) -> do
+      -- sanitizeBackendError covers both Postgres ("column \"x\" does not exist") and
+      -- TimeFusion's wrapped form; the raw error stays on the span + log line.
+      let userMsg = Utils.sanitizeBackendError . toText $ displayException e
+      -- Unlabelled on purpose — project id and the sanitised error text are both unbounded, and
+      -- both are already on the span and the log line below. See 'Metrics.widgetSqlErrors'.
+      Metrics.count Metrics.widgetSqlErrors 1 []
+      Log.logAttention
+        "widget SQL execution failed; rendering error overlay"
+        (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "error_message" AE..= userMsg])
+      pure fallback{error = Just userMsg}
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)

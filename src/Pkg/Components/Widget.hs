@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetCta (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -196,6 +196,16 @@ instance FromHttpApiData SqlOrder where
   parseQueryParam = maybeToRight "SQL order must not be empty" . mkSqlOrder
 
 
+data WidgetCta = WidgetCta
+  { title :: Text
+  , url :: Text
+  }
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (Default, FromForm, NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetCta
+  deriving (FromHttpApiData) via JSONHttpApiData WidgetCta
+
+
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
@@ -243,6 +253,7 @@ data Widget = Widget
   , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
   , expandPushUrl :: Maybe Text
+  , cta :: Maybe WidgetCta
   , groupByOptions :: Maybe [Text]
   , groupBySelected :: Maybe Text
   , groupByUrl :: Maybe Text
@@ -497,6 +508,7 @@ widget_ w' = case w.wType of
     div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
+  WTServiceMap -> wgtCard_ $ withCardFrame True w ((\c -> (c.title, c.url)) <$> w.cta) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
@@ -679,6 +691,75 @@ displayUnit = \case
   "{}" -> ""
   "By" -> " bytes"
   u -> " " <> u
+
+
+-- | Pick the same representative value used by the browser for a stat tile.
+-- Percentiles and rates are not additive: rendering their bucket sum during SSR
+-- and replacing it with a mean after the first refresh made @5.9K ms@ flash into
+-- @6.6s@ for the same latency tile.
+--
+-- >>> let s = Charts.MetricsStats 50 200 1200 10 120 50 200
+-- >>> statScalar SBMean (Just 0) (Just 600000) s
+-- Just 120.0
+-- >>> statScalar SBRate (Just 0) (Just 600000) s
+-- Just 120.0
+-- >>> statScalar SBRate Nothing Nothing s
+-- Nothing
+statScalar :: SummarizeBy -> Maybe Int -> Maybe Int -> Charts.MetricsStats -> Maybe Double
+statScalar summarize fromM toM stats
+  | stats.count < 1 = Nothing
+  | otherwise = case summarize of
+      SBRate -> do
+        rangeStart <- fromM
+        rangeEnd <- toM
+        let minutes = fromIntegral (rangeEnd - rangeStart) / 60000
+        if minutes > 0 then Just (stats.sum / minutes) else Nothing
+      SBMean -> Just stats.mean
+      SBMax -> Just stats.max
+      SBMin -> Just stats.min
+      SBCount -> Just $ fromIntegral stats.count
+      SBSum -> Just stats.sum
+
+
+-- | Format a stat value by the meaning of its declared unit. This mirrors
+-- @formatStatValue@ in @web-components/src/stat-value.ts@: duration units choose
+-- a readable time scale, byte units use binary multiples, and only ordinary
+-- counts receive decimal K/M/B suffixes.
+--
+-- >>> formatStatValue 5900 "ms"
+-- "5.9s"
+-- >>> formatStatValue 45 "ms"
+-- "45.0ms"
+-- >>> formatStatValue 1500 ""
+-- "1.5K"
+-- >>> formatStatValue 2048 "By"
+-- "2 KiB"
+formatStatValue :: Double -> Text -> Text
+formatStatValue value unit
+  | isNaN value || isInfinite value = "N/A"
+  | Just factor <- snd <$> find ((== unit) . fst) durationFactors = formatDuration $ value * factor
+  | unit `elem` ["By", "by", "bytes", "byte", "B"] = formatBytes value
+  | otherwise = formatNumber value <> displayUnit unit
+  where
+    durationFactors :: [(Text, Double)]
+    durationFactors = [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("μs", 1e3), ("us", 1e3), ("ns", 1)]
+
+    durationSteps :: [(Double, Text)]
+    durationSteps = [(3.6e12, "h"), (6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "μs")]
+    formatDuration ns = case find ((<= ns) . fst) durationSteps of
+      Just (scale, suffix) -> showFFloat' 1 (ns / scale) <> suffix
+      Nothing -> show (round ns :: Integer) <> "ns"
+
+    formatNumber n
+      | n >= 1e9 = showFFloat' 1 (n / 1e9) <> "B"
+      | n >= 1e6 = showFFloat' 1 (n / 1e6) <> "M"
+      | n >= 1e3 = showFFloat' 1 (n / 1e3) <> "K"
+      | n == fromInteger (truncate n) = show (truncate n :: Integer)
+      | n >= 100 = show (round n :: Integer)
+      | n >= 10 = trimFixed 1 n
+      | otherwise = trimFixed 2 n
+
+    trimFixed places = T.dropWhileEnd (== '.') . T.dropWhileEnd (== '0') . showFFloat' places
 
 
 -- | The badge holding a widget's representative scalar for the current range —
@@ -1044,8 +1125,16 @@ renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
-      unitSuffix = foldMap displayUnit widget.unit
-      valueM = widget.dataset >>= (.value) <&> \x -> Utils.prettyPrintCount (round x) <> unitSuffix
+      valueM = case widget.wType of
+        WTTimeseriesStat -> do
+          dataset <- widget.dataset
+          stats <- dataset.stats
+          let summarize = fromMaybe SBSum widget.summarizeBy
+          value <- statScalar summarize dataset.from dataset.to stats
+          let prefix = summarizeByPrefix summarize
+              formatted = formatStatValue value $ fromMaybe "" widget.unit
+          pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatted
+        _ -> widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
       isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (isTrue widget.naked || isStat)
@@ -1116,6 +1205,7 @@ renderChart widget = do
                 yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
                 query = encodeText widget.query
                 pid = encodeText $ widget._projectId <&> (.toText)
+                dbSourceJS = encodeText widget.dbSource
                 -- Same reason as echartOptJS: a backtick or a ${…} in stored SQL
                 -- would otherwise end the template literal or interpolate.
                 querySQLJS = encodeText $ maybeToMonoid widget.sql
@@ -1153,6 +1243,7 @@ renderChart widget = do
                   widgetType: ${wType},
                   query: ${query},
                   querySQL: ${querySQLJS},
+                  dbSource: ${dbSourceJS},
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},

@@ -285,7 +285,7 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
   -- Bounded and total by construction — see 'LiveTail.publishMatches'.
-  fanOutToLiveTail appCtx minted
+  fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
@@ -1553,7 +1553,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     -- subscriptions, refreshed its cache, held the SSE connection open and reported @live@ —
     -- and no record was ever offered to a filter, because every record arrived through the one
     -- ingest path with no hook in it.
-    fanOutToLiveTail appCtx minted
+    fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
     Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace

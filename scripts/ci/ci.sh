@@ -309,7 +309,7 @@ run_body() { # <check>
       mkdir -p static/public/assets/css static/public/assets/web-components/dist/js static/public/assets/web-components/dist/css
       npm ci --prefer-offline --no-audit
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-      (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
+      (cd web-components && npm ci --prefer-online --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)      cabal build all -j $CABAL_FLAGS "$CABAL_OPTS" ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
@@ -327,7 +327,7 @@ run_body() { # <check>
       weeder --config config/weeder.toml --hie-directory dist-newstyle
       ;;
     hlint)   hlint src/ shared/src cli ;;
-    ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
+    ui-tests) (cd web-components && npm ci --prefer-online --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
@@ -352,7 +352,7 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
-  (cd web-components && npm ci --prefer-offline --no-audit)
+  (cd web-components && npm ci --prefer-online --no-audit)
   make build-chart-cli
   cabal build integration-tests $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
@@ -498,6 +498,20 @@ compose() { docker compose -f "$COMPOSE_FILE" --project-name monoscope-ci "$@"; 
 cmd_local() {
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
+  # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
+  # is tmpfs-backed).  Keeping their *containers* after a run made a second local
+  # integration invocation inherit the first run's deterministic test IDs and
+  # report duplicate rows as product failures.  Recreate only these services when
+  # the integration suite is selected; named Cabal/node volumes remain untouched.
+  local needs_integration=false check
+  [ "$#" -eq 0 ] && needs_integration=true
+  for check in "$@"; do
+    [ "$check" = integration-tests ] && needs_integration=true
+  done
+  if [ "$needs_integration" = true ]; then
+    note "resetting ephemeral integration services"
+    compose rm -sf postgres minio timefusion >/dev/null 2>&1 || true
+  fi
   note "starting CI services…"
   # An arm64 TimeFusion built here is the difference between `integration-tests`
   # running locally and it being CI's job forever — the published image is amd64

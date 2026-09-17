@@ -54,6 +54,9 @@ module Models.Telemetry.Telemetry (
   mintMetricIds,
   bulkInsertOtelLogsAndSpansTF,
   insertAndHandOff,
+  redactJSON,
+  redactOtelSpan,
+  ingestionRedactionPaths,
   WriteTarget (..),
   writeTargetFor,
   WriteFailure,
@@ -1628,11 +1631,53 @@ insertAndHandOff
 insertAndHandOff tfPgTypes target worker caches records
   | V.null records = pure (Right ())
   | otherwise = do
-      res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target records
+      let cleanRecords = V.map redactOtelSpan records
+      res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target cleanRecords
       -- Hand-off only when every row landed on every required store; a
       -- failed batch stays Left → DLQ.
-      when (isRight res) $ liftIO $ handOffBatches worker caches records
+      when (isRight res) $ liftIO $ handOffBatches worker caches cleanRecords
       pure res
+
+
+-- | Redact a JSON value using dotted paths. Leading dots are accepted because SDK
+-- configuration historically used both spellings.
+redactJSON :: V.Vector Text -> AE.Value -> AE.Value
+redactJSON paths0 = go [fromMaybe path (T.stripPrefix "." path) | path <- V.toList paths0]
+  where
+    go [] = \value -> value
+    go paths = \case
+      AE.Object fields -> AE.Object $ KEM.mapWithKey (\key -> go $ mapMaybe (matchKey $ AEK.toText key) paths) fields
+      AE.Array values
+        | "" `elem` paths -> AE.Array $ V.map (go [""]) values
+        | null childPaths -> AE.Array values
+        | otherwise -> AE.Array $ V.map (go childPaths) values
+        where
+          childPaths = mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths
+      AE.String{} | "" `elem` paths -> AE.String "[REDACTED]"
+      AE.Number{} | "" `elem` paths -> AE.String "[REDACTED]"
+      value -> value
+
+    matchKey key path =
+      T.stripPrefix key path >>= \rest -> case T.uncons rest of
+        Nothing -> Just ""
+        Just ('.', rest') -> Just rest'
+        _ -> Nothing
+
+
+-- | The last trust boundary before a record is stored or handed to derived-data
+-- workers. Keep this here, rather than in a transport decoder, because OTLP,
+-- Pub/Sub, and recovery all share 'insertAndHandOff'.
+redactOtelSpan :: OtelLogsAndSpans -> OtelLogsAndSpans
+redactOtelSpan otelSpan = redacted{summary = generateSummary redacted}
+  where
+    redacted = otelSpan{attributes = redactMap <$> otelSpan.attributes, resource = redactMap <$> otelSpan.resource, body = redactValue <$> otelSpan.body, events = redactValue <$> otelSpan.events}
+    redactMap (AesonText fields) =
+      AesonText $ fromMaybe fields $ jsonToMap $ redactJSON ingestionRedactionPaths $ AE.Object $ KEM.fromMapText fields
+    redactValue (AesonText value) = AesonText $ redactJSON ingestionRedactionPaths value
+
+
+ingestionRedactionPaths :: V.Vector Text
+ingestionRedactionPaths = V.fromList [".password", ".set-cookie", ".authorization", ".cookie", ".http.request.headers.authorization", ".http.request.headers.cookie", ".http.response.headers.set-cookie"]
 
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
