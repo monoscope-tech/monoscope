@@ -367,7 +367,7 @@ otelSessionRows scope match sessionFilter =
           <> [HI.sql| ORDER BY timestamp DESC) FILTER (WHERE |]
           <> pageViewPredicate
           <> [HI.sql|),
-          MAX(COALESCE(attributes___user_agent___original, resource___user_agent___original)),
+          MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original)),
           false
         FROM otel_logs_and_spans
         WHERE |]
