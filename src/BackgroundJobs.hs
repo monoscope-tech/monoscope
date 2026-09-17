@@ -3700,54 +3700,76 @@ autoAckProvenEndpoints pid = do
                 , total >= provenEndpointMinRequests
                 , hrs >= provenEndpointMinHours
                 ]
-          unless (null proven) do
-            let ackedIds = V.fromList [iid | (iid, _, _) <- proven]
-            Hasql.interpExecute_
-              [HI.sql| UPDATE apis.issues
+          if null proven
+            then pure 0
+            else do
+              let provenIds = V.fromList [iid | (iid, _, _) <- proven]
+              ackedIds :: V.Vector Issues.IssueId <-
+                Hasql.interp
+                  [HI.sql| UPDATE apis.issues
                      SET acknowledged_at = #{now}, acknowledged_by = NULL, acknowledged_until = #{Issues.indefiniteUntil}
-                     WHERE id = ANY(#{ackedIds}::uuid[]) AND acknowledged_at IS NULL AND archived_at IS NULL |]
-            forM_ proven \(iid, total, hrs) ->
-              Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
-                $ Just
-                $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
-            Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", length proven, "candidates", length candidates)
-    result <- withEndpointAutoAckLease authCtx scanBuckets
-    finishedAt <- liftIO $ getTime Monotonic
-    started <- liftIO $ readIORef slicesStarted
-    completed <- liftIO $ readIORef slicesCompleted
-    let elapsedMs = toNanoSecs (finishedAt `diffTimeSpec` startedAt) `div` 1_000_000
-        fields outcome failure =
-          AE.object
-            [ "project_id" AE..= pid
-            , "candidate_count" AE..= length candidates
-            , "slices_started" AE..= started
-            , "slices_completed" AE..= completed
-            , "elapsed_ms" AE..= elapsedMs
-            , "outcome" AE..= outcome
-            , "failure_class" AE..= failure
-            ]
-    case result of
-      Nothing -> Log.logInfo "Endpoint auto-ack sweep deferred" $ fields ("lease_busy" :: Text) (Nothing :: Maybe Text)
-      Just (Right buckets) -> do
-        ackBuckets buckets
-        Log.logInfo "Endpoint auto-ack sweep completed" $ fields ("completed" :: Text) (Nothing :: Maybe Text)
-      Just (Left err)
-        | Hasql.isStatementTimeoutException err || Hasql.isTransientException err ->
-            Log.logAttention "Endpoint auto-ack sweep deferred after query failure"
-              $ fields ("query_deferred" :: Text) (Just $ bool "transient_resource" "statement_timeout" $ Hasql.isStatementTimeoutException err)
-        | otherwise -> throwIO err
+                     WHERE id = ANY(#{provenIds}::uuid[]) AND acknowledged_at IS NULL AND archived_at IS NULL
+                     RETURNING id |]
+              let ackedSet = HashSet.fromList $ V.toList ackedIds
+              forM_ (filter (\(iid, _, _) -> HashSet.member iid ackedSet) proven) \(iid, total, hrs) ->
+                Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
+                  $ Just
+                  $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
+              Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", V.length ackedIds, "candidates", length candidates)
+              pure $ V.length ackedIds
+        fields outcome failure acked = do
+          finishedAt <- liftIO $ getTime Monotonic
+          started <- liftIO $ readIORef slicesStarted
+          completed <- liftIO $ readIORef slicesCompleted
+          let elapsedMs = toNanoSecs (finishedAt `diffTimeSpec` startedAt) `div` 1_000_000
+          pure
+            $ AE.object
+              [ "project_id" AE..= pid
+              , "candidate_count" AE..= length candidates
+              , "slices_started" AE..= started
+              , "slices_completed" AE..= completed
+              , "elapsed_ms" AE..= elapsedMs
+              , "acked_count" AE..= acked
+              , "outcome" AE..= outcome
+              , "failure_class" AE..= failure
+              ]
+        runSweep = do
+          scanResult <- tryAny scanBuckets
+          case scanResult of
+            Left err
+              | Hasql.isQueryCanceledException err || Hasql.isTransientException err -> do
+                  eventFields <- fields ("query_deferred" :: Text) (Just $ bool "transient_resource" "query_canceled" $ Hasql.isQueryCanceledException err) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack sweep deferred after query failure" eventFields
+              | otherwise -> do
+                  eventFields <- fields ("query_failed" :: Text) (Just ("nontransient_query" :: Text)) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack sweep failed" eventFields
+                  throwIO err
+            Right buckets -> do
+              ackResult <- tryAny $ ackBuckets buckets
+              case ackResult of
+                Left err -> do
+                  eventFields <- fields ("ack_failed" :: Text) (Just ("postgres_mutation" :: Text)) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack acknowledgement failed" eventFields
+                  throwIO err
+                Right acked -> do
+                  eventFields <- fields ("completed" :: Text) (Nothing :: Maybe Text) acked
+                  Log.logInfo "Endpoint auto-ack sweep completed" eventFields
+    leaseResult <- withEndpointAutoAckLease authCtx runSweep
+    when (isNothing leaseResult) do
+      eventFields <- fields ("lease_busy" :: Text) (Nothing :: Maybe Text) (0 :: Int)
+      Log.logInfo "Endpoint auto-ack sweep deferred" eventFields
 
 
 -- The session that owns this lock stays checked out for the whole TimeFusion
 -- traversal. Acquiring and releasing through the Hasql effect could use two
 -- pooled sessions and strand a session-level advisory lock.
-withEndpointAutoAckLease :: Config.AuthContext -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe (Either SomeException a))
+withEndpointAutoAckLease :: Config.AuthContext -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe a)
 withEndpointAutoAckLease authCtx action = withRunInIO \run ->
   withResource authCtx.pool \conn ->
     bracket
       (acquire conn)
       (release conn)
-      (\acquired -> if acquired then Just <$> tryAny (run action) else pure Nothing)
+      (\acquired -> if acquired then Just <$> run action else pure Nothing)
   where
     acquire conn = do
       [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)

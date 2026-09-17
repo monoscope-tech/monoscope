@@ -80,10 +80,10 @@ spec = describe "isTransientException" $ do
     EHasql.isLockTimeout (EHasql.HasqlException lockTimeoutError) `shouldBe` True
     EHasql.isLockTimeout (EHasql.HasqlException realSqlStateError) `shouldBe` False -- 23505
     EHasql.isLockTimeout (EHasql.HasqlException deadlockError) `shouldBe` False -- 40P01
-  it "classifies statement timeout by SQLSTATE" $ do
+  it "classifies query cancellation by SQLSTATE" $ do
     let timeout = EHasql.HasqlException statementTimeoutError
-    EHasql.isStatementTimeoutException (toException timeout) `shouldBe` True
-    EHasql.isStatementTimeoutException (asExc lockTimeoutError) `shouldBe` False
+    EHasql.isQueryCanceledException (toException timeout) `shouldBe` True
+    EHasql.isQueryCanceledException (asExc lockTimeoutError) `shouldBe` False
   it "keeps database diagnostics without serializing ingestion parameters" do
     let payload = T.replicate 100000 "private-batch-value"
         err =

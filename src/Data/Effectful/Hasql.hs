@@ -9,7 +9,7 @@ module Data.Effectful.Hasql (
   SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
-  isStatementTimeoutException,
+  isQueryCanceledException,
   transientBackoffMicros,
   retryTransientLoop,
   retryTransientEff,
@@ -217,17 +217,17 @@ isTransientException = maybe False (isTransientHasqlError . Ann.exception) . fro
 
 
 -- | PostgreSQL query cancellation (SQLSTATE 57014). The bounded TimeFusion
--- evidence scan uses a server-side statement timeout, so this code means the
--- optional sweep should defer instead of retrying the enclosing background job.
+-- evidence scan normally reaches this through its server-side statement timeout,
+-- so the optional sweep should defer instead of retrying the enclosing job.
 -- Matches both bare and tracing-annotated 'HasqlException' values.
 --
 -- >>> let timeout = HasqlException (SessionUsageError (ScriptSessionError "select 1" (ServerError "57014" "statement timeout" Nothing Nothing Nothing)))
--- >>> isStatementTimeoutException (toException timeout)
+-- >>> isQueryCanceledException (toException timeout)
 -- True
--- >>> isStatementTimeoutException (toException (Ann.AnnotatedException [] timeout))
+-- >>> isQueryCanceledException (toException (Ann.AnnotatedException [] timeout))
 -- True
-isStatementTimeoutException :: SomeException -> Bool
-isStatementTimeoutException = maybe False ((== Just "57014") . serverErrorCode . Ann.exception) . fromException @(Ann.AnnotatedException HasqlException)
+isQueryCanceledException :: SomeException -> Bool
+isQueryCanceledException = maybe False ((== Just "57014") . serverErrorCode . Ann.exception) . fromException @(Ann.AnnotatedException HasqlException)
 
 
 -- | SQLSTATE of a failed statement, if the error carries one — the nested walk

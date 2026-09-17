@@ -522,15 +522,13 @@ spec = around withTestResources do
 
       it "defers without scanning when another replica owns the evidence lease" \tr -> do
         clearTestEndpoints tr
-        let h = "lease-busy-endpoint"
-        insertOpenIssue tr h
-        void
-          $ withPool tr.trPool
-          $ DBT.execute
-            [sql| UPDATE apis.issues
-                  SET created_at = ?, last_notified_at = ?
-                  WHERE project_id = ? AND endpoint_hash = ? |]
-            (frozenTime, Just frozenTime, pid, h)
+        key <- createTestAPIKey tr pid "auto-ack-lease-busy-key"
+        let path = "/v1/lease-busy"
+        seedTraffic tr key path "200" 20 2
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        h <- endpointHashFor tr path
+        pinIssueAtFrozen tr h True
 
         withResource tr.trPool \conn ->
           bracket
