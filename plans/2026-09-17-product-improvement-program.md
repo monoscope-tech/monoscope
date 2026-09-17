@@ -19,9 +19,9 @@ query failure rather than look like it has no data.
 
 | # | Outcome | Current evidence | Concrete delivery | Completion evidence |
 |---|---|---|---|---|
-| 1 | Core reads answer promptly | 24-hour container view timed out; sessions took 18.74s; RUM has 31x read amplification; `/chart_data` has recorded 504s. | Finish session tier/client pairing, identify every 504 query from production telemetry, measure endpoint queries at 24h/3d/7d before changing their shape, and render Common Explorer facets in the first response. | Recorded before/after timings, no unresolved 504 query class, route regression coverage, and facet browser/handler tests. |
+| 1 | Core reads answer promptly | 24-hour container view timed out; sessions took 18.74s; RUM has 31x read amplification. Common Explorer facets already render from the first-response schema summary. A 2026-09-17 production check found 6,160 `/chart_data` requests in seven days with zero 5xx and zero 504 in thirty days; 37 401s are a separate auth/session class. | Finish session tier/client pairing, retain the endpoint timing decision, and investigate a chart failure class only when current telemetry identifies one. | Recorded before/after timings, no unresolved current 504 query class, route regression coverage, and facet browser/handler tests. |
 | 2 | Alert to investigation is one path | Alert delivery and issue lifecycle flows exist. The legacy alert-detail route now gives current value, threshold and query, and hands off to the canonical monitor overview; issue detail, logs, traces, acknowledgement, and recovery still do not share one focused workspace. | Reuse the shared details panel for Issues; make alert/issue links carry service, time, environment and trace context; surface acknowledgement and recovery history beside evidence. | One end-to-end integration/browser flow from monitor evaluation through alert, issue, trace/log drill-down, acknowledgement and recovery. |
-| 3 | Dashboards are operationally trustworthy | `dashboard-query-and-panel-convergence.md` specifies sorting, details, trace-table convergence, endpoint measurements, typed log query parameters, and CI repair; implementation is in progress. | Complete the six decisions in that plan without client-side sorting after a server limit; retain query errors and exact time scope on every refetch. | Widget sort, panel, parameter, trace and endpoint regression coverage plus measured endpoint decision. |
+| 3 | Dashboards are operationally trustworthy | The six dashboard-convergence decisions are implemented and validated: server-side sorting, shared details, trace-table convergence, typed query parameters, endpoint measurement, and CI repair. Long-range endpoint scans remain an explicitly evidence-gated cache/rollup follow-up. | Retain query errors and exact time scope on every refetch; only optimize endpoint scans after equivalence tests and repeated benchmarks justify a complete-result cache or server-side rollup. | Widget sort, panel, parameter, trace and endpoint regression coverage plus measured endpoint decision. |
 | 4 | New projects reach first value | Existing tests cover onboarding, first ingest, dashboard, monitor and integration settings, but do not prove the complete activation chain or measure its drop-offs. The sidebar checklist derives dashboard, monitor and successfully-sent test-notification milestones from live records; a new privacy-safe, deduplicated project milestone ledger records the first verified ingest, dashboard, monitor and sent test notification. | Add the operator funnel query/report and extend the customer-flow test through dashboard, monitor and test notification. | One customer-flow test and activation event funnel; empty/partial/error states remain actionable. |
 | 5 | Environment and service scope are dependable | Sticky environment selection scopes Explorer, monitors and RUM. `/chart_data`, its stream, direct widget fetches, and dashboard server-prefill now bind the authenticated session environment to generated KQL and cache identity. Raw SQL dashboard templates, API v1 and a two-environment/two-service fixture remain open. | Finish one scoped-query contract for raw dashboard SQL and API v1; preserve explicit shared-link scope and prove service filtering. | Two-environment/two-service fixture proves every named surface excludes the other scope. |
 | 6 | Sessions and replay support investigation | Session/replay UI and panel cache exist; the hour tier is building but its query has unmatched expression aggregates. Session detail preserves replay, identity, landing page and raw telemetry context; browser-error occurrences now also link into that workspace. | Deploy the paired source-named landing-page/user-agent measures, then prove raw-versus-tier equivalence and the production route. | Rollup route test; raw-versus-tier result fixture; session detail navigation and empty/replay-only coverage. |
@@ -43,6 +43,17 @@ query failure rather than look like it has no data.
    evidence. Do not materialize unbounded trace IDs.
 5. Add a reusable failure/retry contract so a timeout says what failed, retains
    the exact query scope, and provides one safe retry.
+
+### Chart failure decision — 2026-09-17
+
+Read-only production metrics for project `87576849-4941-49d3-a15d-680fef88a1a8`
+found 6,160 `/chart_data` requests in the last seven days, with zero 5xx. A
+30-day 504-specific count was also zero. The only non-success class in the
+seven-day status breakdown was 37 401 responses. Do not change a chart query
+shape or create a new rollup on the basis of historical 504s: first capture a
+current failure with its query, time range, source and exact status. The 401s
+belong to the existing expired-auth/session-recovery investigation, not the
+query-performance workstream.
 
 ### Milestone B — investigation workspace (items 2, 3, 5)
 
@@ -67,7 +78,7 @@ measure weekly conversion and elapsed time with this aggregate query:
 
 ```sql
 WITH cohort AS (
-  SELECT id, date_trunc('week', created_at) AS week
+  SELECT id, created_at, date_trunc('week', created_at) AS week
   FROM projects.projects
   WHERE created_at >= now() - interval '12 weeks'
 ), milestones AS (
@@ -82,7 +93,7 @@ SELECT
   count(*) FILTER (WHERE monitor.occurred_at IS NOT NULL) AS monitors_created,
   count(*) FILTER (WHERE notification.occurred_at IS NOT NULL) AS notifications_tested,
   percentile_cont(0.5) WITHIN GROUP (
-    ORDER BY extract(epoch FROM notification.occurred_at - cohort.week) / 3600
+    ORDER BY extract(epoch FROM notification.occurred_at - cohort.created_at) / 3600
   ) FILTER (WHERE notification.occurred_at IS NOT NULL) AS median_hours_to_notification_test
 FROM cohort
 LEFT JOIN milestones ingest ON ingest.project_id = cohort.id AND ingest.milestone = 'ingest_verified'
