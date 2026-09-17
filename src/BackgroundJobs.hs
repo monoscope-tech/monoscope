@@ -3595,8 +3595,8 @@ provenEndpointMinHours = 2
 -- | How far back the evidence query reads. An endpoint live for longer than this
 -- is proven by recent traffic just as well as by its whole history, and the bound
 -- is what keeps this off TimeFusion's unbounded-aggregate failure mode.
-provenEndpointWindow :: NominalDiffTime
-provenEndpointWindow = (-7) * 86400
+provenEndpointWindowDays :: Int
+provenEndpointWindowDays = 7
 
 
 -- | Acknowledge @api_change@ issues the service has since proven real.
@@ -3633,8 +3633,7 @@ autoAckProvenEndpoints pid = do
              ORDER BY i.created_at ASC
              LIMIT 200 |]
   unless (null candidates) do
-    let windowStart = addUTCTime provenEndpointWindow now
-        hashes = V.fromList $ ordNub [h | (_, h, _) <- candidates]
+    let hashes = V.fromList $ ordNub [h | (_, h, _) <- candidates]
     -- Endpoint hashes are stamped onto every span at ingest, so the evidence is
     -- an array-overlap on the stamped hash rather than a route/path match —
     -- telemetry carries concrete paths while apis.endpoints stores templates,
@@ -3643,22 +3642,60 @@ autoAckProvenEndpoints pid = do
     -- It matters which: the Postgres mirror of this table is being retired and
     -- reads empty where TimeFusion is on, so pinning this to PG would make every
     -- endpoint look unproven forever and quietly disable the whole sweep.
-    buckets :: [(Text, Int64, Int64)] <-
-      Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
-        $ Hasql.interp
-          [HI.sql|
-            WITH served AS (
-              SELECT unnest(hashes) AS hash,
-                     floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
-              FROM otel_logs_and_spans
-              WHERE project_id = #{pid}::text
-                AND timestamp >= ^{Endpoints.tsLit windowStart}
-                AND attributes___http___request___method IS NOT NULL
-                AND attributes___http___response___status_code < 400
-                AND hashes && #{hashes}::text[]
+    -- A single seven-day UNNEST/GROUP scan exceeded TimeFusion's 90-second
+    -- statement deadline in production. Read the same non-overlapping range as seven
+    -- one-day statements instead. This keeps each scan bounded while preserving
+    -- one shared scan for every candidate; issuing one seven-day query per hash
+    -- multiplies the expensive false-candidate case by up to 200.
+    --
+    -- The newest slice intentionally has no upper bound. The old query had none
+    -- either, and retaining that detail keeps replayed/future-dated telemetry and
+    -- the integration fixtures semantically identical.
+    let day = 86400
+        windows =
+          [ ( addUTCTime (fromIntegral (-n) * day) now
+            , if n == (1 :: Int) then Nothing else Just $ addUTCTime (fromIntegral (1 - n) * day) now
             )
-            SELECT hash, hour_bucket, count(*)::bigint AS cnt
-            FROM served GROUP BY hash, hour_bucket |]
+          | n <- [1 .. provenEndpointWindowDays]
+          ]
+        readWindow (lower, upper) =
+          Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads case upper of
+            Nothing ->
+              Hasql.interp
+                [HI.sql|
+                  WITH served AS (
+                    SELECT unnest(hashes) AS hash,
+                           floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
+                    FROM otel_logs_and_spans
+                    WHERE project_id = #{pid}::text
+                      AND timestamp >= ^{Endpoints.tsLit lower}
+                      AND attributes___http___request___method IS NOT NULL
+                      AND attributes___http___response___status_code < 400
+                      AND hashes && #{hashes}::text[]
+                  )
+                  SELECT hash, hour_bucket, count(*)::bigint AS cnt
+                  FROM served
+                  WHERE hash = ANY(#{hashes}::text[])
+                  GROUP BY hash, hour_bucket |]
+            Just upper' ->
+              Hasql.interp
+                [HI.sql|
+                  WITH served AS (
+                    SELECT unnest(hashes) AS hash,
+                           floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
+                    FROM otel_logs_and_spans
+                    WHERE project_id = #{pid}::text
+                      AND timestamp >= ^{Endpoints.tsLit lower}
+                      AND timestamp < ^{Endpoints.tsLit upper'}
+                      AND attributes___http___request___method IS NOT NULL
+                      AND attributes___http___response___status_code < 400
+                      AND hashes && #{hashes}::text[]
+                  )
+                  SELECT hash, hour_bucket, count(*)::bigint AS cnt
+                  FROM served
+                  WHERE hash = ANY(#{hashes}::text[])
+                  GROUP BY hash, hour_bucket |]
+    buckets :: [(Text, Int64, Int64)] <- concat <$> traverse readWindow windows
     let byHash = Map.fromListWith (<>) [(h, [(b, c)]) | (h, b, c) <- buckets]
         -- Traffic from the issue's own hour onwards: the endpoint having been
         -- hit before we noticed it is not evidence that it is real. Whole hours,

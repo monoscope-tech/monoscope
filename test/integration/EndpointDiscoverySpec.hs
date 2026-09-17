@@ -3,7 +3,7 @@ module EndpointDiscoverySpec (spec) where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -59,15 +59,19 @@ insertOpenIssue tr endpointHash =
 -- endpoint could ever look proven. The sweep also only considers notified issues
 -- (or ones over 24h old), so acking cannot delete an alert
 -- 'sendNewEndpointAlerts' has not sent yet — which is what @notified@ selects.
-pinIssueAtFrozen :: TestResources -> Text -> Bool -> IO ()
-pinIssueAtFrozen tr endpointHash notified = do
+pinIssueAt :: TestResources -> UTCTime -> Text -> Bool -> IO ()
+pinIssueAt tr createdAt endpointHash notified = do
   n <-
     withPool tr.trPool
       $ DBT.execute
         [sql| UPDATE apis.issues SET created_at = ?, last_notified_at = ?
             WHERE project_id = ? AND endpoint_hash = ? AND issue_type = 'api_change' |]
-        (frozenTime, if notified then Just frozenTime else Nothing, pid, endpointHash)
+        (createdAt, if notified then Just createdAt else Nothing, pid, endpointHash)
   when (n == 0) $ fail $ "discovery raised no api_change issue for " <> toString endpointHash
+
+
+pinIssueAtFrozen :: TestResources -> Text -> Bool -> IO ()
+pinIssueAtFrozen tr = pinIssueAt tr frozenTime
 
 
 -- | The hash ingest derived for this path, failing loudly if no endpoint was
@@ -412,7 +416,7 @@ spec = around withTestResources do
           -- otherwise mint colliding ids. otel_logs_and_spans is NOT cleared between
           -- tests, but every timestamp here is frozenTime-relative, so re-runs land in
           -- the same hour buckets and the hour-spread assertions stay deterministic.
-          seedTraffic tr key path status n spreadHours =
+          seedTrafficAt origin tr key path status n spreadHours =
             forM_ [1 .. n] \i ->
               ingestSpanLinked
                 tr
@@ -424,7 +428,8 @@ spec = around withTestResources do
                 -- Same attribute pair createOtelSpanAtTime uses (the shape known to
                 -- produce endpoints), plus the status the sweep gates on.
                 [("http.method", "GET"), ("http.route", path), ("http.response.status_code", status), ("server.address", host)]
-                (addUTCTime (fromIntegral ((i `mod` spreadHours) * 3600 + 60)) frozenTime)
+                (addUTCTime (fromIntegral ((i `mod` spreadHours) * 3600 + 60)) origin)
+          seedTraffic = seedTrafficAt frozenTime
 
       it "acks an endpoint proven by served traffic, and leaves a scanner burst alone" \tr -> do
         clearTestEndpoints tr
@@ -459,6 +464,23 @@ spec = around withTestResources do
         queryIssueAcked tr scanHash `shouldReturn` False
         -- A system ack with no trail reads as a bug the first time it is opened.
         queryAckReasons tr realHash `shouldReturn` ["endpoint_proven_by_traffic"]
+
+      it "combines proof from both sides of a daily scan boundary" \tr -> do
+        clearTestEndpoints tr
+        key <- createTestAPIKey tr pid "auto-ack-cross-day-key"
+        let path = "/v1/cross-day"
+            boundaryOrigin = addUTCTime (-25 * 3600) frozenTime
+        -- Ten requests land just before now-24h and ten just after it. Neither
+        -- daily statement proves the endpoint alone; their combined buckets do.
+        seedTrafficAt boundaryOrigin tr key path "200" 20 2
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        h <- endpointHashFor tr path
+        pinIssueAt tr (addUTCTime (-26 * 3600) frozenTime) h True
+
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+
+        queryIssueAcked tr h `shouldReturn` True
 
       it "leaves an un-notified issue alone, so the ack cannot swallow its alert" \tr -> do
         clearTestEndpoints tr
