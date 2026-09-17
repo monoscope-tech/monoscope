@@ -8,6 +8,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
+import Effectful (Eff, IOE, (:>))
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -62,11 +63,12 @@ data ActivationProgress = ActivationProgress
   , hasMonitor :: Bool
   , hasTestNotification :: Bool
   }
+  deriving stock (Show)
 
 
 activationProgress :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
 activationProgress pid ingestionVerified = do
-  [(hasDashboard, hasMonitor, hasTestNotification)] <-
+  rows :: [(Bool, Bool, Bool)] <-
     Hasql.interp
       [HI.sql|
         SELECT
@@ -74,6 +76,7 @@ activationProgress pid ingestionVerified = do
           EXISTS (SELECT 1 FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL),
           EXISTS (SELECT 1 FROM apis.notification_test_history WHERE project_id = #{pid} AND status = 'sent')
       |]
+  let (hasDashboard, hasMonitor, hasTestNotification) = fromMaybe (False, False, False) $ listToMaybe rows
   pure ActivationProgress{..}
 
 
@@ -120,7 +123,7 @@ onboardingChecklist_ project progressState = do
       doneCount = length $ filter fst items
       totalCount = length items
       progress = show doneCount <> "/" <> show totalCount :: Text
-  unless (doneCount == totalCount || has "checklist_dismissed")
+  unless (doneCount == totalCount || V.elem "checklist_dismissed" project.onboardingStepsCompleted)
     $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
@@ -199,6 +202,7 @@ data BWConfig = BWConfig
   -- ^ Deployment environments this project has actually reported, for the app-wide picker.
   -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
   -- Explorer's facet sidebar offers and it costs one indexed row read.
+  , activationProgressM :: Maybe ActivationProgress
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)

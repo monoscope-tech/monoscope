@@ -12,6 +12,7 @@ import Data.Annotation (toAnnotation)
 import Data.ByteString qualified as BS
 import Data.Default
 import Data.Effectful.Hasql (runHasqlPool)
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
 import Data.Text qualified as T
@@ -153,7 +154,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
       -- The chart routes bind this to the authenticated session instead of trusting a
       -- browser query parameter. Other callers may leave it absent for deliberately
       -- cross-environment exports and background work.
-      environment = join (lookup "environment" allParams) >>= Utils.nonEmptyT
+      environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
   let mappngSQL = variablePresets density pid.toText fromD toD allParams now
       mappngKQL = variablePresetsKQL density pid.toText fromD toD allParams now
   let source = parseMaybe pSource =<< sourceM
@@ -660,7 +661,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
       density = fromMaybe def densityM
       source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
-      environment = join (lookup "environment" allParams) >>= Utils.nonEmptyT
+      environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
       mapping = variablePresets density pid.toText fromD toD allParams now
       mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
       parsed = first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM
