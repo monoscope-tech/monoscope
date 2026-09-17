@@ -531,9 +531,10 @@ spec = around withTestResources do
         pinIssueAtFrozen tr h True
 
         withResource tr.trPool \conn ->
-          bracket
-            (SimplePG.query conn [sql|SELECT pg_advisory_lock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only ()])
-            (\_ -> void (SimplePG.query conn [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only Bool]))
-            (const $ runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid)
+          SimplePG.withTransaction conn do
+            void (SimplePG.query conn [sql|SELECT pg_advisory_xact_lock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only ()])
+            runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
 
         queryIssueAcked tr h `shouldReturn` False
+        runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        queryIssueAcked tr h `shouldReturn` True
