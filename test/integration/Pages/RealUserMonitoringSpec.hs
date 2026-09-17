@@ -255,7 +255,8 @@ spec = sequential $ aroundAll withTestResources do
       browserSpan apiKey "60000000000000000000000000000006" "6000000000000001" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 123")] "TypeError" "session-err-a" Nothing "storefront" tr
       browserSpan apiKey "60000000000000000000000000000006" "6000000000000002" [("exception.type", "TypeError"), ("exception.message", "Cannot read cart item 456")] "TypeError" "session-err-b" Nothing "storefront" tr
       panel <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "errors")
-      panel `shouldContainAll` ["TypeError", "×2", "2 sessions", "Latest occurrence"]
+      panel `shouldContainAll` ["TypeError", "×2", "2 sessions", "View session", "Telemetry"]
+      panel `shouldSatisfy` T.isInfixOf "tab=sessions"
       -- Grouped, not listed: the message renders once for the pair.
       T.count "Cannot read cart item" panel `shouldBe` 1
 

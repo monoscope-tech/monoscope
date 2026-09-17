@@ -1299,7 +1299,9 @@ recentErrors_ links errors = rumPanel_ "Browser errors" "Grouped by signature; c
           div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 text-xs text-textWeak"] do
             forM_ issue.path $ span_ [class_ "max-w-56 truncate font-mono"] . toHtml
             when (issue.sessions > 0) $ span_ [class_ "tabular-nums"] $ toHtml $ countNoun issue.sessions "session"
-            forM_ issue.sessionId \sid -> a_ [href_ $ sessionLogsUrl links sid, class_ "font-medium text-textBrand hover:underline"] "Latest occurrence"
+            forM_ issue.sessionId \sid -> do
+              a_ [href_ $ sessionsUrl links Nothing AllSessionRows (Just sid), class_ "font-medium text-textBrand hover:underline"] "View session"
+              a_ [href_ $ sessionLogsUrl links sid, class_ "font-medium text-textBrand hover:underline"] "Telemetry"
 
 
 data AudienceRow = AudienceRow
