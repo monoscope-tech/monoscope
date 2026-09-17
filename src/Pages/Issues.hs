@@ -1838,6 +1838,9 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
       currentSort = fromMaybe "-created_at" sortM
+      -- The authenticated, sticky service scope wins over a stale shared URL just as
+      -- the environment scope does. The page filter remains useful only in All-services.
+      scopedServices = maybe serviceFilters pure session.service
       period = fromMaybe "24h" periodM
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
@@ -1851,17 +1854,17 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
             , Issues.offset = pageInt * perPage
             , Issues.order = Just currentSort
             , Issues.period = period
-            , Issues.services = serviceFilters
+            , Issues.services = scopedServices
             , Issues.environment = session.environment
             , Issues.types = typeFilters
             }
       )
       ( concurrently
-          (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL AND (#{session.environment}::text IS NULL OR environment = #{session.environment}) |])
+          (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL AND (#{session.environment}::text IS NULL OR environment = #{session.environment}) AND (#{session.service}::text IS NULL OR service = #{session.service}) |])
           (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])
       )
 
-  let filterParams = foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) typeFilters
+  let filterParams = foldMap ("&service=" <>) scopedServices <> foldMap ("&type=" <>) typeFilters
       baseUrl = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> filterParams
       paginationConfig =
         Pagination
