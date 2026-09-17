@@ -403,7 +403,7 @@ otelSessionCoreRows scope match sessionFilter =
           <> [HI.sql|)::bigint,
           MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
           MAX(resource___service___name),
-          NULL::text, NULL::text, false
+          NULL::text AS last_page, NULL::text AS user_agent, false AS has_replay
         FROM otel_logs_and_spans
         WHERE |]
           <> browserScope scope
